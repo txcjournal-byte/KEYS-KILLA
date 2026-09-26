@@ -1,42 +1,49 @@
 # KEYS KILLA
 
-*rare & modern trap melodies & basses* – VST3 / AU / Standalone syntezátor (JUCE 8, C++20, CMake).
+*rare & modern trap melodies & basses* – VST3 / AU / Standalone syntezátor (JUCE 8, C++20, CMake) od výrobce 808 KILLA.
 Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BLOOD](docs/screenshot_blood.png)
 
-## Stav: testovací verze 0.1
+## Co umí (verze 0.2)
 
-| Oblast | Hotovo v 0.1 |
+| Oblast | Obsah |
 |---|---|
-| Enginy | VA (PolyBLEP, unison až 7), FM (2-op + feedback), Pluck (Karplus-Strong), Vox (formanty A/E/I/O/U), Organ (additive 8 harmonických), Flute (sinus + dech), Sub/808 (pitch drop) |
-| Hraní | 16 hlasů, Mono/Legato + glide, sustain pedál, pitch/mod wheel, CHORD (m7), ARP (sync s tempem, pravý klik = rychlost) |
-| Bass režim | presety BASS: mono, sub vrstva, mono pod ~120 Hz, Clean Low distorze, makra SUB/WOBBLE/DIRT/GLIDE/TONE/PUNCH, varování při přebuzení |
-| FX | Drive (Soft/Tape/Hard/**Blown**/Fold, 2× oversampling), Lo-Fi (bitcrush, SR reduction, wow/flutter, vinyl), Chorus, ping-pong Delay (sync), Reverb, Width |
-| EXCLUSIVE | DICE + CHAOS (pravý klik = undo), ERA MORPH XY pad, GHOST (obrácený stín o oktávu výš), BEND (scoop, dive na konci noty, broken tape), CIRCUIT (glitche synchronizované s tempem, deterministické), BODY SWAP (v ADVANCED) |
-| Presety | 81 factory presetů (všech 10 dlaždic, éry 2010–2026, Experimental, Exclusive), hlasitost srovnaná na ±1,5 dB; ukládání/načítání `.kkpreset`, oblíbené |
-| GUI | hlavní stránka podle předloh, skiny CHROME / BLOOD (☀/☾), 100–200 % zoom, tooltips, dvojklik = default, Ctrl+tah = jemně; ADVANCED stránka se všemi parametry (MENU → ADVANCED) |
+| **Enginy** (vrstva A + B) | VA (PolyBLEP, unison až 8), FM (4 operátory, 6 algoritmů, feedback), Wavetable (8 tabulek, mip-mapping, warp Bend/Sync/Mirror/Quantize/FM), Pluck (Karplus-Strong), Modal (kalimba / marimba / zvon), Vox (formanty A-E-I-O-U), Organ (additive), Flute, Orchestral (brass / strings / choir hity), Sub 808 |
+| **Filtr** | Clean, Ladder, Dirty, High Pass, Band Pass; key tracking; obálka 2 |
+| **Modulace** | 3 ADSR obálky, 2 LFO (sync, 5 tvarů), mod matrix 8 slotů (Env 2/3, LFO 1/2, velocity, mod wheel, aftertouch, key track, random → pitch, cutoff, reso, wave A/B, FM A/B, level A/B, amp, pan, sub, detune) |
+| **Hraní** | 16 hlasů, Mono / Legato + glide, pitch bend range, sustain, aftertouch (channel i poly), **Key Lock** (tónina + 8 stupnic, zobrazeno na klaviatuře), **CHORD** (9 typů vč. diatonického, strum), **ARP** (Up/Down/Up-Down/Random/As Played, 1–3 oktávy, swing, gate, sync) |
+| **Bass režim** | mono, sub vrstva, mono pod 120 Hz, subsonic filtr 22 Hz, Clean Low distorze, makra SUB/WOBBLE/DIRT/GLIDE/TONE/PUNCH, wobble cíl filtr/hlasitost/wave/pitch, varování při přebuzení |
+| **FX rack** (pořadí přetahovatelné) | Drive (Soft/Tape/Hard/Blown/Fold, 2× oversampling), Body Swap, Lo-Fi (bitcrush, SR, wow/flutter, vinyl), Circuit Bend, Chorus, Phaser, Flanger, EQ, Delay (ping-pong/stereo/tape), Reverb (hall/plate/cloud, freeze), Reverse, Width |
+| **EXCLUSIVE** | DICE + CHAOS (zámky sekcí, historie 20 hodů, uložení jako preset – pravý klik), ERA MORPH (XY pad, do rohů lze vložit presety a míchat je, jinak mění charakter), GHOST (obrácený stín ±oktáva, blur), BEND (dive/rise/dip/octave jump/random + broken tape), CIRCUIT (glitche v tempu, deterministické), BODY SWAP (6 těles) |
+| **Presety** | **408 factory presetů**: 10 kategorií, éry 2010–2026, Experimental, Exclusive (48), Bass (99); varianty Lo-Fi / Dark / Blown; hlasitost srovnaná na −15 dB |
+| **Správa presetů** | prohlížeč s vyhledáváním a filtry (kategorie, éra, exclusive, oblíbené, user), Save / Save As / Rename / Delete, `*` při změně + Revert, A/B, Undo/Redo, Init, import/export packů (.zip), JSON formát s verzí |
+| **GUI** | skiny CHROME / BLOOD (☀/☾, výchozí pro všechny instance), 100–200 %, ADVANCED se záložkami ENGINE A/B, FILTER, MOD, FX, EXCLUSIVE, PLAY, SETTINGS, vizualizace vlny, obálek a LFO, tooltip u každého prvku, dvojklik = default, Ctrl + tah = jemně |
+| **Technika** | žádné alokace v audio threadu, deterministický render (export = přehrávání), bypass s fade, tail 10 s, 44,1–192 kHz, Eco režim |
 
-Zatím chybí (další fáze): wavetable a orchestral engine, vrstvy A+B, mod matrix, Key Lock, rohy ERA MORPH s vlastními presety, záložky ADVANCED, 240+ presetů, instalátory a podpis.
+![ADVANCED](docs/screenshot_advanced.png)
 
 ## Test ve FL Studiu (Windows)
 
-1. GitHub → **Actions** → poslední běh `build` → artefakt **KEYS-KILLA-Windows-VST3** → stáhnout a rozbalit.
-2. Složku `KEYS KILLA.vst3` zkopírovat do `C:\Program Files\Common Files\VST3\`.
-3. FL Studio → *Options → Manage plugins → Find installed plugins* → KEYS KILLA (Generators) → přidat do Channel Racku.
+1. GitHub → **Actions** → poslední běh `build` → stáhni **KEYS-KILLA-Windows-Installer** (instalátor) nebo **KEYS-KILLA-Windows-VST3**.
+2. Instalátor dá plugin do `C:\Program Files\Common Files\VST3\`. Ručně: zkopíruj složku `KEYS KILLA.vst3` tamtéž.
+3. FL Studio → *Options → Manage plugins → Find installed plugins* → KEYS KILLA (výrobce 808 KILLA) → Channel Rack.
 
-## Build lokálně
+## Build a testy
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release      # JUCE se stáhne automaticky (nebo -DKK_JUCE_DIR=cesta)
+cmake -B build -DCMAKE_BUILD_TYPE=Release        # JUCE se stáhne automaticky (nebo -DKK_JUCE_DIR=cesta)
 cmake --build build --config Release
-./build/KeysKillaTests_artefacts/Release/KeysKillaTests   # offline render všech presetů (NaN, ticho, DC, hlasitost)
+./build/KeysKillaTests_artefacts/Release/KeysKillaTests          # unit testy + render všech presetů
+./build/KeysKillaTests_artefacts/Release/KeysKillaTests -bench   # CPU, 8 not
 pluginval --strictness-level 10 --validate "build/KeysKilla_artefacts/Release/VST3/KEYS KILLA.vst3"
+python3 tests/calibrate.py build/KeysKillaTests_artefacts/Release/KeysKillaTests   # přepočet hlasitosti presetů
 ```
 
-`tests/calibrate.py` přepočítá hlasitost presetů (`python3 tests/calibrate.py <cesta k KeysKillaTests>`).
+## Distribuce
 
-## Identita pluginu
-
-Jméno výrobce a 4znakové kódy jsou v `CMakeLists.txt` (`KK_COMPANY_NAME`, `KK_MANUFACTURER_CODE`, `KK_PLUGIN_CODE`).
-**Teď jsou tam dočasné hodnoty** – před první veřejnou verzí je nahraď skutečnými (kód výrobce stejný jako u 808 KILLA) a pak je už nikdy neměň.
+- Windows: `installer/win/keyskilla.iss` (Inno Setup) – staví CI.
+- macOS: `installer/mac/build_pkg.sh` – `.pkg` s VST3 + AU + Standalone, Universal Binary. Podepíše a notarizuje,
+  když jsou v GitHubu nastavené secrets `MAC_APP_SIGN_ID`, `MAC_INST_SIGN_ID`, `NOTARY_APPLE_ID`, `NOTARY_TEAM_ID`, `NOTARY_PASSWORD`.
+- Identita: výrobce **808 KILLA**, kód výrobce **Kila** (stejný jako 808 KILLA), kód pluginu **Kkey**. Nikdy neměnit.
+- Verze je jen v `CMakeLists.txt` (`project(KEYS_KILLA VERSION …)`).

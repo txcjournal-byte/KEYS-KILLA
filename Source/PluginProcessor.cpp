@@ -331,8 +331,13 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
                 else
                 {
                     if (! on)   // cancel strummed notes that have not sounded yet
+                    {
                         for (int q = 0; q < pendingN;)
-                            if (pending[(size_t) q].on && pending[(size_t) q].note == notes[k]) pending[(size_t) q] = pending[(size_t) --pendingN]; else ++q;
+                        {
+                            if (pending[(size_t) q].on && pending[(size_t) q].note == notes[k]) pending[(size_t) q] = pending[(size_t) --pendingN];
+                            else ++q;
+                        }
+                    }
                     emit (on, notes[k], m.getFloatVelocity(), pos);
                 }
             }
@@ -721,7 +726,11 @@ std::array<int, kk::numFxSlots> KeysKillaProcessor::getFxOrder() const
 void KeysKillaProcessor::setFxOrder (const std::array<int, kk::numFxSlots>& o)
 {
     std::array<bool, kk::numFxSlots> seen {};
-    for (int v : o) if (v < 0 || v >= kk::numFxSlots || seen[(size_t) v]) return; else seen[(size_t) v] = true;
+    for (int v : o)
+    {
+        if (v < 0 || v >= kk::numFxSlots || seen[(size_t) v]) return;
+        seen[(size_t) v] = true;
+    }
     for (int i = 0; i < kk::numFxSlots; ++i) fxOrder[(size_t) i] = o[(size_t) i];
 }
 

@@ -1,5 +1,6 @@
 name: build
 
+# Builds, tests and packages KEYS KILLA for Windows (VST3 + Standalone) and macOS (VST3 + AU + Standalone).
 on:
   push:
   pull_request:
@@ -9,38 +10,103 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DKK_BUILD_TESTS=ON
+        run: cmake -B build -A x64
+
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Render test (all presets)
+
+      - name: Render + unit tests (all presets)
         run: build\KeysKillaTests_artefacts\Release\KeysKillaTests.exe
+
       - name: pluginval (strictness 10)
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
-          .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --validate "build\KeysKilla_artefacts\Release\VST3\KEYS KILLA.vst3"
-      - uses: actions/upload-artifact@v4
+          .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --validate "build\KeysKilla_artefacts\Release\VST3\KEYS KILLA.vst3"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Installer (Inno Setup)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(KEYS_KILLA VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\win\keyskilla.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload VST3 + Standalone
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
         with:
           name: KEYS-KILLA-Windows-VST3
           path: |
             build/KeysKilla_artefacts/Release/VST3/
             build/KeysKilla_artefacts/Release/Standalone/
 
+      - name: Upload installer
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KEYS-KILLA-Windows-Installer
+          path: build/installer/*.exe
+
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -S . -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DKK_BUILD_TESTS=OFF
+      - uses: actions/checkout@v5
+
+      - name: Configure (universal)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
       - name: Build
-        run: cmake --build build --config Release --target KeysKilla_VST3 KeysKilla_AU KeysKilla_Standalone -- -quiet
-      - uses: actions/upload-artifact@v4
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Render + unit tests (all presets)
+        run: ./build/KeysKillaTests_artefacts/Release/KeysKillaTests
+
+      - name: auval
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/KeysKilla_artefacts/Release/AU/KEYS KILLA.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 5
+          auval -v aumu Kkey Kila
+
+      - name: pluginval (strictness 10)
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/KeysKilla_artefacts/Release/VST3/KEYS KILLA.vst3"
+
+      - name: Installer (pkg; signed + notarized when secrets exist)
+        if: ${{ !cancelled() }}
+        env:
+          MAC_APP_SIGN_ID: ${{ secrets.MAC_APP_SIGN_ID }}
+          MAC_INST_SIGN_ID: ${{ secrets.MAC_INST_SIGN_ID }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          VERSION=$(sed -n 's/project(KEYS_KILLA VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          installer/mac/build_pkg.sh "$VERSION"
+
+      - name: Upload plugins
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
         with:
-          name: KEYS-KILLA-macOS-unsigned
+          name: KEYS-KILLA-macOS
           path: |
             build/KeysKilla_artefacts/Release/VST3/
             build/KeysKilla_artefacts/Release/AU/
             build/KeysKilla_artefacts/Release/Standalone/
+
+      - name: Upload installer
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KEYS-KILLA-macOS-Installer
+          path: build/installer/*.pkg

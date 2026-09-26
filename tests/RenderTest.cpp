@@ -152,6 +152,26 @@ int main (int argc, char** argv)
         }
         return 0;
     }
+    if (argc > 1 && juce::String (argv[1]) == "-bench")   // CPU: 8 held notes, 20 s of audio at 48 kHz, normal and eco
+    {
+        for (const char* name : { "Ice Bells 2013", "Rage Supersaw", "Layered EP Dream", "Wavetable Motion Pad", "Blown Rage Lead", "Reverse Ghost Pad" })
+            for (bool eco : { false, true })
+            {
+                int idx = 0; for (int i = 0; i < p.getNumPrograms(); ++i) if (p.getProgramName (i) == name) idx = i;
+                p.setCurrentProgram (idx); p.eco = eco; p.prepareToPlay (48000, 512);
+                juce::AudioBuffer<float> b (2, 512);
+                const auto t = juce::Time::getMillisecondCounterHiRes();
+                for (int k = 0; k < 48000 * 20 / 512; ++k)
+                {
+                    juce::MidiBuffer m;
+                    if (k == 0) for (int n : { 48, 51, 55, 58, 60, 63, 67, 70 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0);
+                    p.processBlock (b, m);
+                }
+                const double ms = juce::Time::getMillisecondCounterHiRes() - t;
+                std::printf ("%-22s %s  CPU %.1f %% of one core\n", name, eco ? "eco   " : "normal", ms / 200.0);
+            }
+        return 0;
+    }
     if (argc > 2 && juce::String (argv[1]) == "-dc")   // -dc <idx>: mean per 250 ms while a note is held for 6 s
     {
         const int idx = juce::String (argv[2]).getIntValue();
@@ -226,6 +246,7 @@ int main (int argc, char** argv)
         juce::PropertiesFile (o).setValue ("skin", juce::String (argv[3]).getIntValue());
         p.setCurrentProgram (1);
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
+        if (argc > 4) dynamic_cast<KeysKillaEditor*> (ed.get())->showView (juce::String (argv[4]).getIntValue());
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
         out.deleteFile();

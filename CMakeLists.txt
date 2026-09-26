@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.1.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,12 +9,11 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # --- Identity ---------------------------------------------------------------
-# PLACEHOLDERS for the test build. Replace with the real brand + codes
-# (manufacturer code must match 808 KILLA) before the first public release,
-# and never change them after that.
-set(KK_COMPANY_NAME     "KILLA"  CACHE STRING "Manufacturer name")
-set(KK_MANUFACTURER_CODE "Klla"  CACHE STRING "4-char manufacturer code")
-set(KK_PLUGIN_CODE       "Kky1"  CACHE STRING "4-char plugin code")
+# Same maker as 808 KILLA (manufacturer code Kila). NEVER change these after release,
+# hosts identify saved projects by them.
+set(KK_COMPANY_NAME      "808 KILLA")
+set(KK_MANUFACTURER_CODE "Kila")
+set(KK_PLUGIN_CODE       "Kkey")
 
 # --- JUCE -------------------------------------------------------------------
 set(KK_JUCE_DIR "" CACHE PATH "Local JUCE checkout (optional)")
@@ -31,6 +30,7 @@ endif()
 
 juce_add_plugin(KeysKilla
     COMPANY_NAME "${KK_COMPANY_NAME}"
+    BUNDLE_ID com.808killa.keyskilla
     PLUGIN_MANUFACTURER_CODE ${KK_MANUFACTURER_CODE}
     PLUGIN_CODE ${KK_PLUGIN_CODE}
     PRODUCT_NAME "KEYS KILLA"
@@ -53,7 +53,8 @@ target_compile_definitions(KeysKilla PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    KK_VERSION_STRING="${PROJECT_VERSION}")
 
 target_link_libraries(KeysKilla
     PRIVATE

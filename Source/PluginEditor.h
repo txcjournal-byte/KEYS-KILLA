@@ -27,6 +27,7 @@ public:
     ~KeysKillaEditor() override;
     void resized() override;
     void paint (juce::Graphics&) override {}
+    void showView (int v);   // 0 main, 1..8 advanced tabs, 9 preset browser
 
     static constexpr int designW = 1200, designH = 750;
 

@@ -207,7 +207,30 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     {
         NormalisableRange<float> r (lo, hi);
         if (skewCentre > 0) r.setSkewForCentre (skewCentre);
-        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, r, def));
+        const bool hz = id == "cutoff", db = id == "gain" || id.startsWith ("eq"), cents = id.startsWith ("fine");
+        const bool time = name.contains ("Attack") || name.contains ("Decay") || name.contains ("Release") || id == "glide" || id == "strum";
+        const bool semis = id == "bendSemis", rate = id.startsWith ("lfo") && id.contains ("Rate");
+        auto toText = [=] (float v, int) -> String
+        {
+            if (hz)    return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (juce::roundToInt (v)) + " Hz";
+            if (db)    return String (v, 1) + " dB";
+            if (cents) return String (juce::roundToInt (v)) + " ct";
+            if (time)  return v < 1.0f ? String (juce::roundToInt (v * 1000.0f)) + " ms" : String (v, 2) + " s";
+            if (semis) return String (juce::roundToInt (v)) + " st";
+            if (rate)  return String (v, 2) + " Hz";
+            if (hi <= 1.0f && lo >= -1.0f) return String (juce::roundToInt (v * 100.0f)) + " %";
+            return String (v, 2);
+        };
+        auto fromText = [=] (const String& t) -> float
+        {
+            const float x = t.retainCharacters ("-0123456789.").getFloatValue();
+            if (hz && t.containsIgnoreCase ("k")) return x * 1000.0f;
+            if (time && t.containsIgnoreCase ("ms")) return x / 1000.0f;
+            if (hi <= 1.0f && lo >= -1.0f && t.contains ("%")) return x / 100.0f;
+            return x;
+        };
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, r, def,
+                   AudioParameterFloatAttributes().withStringFromValueFunction (toText).withValueFromStringFunction (fromText)));
     };
     auto c = [&] (const String& id, const String& name, const StringArray& ch, int def)
     { l.add (std::make_unique<AudioParameterChoice> (ParameterID { id, 1 }, name, ch, def)); };

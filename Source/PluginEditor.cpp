@@ -3,55 +3,7 @@
 
 using namespace juce;
 
-namespace
-{
-Font serif (float h, bool bold = false, float kern = 0.12f)
-{
-    return Font (FontOptions (Font::getDefaultSerifFontName(), h, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern);
-}
-
-std::unique_ptr<PropertiesFile> openSettings()
-{
-    PropertiesFile::Options o;
-    o.applicationName = "KEYS KILLA"; o.filenameSuffix = "settings"; o.folderName = "KEYS KILLA";
-    o.osxLibrarySubFolder = "Application Support";
-    return std::make_unique<PropertiesFile> (o);
-}
-
-void drawStar (Graphics& g, Point<float> c, float r, Colour col, float thin = 0.18f)
-{
-    Path p;
-    for (int i = 0; i < 8; ++i)
-    {
-        const float a = MathConstants<float>::pi * 0.25f * (float) i;
-        const float rr = (i % 2 == 0) ? r : r * thin;
-        const Point<float> pt (c.x + std::sin (a) * rr, c.y - std::cos (a) * rr);
-        if (i == 0) p.startNewSubPath (pt); else p.lineTo (pt);
-    }
-    p.closeSubPath();
-    g.setColour (col.withMultipliedAlpha (0.35f));
-    g.fillEllipse (Rectangle<float> (r * 0.8f, r * 0.8f).withCentre (c));
-    g.setColour (col);
-    g.fillPath (p);
-}
-
-void drawPanel (Graphics& g, Rectangle<float> r, const Skin& s, const String& title = {})
-{
-    g.setColour (s.panel);
-    g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (s.dark ? Colours::black.withAlpha (0.6f) : Colours::white.withAlpha (0.8f));
-    g.drawRoundedRectangle (r.reduced (1.5f), 7.0f, 1.0f);
-    g.setColour (s.panelEdge);
-    g.drawRoundedRectangle (r, 8.0f, 1.4f);
-    if (title.isNotEmpty())
-    {
-        drawStar (g, { r.getX() + 22, r.getY() + 20 }, 9.0f, s.dark ? s.text : s.textDim);
-        g.setColour (s.text);
-        g.setFont (serif (15.0f, false, 0.3f));
-        g.drawText (title, Rectangle<float> (r.getX() + 40, r.getY() + 8, 300, 24), Justification::centredLeft);
-    }
-}
-} // namespace
+#include "UiCommon.h"
 
 //==============================================================================
 void KKLookAndFeel::setSkin (const Skin& s)
@@ -77,6 +29,21 @@ void KKLookAndFeel::setSkin (const Skin& s)
     setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
     setColour (TextButton::textColourOffId, s.text);
     setColour (TextButton::textColourOnId, s.accent);
+    setColour (TabbedButtonBar::tabTextColourId, s.textDim);
+    setColour (TabbedButtonBar::frontTextColourId, s.dark ? s.accent : s.text);
+    setColour (TabbedButtonBar::tabOutlineColourId, s.panelEdge);
+    setColour (TabbedButtonBar::frontOutlineColourId, s.accent);
+    setColour (TabbedComponent::outlineColourId, Colours::transparentBlack);
+    setColour (TextEditor::backgroundColourId, s.dark ? Colour (0xff141010) : Colour (0xfff7f8fa));
+    setColour (TextEditor::textColourId, s.text);
+    setColour (TextEditor::outlineColourId, s.panelEdge);
+    setColour (TextEditor::focusedOutlineColourId, s.accent);
+    setColour (ListBox::backgroundColourId, Colours::transparentBlack);
+    setColour (ScrollBar::thumbColourId, s.accent.withAlpha (0.6f));
+    setColour (Slider::trackColourId, s.accent);
+    setColour (Slider::backgroundColourId, s.track);
+    setColour (Slider::thumbColourId, s.knobLight);
+    setColour (Slider::textBoxBackgroundColourId, Colours::transparentBlack);
 }
 
 void KKLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, Slider&)
@@ -408,7 +375,7 @@ private:
 class DiceButton : public Component, public SettableTooltipClient
 {
 public:
-    explicit DiceButton (KKLookAndFeel& l) : lnf (l) { setTooltip ("DICE: roll a brand-new sound in the selected category and era. Right-click to undo."); }
+    explicit DiceButton (KKLookAndFeel& l) : lnf (l) { setTooltip ("DICE: roll a brand-new sound in the selected category and era. Right-click: undo, history, locks, save."); }
     std::function<void()> onRoll, onUndo;
     void paint (Graphics& g) override
     {
@@ -567,6 +534,8 @@ public:
         ColourGradient gr (s.keyWhite, a.getX(), a.getY(), s.keyWhite.darker (0.12f), a.getX(), a.getBottom(), false);
         g.setGradientFill (gr);
         g.fillRect (a.reduced (0.5f, 0));
+        if (! inScale (note)) { g.setColour (Colours::black.withAlpha (0.28f)); g.fillRect (a.reduced (0.5f, 0)); }
+        if (isRoot (note)) { g.setColour (s.accent.withAlpha (0.7f)); g.fillEllipse (Rectangle<float> (6, 6).withCentre ({ a.getCentreX(), a.getBottom() - 24 })); }
         if (on)
         {
             g.setColour (s.accent.withAlpha (0.85f));
@@ -587,89 +556,28 @@ public:
         const bool on = isDown || proc.playing[(size_t) note].load();
         g.setColour (on ? s.accent : s.keyBlack);
         g.fillRoundedRectangle (a.withTrimmedTop (-4), 2);
+        if (! on && lockOn() && inScale (note)) { g.setColour (s.accent.withAlpha (0.35f)); g.fillRect (a.reduced (a.getWidth() * 0.3f, 0).withTop (a.getBottom() - 8)); }
+        if (isRoot (note)) { g.setColour (s.accent); g.fillEllipse (Rectangle<float> (5, 5).withCentre ({ a.getCentreX(), a.getBottom() - 12 })); }
         g.setColour (Colours::white.withAlpha (isOver ? 0.25f : 0.12f));
         g.fillRect (a.reduced (a.getWidth() * 0.25f, 0).withTrimmedBottom (a.getHeight() * 0.2f).withWidth (2));
     }
     void drawUpDownButton (Graphics&, int, int, bool, bool, bool) override {}
 private:
+    bool lockOn() const { return proc.apvts.getRawParameterValue (ID::keyLock)->load() > 0.5f; }
+    bool inScale (int note) const
+    {
+        if (! lockOn()) return true;
+        const int key = (int) proc.apvts.getRawParameterValue (ID::key)->load();
+        const int mask = Choices::scaleMask ((int) proc.apvts.getRawParameterValue (ID::scale)->load());
+        return (mask >> (((note - key) % 12 + 12) % 12)) & 1;
+    }
+    bool isRoot (int note) const { return lockOn() && ((note - (int) proc.apvts.getRawParameterValue (ID::key)->load()) % 12 + 12) % 12 == 0; }
     KeysKillaProcessor& proc;
     KKLookAndFeel& lnf;
 };
 
-//==============================================================================
-// Advanced page: every parameter, generic controls. (v1: one page, tabs come later)
-class AdvancedPage : public Component
-{
-public:
-    AdvancedPage (KeysKillaProcessor& p, KKLookAndFeel& l) : lnf (l)
-    {
-        for (auto* ap : p.getParameters())
-        {
-            auto* rp = dynamic_cast<RangedAudioParameter*> (ap);
-            if (! rp) continue;
-            auto item = std::make_unique<Item>();
-            item->label.setText (rp->getName (24).toUpperCase(), dontSendNotification);
-            item->label.setJustificationType (Justification::centred);
-            item->label.setFont (serif (11.0f, false, 0.05f));
-            addAndMakeVisible (item->label);
-            if (auto* c = dynamic_cast<AudioParameterChoice*> (rp))
-            {
-                item->combo = std::make_unique<ComboBox>();
-                item->combo->addItemList (c->choices, 1);
-                addAndMakeVisible (*item->combo);
-                item->ca = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, rp->getParameterID(), *item->combo);
-            }
-            else if (dynamic_cast<AudioParameterBool*> (rp))
-            {
-                item->toggle = std::make_unique<ToggleButton> ("ON");
-                addAndMakeVisible (*item->toggle);
-                item->ba = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, rp->getParameterID(), *item->toggle);
-            }
-            else
-            {
-                item->slider = std::make_unique<Slider> (Slider::RotaryHorizontalVerticalDrag, Slider::TextBoxBelow);
-                item->slider->setTextBoxStyle (Slider::TextBoxBelow, false, 70, 14);
-                addAndMakeVisible (*item->slider);
-                item->sa = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (p.apvts, rp->getParameterID(), *item->slider);
-            }
-            items.push_back (std::move (item));
-        }
-        closeBtn.setButtonText ("CLOSE");
-        closeBtn.onClick = [this] { setVisible (false); };
-        addAndMakeVisible (closeBtn);
-    }
-    void paint (Graphics& g) override
-    {
-        g.fillAll ((lnf.skin->dark ? Colour (0xf0080606) : Colour (0xf0dfe3e8)));
-        drawPanel (g, getLocalBounds().toFloat().reduced (10), *lnf.skin, "ADVANCED");
-    }
-    void resized() override
-    {
-        closeBtn.setBounds (getWidth() - 110, 18, 90, 26);
-        const int cols = 12, cw = (getWidth() - 40) / cols, rh = 108;
-        for (size_t i = 0; i < items.size(); ++i)
-        {
-            auto& it = *items[i];
-            Rectangle<int> cell (20 + (int) (i % cols) * cw, 50 + (int) (i / cols) * rh, cw, rh);
-            it.label.setBounds (cell.removeFromTop (16));
-            if (it.slider) it.slider->setBounds (cell.reduced (4, 0).withTrimmedBottom (6));
-            if (it.combo) it.combo->setBounds (cell.withSizeKeepingCentre (cw - 8, 24));
-            if (it.toggle) it.toggle->setBounds (cell.withSizeKeepingCentre (60, 24));
-        }
-    }
-private:
-    struct Item
-    {
-        Label label;
-        std::unique_ptr<Slider> slider; std::unique_ptr<ComboBox> combo; std::unique_ptr<ToggleButton> toggle;
-        std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> sa;
-        std::unique_ptr<AudioProcessorValueTreeState::ComboBoxAttachment> ca;
-        std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> ba;
-    };
-    KKLookAndFeel& lnf;
-    std::vector<std::unique_ptr<Item>> items;
-    TextButton closeBtn;
-};
+#include "AdvancedPage.h"
+#include "PresetBrowser.h"
 
 //==============================================================================
 class GlyphButton : public Button
@@ -797,7 +705,7 @@ public:
         addAndMakeVisible (chaosLabel);
 
         dice.onRoll = [this] { proc.rollDice (proc.uiTile >= 0 ? proc.uiTile : tileOfCurrent()); };
-        dice.onUndo = [this] { proc.undoDice(); };
+        dice.onUndo = [this] { showDiceMenu(); };
         addAndMakeVisible (dice);
         addAndMakeVisible (xy);
 
@@ -830,8 +738,15 @@ public:
         pitchLabel.setFont (serif (10.0f, false, 0.05f)); modLabel.setFont (serif (10.0f, false, 0.05f));
 
         addAndMakeVisible (keyboard);
-        advanced = std::make_unique<AdvancedPage> (proc, lnf);
+        advanced = std::make_unique<AdvancedPage> (proc, lnf, skinIndex);
+        advanced->onSkin = [this] (int sk) { setSkin (sk); };
+        advanced->onSize = [this] (int pct) { setWindowSize (pct); };
         addChildComponent (*advanced);
+        browser = std::make_unique<PresetBrowser> (proc, lnf);
+        browser->getFavourites = [this] { return favourites(); };
+        browser->toggleFavourite = [this] (const String& n) { toggleFavouriteNamed (n); };
+        browser->onChanged = [this] { refreshState(); };
+        addChildComponent (*browser);
 
         setSize (KeysKillaEditor::designW, KeysKillaEditor::designH);
         refreshState();
@@ -839,6 +754,13 @@ public:
     }
 
     ~MainPage() override { setLookAndFeel (nullptr); }
+
+    // used by tests / screenshots: 0 main, 1..8 advanced tab, 9 preset browser
+    void showView (int v)
+    {
+        if (v >= 1 && v <= 8) { advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
+        if (v == 9) browser->open (-1, -1, false);
+    }
 
     void paint (Graphics& g) override
     {
@@ -916,6 +838,7 @@ public:
         keyboard.setBounds (120, 606, 1054, 126);
         keyboard.setKeyWidth (1054.0f / 50.0f);
         advanced->setBounds (getLocalBounds());
+        browser->setBounds (getLocalBounds().withTrimmedBottom (150));
     }
 
     void mouseUp (const MouseEvent& e) override
@@ -1128,92 +1051,149 @@ private:
         refreshState();
     }
 
-    void showPresetMenu()
-    {
-        PopupMenu all;
-        const auto& ps = factoryPresets();
-        for (int t = 0; t < numTiles; ++t)
-        {
-            PopupMenu sub;
-            for (int i = 0; i < (int) ps.size(); ++i)
-                if (ps[(size_t) i].tile == t)
-                {
-                    const auto& p = ps[(size_t) i];
-                    String label = p.name;
-                    if (p.sub.isNotEmpty()) label << "  [" << p.sub << "]";
-                    if (p.exclusive) label << "  *EXCLUSIVE*";
-                    sub.addItem (i + 1, label, true, i == proc.currentPresetIndex());
-                }
-            all.addSubMenu (tileNames()[t], sub);
-        }
-        PopupMenu favs;
-        auto favList = StringArray::fromTokens (settings->getValue ("favourites"), "|", "");
-        for (int i = 0; i < (int) ps.size(); ++i) if (favList.contains (ps[(size_t) i].name)) favs.addItem (i + 1, ps[(size_t) i].name);
-        all.addSeparator();
-        all.addSubMenu ("FAVOURITES", favs);
-        all.showMenuAsync (PopupMenu::Options().withTargetComponent (presetLabel),
-                           [this] (int r) { if (r > 0) { proc.loadPreset (r - 1); refreshState(); } });
-    }
-
     void mouseDown (const MouseEvent& e) override
     {
-        if (presetR.contains (e.position) && ! heartBtn.getBounds().contains (e.getPosition())) showPresetMenu();
+        if (presetR.contains (e.position) && ! heartBtn.getBounds().contains (e.getPosition()))
+            browser->open (proc.uiExclusive ? -1 : proc.uiTile, proc.uiEra, proc.uiExclusive);
     }
 
-    void toggleFavourite()
+    StringArray favourites() const { return StringArray::fromTokens (settings->getValue ("favourites"), "|", ""); }
+    void toggleFavourite() { toggleFavouriteNamed (proc.currentName()); }
+    void toggleFavouriteNamed (const String& n)
     {
-        auto favList = StringArray::fromTokens (settings->getValue ("favourites"), "|", "");
-        const auto n = proc.currentName();
+        auto favList = favourites();
         if (favList.contains (n)) favList.removeString (n); else favList.add (n);
         favList.removeEmptyStrings();
         settings->setValue ("favourites", favList.joinIntoString ("|"));
         refreshState();
     }
 
-    File presetDir() const
+    void askName (const String& title, const String& initial, std::function<void (const String&)> done)
     {
-        auto d = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Presets");
-        d.createDirectory();
-        return d;
+        auto* w = new AlertWindow (title, "Preset name:", MessageBoxIconType::NoIcon, this);
+        w->addTextEditor ("name", initial);
+        w->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+        w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+        w->enterModalState (true, ModalCallbackFunction::create ([w, done] (int r)
+        {
+            const auto name = w->getTextEditorContents ("name").trim();
+            if (r == 1 && name.isNotEmpty()) done (name);
+        }), true);
     }
 
-    void savePreset()
+    void savePresetAs()
     {
-        chooser = std::make_unique<FileChooser> ("Save preset", presetDir().getChildFile (proc.currentName() + ".kkpreset"), "*.kkpreset");
-        chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
-                              [this] (const FileChooser& fc) { auto f = fc.getResult(); if (f != File()) proc.saveUserPreset (f.withFileExtension ("kkpreset")); refreshState(); });
+        askName ("Save preset as", proc.currentName().upToFirstOccurrenceOf (" *", false, false), [this] (const String& name)
+        {
+            proc.saveUserPreset (KeysKillaProcessor::userPresetDir().getChildFile (File::createLegalFileName (name) + ".kkpreset"));
+            refreshState();
+        });
+    }
+
+    void savePreset()   // SAVE: overwrite the current user preset, factory presets are read-only -> Save As
+    {
+        if (proc.currentUserFile().existsAsFile()) { proc.saveUserPreset (proc.currentUserFile()); refreshState(); }
+        else savePresetAs();
     }
 
     void showMenu()
     {
-        PopupMenu m, size;
-        m.addItem (1, "Init patch");
-        m.addItem (2, "Load preset file...");
-        m.addItem (3, "Save preset file...");
-        m.addItem (4, "Undo last DICE roll");
+        const bool user = proc.currentUserFile().existsAsFile();
+        PopupMenu m, size, packs;
+        m.addSectionHeader ("PRESET");
+        m.addItem (1, "Save", true);
+        m.addItem (2, "Save As...");
+        m.addItem (3, "Rename...", user);
+        m.addItem (4, "Delete", user);
+        m.addItem (5, "Revert", proc.isModified());
+        m.addItem (6, "Init patch");
+        m.addItem (7, "Browse presets...");
+        packs.addItem (20, "Import preset pack (.zip or folder)...");
+        packs.addItem (21, "Export user presets as pack (.zip)...");
+        packs.addItem (22, "Show user preset folder");
+        m.addSubMenu ("Preset packs", packs);
+        m.addSectionHeader ("EDIT");
+        m.addItem (8, "Undo", proc.undoManager.canUndo());
+        m.addItem (9, "Redo", proc.undoManager.canRedo());
+        m.addItem (12, String ("Switch to ") + (proc.currentAB() == 0 ? "B" : "A") + "  (now " + (proc.currentAB() == 0 ? "A" : "B") + ")");
+        m.addItem (13, String ("Copy ") + (proc.currentAB() == 0 ? "A > B" : "B > A"));
+        m.addItem (14, "Undo last DICE roll", ! proc.diceHistoryNames().isEmpty());
         m.addSeparator();
-        m.addItem (5, "ADVANCED page...");
-        m.addSeparator();
+        m.addItem (15, "ADVANCED page...");
+        m.addItem (16, "Eco mode (lower CPU)", true, proc.eco.load());
         m.addItem (10, "Skin: CHROME (light)", true, skinIndex == 0);
         m.addItem (11, "Skin: BLOOD (dark)", true, skinIndex == 1);
         for (int pct : { 100, 125, 150, 175, 200 }) size.addItem (100 + pct, String (pct) + " %");
         m.addSubMenu ("Window size", size);
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (menuBtn), [this] (int r)
         {
-            if (r == 1) proc.initPatch();
-            else if (r == 2)
+            switch (r)
             {
-                chooser = std::make_unique<FileChooser> ("Load preset", presetDir(), "*.kkpreset");
-                chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
-                                      [this] (const FileChooser& fc) { if (fc.getResult() != File()) proc.loadUserPreset (fc.getResult()); refreshState(); });
+                case 1: savePreset(); break;
+                case 2: savePresetAs(); break;
+                case 3: askName ("Rename preset", proc.currentName(), [this] (const String& n) { proc.renameUserPreset (n); refreshState(); }); break;
+                case 4:
+                    AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, "Delete preset", "Delete \"" + proc.currentName() + "\"?", "Delete", "Cancel", this,
+                                                  ModalCallbackFunction::create ([this] (int ok) { if (ok) proc.deleteUserPreset(); refreshState(); }));
+                    break;
+                case 5: proc.revert(); break;
+                case 6: proc.initPatch(); break;
+                case 7: browser->open (-1, -1, false); break;
+                case 8: proc.undoManager.undo(); break;
+                case 9: proc.undoManager.redo(); break;
+                case 12: proc.switchAB(); break;
+                case 13: proc.copyAtoB(); break;
+                case 14: proc.undoDice(); break;
+                case 15: advanced->setVisible (true); advanced->toFront (false); break;
+                case 16: proc.eco = ! proc.eco.load(); break;
+                case 10: case 11: setSkin (r - 10); break;
+                case 20:
+                    chooser = std::make_unique<FileChooser> ("Import preset pack", File::getSpecialLocation (File::userDocumentsDirectory), "*.zip");
+                    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectDirectories,
+                                          [this] (const FileChooser& fc)
+                                          {
+                                              if (fc.getResult() == File()) return;
+                                              const int n = proc.importPack (fc.getResult());
+                                              AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Import", String (n) + " presets imported.", "OK", this);
+                                          });
+                    break;
+                case 21:
+                    chooser = std::make_unique<FileChooser> ("Export preset pack", File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("KEYS KILLA presets.zip"), "*.zip");
+                    chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
+                                          [this] (const FileChooser& fc) { if (fc.getResult() != File()) proc.exportPack (fc.getResult().withFileExtension ("zip")); });
+                    break;
+                case 22: KeysKillaProcessor::userPresetDir().startAsProcess(); break;
+                default:
+                    if (r > 100) setWindowSize (r - 100);
+                    break;
             }
-            else if (r == 3) savePreset();
-            else if (r == 4) proc.undoDice();
-            else if (r == 5) { advanced->setVisible (true); advanced->toFront (false); }
-            else if (r == 10 || r == 11) { applySkin (r - 10); settings->setValue ("skin", skinIndex); repaintAll(); }
-            else if (r > 100)
-                if (auto* ed = findParentComponentOfClass<AudioProcessorEditor>())
-                    ed->setSize (KeysKillaEditor::designW * (r - 100) / 100, KeysKillaEditor::designH * (r - 100) / 100);
+            refreshState();
+        });
+    }
+
+    void setSkin (int idx) { applySkin (idx); settings->setValue ("skin", skinIndex); repaintAll(); }
+    void setWindowSize (int pct)
+    {
+        if (auto* ed = findParentComponentOfClass<AudioProcessorEditor>())
+            ed->setSize (KeysKillaEditor::designW * pct / 100, KeysKillaEditor::designH * pct / 100);
+    }
+
+    void showDiceMenu()
+    {
+        PopupMenu m, hist, locks;
+        m.addItem (1, "Undo last roll", ! proc.diceHistoryNames().isEmpty());
+        const auto names = proc.diceHistoryNames();
+        for (int i = names.size(); --i >= 0;) hist.addItem (100 + i, "Back to: " + names[i]);
+        m.addSubMenu ("History (last 20)", hist, ! names.isEmpty());
+        for (int i = 0; i < KeysKillaProcessor::numLocks; ++i) locks.addItem (200 + i, String ("Lock ") + KeysKillaProcessor::lockName (i), true, proc.diceLocks[(size_t) i]);
+        m.addSubMenu ("Locks", locks);
+        m.addItem (2, "Save this sound as preset...");
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (dice), [this] (int r)
+        {
+            if (r == 1) proc.undoDice();
+            else if (r == 2) savePresetAs();
+            else if (r >= 200) proc.diceLocks[(size_t) (r - 200)] = ! proc.diceLocks[(size_t) (r - 200)];
+            else if (r >= 100) proc.restoreDice (r - 100);
             refreshState();
         });
     }
@@ -1221,7 +1201,7 @@ private:
     void refreshState()
     {
         presetLabel.setFont (serif (19.0f, false, 0.12f));
-        presetLabel.setText (proc.currentName(), dontSendNotification);
+        presetLabel.setText (proc.currentName() + (modified ? " *" : ""), dontSendNotification);
         presetLabel.setColour (Label::textColourId, lnf.skin->text);
         const int cur = proc.currentPresetIndex();
         const int shownTile = proc.uiTile >= 0 ? proc.uiTile : (cur >= 0 && ! proc.uiExclusive ? factoryPresets()[(size_t) cur].tile : -1);
@@ -1238,9 +1218,10 @@ private:
                                      "Filter movement, chorus and vibrato", "Stereo width and detune" };
         static const char* tipsB[] { "Clean sine sub layer an octave down", "Tempo-synced filter wobble", "Distortion above the low end only",
                                      "Slide time between notes", "Darker / brighter", "Punchy pitch click on the attack" };
+        const auto custom = proc.macroNames();
         for (int i = 0; i < 6; ++i)
         {
-            macros[(size_t) i].label.setText (bass ? bassL[i] : normal[i], dontSendNotification);
+            macros[(size_t) i].label.setText (custom.size() == 6 ? custom[i] : String (bass ? bassL[i] : normal[i]), dontSendNotification);
             macros[(size_t) i].label.setFont (serif (20.0f, false, 0.25f));
             macros[(size_t) i].slider.setTooltip (bass ? tipsB[i] : tipsN[i]);
         }
@@ -1256,11 +1237,17 @@ private:
         if (warnHold > 0) --warnHold;
         meter.repaint();
 
-        if (proc.currentName() != lastName || proc.currentPresetIndex() != lastIndex)
+        const bool bassNow = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
+        if (++slowTick % 10 == 0) modifiedNow = proc.isModified();
+        if (proc.currentName() != lastName || proc.currentPresetIndex() != lastIndex || modifiedNow != modified || bassNow != lastBass)
         {
-            lastName = proc.currentName(); lastIndex = proc.currentPresetIndex();
+            lastName = proc.currentName(); lastIndex = proc.currentPresetIndex(); modified = modifiedNow; lastBass = bassNow;
             refreshState();
         }
+        if (! ModifierKeys::currentModifiers.isAnyMouseButtonDown()) proc.undoManager.beginNewTransaction();
+        const float lockHash = proc.apvts.getRawParameterValue (ID::keyLock)->load() * 1000 + proc.apvts.getRawParameterValue (ID::key)->load() * 10
+                             + proc.apvts.getRawParameterValue (ID::scale)->load();
+        if (lockHash != lastLockHash) { lastLockHash = lockHash; keyboard.repaint(); }
         uint64_t hash = 0;
         for (size_t i = 0; i < 128; ++i) if (proc.playing[i].load()) hash = hash * 131 + i + 1;
         if (hash != lastPlayHash) { lastPlayHash = hash; keyboard.repaint(); }
@@ -1291,7 +1278,10 @@ private:
 
     Rectangle<float> browserR, exclusiveR, macroR, playR, meterR, wheelR, keyR, presetR;
     bool isFav = false;
-    int warnHold = 0, lastIndex = -2;
+    int warnHold = 0, lastIndex = -2, slowTick = 0;
+    bool modified = false, modifiedNow = false, lastBass = false;
+    float lastLockHash = -1;
+    std::unique_ptr<PresetBrowser> browser;
     String lastName;
     uint64_t lastPlayHash = 0;
 };
@@ -1308,6 +1298,8 @@ KeysKillaEditor::KeysKillaEditor (KeysKillaProcessor& p) : AudioProcessorEditor 
 }
 
 KeysKillaEditor::~KeysKillaEditor() = default;
+
+void KeysKillaEditor::showView (int v) { page->showView (v); }
 
 void KeysKillaEditor::resized()
 {
