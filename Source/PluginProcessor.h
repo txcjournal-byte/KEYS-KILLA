@@ -10,12 +10,13 @@ class KeysKillaProcessor : public juce::AudioProcessor
 {
 public:
     KeysKillaProcessor();
-    ~KeysKillaProcessor() override = default;
+    ~KeysKillaProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -24,7 +25,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 8.0; }
+    double getTailLengthSeconds() const override { return 10.0; }
 
     int getNumPrograms() override { return (int) factoryPresets().size(); }
     int getCurrentProgram() override { return juce::jmax (0, currentPreset); }
@@ -35,15 +36,49 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // --- message-thread API used by the editor ---
+    // ---------------- message-thread API used by the editor ----------------
     void loadPreset (int index);
     void initPatch();
-    void rollDice (int tile);
-    bool undoDice();
+    void revert();
+    bool isModified() const;
     juce::String currentName() const { return presetName; }
     int  currentPresetIndex() const { return currentPreset; }
+    juce::File currentUserFile() const { return userFile; }
+    juce::StringArray macroNames() const { return macroLabels; }
+
+    // user presets (JSON)
+    static juce::File userPresetDir();
+    juce::Array<juce::File> userPresets() const;
     bool saveUserPreset (const juce::File& f);
     bool loadUserPreset (const juce::File& f);
+    bool renameUserPreset (const juce::String& newName);
+    bool deleteUserPreset();
+    int  importPack (const juce::File& zipOrFolder);
+    bool exportPack (const juce::File& zip);
+
+    // DICE
+    enum DiceLock { lockEngine, lockFilter, lockEnv, lockMod, lockFx, lockExclusive, numLocks };
+    static const char* lockName (int i);
+    void rollDice (int tile);
+    bool undoDice();
+    void restoreDice (int historyIndex);
+    juce::StringArray diceHistoryNames() const;
+    std::array<bool, numLocks> diceLocks {};
+
+    // ERA MORPH corners (0 classic, 1 melodic, 2 raw, 3 aggressive): factory preset index or -1
+    void setMorphCorner (int corner, int presetIndex);
+    int  morphCorner (int corner) const { return corners[(size_t) corner]; }
+
+    // A/B, undo
+    void switchAB();
+    void copyAtoB();
+    int  currentAB() const { return abSlot; }
+    juce::UndoManager undoManager;
+
+    // FX order + settings
+    std::array<int, kk::numFxSlots> getFxOrder() const;
+    void setFxOrder (const std::array<int, kk::numFxSlots>& o);
+    std::atomic<bool> eco { false };
 
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
@@ -56,33 +91,71 @@ public:
 private:
     void buildVoiceParams (kk::VoiceParams& vp, kk::FxParams& fp);
     void handleMidi (const juce::MidiMessage& m);
-    void expandAndArp (const juce::MidiBuffer& in, juce::MidiBuffer& out, int numSamples, double beatPos, double bpm, bool playingHost);
+    void processMidi (const juce::MidiBuffer& in, juce::MidiBuffer& out, int numSamples, double beatPos, double bpm);
+    void applyValues (const std::vector<std::pair<juce::String, float>>& values);
     void syncParamsToState();
-    void applyValues (const std::vector<std::pair<const char*, float>>& values);
+    void snapshotForModified();
+    void rebuildCornerBank();
+    int  lockOf (const juce::String& id) const;
+    float value (int i) const;
+    int  snapToScale (int note) const;
 
-    std::vector<std::atomic<float>*> paramCache;
+    // parameter table
+    std::vector<juce::RangedAudioParameter*> params;
+    std::vector<std::atomic<float>*> raw;
+    std::vector<bool> morphable, discrete;
+    int indexOf (const juce::String& id) const;
+    struct Idx;
+    std::unique_ptr<Idx> ix;
+
     kk::SynthEngine synth;
-    kk::FxRack fx;
+    std::unique_ptr<kk::FxRack> fxPtr { std::make_unique<kk::FxRack>() };
     kk::VoiceParams vp;
     kk::FxParams fp;
 
-    std::vector<float> bufL, bufR, bufG, lfoBuf;
+    std::vector<float> bufL, bufR, bufG, lfoBuf, lfo2Buf;
     juce::MidiBuffer processedMidi;
     double sr = 44100;
-    float lfoPhase = 0;
+    float lfoPhase = 0, lfo2Phase = 0, sh1 = 0, sh2 = 0, lastPh1 = 0, lastPh2 = 0;
+    kk::Rng shRng;
     double freeBeat = 0;
-    float midiPitch = 0, midiMod = 0;
+    float midiPitch = 0, midiMod = 0, midiAT = 0;
+    int64_t sampleClock = 0;
+    float bypassGain = 1.0f; bool bypassed = false;
 
-    // arp / chord
-    bool lastChord = false, lastArp = false;
+    // key lock / chord / arp
+    bool lastChord = false, lastArp = false, lastKeyLock = false;
+    std::array<int, 128> noteMap {};                 // input note -> locked note
     std::array<bool, 128> arpHeld {};
-    int arpIndex = 0, arpNote = -1;
+    std::array<int, 128> arpOrder {}; int arpOrderN = 0;
+    int arpIndex = 0, arpDir = 1;
     int64_t arpLastStep = -1;
+    kk::Rng arpRng;
+    struct Pending { int64_t due; int note; float vel; bool on; };
+    std::array<Pending, 256> pending {}; int pendingN = 0;
+    void addPending (int64_t due, int note, float vel, bool on);
 
+    // morph
+    std::array<int, 4> corners { -1, -1, -1, -1 };
+    std::array<std::array<std::vector<float>, 4>, 2> cornerBank;
+    std::atomic<int> cornerBankIdx { 0 };
+    std::atomic<bool> morphActive { false };
+    float morphW[4] { 0.25f, 0.25f, 0.25f, 0.25f };
+
+    // fx order
+    std::array<std::atomic<int>, kk::numFxSlots> fxOrder;
+
+    // presets
     int currentPreset = -1;
     juce::String presetName { "Init" };
-    std::vector<juce::ValueTree> diceHistory;
+    juce::File userFile;
+    juce::StringArray macroLabels;
+    std::vector<float> loadedSnapshot;
+    struct DiceEntry { juce::String name; juce::ValueTree state; };
+    std::vector<DiceEntry> diceHistory;
     int diceCount = 0;
+    juce::ValueTree abState[2];
+    int abSlot = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KeysKillaProcessor)
 };

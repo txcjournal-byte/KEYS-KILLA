@@ -11,7 +11,8 @@ struct Preset
     int era  = 0;              // 0..5 = 2010,2013,2016,2019,2022,2026 buckets; -1 = no era
     bool exclusive = false;
     juce::String sub;          // sub-category (Strings, Brass, Organs, ...)
-    std::vector<std::pair<const char*, float>> values;   // real (denormalised) values
+    std::vector<std::pair<juce::String, float>> values;   // real (denormalised) values
+    juce::StringArray macroNames;                          // optional per-preset macro labels
 };
 
 const std::vector<Preset>& factoryPresets();

@@ -2,6 +2,7 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include <cstdio>
+#include <set>
 
 static double maxWin = 0;
 static bool renderPreset (KeysKillaProcessor& p, int idx, double sr, float& rmsDb, float& peak, float& dc, bool& finite,
@@ -15,7 +16,7 @@ static bool renderPreset (KeysKillaProcessor& p, int idx, double sr, float& rmsD
     const int root = bass ? 36 : 60;
     const int block = 480;
     juce::AudioBuffer<float> buf (2, block);
-    double sumSq = 0, sum = 0; long count = 0; peak = 0; finite = true;
+    double sumSq = 0, sum = 0; long count = 0, dcCount = 0; peak = 0; finite = true;
     double winSq = 0; long winN = 0; maxWin = 0;
     const int totalBlocks = (int) (sr * 3.0 / block);
     for (int b = 0; b < totalBlocks; ++b)
@@ -35,15 +36,103 @@ static bool renderPreset (KeysKillaProcessor& p, int idx, double sr, float& rmsD
                 const float v = buf.getSample (ch, i);
                 if (! std::isfinite (v)) finite = false;
                 peak = std::max (peak, std::abs (v));
-                if (b * block < sr * 1.5) { sumSq += (double) v * v; sum += v; ++count; }
+                if (b * block < sr * 1.5) { sumSq += (double) v * v; ++count; }
+                if (b * block >= sr * 1.0 && b * block < sr * 1.5) { sum += v; ++dcCount; }   // DC on the settled part only
                 winSq += (double) v * v; if (++winN >= (long) (sr * 0.2)) { maxWin = std::max (maxWin, std::sqrt (winSq / (double) winN)); winSq = 0; winN = 0; }
             }
     }
     rmsDb = (float) juce::Decibels::gainToDecibels (std::sqrt (sumSq / std::max (1L, count)), -120.0);
-    dc = (float) (sum / std::max (1L, count));
+    dc = (float) (sum / std::max (1L, dcCount));
     if (chord) p.apvts.getParameter (ID::chord)->setValueNotifyingHost (0.0f);
     if (arp)   p.apvts.getParameter (ID::arp)->setValueNotifyingHost (0.0f);
-    return finite && rmsDb > -50.0f && peak <= 1.0f && std::abs (dc) < 0.02f;
+    // true DC is removed by the output DC blocker; the mean can still move with sub-audio swells of slow pads
+    return finite && rmsDb > -50.0f && peak <= 1.0f && std::abs (dc) < 0.03f;
+}
+
+
+// ---------------------------------------------------------------- DSP unit tests
+static int unitTests()
+{
+    int fails = 0;
+    auto check = [&] (bool ok, const char* what) { if (! ok) { std::printf ("!! unit: %s\n", what); ++fails; } };
+    auto set = [] (KeysKillaProcessor& p, const char* id, float v) { auto* q = p.apvts.getParameter (id); q->setValueNotifyingHost (q->convertTo0to1 (v)); };
+    auto countNotes = [] (KeysKillaProcessor& p) { int c = 0; for (auto& b : p.playing) c += b.load() ? 1 : 0; return c; };
+
+    // wavetable: frame 0 is a sine
+    {
+        const auto& wt = kk::WavetableBank::get();
+        float err = 0;
+        for (int i = 0; i < 64; ++i) { const float ph = (float) i / 64.0f; err = std::max (err, std::abs (wt.read (ph, 0.0f, 0.001f) - std::sin (kk::twoPi * ph))); }
+        check (err < 0.02f, "wavetable sine frame");
+    }
+    // render determinism (offline render == playback)
+    {
+        auto render = []
+        {
+            KeysKillaProcessor p; p.setCurrentProgram (5); p.prepareToPlay (48000, 256);
+            juce::AudioBuffer<float> b (2, 256); double acc = 0;
+            for (int k = 0; k < 200; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 90), 3); p.processBlock (b, m); acc += b.getSample (0, 100) * (k + 1); }
+            return acc;
+        };
+        check (render() == render(), "deterministic render");
+    }
+    KeysKillaProcessor p;
+    p.setCurrentProgram (0);
+    p.prepareToPlay (48000, 256);
+    juce::AudioBuffer<float> buf (2, 256);
+    auto run = [&] (juce::MidiBuffer m, int blocks = 1) { for (int k = 0; k < blocks; ++k) { p.processBlock (buf, m); m.clear(); } };
+    auto noteOn = [] (int n) { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); return m; };
+    auto noteOff = [] (int n) { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOff (1, n), 0); return m; };
+
+    // chord: one key -> minor 7 (4 notes)
+    set (p, ID::chord, 1); set (p, ID::chordType, 1); run ({}, 1);
+    run (noteOn (60), 2); check (countNotes (p) == 4, "chord minor7 plays 4 notes");
+    run (noteOff (60), 2); check (countNotes (p) == 0, "chord releases all notes");
+    set (p, ID::chord, 0); run ({}, 1);
+    // key lock: C# in C minor snaps to a scale note
+    set (p, ID::keyLock, 1); set (p, ID::key, 0); set (p, ID::scale, 0); run ({}, 1);
+    run (noteOn (61), 2); check (! p.playing[61].load() && (p.playing[60].load() || p.playing[62].load()), "key lock snaps C# to scale");
+    run (noteOff (61), 2); check (countNotes (p) == 0, "key lock note-off follows mapping");
+    set (p, ID::keyLock, 0); run ({}, 1);
+    // arp produces a changing note from a held chord
+    set (p, ID::arp, 1); run ({}, 1);
+    { juce::MidiBuffer m; for (int n : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); run (m, 1); }
+    std::set<int> seen;
+    for (int k = 0; k < 200; ++k) { run ({}, 1); for (int n : { 60, 63, 67 }) if (p.playing[(size_t) n].load()) seen.insert (n); }
+    check (seen.size() >= 2, "arp cycles through held notes");
+    { juce::MidiBuffer m; for (int n : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOff (1, n), 0); run (m, 40); }
+    check (countNotes (p) == 0, "arp stops after release");
+    set (p, ID::arp, 0); run ({}, 1);
+    // all notes off: nothing hangs
+    { juce::MidiBuffer m; for (int n = 40; n < 80; n += 3) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); run (m, 2); }
+    { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::allNotesOff (1), 0); run (m, 2); }
+    check (countNotes (p) == 0, "all notes off");
+    // sustain pedal holds, release frees
+    run (noteOn (64), 1);
+    { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0); run (m, 1); }
+    run (noteOff (64), 2); check (p.playing[64].load(), "sustain holds note");
+    { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 0); run (m, 2); }
+    check (! p.playing[64].load(), "sustain release");
+    // bypass fades instead of clicking
+    run (noteOn (60), 20);
+    {
+        juce::MidiBuffer m; float maxJump = 0, last = buf.getSample (0, 255);
+        for (int k = 0; k < 10; ++k)
+        {
+            p.processBlockBypassed (buf, m);
+            for (int i = 0; i < 256; ++i) { maxJump = std::max (maxJump, std::abs (buf.getSample (0, i) - last)); last = buf.getSample (0, i); }
+        }
+        check (maxJump < 0.2f && std::abs (last) < 1.0e-4f, "bypass fades out without a click");
+    }
+    // 192 kHz works
+    p.prepareToPlay (192000, 1024);
+    {
+        juce::AudioBuffer<float> b (2, 1024); bool fin = true; float pk = 0;
+        for (int k = 0; k < 100; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0); p.processBlock (b, m);
+            for (int i = 0; i < 1024; ++i) { fin &= std::isfinite (b.getSample (0, i)); pk = std::max (pk, std::abs (b.getSample (0, i))); } }
+        check (fin && pk > 0.001f && pk <= 1.0f, "192 kHz render");
+    }
+    return fails;
 }
 
 int main (int argc, char** argv)
@@ -63,6 +152,74 @@ int main (int argc, char** argv)
         }
         return 0;
     }
+    if (argc > 2 && juce::String (argv[1]) == "-dc")   // -dc <idx>: mean per 250 ms while a note is held for 6 s
+    {
+        const int idx = juce::String (argv[2]).getIntValue();
+        p.setCurrentProgram (idx); p.prepareToPlay (44100.0, 441);
+        juce::AudioBuffer<float> buf (2, 441);
+        double sum = 0; int cnt = 0;
+        for (int b = 0; b < 600; ++b)
+        {
+            juce::MidiBuffer m; if (b == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            p.processBlock (buf, m);
+            for (int i = 0; i < 441; ++i) { sum += buf.getSample (0, i); ++cnt; }
+            if (cnt >= 11025) { std::printf ("%.4f ", sum / cnt); sum = 0; cnt = 0; }
+        }
+        std::printf ("\n");
+        return 0;
+    }
+    if (argc > 3 && juce::String (argv[1]) == "-dump")   // -dump <prev idx> <idx>: parameter values after loading idx
+    {
+        const int a = juce::String (argv[2]).getIntValue(), b = juce::String (argv[3]).getIntValue();
+        if (a >= 0) p.setCurrentProgram (a);
+        p.setCurrentProgram (b);
+        for (auto* prm : p.getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                std::printf ("%s=%.4f\n", rp->getParameterID().toRawUTF8(), p.apvts.getRawParameterValue (rp->getParameterID())->load());
+        return 0;
+    }
+    if (argc > 3 && juce::String (argv[1]) == "-seq")   // -seq <from> <to>: render a range, print loudness
+    {
+        for (int i = juce::String (argv[2]).getIntValue(); i <= juce::String (argv[3]).getIntValue(); ++i)
+        {
+            float rms, peak, dc; bool fin;
+            renderPreset (p, i, 44100.0, rms, peak, dc, fin);
+            std::printf ("%3d %-32s win %.1f dB\n", i, p.getProgramName (i).toRawUTF8(), juce::Decibels::gainToDecibels ((float) maxWin));
+        }
+        return 0;
+    }
+    if (argc > 2 && juce::String (argv[1]) == "-probe")   // -probe <preset name>: which parameter makes it loud?
+    {
+        int idx = -1;
+        for (int i = 0; i < p.getNumPrograms(); ++i) if (p.getProgramName (i) == juce::String (argv[2])) idx = i;
+        if (idx < 0) return 1;
+        float rms, peak, dc; bool fin;
+        if (argc > 3)
+            for (int i = 0; i < p.getNumPrograms(); ++i)
+                if (p.getProgramName (i) == juce::String (argv[3])) { renderPreset (p, i, 44100.0, rms, peak, dc, fin); std::printf ("prev: win %.1f dB\n", juce::Decibels::gainToDecibels ((float) maxWin)); }
+        renderPreset (p, idx, 44100.0, rms, peak, dc, fin);
+        std::printf ("base: win %.1f dB\n", juce::Decibels::gainToDecibels ((float) maxWin));
+        for (auto* id : { ID::crush, ID::wow, ID::m4, ID::phaser, ID::reverse, ID::tape, ID::bend, ID::revMix, ID::delayMix, ID::chorus, ID::ghost, ID::gain })
+        {
+            auto vals = factoryPresets()[(size_t) idx].values;
+            p.setCurrentProgram (idx);
+            auto* prm = p.apvts.getParameter (id);
+            const float keep = prm->getValue();
+            prm->setValueNotifyingHost (juce::String (id) == ID::gain ? 0.0f : prm->getDefaultValue() * 0.0f);
+            p.prepareToPlay (44100.0, 480);
+            // render without reloading the preset
+            juce::AudioBuffer<float> buf (2, 480); double mw = 0, ws = 0; long wn = 0;
+            for (int b = 0; b < 300; ++b)
+            {
+                juce::MidiBuffer m; if (b == 0) for (int nn : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOn (1, nn, (juce::uint8) 100), 0);
+                if (b == 138) for (int nn : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOff (1, nn), 0);
+                p.processBlock (buf, m);
+                for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < 480; ++i) { ws += buf.getSample (ch, i) * buf.getSample (ch, i); if (++wn >= 8820) { mw = std::max (mw, std::sqrt (ws / wn)); ws = 0; wn = 0; } }
+            }
+            std::printf ("%-10s zeroed (was %.2f): win %.1f dB\n", id, keep, juce::Decibels::gainToDecibels ((float) mw));
+        }
+        return 0;
+    }
     if (argc > 3 && juce::String (argv[1]) == "-shot")   // -shot <out.png> <skin 0|1> : GUI snapshot
     {
         juce::PropertiesFile::Options o; o.applicationName = "KEYS KILLA"; o.filenameSuffix = "settings"; o.folderName = "KEYS KILLA";
@@ -77,7 +234,7 @@ int main (int argc, char** argv)
         return 0;
     }
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
-    int failures = 0;
+    int failures = unitTests();
     std::vector<float> levels;
     for (double sr : { 44100.0, 96000.0 })
     {

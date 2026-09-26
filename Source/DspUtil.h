@@ -11,6 +11,42 @@ constexpr float pi    = 3.141592653589793f;
 
 inline float semisToHz (float midi) { return 440.0f * std::exp2 ((midi - 69.0f) / 12.0f); }
 inline float clamp01 (float x) { return std::clamp (x, 0.0f, 1.0f); }
+inline float fastTanh (float x)
+{
+    x = std::clamp (x, -3.0f, 3.0f);
+    return x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
+}
+
+// LFO shapes: 0 sine, 1 tri, 2 saw, 3 square, 4 S&H (value supplied by caller)
+inline float lfoShape (int shape, float ph, float sh)
+{
+    switch (shape)
+    {
+        case 1:  return ph < 0.5f ? ph * 4.0f - 1.0f : 3.0f - ph * 4.0f;
+        case 2:  return 1.0f - 2.0f * ph;
+        case 3:  return ph < 0.5f ? 1.0f : -1.0f;
+        case 4:  return sh;
+        default: return std::sin (twoPi * ph);
+    }
+}
+
+// Cheap 4-pole ladder with saturating stages
+struct Ladder
+{
+    float s[4] {};
+    void reset() { for (auto& v : s) v = 0; }
+    inline float tick (float x, float g, float res)
+    {
+        const float fb = res * 4.0f * s[3];
+        float in = fastTanh (x - fb);
+        for (int i = 0; i < 4; ++i)
+        {
+            s[i] += g * (in - s[i]);
+            in = s[i];
+        }
+        return s[3] * (1.0f + res * 1.5f);
+    }
+};
 
 // Deterministic, allocation-free RNG (xorshift32)
 struct Rng
@@ -52,7 +88,7 @@ struct SvfCoef
 
 struct SvfState
 {
-    float ic1 = 0, ic2 = 0, lp = 0, bp = 0;
+    float ic1 = 0, ic2 = 0, lp = 0, bp = 0, hp = 0;
     inline void tick (const SvfCoef& c, float v0)
     {
         const float v3 = v0 - ic2;
@@ -60,9 +96,9 @@ struct SvfState
         const float v2 = ic2 + c.a2 * ic1 + c.a3 * v3;
         ic1 = 2.0f * v1 - ic1;
         ic2 = 2.0f * v2 - ic2;
-        lp = v2; bp = v1;
+        lp = v2; bp = v1; hp = v0 - c.k * v1 - v2;
     }
-    void reset() { ic1 = ic2 = lp = bp = 0; }
+    void reset() { ic1 = ic2 = lp = bp = hp = 0; }
 };
 
 struct OnePole
@@ -75,8 +111,9 @@ struct OnePole
 
 struct DcBlock
 {
-    float x1 = 0, y1 = 0;
-    inline float tick (float x) { float y = x - x1 + 0.995f * y1; x1 = x; y1 = y; return y; }
+    float x1 = 0, y1 = 0, r = 0.999f;
+    void setHz (float hz, float sr) { r = std::exp (-twoPi * hz / sr); }
+    inline float tick (float x) { float y = x - x1 + r * y1; x1 = x; y1 = y; return y; }
 };
 
 struct DelayLine

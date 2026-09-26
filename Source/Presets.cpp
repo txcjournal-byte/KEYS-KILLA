@@ -1,5 +1,6 @@
 #include "Presets.h"
 #include "Params.h"
+#include "PresetGains.h"
 
 // Factory presets. Values are real parameter values; anything not listed uses the default.
 // Names are neutral descriptions only (instrument, scene, mood, year).
@@ -22,11 +23,17 @@ const std::vector<Preset>& factoryPresets()
     static const std::vector<Preset> presets = []
     {
         std::vector<Preset> v;
-        auto P = [&v] (const char* name, int tile, int era, bool excl, const char* sub,
-                       std::vector<std::pair<const char*, float>> vals)
-        { v.push_back ({ name, tile, era, excl, sub, std::move (vals) }); };
+        using Vals = std::vector<std::pair<juce::String, float>>;
+        auto P = [&v] (const char* name, int tile, int era, bool excl, const char* sub, Vals vals)
+        { v.push_back ({ name, tile, era, excl, sub, std::move (vals), {} }); };
 
         const float FM = engFM, VA = engVA, PL = engPluck, VX = engVox, OR = engOrgan, FL = engFlute, SB = engSub;
+        const float WT = engWavetable, OC = engOrchestral, MD = engModal;
+        // mod matrix helper: slot, source, dest, amount
+        auto MM = [] (Vals& vals, int slot, int src, int dst, float amt)
+        {
+            vals.push_back ({ ID::mmSrc (slot), (float) src }); vals.push_back ({ ID::mmDst (slot), (float) dst }); vals.push_back ({ ID::mmAmt (slot), amt });
+        };
 
         // ---------------- BELLS ----------------
         P ("Southside Bells 2010", tBells, 0, false, "", { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.45f }, { fdecay, 1.0f },
@@ -136,12 +143,12 @@ const std::vector<Preset>& factoryPresets()
             { decay, 0.3f }, { sustain, 0.1f }, { circuit, 0.45f }, { crush, 0.2f }, { revMix, 0.2f }, { gain, -5.7f } });
 
         // ---------------- BASS (mono + bass mode added automatically) ----------------
-        auto B = [&] (const char* name, int era, std::vector<std::pair<const char*, float>> vals)
+        auto B = [&] (const char* name, int era, Vals vals, bool excl = false)
         {
-            std::vector<std::pair<const char*, float>> base { { m1, 0.0f }, { m2, 0.0f }, { m3, 0.0f }, { m4, 0.0f }, { m5, 0.5f }, { m6, 0.0f },
+            Vals base { { m1, 0.0f }, { m2, 0.0f }, { m3, 0.0f }, { m4, 0.0f }, { m5, 0.5f }, { m6, 0.0f },
                                                               { revMix, 0.0f }, { width, 0.4f }, { octave, -1 } };
             base.insert (base.end(), vals.begin(), vals.end());
-            P (name, tBass, era, false, "", base);
+            P (name, tBass, era, excl, "", base);
         };
         B ("Pure Sub", 0, { { engine, SB }, { wave, 0.0f }, { sustain, 1 }, { release, 0.2f,  }, { gain, -5.5f } });
         B ("Warm Sub", 2, { { engine, SB }, { wave, 0.35f }, { sustain, 1 }, { release, 0.25f }, { m3, 0.1f,  }, { gain, -8.9f } });
@@ -210,6 +217,167 @@ const std::vector<Preset>& factoryPresets()
             { bodyMix, 0.4f }, { m1, 0.5f }, { m5, 0.5f }, { revMix, 0 }, { m2, 0 }, { m6, 0,  }, { gain, 3.2f } });
         P ("Broken Tape Keys", tKeys, 5, true, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 2.0f }, { sustain, 0.2f },
             { bend, 0.9f }, { circuit, 0.2f }, { wow, 0.4f }, { revMix, 0.3f,  }, { gain, -5.6f } });
+
+        // ================= new engines: wavetable, orchestral, modal, layers A+B =================
+        P ("Modal Bell Tower", tBells, 0, false, "", { { engine, MD }, { wave, 0.85f }, { fmAmt, 0.5f }, { decay, 3.0f }, { sustain, 0 }, { release, 2.0f },
+            { revMix, 0.35f }, { revSize, 0.9f } });
+        P ("Glass Wavetable Bells", tBells, 3, false, "", { { engine, WT }, { wave, 0.71f }, { octave, 1 }, { decay, 1.6f }, { sustain, 0 }, { release, 1.2f },
+            { cutoff, 9000 }, { fenv, 0.3f }, { delayMix, 0.25f }, { revMix, 0.3f } });
+        P ("Tine Keys 2019", tKeys, 3, false, "", { { engine, FM }, { fmAlgo, 5 }, { fmRatio, 1.0f }, { fmRatio2, 14.0f }, { fmAmt, 0.35f },
+            { fdecay, 0.5f }, { decay, 2.0f }, { sustain, 0.15f }, { release, 0.6f }, { chorus, 0.35f }, { revMix, 0.2f } });
+        { Vals v2 { { engine, FM }, { fmAlgo, 5 }, { fmRatio, 1.0f }, { fmRatio2, 14.0f }, { fmAmt, 0.3f }, { decay, 2.2f }, { sustain, 0.2f },
+                    { release, 0.8f }, { layerB, 1 }, { engineB, WT }, { waveB, 0.0f }, { octaveB, 1 }, { levelB, 0.35f }, { chorus, 0.3f }, { revMix, 0.3f } };
+          P ("Layered EP Dream", tKeys, 4, false, "", v2); }
+        P ("Organ Ladder Grit", tKeys, 2, false, "Organs", { { engine, OR }, { wave, 0.7f }, { filterType, 1 }, { cutoff, 2500 }, { reso, 0.3f },
+            { sustain, 1 }, { release, 0.2f }, { drive, 0.25f }, { driveType, 1 }, { revMix, 0.2f } });
+        P ("WT Digi Pluck", tPlucks, 4, false, "", { { engine, WT }, { wave, 1.0f }, { unison, 3 }, { detune, 0.2f }, { cutoff, 1800 }, { fenv, 0.7f },
+            { fdecay, 0.15f }, { decay, 0.3f }, { sustain, 0 }, { release, 0.2f }, { delayMix, 0.3f }, { delayMode, 0 } });
+        P ("Harp Arp 2014", tPlucks, 1, false, "", { { engine, PL }, { wave, 0.45f }, { decay, 2.5f }, { sustain, 0 }, { release, 0.8f },
+            { revMix, 0.4f }, { revType, 1 } });
+        P ("Wavetable Whistle", tFlutes, 4, false, "", { { engine, WT }, { wave, 0.05f }, { octave, 1 }, { attack, 0.03f }, { sustain, 0.9f }, { release, 0.3f },
+            { lfoPitch, 0.12f }, { mono, 1 }, { glide, 0.06f }, { revMix, 0.3f }, { delayMix, 0.2f } });
+        P ("Orchestra Choir Hit 2011", tChoir, 0, false, "", { { engine, OC }, { wave, 1.0f }, { fmAmt, 0.0f }, { unison, 5 }, { detune, 0.3f },
+            { attack, 0.005f }, { decay, 0.7f }, { sustain, 0.2f }, { release, 0.5f }, { revMix, 0.4f }, { revSize, 0.9f } });
+        { Vals v2 { { engine, VX }, { wave, 0.35f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.3f }, { sustain, 1 }, { release, 1.5f },
+                    { layerB, 1 }, { engineB, WT }, { waveB, 0.7f }, { unisonB, 3 }, { detuneB, 0.3f }, { levelB, 0.4f }, { revMix, 0.45f } };
+          MM (v2, 0, srcLfo2, dstWaveB, 0.25f);
+          P ("Synth Vox Layer", tChoir, 5, false, "", v2); }
+        P ("Orchestral Strings 2012", tPads, 0, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.2f },
+            { sustain, 0.9f }, { release, 0.8f }, { lfoPitch, 0.05f }, { revMix, 0.4f }, { revSize, 0.9f } });
+        { Vals v2 { { engine, WT }, { wave, 0.4f }, { unison, 5 }, { detune, 0.35f }, { attack, 0.6f }, { sustain, 1 }, { release, 2.0f },
+                    { cutoff, 5000 }, { lfo2Rate, 0.15f }, { chorus, 0.3f }, { revMix, 0.5f }, { revType, 2 } };
+          MM (v2, 0, srcLfo2, dstWaveA, 0.35f); MM (v2, 1, srcLfo1, dstPan, 0.3f);
+          P ("Wavetable Motion Pad", tPads, 4, false, "", v2); }
+        { Vals v2 { { engine, VA }, { wave, 0.0f }, { unison, 5 }, { detune, 0.35f }, { attack, 0.5f }, { sustain, 1 }, { release, 2.0f }, { cutoff, 4000 },
+                    { layerB, 1 }, { engineB, WT }, { waveB, 0.71f }, { octaveB, 1 }, { levelB, 0.45f }, { phaser, 0.35f }, { revMix, 0.5f } };
+          P ("Layered Glass Pad", tPads, 3, false, "", v2); }
+        P ("Orchestral Brass Stab 2010", tLeads, 0, false, "Brass", { { engine, OC }, { wave, 0.0f }, { unison, 3 }, { detune, 0.2f }, { attack, 0.01f },
+            { decay, 0.5f }, { sustain, 0.5f }, { release, 0.3f }, { revMix, 0.35f }, { revSize, 0.85f } });
+        P ("WT Rage Lead", tLeads, 4, false, "", { { engine, WT }, { wave, 0.285f }, { unison, 7 }, { detune, 0.45f }, { sustain, 0.9f }, { release, 0.3f },
+            { drive, 0.35f }, { driveType, 1 }, { revMix, 0.25f } });
+        { Vals v2 { { engine, WT }, { wave, 0.3f }, { warpMode, 1 }, { fmAmt, 0.2f }, { unison, 3 }, { detune, 0.2f }, { sustain, 0.9f },
+                    { e3attack, 0.001f }, { e3decay, 0.4f }, { mono, 1 }, { glide, 0.05f }, { delayMix, 0.25f } };
+          MM (v2, 0, srcEnv3, dstFmA, 0.6f);
+          P ("Sync Lead 2025", tLeads, 5, false, "", v2); }
+        P ("Stack FM Lead", tLeads, 3, false, "", { { engine, FM }, { fmAlgo, 1 }, { fmRatio, 2.0f }, { fmRatio2, 3.0f }, { fmAmt, 0.35f },
+            { sustain, 0.8f }, { release, 0.3f }, { lfoPitch, 0.06f }, { delayMix, 0.2f } });
+        P ("Tape Pad Loop", tPads, 2, false, "", { { engine, VA }, { wave, 0.35f }, { unison, 3 }, { cutoff, 2500 }, { attack, 0.3f }, { sustain, 0.9f },
+            { release, 1.2f }, { delayMode, 2 }, { delayMix, 0.35f }, { delayFb, 0.55f }, { wow, 0.35f } });
+        P ("Kalimba Modal", tExotic, 3, false, "Mallets", { { engine, MD }, { wave, 0.1f }, { fmAmt, 0.4f }, { decay, 1.2f }, { sustain, 0 },
+            { release, 0.8f }, { revMix, 0.3f } });
+        P ("Marimba Modal 2016", tExotic, 2, false, "Mallets", { { engine, MD }, { wave, 0.5f }, { fmAmt, 0.3f }, { decay, 0.8f }, { sustain, 0 },
+            { release, 0.5f }, { revMix, 0.2f } });
+        P ("Frozen Cloud", tExperimental, -1, false, "", { { engine, VX }, { wave, 0.6f }, { unison, 7 }, { detune, 0.5f }, { attack, 0.8f }, { sustain, 1 },
+            { release, 3.0f }, { revType, 2 }, { revMix, 0.7f }, { freeze, 0 }, { phaser, 0.3f } });
+        P ("Phaser Void", tExperimental, -1, false, "", { { engine, WT }, { wave, 0.9f }, { unison, 5 }, { detune, 0.4f }, { attack, 0.5f }, { sustain, 1 },
+            { release, 2.0f }, { phaser, 0.8f }, { flanger, 0.3f }, { revMix, 0.5f } });
+        P ("Reverse Tape Keys", tExperimental, -1, false, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 1.5f }, { sustain, 0.3f },
+            { reverse, 0.6f }, { wow, 0.3f }, { revMix, 0.3f } });
+
+        // ---------------- more bass ----------------
+        B ("Sub + Click", 3, { { engine, SB }, { wave, 0.1f }, { sustain, 1 }, { release, 0.2f }, { m6, 0.7f } });
+        B ("Rage Saw Bass", 4, { { engine, VA }, { wave, 0.0f }, { unison, 2 }, { detune, 0.2f }, { cutoff, 3000 }, { sustain, 1 }, { drive, 0.45f },
+                              { driveType, 2 }, { m1, 0.5f }, { m3, 0.35f } });
+        B ("Jerk Bounce Bass", 4, { { engine, VA }, { wave, 0.5f }, { cutoff, 1500 }, { fenv, 0.5f }, { fdecay, 0.08f }, { decay, 0.2f }, { sustain, 0.1f },
+                              { release, 0.08f }, { m1, 0.4f }, { m6, 0.5f } });
+        B ("Club Stab Bass", 5, { { engine, VA }, { wave, 0.1f }, { unison, 3 }, { detune, 0.2f }, { cutoff, 1800 }, { fenv, 0.5f }, { fdecay, 0.12f },
+                              { decay, 0.25f }, { sustain, 0.2f }, { m1, 0.4f }, { m3, 0.2f } });
+        B ("Digital Bass 2012", 0, { { engine, FM }, { fmRatio, 2.0f }, { fmAmt, 0.45f }, { fdecay, 0.25f }, { sustain, 0.7f }, { crush, 0.15f }, { m1, 0.3f } });
+        B ("FM Growl", 4, { { engine, FM }, { fmAlgo, 3 }, { fmRatio, 1.0f }, { fmRatio2, 2.0f }, { fmAmt, 0.5f }, { sustain, 1 }, { lfoSync, 1 }, { lfoDiv, 4 },
+                              { wobTarget, 0 }, { m2, 0.4f }, { m3, 0.35f }, { m1, 0.4f } });
+        { Vals v2 { { engine, WT }, { wave, 0.5f }, { warpMode, 4 }, { fmAmt, 0.4f }, { sustain, 1 }, { lfo2Sync, 1 }, { lfo2Div, 4 }, { m1, 0.4f }, { m3, 0.3f } };
+          MM (v2, 0, srcLfo2, dstFmA, 0.5f);
+          B ("WT Growl Bass", 5, v2); }
+        B ("Ladder Acid", 1, { { engine, VA }, { wave, 0.0f }, { filterType, 1 }, { cutoff, 400 }, { reso, 0.8f }, { fenv, 0.6f }, { fdecay, 0.2f },
+                              { sustain, 0.7f }, { glide, 0.1f }, { m1, 0.2f } });
+        B ("Dark Acid", 2, { { engine, VA }, { wave, 0.5f }, { filterType, 2 }, { cutoff, 350 }, { reso, 0.7f }, { fenv, 0.5f }, { fdecay, 0.3f },
+                              { sustain, 0.6f }, { glide, 0.12f }, { m1, 0.3f } });
+        B ("Pluck Bass", 3, { { engine, PL }, { wave, 0.4f }, { decay, 1.0f }, { sustain, 0 }, { release, 0.2f }, { m1, 0.4f } });
+        B ("Detroit Pluck Bass", 3, { { engine, VA }, { wave, 0.3f }, { cutoff, 700 }, { fenv, 0.6f }, { fdecay, 0.1f }, { decay, 0.3f }, { sustain, 0 },
+                              { release, 0.15f }, { m1, 0.5f } });
+        { Vals v2 { { engine, VA }, { wave, 0.0f }, { unison, 3 }, { detune, 0.3f }, { cutoff, 800 }, { sustain, 1 }, { lfo2Rate, 0.3f }, { m1, 0.4f } };
+          MM (v2, 0, srcLfo2, dstDetune, 0.4f); MM (v2, 1, srcLfo2, dstCutoff, 0.15f);
+          B ("Moving Reese", 3, v2); }
+        B ("Hyper Bass", 4, { { engine, WT }, { wave, 0.57f }, { unison, 3 }, { detune, 0.25f }, { cutoff, 4000 }, { sustain, 1 }, { drive, 0.4f },
+                              { driveType, 2 }, { m1, 0.4f } });
+        B ("Digicore Wobble", 4, { { engine, WT }, { wave, 0.43f }, { sustain, 1 }, { lfoSync, 1 }, { lfoDiv, 4 }, { wobTarget, 2 }, { m2, 0.7f }, { m1, 0.5f } });
+        B ("Phonk Crush Bass", 1, { { engine, SB }, { wave, 0.9f }, { decay, 1.2f }, { sustain, 0.4f }, { crush, 0.4f }, { drive, 0.5f }, { driveType, 3 },
+                              { m1, 0.2f }, { m3, 0.3f } });
+        B ("Slow Growl Wobble", 3, { { engine, VX }, { wave, 0.2f }, { unison, 3 }, { detune, 0.2f }, { sustain, 1 }, { lfoSync, 1 }, { lfoDiv, 2 },
+                              { m2, 0.6f }, { m3, 0.3f }, { m1, 0.5f } });
+        B ("Bent Sub", 5, { { engine, SB }, { wave, 0.3f }, { sustain, 1 }, { tape, 1 }, { bend, 0.4f }, { m1, 0.2f } }, true);
+        B ("Broken Bass", 5, { { engine, VA }, { wave, 0.3f }, { cutoff, 1500 }, { sustain, 1 }, { circuit, 0.5f }, { m1, 0.5f } }, true);
+
+        // ---------------- more EXCLUSIVE ----------------
+        P ("Ghost Orchestra", tPads, 0, true, "", { { engine, OC }, { wave, 0.5f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.3f }, { sustain, 0.9f },
+            { release, 1.5f }, { ghost, 0.7f }, { ghostOct, 1 }, { revMix, 0.4f } });
+        P ("Choir In A Bell", tChoir, 3, true, "", { { engine, VX }, { wave, 0.2f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.2f }, { sustain, 0.9f },
+            { release, 1.5f }, { body, 2 }, { bodyMix, 0.6f }, { revMix, 0.35f } });
+        P ("Wood Box Supersaw", tLeads, 4, true, "", { { engine, VA }, { wave, 0.0f }, { unison, 7 }, { detune, 0.45f }, { sustain, 0.8f },
+            { body, 5 }, { bodyMix, 0.55f }, { revMix, 0.2f } });
+        P ("Glass Flute Swap", tFlutes, 4, true, "", { { engine, FL }, { wave, 0.4f }, { sustain, 0.9f }, { lfoPitch, 0.1f }, { body, 3 }, { bodyMix, 0.5f },
+            { revMix, 0.35f } });
+        P ("Flute In A Metal Pipe", tFlutes, 3, true, "", { { engine, FL }, { wave, 0.5f }, { sustain, 0.9f }, { body, 4 }, { bodyMix, 0.6f }, { revMix, 0.3f } });
+        P ("Circuit Organ", tKeys, 4, true, "Organs", { { engine, OR }, { wave, 0.6f }, { sustain, 1 }, { circuit, 0.5f }, { circRate, 2 }, { crush, 0.2f } });
+        P ("Octave Jump Lead", tLeads, 5, true, "", { { engine, WT }, { wave, 0.3f }, { unison, 5 }, { detune, 0.3f }, { sustain, 0.9f }, { release, 0.4f },
+            { bend, 0.7f }, { bendMode, 3 }, { bendSemis, -12 }, { drive, 0.3f }, { gain, -3 } });
+        P ("Rise Bend Bells", tBells, 5, true, "", { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.4f }, { decay, 2.0f }, { sustain, 0.1f }, { release, 1.0f },
+            { bend, 0.5f }, { bendMode, 1 }, { bendSemis, 12 }, { revMix, 0.35f } });
+        P ("Tape Choir", tChoir, 2, true, "", { { engine, VX }, { wave, 0.6f }, { unison, 5 }, { attack, 0.2f }, { sustain, 0.9f }, { release, 1.2f },
+            { tape, 1 }, { bend, 0.3f }, { wow, 0.3f }, { revMix, 0.4f } });
+        P ("Reverse Ghost Pad", tPads, 5, true, "", { { engine, WT }, { wave, 0.6f }, { unison, 5 }, { detune, 0.35f }, { attack, 0.6f }, { sustain, 1 },
+            { release, 2.5f }, { ghost, 0.6f }, { reverse, 0.4f }, { revMix, 0.45f } });
+        P ("Bent Kalimba", tExotic, 5, true, "Mallets", { { engine, MD }, { wave, 0.1f }, { fmAmt, 0.5f }, { decay, 1.2f }, { sustain, 0 },
+            { bend, 0.5f }, { bendMode, 4 }, { tape, 1 }, { revMix, 0.3f } });
+        P ("Haunted Music Box", tBells, 2, true, "", { { engine, MD }, { wave, 0.85f }, { octave, 1 }, { decay, 1.5f }, { sustain, 0 }, { ghost, 0.6f },
+            { tape, 1 }, { wow, 0.3f }, { revMix, 0.4f } });
+        P ("Aggressive Era Pad", tPads, 4, true, "", { { engine, VA }, { wave, 0.2f }, { unison, 7 }, { detune, 0.4f }, { attack, 0.2f }, { sustain, 0.9f },
+            { release, 1.2f }, { morphX, 1.0f }, { morphY, 0.0f }, { gain, -4 } });
+        P ("Classic Era Keys", tKeys, 0, true, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 1.8f }, { sustain, 0.1f },
+            { morphX, 0.0f }, { morphY, 1.0f } });
+
+        // ================= variants: lo-fi, dark (old eras) / blown (new eras) =================
+        const size_t numBase = v.size();
+        for (size_t i = 0; i < numBase; ++i)
+        {
+            const Preset base = v[i];
+            auto get = [] (const Vals& vals, const char* id, float def) { for (auto& [k, x] : vals) if (k == id) return x; return def; };
+            auto set = [] (Vals& vals, const char* id, float x) { for (auto& [k, y] : vals) if (k == id) { y = x; return; } vals.push_back ({ id, x }); };
+            const bool bassP = base.tile == tBass;
+
+            Preset lf = base; lf.name << " Lo-Fi";
+            set (lf.values, crush, std::min (1.0f, get (base.values, crush, 0) + (bassP ? 0.25f : 0.22f)));
+            set (lf.values, wow, std::min (1.0f, get (base.values, wow, 0) + (bassP ? 0.12f : 0.35f)));
+            if (! bassP) set (lf.values, m4, 0.3f);
+            v.push_back (lf);
+
+            const bool oldEra = base.era >= 0 && base.era <= 2;
+            Preset second = base;
+            if (oldEra || base.era < 0)
+            {
+                second.name << " Dark";
+                set (second.values, cutoff, std::max (200.0f, get (base.values, cutoff, 12000.0f) * 0.4f));
+                if (! bassP) { set (second.values, revMix, std::min (1.0f, get (base.values, revMix, 0.15f) + 0.15f)); set (second.values, revSize, 0.9f); }
+            }
+            else
+            {
+                second.name << " Blown";
+                set (second.values, drive, bassP ? 0.5f : 0.6f);
+                set (second.values, driveType, 3);
+            }
+            v.push_back (second);
+        }
+
+        // loudness table produced by tests/calibrate.py
+        for (auto& pr : v)
+            for (const auto& g : presetGains)
+                if (pr.name == g.name)
+                {
+                    bool found = false;
+                    for (auto& [k, x] : pr.values) if (k == ID::gain) { x = g.gain; found = true; }
+                    if (! found) pr.values.push_back ({ ID::gain, g.gain });
+                    break;
+                }
         return v;
     }();
     return presets;
