@@ -152,7 +152,7 @@ namespace Choices
     inline const juce::StringArray wobTargets{ "Filter", "Volume", "Wave", "Pitch" };
     inline const juce::StringArray keys      { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     inline const juce::StringArray scales    { "Minor", "Major", "Harmonic Minor", "Phrygian", "Dorian", "Minor Pent.", "Blues", "Chromatic" };
-    inline const juce::StringArray chordTypes{ "Minor", "Minor 7", "Minor 9", "Major", "Major 7", "Sus 2", "Power", "Octaves", "Scale Triad" };
+    inline const juce::StringArray chordTypes{ "Trap Minor", "Dark Minor", "Minor Add9", "Dark Sus", "Power", "Octaves", "Phrygian", "Minor 7", "Major", "Scale Triad" };
     inline const juce::StringArray arpRates  { "1/8", "1/16", "1/16T", "1/32" };
     inline const juce::StringArray arpModes  { "Up", "Down", "Up/Down", "Random", "As Played" };
     inline const juce::StringArray drives    { "Soft", "Tape", "Hard", "Blown", "Fold" };
@@ -313,7 +313,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     c (ID::key, "Key", Choices::keys, 0);
     c (ID::scale, "Scale", Choices::scales, 0);
     b (ID::chord, "Chord", false);
-    c (ID::chordType, "Chord Type", Choices::chordTypes, 1);
+    c (ID::chordType, "Chord Type", Choices::chordTypes, 0);
     f (ID::strum, "Strum", 0, 0.12f, 0);
     b (ID::arp, "Arp", false);
     c (ID::arpRate, "Arp Rate", Choices::arpRates, 1);

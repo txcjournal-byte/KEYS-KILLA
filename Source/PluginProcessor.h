@@ -69,11 +69,15 @@ public:
     void setMorphCorner (int corner, int presetIndex);
     int  morphCorner (int corner) const { return corners[(size_t) corner]; }
 
-    // A/B, undo
+    // A/B, undo (parameter snapshots - cheap, no per-change bookkeeping)
     void switchAB();
     void copyAtoB();
     int  currentAB() const { return abSlot; }
-    juce::UndoManager undoManager;
+    void captureUndo();   // call when the user finished an edit (mouse up)
+    bool undo();
+    bool redo();
+    bool canUndo() const { return ! undoStack.empty(); }
+    bool canRedo() const { return ! redoStack.empty(); }
 
     // FX order + settings
     std::array<int, kk::numFxSlots> getFxOrder() const;
@@ -86,7 +90,7 @@ public:
     std::atomic<bool>  overload { false };
     std::atomic<float> guiPitch { 0 }, guiMod { 0 };   // from on-screen wheels
     std::array<std::atomic<bool>, 128> playing {};
-    int uiTile = -1, uiEra = -1; bool uiExclusive = false;   // browser filter (kept while editor is closed)
+    int uiTile = -1, uiEra = -1, uiSub = -1; bool uiExclusive = false;   // browser filter (kept while editor is closed)
 
 private:
     void buildVoiceParams (kk::VoiceParams& vp, kk::FxParams& fp);
@@ -122,6 +126,7 @@ private:
     float midiPitch = 0, midiMod = 0, midiAT = 0;
     int64_t sampleClock = 0;
     float bypassGain = 1.0f; bool bypassed = false;
+    std::atomic<bool> presetJump { false }; int dipPos = 1 << 20;   // short dip when many params jump at once
 
     // key lock / chord / arp
     bool lastChord = false, lastArp = false, lastKeyLock = false;
@@ -155,6 +160,11 @@ private:
     std::vector<DiceEntry> diceHistory;
     int diceCount = 0;
     juce::ValueTree abState[2];
+    std::vector<std::vector<float>> undoStack, redoStack;
+    std::vector<float> lastSnap;
+    std::vector<float> snapshot() const;
+    void applySnapshot (const std::vector<float>& v);
+    bool presetForcedArp = false;
     int abSlot = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KeysKillaProcessor)

@@ -4,6 +4,7 @@
 using namespace juce;
 
 #include "UiCommon.h"
+#include "BinaryData.h"
 
 //==============================================================================
 void KKLookAndFeel::setSkin (const Skin& s)
@@ -169,290 +170,308 @@ Font KKLookAndFeel::getTextButtonFont (TextButton&, int h) { return serif (jmin 
 Font KKLookAndFeel::getLabelFont (Label& l) { return serif (jmax (11.0f, (float) l.getHeight() * 0.72f), false, 0.2f); }
 Font KKLookAndFeel::getPopupMenuFont() { return serif (15.0f, false, 0.05f); }
 
-//==============================================================================
-// Tiles
-class TileButton : public Component, public SettableTooltipClient
-{
-public:
-    TileButton (int idx, KKLookAndFeel& l) : index (idx), lnf (l) {}
-    std::function<void()> onClick;
-    bool selected = false;
 
-    void paint (Graphics& g) override
+//==============================================================================
+// Skin bitmaps (from the design mockups, see tools/make_skin_assets.py) + element geometry.
+// Coordinates are in design pixels (1586 x 992). Skin 0 = CHROME, 1 = BLOOD.
+struct Geo
+{
+    Rectangle<int> prev, name, heart, next, save, menu, skin;
+    std::array<Rectangle<int>, 10> tiles;
+    Rectangle<int> subBar;
+    std::array<Point<int>, 6> era;
+    Rectangle<int> exclusive, dice, chaos, xy;
+    std::array<Point<int>, 6> macro; int macroCap, macroArc, macroLabelY;
+    std::array<Point<int>, 3> small; int smallCap, smallArc;
+    Rectangle<int> chord, link, arp, meter, keyboard, pitch, mod;
+};
+
+static Rectangle<int> R (int x0, int y0, int x1, int y1) { return { x0, y0, x1 - x0, y1 - y0 }; }
+
+static const Geo& geo (int skin)
+{
+    static const Geo chrome = []
     {
-        const auto& s = *lnf.skin;
-        auto r = getLocalBounds().toFloat().reduced (2);
-        g.setColour (s.dark ? Colour (0xff0c0a0a) : Colour (0xffe6e9ec).withAlpha (0.9f));
-        g.fillRoundedRectangle (r, 5);
-        if (selected)
+        Geo g;
+        g.prev = R (737, 105, 787, 158); g.name = R (790, 105, 1068, 158); g.heart = R (1068, 110, 1102, 154); g.next = R (1115, 105, 1162, 158);
+        g.save = R (1180, 105, 1253, 175); g.menu = R (1273, 105, 1362, 175); g.skin = R (1380, 120, 1418, 158);
+        const int tx[10][2] { { 47, 128 }, { 135, 224 }, { 231, 319 }, { 325, 415 }, { 421, 515 }, { 521, 619 }, { 626, 722 }, { 729, 826 }, { 832, 927 }, { 933, 1052 } };
+        for (int i = 0; i < 10; ++i) g.tiles[(size_t) i] = R (tx[i][0], 297, tx[i][1], 437);
+        g.subBar = R (60, 440, 1040, 461);
+        const int ex[6] { 86, 203, 321, 442, 561, 678 };
+        for (int i = 0; i < 6; ++i) g.era[(size_t) i] = { ex[i], 494 };
+        g.exclusive = R (833, 465, 1043, 507); g.dice = R (1112, 290, 1262, 446); g.chaos = R (1110, 468, 1262, 489); g.xy = R (1312, 300, 1508, 443);
+        const int mx[6] { 158, 319, 480, 639, 797, 958 };
+        for (int i = 0; i < 6; ++i) g.macro[(size_t) i] = { mx[i], 657 };
+        g.macroCap = 46; g.macroArc = 63; g.macroLabelY = 728;
+        const int sx[3] { 1190, 1329, 1472 };
+        for (int i = 0; i < 3; ++i) g.small[(size_t) i] = { sx[i], 547 };
+        g.smallCap = 31; g.smallArc = 45;
+        g.chord = R (1112, 666, 1222, 708); g.link = R (1234, 668, 1270, 704); g.arp = R (1279, 663, 1395, 710);
+        g.meter = R (1456, 658, 1510, 772); g.keyboard = R (163, 797, 1533, 922); g.pitch = R (48, 808, 84, 900); g.mod = R (102, 808, 138, 900);
+        return g;
+    }();
+    static const Geo blood = []
+    {
+        Geo g;
+        g.prev = R (720, 112, 768, 162); g.name = R (770, 112, 1085, 162); g.heart = R (1085, 118, 1117, 158); g.next = R (1137, 112, 1185, 162);
+        g.save = R (1200, 112, 1262, 178); g.menu = R (1264, 112, 1350, 178); g.skin = R (1362, 124, 1400, 162);
+        const int tx[10][2] { { 43, 127 }, { 133, 231 }, { 237, 330 }, { 336, 433 }, { 440, 539 }, { 546, 649 }, { 654, 751 }, { 757, 856 }, { 862, 960 }, { 966, 1076 } };
+        for (int i = 0; i < 10; ++i) g.tiles[(size_t) i] = R (tx[i][0], 290, tx[i][1], 428);
+        g.subBar = R (56, 431, 1066, 452);
+        const int ex[6] { 94, 211, 331, 451, 568, 686 };
+        for (int i = 0; i < 6; ++i) g.era[(size_t) i] = { ex[i], 487 };
+        g.exclusive = R (849, 457, 1067, 497); g.dice = R (1125, 280, 1275, 450); g.chaos = R (1133, 455, 1269, 476); g.xy = R (1320, 300, 1506, 440);
+        const int mx[6] { 166, 330, 494, 655, 816, 977 };
+        for (int i = 0; i < 6; ++i) g.macro[(size_t) i] = { mx[i], 650 };
+        g.macroCap = 47; g.macroArc = 65; g.macroLabelY = 730;
+        const int sx[3] { 1206, 1335, 1461 };
+        for (int i = 0; i < 3; ++i) g.small[(size_t) i] = { sx[i], 540 };
+        g.smallCap = 25; g.smallArc = 37;
+        g.chord = R (1105, 653, 1235, 693); g.link = R (1242, 655, 1276, 691); g.arp = R (1280, 653, 1400, 693);
+        g.meter = R (1455, 652, 1505, 778); g.keyboard = R (158, 800, 1510, 938); g.pitch = R (43, 810, 80, 895); g.mod = R (98, 810, 136, 895);
+        return g;
+    }();
+    return skin == 1 ? blood : chrome;
+}
+
+struct SkinImages { Image bg, white, black; };
+
+static const SkinImages& skinImages (int skin)
+{
+    static SkinImages imgs[2];
+    auto& s = imgs[skin == 1 ? 1 : 0];
+    if (s.bg.isNull())
+    {
+        if (skin == 1)
         {
-            g.setColour (s.accent.withAlpha (0.25f)); g.drawRoundedRectangle (r.expanded (1), 6, 5);
-            g.setColour (s.accent); g.drawRoundedRectangle (r, 5, 2.2f);
+            s.bg = ImageCache::getFromMemory (BinaryData::blood_bg_jpg, BinaryData::blood_bg_jpgSize);
+            s.white = ImageCache::getFromMemory (BinaryData::blood_white_png, BinaryData::blood_white_pngSize);
+            s.black = ImageCache::getFromMemory (BinaryData::blood_black_png, BinaryData::blood_black_pngSize);
         }
         else
         {
-            g.setColour (hover ? s.text.withAlpha (0.5f) : s.panelEdge);
-            g.drawRoundedRectangle (r, 5, 1.1f);
+            s.bg = ImageCache::getFromMemory (BinaryData::chrome_bg_jpg, BinaryData::chrome_bg_jpgSize);
+            s.white = ImageCache::getFromMemory (BinaryData::chrome_white_png, BinaryData::chrome_white_pngSize);
+            s.black = ImageCache::getFromMemory (BinaryData::chrome_black_png, BinaryData::chrome_black_pngSize);
         }
-        auto icon = r.reduced (10).withTrimmedBottom (26);
-        icon = icon.withSizeKeepingCentre (jmin (icon.getWidth(), icon.getHeight()), jmin (icon.getWidth(), icon.getHeight()));
-        drawIcon (g, icon, s);
-        g.setColour (s.text);
-        g.setFont (serif (index == tExperimental ? 9.5f : 12.5f, false, index == tExperimental ? 0.0f : 0.2f));
-        g.drawFittedText (tileNames()[index], r.removeFromBottom (26).toNearestInt().reduced (2, 0), Justification::centred, 1, 0.8f);
     }
+    return s;
+}
 
-    void mouseUp (const MouseEvent& e) override { if (e.mouseWasClicked() && onClick) onClick(); }
-    void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
-    void mouseExit (const MouseEvent&) override { hover = false; repaint(); }
-
-private:
-    void drawIcon (Graphics& g, Rectangle<float> b, const Skin& s)
+// Keyboard focus must stay with the host (space = play/stop in FL Studio)
+static void noFocus (Component& c)
+{
+    if (dynamic_cast<TextEditor*> (&c) == nullptr)
     {
-        auto P = [&] (float x, float y) { return Point<float> (b.getX() + x * b.getWidth(), b.getY() + y * b.getHeight()); };
-        ColourGradient metal (s.iconLight, b.getX(), b.getY(), s.iconDark, b.getRight(), b.getBottom(), false);
-        metal.addColour (0.45, s.iconDark.brighter (0.4f));
-        metal.addColour (0.55, s.iconLight.withAlpha (0.9f));
-        const Colour edge = s.dark ? Colours::black : Colour (0xff3c4248);
-        Path p;
-        switch (index)
-        {
-            case tBells:
-                p.startNewSubPath (P (0.5f, 0.12f));
-                p.cubicTo (P (0.28f, 0.14f), P (0.3f, 0.5f), P (0.14f, 0.76f));
-                p.lineTo (P (0.86f, 0.76f));
-                p.cubicTo (P (0.7f, 0.5f), P (0.72f, 0.14f), P (0.5f, 0.12f));
-                p.closeSubPath();
-                p.addEllipse (Rectangle<float> (b.getWidth() * 0.14f, b.getWidth() * 0.14f).withCentre (P (0.5f, 0.84f)));
-                p.addEllipse (Rectangle<float> (b.getWidth() * 0.1f, b.getWidth() * 0.1f).withCentre (P (0.5f, 0.08f)));
-                break;
-            case tKeys:
-            {
-                p.addRectangle (Rectangle<float> (P (0.1f, 0.18f), P (0.9f, 0.82f)));
-                g.setGradientFill (metal); g.fillPath (p);
-                g.setColour (edge);
-                for (int i = 1; i < 5; ++i) g.drawLine (Line<float> (P (0.1f + 0.16f * i, 0.18f), P (0.1f + 0.16f * i, 0.82f)), 1.2f);
-                for (int i : { 1, 2, 3, 4 })
-                    g.fillRect (Rectangle<float> (P (0.1f + 0.16f * i - 0.05f, 0.18f), P (0.1f + 0.16f * i + 0.05f, 0.55f)));
-                g.drawRect (Rectangle<float> (P (0.1f, 0.18f), P (0.9f, 0.82f)), 1.2f);
-                return;
-            }
-            case tPlucks:
-            {
-                g.setGradientFill (metal);
-                Path arc; arc.startNewSubPath (P (0.15f, 0.2f)); arc.quadraticTo (P (0.5f, 0.02f), P (0.85f, 0.2f));
-                g.strokePath (arc, PathStrokeType (3.0f));
-                for (int i = 0; i < 9; ++i)
-                    g.drawLine (Line<float> (P (0.18f + 0.08f * i, 0.18f - (i > 1 && i < 7 ? 0.04f : 0.0f)), P (0.46f + 0.01f * i, 0.8f)), 1.3f);
-                g.fillEllipse (Rectangle<float> (b.getWidth() * 0.3f, b.getWidth() * 0.08f).withCentre (P (0.5f, 0.84f)));
-                return;
-            }
-            case tFlutes:
-            {
-                p.addRoundedRectangle (-0.06f, -0.45f, 0.12f, 0.9f, 0.05f);
-                for (int i = 0; i < 5; ++i) p.addEllipse (-0.022f, -0.25f + 0.1f * i, 0.044f, 0.044f);
-                p.setUsingNonZeroWinding (false);
-                p.applyTransform (AffineTransform::rotation (0.75f).scaled (b.getWidth()).translated (b.getCentreX(), b.getCentreY()));
-                break;
-            }
-            case tChoir:
-                for (int i = 0; i < 3; ++i)
-                {
-                    const float cx = 0.25f + 0.25f * (float) i, top = i == 1 ? 0.12f : 0.25f;
-                    Path f; f.startNewSubPath (P (cx - 0.15f, 0.88f));
-                    f.cubicTo (P (cx - 0.14f, top + 0.2f), P (cx - 0.08f, top), P (cx, top));
-                    f.cubicTo (P (cx + 0.08f, top), P (cx + 0.14f, top + 0.2f), P (cx + 0.15f, 0.88f));
-                    f.closeSubPath();
-                    p.addPath (f);
-                }
-                break;
-            case tPads:
-                for (auto c : { Point<float> (0.3f, 0.55f), Point<float> (0.5f, 0.42f), Point<float> (0.7f, 0.55f), Point<float> (0.42f, 0.62f), Point<float> (0.6f, 0.64f) })
-                    p.addEllipse (Rectangle<float> (b.getWidth() * 0.34f, b.getWidth() * 0.3f).withCentre (P (c.x, c.y)));
-                break;
-            case tLeads:
-            {
-                for (int i = 0; i < 16; ++i)
-                {
-                    const float a = MathConstants<float>::pi * 0.125f * (float) i;
-                    const float rr = (i % 4 == 0) ? 0.48f : (i % 2 == 0 ? 0.22f : 0.07f);
-                    auto pt = P (0.5f + std::sin (a) * rr, 0.5f - std::cos (a) * rr);
-                    if (i == 0) p.startNewSubPath (pt); else p.lineTo (pt);
-                }
-                p.closeSubPath();
-                break;
-            }
-            case tBass:
-            {
-                g.setGradientFill (metal);
-                g.fillEllipse (Rectangle<float> (P (0.12f, 0.12f), P (0.88f, 0.88f)));
-                g.setColour (edge);
-                g.fillEllipse (Rectangle<float> (P (0.22f, 0.22f), P (0.78f, 0.78f)));
-                g.setGradientFill (metal);
-                g.fillEllipse (Rectangle<float> (P (0.36f, 0.36f), P (0.64f, 0.64f)));
-                g.setColour (edge); g.drawEllipse (Rectangle<float> (P (0.12f, 0.12f), P (0.88f, 0.88f)), 1.2f);
-                return;
-            }
-            case tExotic:
-            {
-                p.addEllipse (Rectangle<float> (P (0.1f, 0.5f), P (0.5f, 0.9f)));
-                Path neck; neck.addRectangle (-0.03f, -0.55f, 0.06f, 0.55f);
-                neck.applyTransform (AffineTransform::rotation (0.8f).scaled (b.getWidth()).translated (P (0.32f, 0.7f)));
-                p.addPath (neck);
-                p.addRectangle (Rectangle<float> (P (0.72f, 0.08f), P (0.88f, 0.22f)));
-                break;
-            }
-            default:
-            {
-                Random r (42);
-                for (int i = 0; i < 7; ++i)
-                {
-                    const float cx = 0.25f + r.nextFloat() * 0.5f, cy = 0.2f + r.nextFloat() * 0.6f, sz = 0.12f + r.nextFloat() * 0.18f;
-                    p.startNewSubPath (P (cx, cy - sz));
-                    p.lineTo (P (cx + sz * 0.8f, cy + sz * 0.2f));
-                    p.lineTo (P (cx - sz * 0.3f, cy + sz));
-                    p.closeSubPath();
-                }
-                break;
-            }
-        }
-        g.setGradientFill (metal);
-        g.fillPath (p);
-        g.setColour (edge.withAlpha (0.8f));
-        g.strokePath (p, PathStrokeType (1.1f));
+        c.setWantsKeyboardFocus (false);
+        c.setMouseClickGrabsKeyboardFocus (false);
     }
+    for (auto* ch : c.getChildren()) noFocus (*ch);
+}
 
-    int index;
-    KKLookAndFeel& lnf;
-    bool hover = false;
-};
+static void drawGlowFrame (Graphics& g, Rectangle<float> r, Colour accent, float corner = 5.0f)
+{
+    g.setColour (accent.withAlpha (0.18f)); g.drawRoundedRectangle (r.expanded (3), corner + 3, 6.0f);
+    g.setColour (accent.withAlpha (0.35f)); g.drawRoundedRectangle (r.expanded (1), corner + 1, 3.0f);
+    g.setColour (accent); g.drawRoundedRectangle (r, corner, 1.8f);
+}
 
 //==============================================================================
-class EraTimeline : public Component, public SettableTooltipClient
+// Knob drawn from the design: the metal cap is cut out of the skin bitmap and rotated,
+// the value arc is drawn live over the (cleaned) track.
+class ImageKnob : public Slider
 {
 public:
-    explicit EraTimeline (KKLookAndFeel& l) : lnf (l) { setTooltip ("Filter presets by era. Click again to show all eras."); }
-    std::function<void (int)> onSelect;
-    int selected = -1;
-
+    ImageKnob (KKLookAndFeel& l, const int& skinRef) : Slider (RotaryHorizontalVerticalDrag, NoTextBox), lnf (l), skin (skinRef)
+    {
+        setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
+        setVelocityModeParameters (0.6, 1, 0.02, true, ModifierKeys::ctrlModifier);
+        setPopupDisplayEnabled (true, true, nullptr);
+    }
+    void place (Point<int> designCentre, int capRadius, int arcRadius)
+    {
+        centre = designCentre; capR = capRadius; arcR = arcRadius;
+        const int half = arcR + 12;
+        setBounds (centre.x - half, centre.y - half, half * 2, half * 2);
+    }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        const float y = getHeight() * 0.68f;
-        g.setColour (s.dark ? s.text.withAlpha (0.5f) : s.textDim);
-        g.drawLine (xFor (0) - 10, y, (float) getWidth() - 4, y, 1.2f);
-        for (int i = 0; i < 6; ++i)
+        const auto& bg = skinImages (skin).bg;
+        const float pos = (float) valueToProportionOfLength (getValue());
+        const float ang = MathConstants<float>::pi * (-0.75f + 1.5f * pos);
+        const Point<float> c ((float) getWidth() * 0.5f, (float) getHeight() * 0.5f);
+
+        // rotated metal cap
+        const auto src = bg.getClippedImage ({ centre.x - capR, centre.y - capR, capR * 2, capR * 2 });
         {
-            const float x = xFor (i);
-            const bool on = i == selected;
-            if (on) { g.setColour (s.accent.withAlpha (0.35f)); g.fillEllipse (Rectangle<float> (20, 20).withCentre ({ x, y })); }
-            g.setColour (on ? s.accent : (s.dark ? s.text : Colour (0xfff5f5f5)));
-            g.fillEllipse (Rectangle<float> (on ? 11.0f : 10.0f, on ? 11.0f : 10.0f).withCentre ({ x, y }));
-            g.setColour (on ? s.accent : s.textDim);
-            g.drawEllipse (Rectangle<float> (10, 10).withCentre ({ x, y }), 1.2f);
-            g.setColour (on ? s.accent : s.text);
-            g.setFont (serif (15.0f, false, 0.0f));
-            g.drawText (eraNames()[i], Rectangle<float> (60, 20).withCentre ({ x, y - 18 }), Justification::centred);
+            Graphics::ScopedSaveState ss (g);
+            Path clip; clip.addEllipse (c.x - (float) capR, c.y - (float) capR, (float) capR * 2, (float) capR * 2);
+            g.reduceClipRegion (clip);
+            g.setImageResamplingQuality (Graphics::highResamplingQuality);
+            g.drawImageTransformed (src, AffineTransform::translation (-(float) capR, -(float) capR).rotated (ang).translated (c));
+        }
+        if (! s.dark)   // chrome caps have no painted pointer
+        {
+            const Point<float> a (c.x + std::sin (ang) * capR * 0.3f, c.y - std::cos (ang) * capR * 0.3f);
+            const Point<float> b (c.x + std::sin (ang) * capR * 0.86f, c.y - std::cos (ang) * capR * 0.86f);
+            g.setColour (Colours::black.withAlpha (0.25f)); g.drawLine ({ a.translated (1, 1), b.translated (1, 1) }, capR > 35 ? 4.0f : 3.0f);
+            g.setColour (Colour (0xff20252b)); g.drawLine ({ a, b }, capR > 35 ? 3.0f : 2.2f);
+        }
+        // value arc
+        if (pos > 0.002f)
+        {
+            Path arc; arc.addCentredArc (c.x, c.y, (float) arcR, (float) arcR, 0, -MathConstants<float>::pi * 0.75f, ang, true);
+            const float w = capR > 35 ? 1.0f : 0.7f;
+            g.setColour (s.accent.withAlpha (0.16f)); g.strokePath (arc, PathStrokeType (14.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour (s.accent.withAlpha (0.4f));  g.strokePath (arc, PathStrokeType (7.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour (s.accent);                   g.strokePath (arc, PathStrokeType (3.6f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour (Colours::white.withAlpha (s.dark ? 0.55f : 0.8f)); g.strokePath (arc, PathStrokeType (1.2f * w));
         }
     }
+    bool hitTest (int x, int y) override { return Point<int> (x, y).getDistanceFrom ({ getWidth() / 2, getHeight() / 2 }) <= arcR + 6; }
+private:
+    KKLookAndFeel& lnf;
+    const int& skin;
+    Point<int> centre; int capR = 40, arcR = 60;
+};
 
+//==============================================================================
+// Invisible hot-spot button that paints only its live state over the bitmap
+class HotButton : public Button
+{
+public:
+    enum Kind { plain, tile, toggleFace };
+    HotButton (KKLookAndFeel& l, Kind k, String label = {}) : Button (label), lnf (l), kind (k), text (std::move (label)) {}
+    std::function<void (Graphics&, Rectangle<float>, const Skin&)> glyph;
+    bool selected = false;
+    std::function<void()> onRightClick;
+
+    void paintButton (Graphics& g, bool over, bool down) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat().reduced (2);
+        const bool on = kind == toggleFace ? getToggleState() : selected;
+        if (kind == toggleFace)
+        {
+            auto face = r.reduced (4);
+            if (s.dark) g.setColour (Colour (0xff120d0d));
+            else g.setGradientFill (ColourGradient (Colour (0xfff1f3f5), 0, face.getY(), Colour (0xffc6ccd2), 0, face.getBottom(), false));
+            g.fillRoundedRectangle (face, 3);
+            g.setFont (serif (face.getHeight() * 0.5f, s.dark ? false : true, s.dark ? 0.18f : 0.08f));
+            g.setColour (on ? (s.dark ? s.accent.brighter (0.2f) : Colour (0xff0b3d73)) : (s.dark ? Colour (0xffd8d2d2) : Colour (0xff1a1d21)));
+            g.drawText (text, face, Justification::centred);
+        }
+        if (on) drawGlowFrame (g, r, s.accent, kind == tile ? 5.0f : 4.0f);
+        if (on && kind == tile) { g.setColour (s.accent.withAlpha (0.07f)); g.fillRoundedRectangle (r, 5); }
+        if (over && ! on) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, 5); }
+        if (glyph) glyph (g, r, s);
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && onRightClick) { onRightClick(); return; }
+        Button::mouseUp (e);
+    }
+private:
+    KKLookAndFeel& lnf;
+    Kind kind;
+    String text;
+};
+
+//==============================================================================
+class EraOverlay : public Component, public SettableTooltipClient
+{
+public:
+    EraOverlay (KKLookAndFeel& l, const int& s) : lnf (l), skin (s) { setTooltip ("Filter presets by era. Click again to show all eras."); }
+    std::function<void (int)> onSelect;
+    int selected = -1;
+    Point<int> origin;
+    void paint (Graphics& g) override
+    {
+        if (selected < 0) return;
+        const auto& s = *lnf.skin;
+        const auto p = (geo (skin).era[(size_t) selected] - origin).toFloat();
+        g.setColour (s.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (30, 30).withCentre (p));
+        g.setColour (s.accent.withAlpha (0.5f));  g.fillEllipse (Rectangle<float> (18, 18).withCentre (p));
+        g.setColour (s.accent); g.fillEllipse (Rectangle<float> (11, 11).withCentre (p));
+        g.setColour (Colours::white); g.fillEllipse (Rectangle<float> (4, 4).withCentre (p));
+        g.setColour (s.accent); g.fillRoundedRectangle (Rectangle<float> (34, 3).withCentre (p.translated (0, -12)), 1.5f);
+    }
     void mouseUp (const MouseEvent& e) override
     {
         int best = 0;
-        for (int i = 1; i < 6; ++i) if (std::abs (xFor (i) - e.position.x) < std::abs (xFor (best) - e.position.x)) best = i;
-        if (std::abs (xFor (best) - e.position.x) > 40) return;
+        for (int i = 1; i < 6; ++i)
+            if (std::abs (geo (skin).era[(size_t) i].x - origin.x - e.x) < std::abs (geo (skin).era[(size_t) best].x - origin.x - e.x)) best = i;
         selected = selected == best ? -1 : best;
         repaint();
         if (onSelect) onSelect (selected);
     }
-
 private:
-    float xFor (int i) const { return 30.0f + (float) i * ((float) getWidth() - 110.0f) / 5.0f; }
-    KKLookAndFeel& lnf;
+    KKLookAndFeel& lnf; const int& skin;
 };
 
 //==============================================================================
-class DiceButton : public Component, public SettableTooltipClient
+// Sub-categories from the spec that have no tile of their own
+struct SubCat { const char* label; const char* sub; };
+static const std::array<SubCat, 7> subCats { { { "PIANO", "Piano" }, { "ORGANS", "Organs" }, { "STRINGS", "Strings" }, { "BRASS", "Brass" },
+                                               { "GUITARS", "Guitars" }, { "MALLETS", "Mallets" }, { "ARPS", "Arps" } } };
+
+class SubChips : public Component, public SettableTooltipClient
 {
 public:
-    explicit DiceButton (KKLookAndFeel& l) : lnf (l) { setTooltip ("DICE: roll a brand-new sound in the selected category and era. Right-click: undo, history, locks, save."); }
-    std::function<void()> onRoll, onUndo;
+    explicit SubChips (KKLookAndFeel& l) : lnf (l) { setTooltip ("Sub-categories: piano, organs, strings, brass, guitars, mallets and arps."); }
+    std::function<void (int)> onSelect;
+    int selected = -1;
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        auto b = getLocalBounds().toFloat().reduced (8).withTrimmedBottom (26);
-        const float sz = jmin (b.getWidth(), b.getHeight());
-        auto c = b.getCentre();
-        const float h = sz * 0.42f;
-        // isometric cube
-        Point<float> top (c.x, c.y - h), l (c.x - h * 0.9f, c.y - h * 0.45f), rr (c.x + h * 0.9f, c.y - h * 0.45f), mid (c.x, c.y);
-        Point<float> bl (c.x - h * 0.9f, c.y + h * 0.55f), br (c.x + h * 0.9f, c.y + h * 0.55f), bot (c.x, c.y + h);
-        auto face = [&] (std::initializer_list<Point<float>> pts, Colour col)
+        const float w = (float) getWidth() / (float) subCats.size();
+        for (size_t i = 0; i < subCats.size(); ++i)
         {
-            Path p; bool first = true;
-            for (auto pt : pts) { if (first) p.startNewSubPath (pt); else p.lineTo (pt); first = false; }
-            p.closeSubPath();
-            g.setColour (col); g.fillPath (p);
-            g.setColour (s.dark ? Colours::black : Colour (0xff50575f)); g.strokePath (p, PathStrokeType (1.2f));
-        };
-        const Colour baseC = s.dark ? Colour (0xff1b1717) : Colour (0xffd9dde2);
-        face ({ top, rr, mid, l }, baseC.brighter (0.25f));
-        face ({ l, mid, bot, bl }, baseC);
-        face ({ mid, rr, br, bot }, baseC.darker (0.25f));
-        auto pip = [&] (Point<float> p) { g.setColour (s.accent.withAlpha (0.35f)); g.fillEllipse (Rectangle<float> (h * 0.2f, h * 0.2f).withCentre (p));
-                                         g.setColour (s.accent); g.fillEllipse (Rectangle<float> (h * 0.12f, h * 0.12f).withCentre (p)); };
-        pip ((top + mid) * 0.5f); pip ((l + top) * 0.5f * 0.5f + (mid + rr) * 0.5f * 0.5f);
-        for (int i = 0; i < 3; ++i) pip (l + (bot - l) * (0.25f + 0.25f * i) + Point<float> (h * 0.15f, -h * 0.1f));
-        for (int i = 0; i < 2; ++i) pip (mid + (br - mid) * (0.3f + 0.4f * i) + Point<float> (0, h * 0.2f));
-        g.setColour (s.text);
-        g.setFont (serif (19.0f, false, 0.25f));
-        g.drawText ("DICE", getLocalBounds().removeFromBottom (30), Justification::centred);
+            auto r = Rectangle<float> (w * (float) i, 0, w, (float) getHeight()).reduced (5, 1);
+            const bool on = (int) i == selected;
+            g.setColour (s.dark ? Colour (0xcc0c0909) : Colour (0xccf4f6f8));
+            g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
+            if (on) drawGlowFrame (g, r, s.accent, r.getHeight() * 0.5f);
+            else { g.setColour (s.dark ? Colour (0x55ffffff) : Colour (0x66202428)); g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f); }
+            g.setColour (on ? (s.dark ? s.accent.brighter (0.3f) : Colour (0xff0b3d73)) : (s.dark ? Colour (0xffd9d4d4) : Colour (0xff1a1d21)));
+            g.setFont (serif (13.0f, ! s.dark, 0.22f));
+            g.drawText (subCats[i].label, r, Justification::centred);
+        }
     }
     void mouseUp (const MouseEvent& e) override
     {
-        if (! e.mouseWasClicked()) return;
-        if (e.mods.isPopupMenu()) { if (onUndo) onUndo(); }
-        else if (onRoll) onRoll();
+        const int i = jlimit (0, (int) subCats.size() - 1, e.x * (int) subCats.size() / jmax (1, getWidth()));
+        selected = selected == i ? -1 : i;
+        repaint();
+        if (onSelect) onSelect (selected);
     }
 private:
     KKLookAndFeel& lnf;
 };
 
 //==============================================================================
-class XYPad : public Component, public SettableTooltipClient
+class XYOverlay : public Component, public SettableTooltipClient
 {
 public:
-    XYPad (KeysKillaProcessor& p, KKLookAndFeel& l)
+    XYOverlay (KeysKillaProcessor& p, KKLookAndFeel& l)
         : lnf (l),
           ax (*p.apvts.getParameter (ID::morphX), [this] (float v) { x = v; repaint(); }),
           ay (*p.apvts.getParameter (ID::morphY), [this] (float v) { y = v; repaint(); })
     {
         ax.sendInitialUpdate(); ay.sendInitialUpdate();
-        setTooltip ("ERA MORPH: drag between classic, melodic, raw and aggressive character. Double-click to centre.");
+        setTooltip ("ERA MORPH: drag between classic, melodic, raw and aggressive. Double-click to centre. Corner presets: ADVANCED > EXCLUSIVE.");
     }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        auto r = getLocalBounds().toFloat();
-        g.setColour (s.text); g.setFont (serif (12.0f, false, 0.1f));
-        g.drawText ("CLASSIC", r.removeFromTop (18), Justification::centredLeft);
-        g.drawText ("MELODIC", r.withHeight (18).translated (0, -18), Justification::centredRight);
-        auto bottom = r.removeFromBottom (36);
-        g.drawText ("RAW", bottom.removeFromTop (16), Justification::centredLeft);
-        g.drawText ("AGGRESSIVE", bottom.withY (bottom.getY() - 16).withHeight (16), Justification::centredRight);
-        g.setFont (serif (16.0f, false, 0.25f));
-        g.drawText ("ERA MORPH", bottom, Justification::centred);
-        pad = r.reduced (4, 2);
-        g.setColour (s.dark ? Colour (0xff0a0808) : Colour (0xffd5d9de));
-        g.fillRect (pad);
-        g.setColour (s.panelEdge); g.drawRect (pad, 1.0f);
-        g.setColour (s.dark ? s.text.withAlpha (0.35f) : s.textDim.withAlpha (0.5f));
-        g.drawLine (pad.getCentreX(), pad.getY(), pad.getCentreX(), pad.getBottom(), 1.0f);
-        g.drawLine (pad.getX(), pad.getCentreY(), pad.getRight(), pad.getCentreY(), 1.0f);
-        const Point<float> d (pad.getX() + x * pad.getWidth(), pad.getBottom() - y * pad.getHeight());
-        g.setColour (s.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (28, 28).withCentre (d));
-        g.setColour (s.accent.withAlpha (0.5f)); g.fillEllipse (Rectangle<float> (16, 16).withCentre (d));
-        g.setColour (Colours::white); g.fillEllipse (Rectangle<float> (7, 7).withCentre (d));
+        auto r = getLocalBounds().toFloat().reduced (8);
+        const Point<float> d (r.getX() + x * r.getWidth(), r.getBottom() - y * r.getHeight());
+        g.setColour (s.accent.withAlpha (0.12f)); g.fillEllipse (Rectangle<float> (46, 46).withCentre (d));
+        g.setColour (s.accent.withAlpha (0.3f));  g.fillEllipse (Rectangle<float> (28, 28).withCentre (d));
+        g.setColour (s.accent);                   g.fillEllipse (Rectangle<float> (15, 15).withCentre (d));
+        g.setColour (Colours::white);             g.fillEllipse (Rectangle<float> (6, 6).withCentre (d));
     }
     void mouseDown (const MouseEvent& e) override { ax.beginGesture(); ay.beginGesture(); drag (e); }
     void mouseDrag (const MouseEvent& e) override { drag (e); }
@@ -461,53 +480,77 @@ public:
 private:
     void drag (const MouseEvent& e)
     {
-        if (pad.isEmpty()) return;
-        ax.setValueAsPartOfGesture (jlimit (0.0f, 1.0f, (e.position.x - pad.getX()) / pad.getWidth()));
-        ay.setValueAsPartOfGesture (jlimit (0.0f, 1.0f, (pad.getBottom() - e.position.y) / pad.getHeight()));
+        auto r = getLocalBounds().toFloat().reduced (8);
+        ax.setValueAsPartOfGesture (jlimit (0.0f, 1.0f, (e.position.x - r.getX()) / r.getWidth()));
+        ay.setValueAsPartOfGesture (jlimit (0.0f, 1.0f, (r.getBottom() - e.position.y) / r.getHeight()));
     }
     KKLookAndFeel& lnf;
     ParameterAttachment ax, ay;
     float x = 0.5f, y = 0.5f;
-    Rectangle<float> pad;
 };
 
 //==============================================================================
-class Meter : public Component
+class ChaosSlider : public Slider
 {
 public:
-    explicit Meter (KKLookAndFeel& l) : lnf (l) {}
+    explicit ChaosSlider (KKLookAndFeel& l) : Slider (LinearHorizontal, NoTextBox), lnf (l) {}
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat().reduced (8, 0);
+        const float cy = r.getCentreY();
+        const float px = r.getX() + (float) valueToProportionOfLength (getValue()) * r.getWidth();
+        g.setColour (s.accent.withAlpha (0.3f)); g.fillRoundedRectangle (Rectangle<float> (r.getX(), cy - 3.5f, px - r.getX(), 7), 3.5f);
+        g.setColour (s.accent); g.fillRoundedRectangle (Rectangle<float> (r.getX(), cy - 2, px - r.getX(), 4), 2);
+        g.setColour (s.accent.withAlpha (0.35f)); g.fillEllipse (Rectangle<float> (24, 24).withCentre ({ px, cy }));
+        g.setGradientFill (ColourGradient (Colours::white, px - 6, cy - 6, Colour (0xff8a9098), px + 6, cy + 6, false));
+        g.fillEllipse (Rectangle<float> (15, 15).withCentre ({ px, cy }));
+        g.setColour (s.accent); g.drawEllipse (Rectangle<float> (15, 15).withCentre ({ px, cy }), 2.2f);
+    }
+private:
+    KKLookAndFeel& lnf;
+};
+
+class WheelSlider : public Slider
+{
+public:
+    explicit WheelSlider (KKLookAndFeel& l) : Slider (LinearVertical, NoTextBox), lnf (l) {}
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat().reduced (5, 8);
+        const float py = r.getBottom() - (float) valueToProportionOfLength (getValue()) * r.getHeight();
+        g.setColour (s.accent.withAlpha (0.35f)); g.fillRoundedRectangle (Rectangle<float> (r.getWidth() + 4, 9).withCentre ({ r.getCentreX(), py }), 4);
+        g.setColour (Colours::white.withAlpha (0.95f)); g.fillRoundedRectangle (Rectangle<float> (r.getWidth(), 4).withCentre ({ r.getCentreX(), py }), 2);
+    }
+private:
+    KKLookAndFeel& lnf;
+};
+
+//==============================================================================
+class MeterOverlay : public Component
+{
+public:
+    explicit MeterOverlay (KKLookAndFeel& l) : lnf (l) {}
     float l = 0, r = 0; bool warn = false;
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
         auto b = getLocalBounds().toFloat();
-        g.setColour (warn ? s.accent : s.text);
-        g.setFont (serif (14.0f, false, 0.25f));
-        g.drawText (warn ? "BASS CLIP!" : "OUTPUT", b.removeFromTop (22), Justification::centred);
-        auto lab = b.removeFromBottom (18);
-        g.setFont (serif (12.0f));
-        g.setColour (s.text);
-        auto bars = b.withTrimmedRight (b.getWidth() * 0.45f).reduced (6, 2);
-        const float bw = bars.getWidth() / 2.0f - 3;
-        const float marks[] { 0, -12, -24, -36 };
-        auto dbToY = [&] (float db) { return bars.getY() + bars.getHeight() * (-db / 36.0f); };
-        for (float m : marks)
-            g.drawText (String ((int) m), Rectangle<float> (b.getRight() - b.getWidth() * 0.45f, dbToY (m) - 7, b.getWidth() * 0.4f, 14), Justification::centred);
-        g.drawText ("L", Rectangle<float> (bars.getX(), lab.getY(), bw, 16), Justification::centred);
-        g.drawText ("R", Rectangle<float> (bars.getX() + bw + 6, lab.getY(), bw, 16), Justification::centred);
+        const float bw = b.getWidth() * 0.36f;
+        const Rectangle<float> bars[2] { { b.getX() + 2, b.getY(), bw, b.getHeight() }, { b.getRight() - bw - 2, b.getY(), bw, b.getHeight() } };
+        const int segs = 12;
         for (int ch = 0; ch < 2; ++ch)
         {
-            const float v = ch == 0 ? l : r;
-            const float db = jlimit (-36.0f, 0.0f, Decibels::gainToDecibels (v, -60.0f));
-            auto col = Rectangle<float> (bars.getX() + ch * (bw + 6), bars.getY(), bw, bars.getHeight());
-            const int segs = 14;
-            for (int i = 0; i < segs; ++i)
+            const float db = jlimit (-36.0f, 0.0f, Decibels::gainToDecibels (ch == 0 ? l : r, -60.0f));
+            const int lit = (int) std::round ((db + 36.0f) / 36.0f * segs);
+            for (int i = 0; i < lit; ++i)
             {
-                const float segDb = -36.0f + 36.0f * (float) (i + 1) / segs;
-                auto seg = Rectangle<float> (col.getX(), dbToY (segDb), bw, bars.getHeight() / segs - 2);
-                const bool lit = db >= segDb - 36.0f / segs;
-                g.setColour (lit ? s.accent : s.accent.withAlpha (0.12f));
-                g.fillRect (seg);
+                const float h = bars[ch].getHeight() / segs;
+                auto seg = Rectangle<float> (bars[ch].getX(), bars[ch].getBottom() - h * (float) (i + 1), bw, h - 2.0f);
+                const Colour c = (warn && i >= segs - 2) ? Colours::orange : s.accent;
+                g.setColour (c.withAlpha (0.35f)); g.fillRect (seg.expanded (1.5f));
+                g.setColour (c); g.fillRect (seg);
             }
         }
     }
@@ -516,50 +559,60 @@ private:
 };
 
 //==============================================================================
+// Keyboard: real piano layout (the mockup keys are decorative), textures cut from the design
 class KKKeyboard : public MidiKeyboardComponent
 {
 public:
-    KKKeyboard (KeysKillaProcessor& p, KKLookAndFeel& l)
-        : MidiKeyboardComponent (p.keyboardState, horizontalKeyboard), proc (p), lnf (l)
+    KKKeyboard (KeysKillaProcessor& p, KKLookAndFeel& l, const int& s)
+        : MidiKeyboardComponent (p.keyboardState, horizontalKeyboard), proc (p), lnf (l), skin (s)
     {
-        setAvailableRange (24, 108);
+        setAvailableRange (24, 107);
         setScrollButtonsVisible (false);
         setOctaveForMiddleC (4);
         setWantsKeyboardFocus (false);
+        setMouseClickGrabsKeyboardFocus (false);
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        g.setColour (s.dark ? Colour (0xff0b0909) : Colour (0xff2a2e33));
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4);
+        MidiKeyboardComponent::paint (g);
     }
     void drawWhiteNote (int note, Graphics& g, Rectangle<float> a, bool isDown, bool isOver, Colour, Colour) override
     {
         const auto& s = *lnf.skin;
+        const auto& tex = skinImages (skin).white;
         const bool on = isDown || proc.playing[(size_t) note].load();
-        ColourGradient gr (s.keyWhite, a.getX(), a.getY(), s.keyWhite.darker (0.12f), a.getX(), a.getBottom(), false);
-        g.setGradientFill (gr);
-        g.fillRect (a.reduced (0.5f, 0));
-        if (! inScale (note)) { g.setColour (Colours::black.withAlpha (0.28f)); g.fillRect (a.reduced (0.5f, 0)); }
-        if (isRoot (note)) { g.setColour (s.accent.withAlpha (0.7f)); g.fillEllipse (Rectangle<float> (6, 6).withCentre ({ a.getCentreX(), a.getBottom() - 24 })); }
+        auto k = a.reduced (1.0f, 0).withTrimmedBottom (2);
+        g.setImageResamplingQuality (Graphics::mediumResamplingQuality);
+        g.drawImage (tex, k, RectanglePlacement::stretchToFit);
+        g.setColour (Colours::black.withAlpha (0.35f)); g.drawRoundedRectangle (k, 2, 1);
+        if (! inScale (note)) { g.setColour (Colours::black.withAlpha (0.3f)); g.fillRect (k); }
         if (on)
         {
-            g.setColour (s.accent.withAlpha (0.85f));
-            g.fillRect (a.reduced (2, 0).withTrimmedTop (a.getHeight() * 0.05f));
+            g.setGradientFill (ColourGradient (s.accent.withAlpha (0.95f), 0, k.getY(), s.accent.withAlpha (0.55f), 0, k.getBottom(), false));
+            g.fillRect (k.reduced (1.5f, 0));
+            g.setColour (Colours::white.withAlpha (0.5f)); g.fillRect (k.reduced (k.getWidth() * 0.35f, 2).withHeight (k.getHeight() * 0.5f));
         }
-        else if (isOver) { g.setColour (s.accent.withAlpha (0.15f)); g.fillRect (a); }
-        g.setColour (Colours::black.withAlpha (0.45f));
-        g.drawVerticalLine ((int) a.getRight(), a.getY(), a.getBottom());
-        if (note % 12 == 0)
-        {
-            g.setColour (Colours::black.withAlpha (0.5f)); g.setFont (serif (10.0f));
-            g.drawText ("C" + String (note / 12 - 1), a.withTrimmedTop (a.getHeight() - 16), Justification::centred);
-        }
+        else if (isOver) { g.setColour (s.accent.withAlpha (0.18f)); g.fillRect (k); }
+        if (isRoot (note)) { g.setColour (s.accent); g.fillEllipse (Rectangle<float> (6, 6).withCentre ({ k.getCentreX(), k.getBottom() - 14 })); }
     }
     void drawBlackNote (int note, Graphics& g, Rectangle<float> a, bool isDown, bool isOver, Colour) override
     {
         const auto& s = *lnf.skin;
         const bool on = isDown || proc.playing[(size_t) note].load();
-        g.setColour (on ? s.accent : s.keyBlack);
-        g.fillRoundedRectangle (a.withTrimmedTop (-4), 2);
-        if (! on && lockOn() && inScale (note)) { g.setColour (s.accent.withAlpha (0.35f)); g.fillRect (a.reduced (a.getWidth() * 0.3f, 0).withTop (a.getBottom() - 8)); }
-        if (isRoot (note)) { g.setColour (s.accent); g.fillEllipse (Rectangle<float> (5, 5).withCentre ({ a.getCentreX(), a.getBottom() - 12 })); }
-        g.setColour (Colours::white.withAlpha (isOver ? 0.25f : 0.12f));
-        g.fillRect (a.reduced (a.getWidth() * 0.25f, 0).withTrimmedBottom (a.getHeight() * 0.2f).withWidth (2));
+        auto k = a.withTrimmedTop (-2);
+        g.setColour (Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (k.translated (1.5f, 2), 2);
+        g.drawImage (skinImages (skin).black, k, RectanglePlacement::stretchToFit);
+        if (on)
+        {
+            g.setColour (s.accent.withAlpha (0.35f)); g.fillRoundedRectangle (k.expanded (2), 3);
+            g.setGradientFill (ColourGradient (s.accent.brighter (0.2f), 0, k.getY(), s.accent.darker (0.2f), 0, k.getBottom(), false));
+            g.fillRoundedRectangle (k.reduced (1.5f), 2);
+        }
+        else if (isOver) { g.setColour (s.accent.withAlpha (0.3f)); g.fillRoundedRectangle (k, 2); }
+        if (lockOn() && inScale (note) && ! on) { g.setColour (s.accent.withAlpha (0.7f)); g.fillRect (k.reduced (k.getWidth() * 0.3f, 0).withTop (k.getBottom() - 6)); }
     }
     void drawUpDownButton (Graphics&, int, int, bool, bool, bool) override {}
 private:
@@ -572,441 +625,314 @@ private:
         return (mask >> (((note - key) % 12 + 12) % 12)) & 1;
     }
     bool isRoot (int note) const { return lockOn() && ((note - (int) proc.apvts.getRawParameterValue (ID::key)->load()) % 12 + 12) % 12 == 0; }
-    KeysKillaProcessor& proc;
-    KKLookAndFeel& lnf;
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf; const int& skin;
+};
+
+//==============================================================================
+// Label drawn over the baked macro caption only when it differs (bass mode / preset names)
+class MacroCaption : public Component
+{
+public:
+    MacroCaption (KKLookAndFeel& l, const int& s) : lnf (l), skin (s) { setInterceptsMouseClicks (false, false); }
+    String text; bool custom = false; Point<int> designPos;
+    void paint (Graphics& g) override
+    {
+        if (! custom) return;
+        const auto& sk = *lnf.skin;
+        const auto& bg = skinImages (skin).bg;
+        const Colour fill = bg.getPixelAt (designPos.x - getWidth() / 2 + 4, designPos.y);
+        g.setColour (fill); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4);
+        g.setColour (sk.dark ? Colour (0xffe6e1e1) : Colour (0xff15181c));
+        g.setFont (serif ((float) getHeight() * 0.62f, ! sk.dark, 0.26f));
+        g.drawText (text, getLocalBounds(), Justification::centred);
+    }
+private:
+    KKLookAndFeel& lnf; const int& skin;
 };
 
 #include "AdvancedPage.h"
 #include "PresetBrowser.h"
 
 //==============================================================================
-class GlyphButton : public Button
+// CHORD / ARP settings panel (opened from the link icon between the buttons)
+class PlayPanel : public Component
 {
 public:
-    GlyphButton (KKLookAndFeel& l, bool framed) : Button ({}), lnf (l), frame (framed) {}
-    std::function<void (Graphics&, Rectangle<float>, const Skin&)> drawGlyph;
-    void paintButton (Graphics& g, bool over, bool down) override
+    PlayPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
+        : lnf (l), grid (p, { ID::chord, ID::chordType, ID::strum, ID::keyLock, ID::key, ID::scale,
+                              ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing }, 6)
     {
-        if (frame) lnf.drawButtonBackground (g, *this, {}, over, down);
-        if (drawGlyph) drawGlyph (g, getLocalBounds().toFloat(), *lnf.skin);
+        addAndMakeVisible (grid);
+        close.setButtonText ("CLOSE");
+        close.onClick = [this] { setVisible (false); };
+        addAndMakeVisible (close);
+    }
+    void paint (Graphics& g) override
+    {
+        drawPanel (g, getLocalBounds().toFloat().reduced (4), *lnf.skin, "CHORD / ARP");
+        g.setColour (lnf.skin->dark ? Colour (0xf0080606) : Colour (0xf0e3e6ea));
+        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (6).withTrimmedTop (34), 6);
+    }
+    void resized() override
+    {
+        close.setBounds (getWidth() - 100, 12, 84, 26);
+        grid.setBounds (getLocalBounds().reduced (16).withTrimmedTop (34));
     }
 private:
     KKLookAndFeel& lnf;
-    bool frame;
+    ParamGrid grid;
+    TextButton close;
 };
 
 //==============================================================================
 class MainPage : public Component, private Timer
 {
 public:
-    MainPage (KeysKillaProcessor& p) : proc (p), era (lnf), dice (lnf), xy (p, lnf), meter (lnf), keyboard (p, lnf)
+    explicit MainPage (KeysKillaProcessor& p) : proc (p), era (lnf, skinIndex), subChips (lnf), xy (p, lnf), chaos (lnf),
+                                                pitchWheel (lnf), modWheel (lnf), meter (lnf), keyboard (p, lnf, skinIndex)
     {
         settings = openSettings();
-        applySkin (settings->getIntValue ("skin", 0));
+        skinIndex = jlimit (0, 1, settings->getIntValue ("skin", 1));
+        lnf.setSkin (Skin::all()[(size_t) skinIndex]);
         setLookAndFeel (&lnf);
 
         for (int i = 0; i < numTiles; ++i)
         {
-            auto t = std::make_unique<TileButton> (i, lnf);
+            auto t = std::make_unique<HotButton> (lnf, HotButton::tile);
             t->setTooltip ("Browse " + tileNames()[i].toLowerCase() + " presets.");
-            t->onClick = [this, i] { proc.uiTile = i; proc.uiExclusive = false; loadFirstMatching(); };
+            t->onClick = [this, i] { proc.uiTile = i; proc.uiExclusive = false; proc.uiSub = -1; subChips.selected = -1; loadFirstMatching(); };
             addAndMakeVisible (*t);
             tiles.push_back (std::move (t));
         }
         era.selected = proc.uiEra;
         era.onSelect = [this] (int e) { proc.uiEra = e; loadFirstMatching(); };
         addAndMakeVisible (era);
+        subChips.selected = proc.uiSub;
+        subChips.onSelect = [this] (int sc) { proc.uiSub = sc; if (sc >= 0) { proc.uiTile = -1; proc.uiExclusive = false; } loadFirstMatching(); };
+        addAndMakeVisible (subChips);
 
-        exclusiveBtn.setButtonText ("EXCLUSIVE");
         exclusiveBtn.setTooltip ("Signature sounds built on the exclusive engine features.");
-        exclusiveBtn.onClick = [this] { proc.uiExclusive = ! proc.uiExclusive; if (proc.uiExclusive) proc.uiTile = -1; loadFirstMatching(); };
+        exclusiveBtn.setClickingTogglesState (false);
+        exclusiveBtn.onClick = [this] { proc.uiExclusive = ! proc.uiExclusive; if (proc.uiExclusive) { proc.uiTile = -1; proc.uiSub = -1; subChips.selected = -1; } loadFirstMatching(); };
         addAndMakeVisible (exclusiveBtn);
 
-        // preset bar
-        for (Button* b : { (Button*) &prevBtn, (Button*) &nextBtn, (Button*) &saveBtn, (Button*) &menuBtn, (Button*) &skinBtn }) addAndMakeVisible (*b);
-        prevBtn.setButtonText ("<"); nextBtn.setButtonText (">");
-        prevBtn.onClick = [this] { step (-1); }; nextBtn.onClick = [this] { step (1); };
-        prevBtn.setTooltip ("Previous preset"); nextBtn.setTooltip ("Next preset");
-        saveBtn.setButtonText ("SAVE"); saveBtn.setTooltip ("Save your sound as a preset file.");
-        saveBtn.onClick = [this] { savePreset(); };
-        menuBtn.setButtonText ("MENU"); menuBtn.onClick = [this] { showMenu(); };
-        skinBtn.setTooltip ("Switch light (CHROME) / dark (BLOOD) skin.");
-        skinBtn.onClick = [this] { applySkin (skinIndex == 0 ? 1 : 0); settings->setValue ("skin", skinIndex); repaintAll(); };
-        presetLabel.setJustificationType (Justification::centred);
-        presetLabel.setInterceptsMouseClicks (false, false);
-        addAndMakeVisible (presetLabel);
-        heartBtn.drawGlyph = [this] (Graphics& g, Rectangle<float> hb, const Skin& s)
+        // top bar
+        prevBtn.onClick = [this] { step (-1); }; prevBtn.setTooltip ("Previous preset");
+        nextBtn.onClick = [this] { step (1); };  nextBtn.setTooltip ("Next preset");
+        saveBtn.onClick = [this] { savePreset(); }; saveBtn.setTooltip ("Save your sound as a user preset.");
+        menuBtn.onClick = [this] { showMenu(); };  menuBtn.setTooltip ("Presets, A/B, undo, ADVANCED page, skin and size.");
+        nameBtn.onClick = [this] { openBrowser(); }; nameBtn.setTooltip ("Click to browse and search all presets.");
+        heartBtn.onClick = [this] { toggleFavourite(); }; heartBtn.setTooltip ("Add to favourites");
+        heartBtn.glyph = [this] (Graphics& g, Rectangle<float> hb, const Skin& s)
         {
-            hb = hb.reduced (5);
+            if (! isFav) return;
+            hb = hb.reduced (7, 9);
             Path heart;
             heart.startNewSubPath (hb.getCentreX(), hb.getBottom());
-            heart.cubicTo (hb.getX() - 4, hb.getCentreY(), hb.getX() + 2, hb.getY() - 3, hb.getCentreX(), hb.getY() + hb.getHeight() * 0.3f);
-            heart.cubicTo (hb.getRight() - 2, hb.getY() - 3, hb.getRight() + 4, hb.getCentreY(), hb.getCentreX(), hb.getBottom());
-            if (isFav) { g.setColour (s.accent); g.fillPath (heart); }
-            g.setColour (isFav ? s.accent : s.text);
-            g.strokePath (heart, PathStrokeType (1.5f));
+            heart.cubicTo (hb.getX() - 3, hb.getCentreY(), hb.getX() + 2, hb.getY() - 3, hb.getCentreX(), hb.getY() + hb.getHeight() * 0.3f);
+            heart.cubicTo (hb.getRight() - 2, hb.getY() - 3, hb.getRight() + 3, hb.getCentreY(), hb.getCentreX(), hb.getBottom());
+            g.setColour (s.accent.withAlpha (0.35f)); g.strokePath (heart, PathStrokeType (5.0f));
+            g.setColour (s.accent); g.fillPath (heart);
         };
-        skinBtn.drawGlyph = [] (Graphics& g, Rectangle<float> sb, const Skin& s)
+        nameBtn.glyph = [this] (Graphics& g, Rectangle<float> r, const Skin& s)
         {
-            sb = sb.reduced (10);
-            g.setColour (s.text);
-            if (s.dark)   // moon
-            {
-                g.fillEllipse (sb);
-                g.setColour (Colour (0xff120f0f)); g.fillEllipse (sb.translated (sb.getWidth() * 0.38f, -sb.getHeight() * 0.22f));
-            }
-            else          // sun
+            g.setColour (s.dark ? Colour (0xffece6e6) : Colour (0xff15181c));
+            g.setFont (serif (r.getHeight() * 0.5f, false, 0.14f));
+            g.drawFittedText (proc.currentName() + (modified ? " *" : ""), r.reduced (10, 0).toNearestInt(), Justification::centred, 1, 0.7f);
+        };
+        skinBtn.setTooltip ("Switch light (CHROME) / dark (BLOOD) skin.");
+        skinBtn.onClick = [this] { setSkin (skinIndex == 0 ? 1 : 0); };
+        skinBtn.glyph = [] (Graphics& g, Rectangle<float> r, const Skin& s)
+        {
+            auto c = r.reduced (2);
+            g.setColour (s.dark ? Colour (0xdd100c0c) : Colour (0xddf0f2f4)); g.fillEllipse (c);
+            g.setColour (s.dark ? Colour (0x88ffffff) : Colour (0x88202428)); g.drawEllipse (c, 1.2f);
+            auto sb = c.reduced (c.getWidth() * 0.27f);
+            g.setColour (s.dark ? Colour (0xffe8e2e2) : Colour (0xff1a1d21));
+            if (s.dark) { g.fillEllipse (sb); g.setColour (Colour (0xff100c0c)); g.fillEllipse (sb.translated (sb.getWidth() * 0.38f, -sb.getHeight() * 0.22f)); }
+            else
             {
                 g.fillEllipse (sb.reduced (sb.getWidth() * 0.25f));
-                const auto c = sb.getCentre(); const float r = sb.getWidth() * 0.5f;
+                const auto cc = sb.getCentre(); const float rr = sb.getWidth() * 0.5f;
                 for (int i = 0; i < 8; ++i)
                 {
                     const float a = MathConstants<float>::twoPi * (float) i / 8.0f;
-                    g.drawLine (c.x + std::sin (a) * r * 0.62f, c.y - std::cos (a) * r * 0.62f, c.x + std::sin (a) * r, c.y - std::cos (a) * r, 1.5f);
+                    g.drawLine (cc.x + std::sin (a) * rr * 0.62f, cc.y - std::cos (a) * rr * 0.62f, cc.x + std::sin (a) * rr, cc.y - std::cos (a) * rr, 1.5f);
                 }
             }
         };
-        heartBtn.setTooltip ("Add to favourites");
-        heartBtn.onClick = [this] { toggleFavourite(); };
-        addAndMakeVisible (heartBtn);
+        for (Component* c : { (Component*) &prevBtn, (Component*) &nextBtn, (Component*) &saveBtn, (Component*) &menuBtn,
+                              (Component*) &nameBtn, (Component*) &heartBtn, (Component*) &skinBtn })
+            addAndMakeVisible (c);
 
-        // macros
+        // macros + exclusive knobs
         const char* macroIds[] { ID::m1, ID::m2, ID::m3, ID::m4, ID::m5, ID::m6 };
         for (int i = 0; i < 6; ++i)
         {
-            auto& k = macros[(size_t) i];
-            setupKnob (k.slider, macroIds[i]);
-            k.att = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, macroIds[i], k.slider);
-            k.label.setJustificationType (Justification::centred);
-            addAndMakeVisible (k.slider); addAndMakeVisible (k.label);
+            auto k = std::make_unique<ImageKnob> (lnf, skinIndex);
+            auto* prm = proc.apvts.getParameter (macroIds[i]);
+            k->setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
+            attachments.push_back (std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, macroIds[i], *k));
+            addAndMakeVisible (*k);
+            macros.push_back (std::move (k));
+            auto cap = std::make_unique<MacroCaption> (lnf, skinIndex);
+            addAndMakeVisible (*cap);
+            captions.push_back (std::move (cap));
         }
-        // exclusive knobs
         const char* exIds[] { ID::ghost, ID::bend, ID::circuit };
-        const char* exNames[] { "GHOST", "BEND", "CIRCUIT" };
-        const char* exTips[] { "GHOST: adds a reversed, octave-up shadow layer with a haunted tail.",
-                               "BEND: melody bends - scoop in, dive at note end, broken tape above 60%.",
-                               "CIRCUIT: tempo-synced broken-electronics glitches (stutter, dropout, crush)." };
+        const char* exTips[] { "GHOST: reversed, octave-shifted shadow layer with a haunted tail.",
+                               "BEND: melody bends - dive, rise, dip, octave jump or random (mode in ADVANCED > EXCLUSIVE).",
+                               "CIRCUIT: tempo-synced broken-electronics glitches." };
         for (int i = 0; i < 3; ++i)
         {
-            auto& k = exKnobs[(size_t) i];
-            setupKnob (k.slider, exIds[i]);
-            k.slider.setTooltip (exTips[i]);
-            k.att = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, exIds[i], k.slider);
-            k.label.setText (exNames[i], dontSendNotification);
-            k.label.setJustificationType (Justification::centred);
-            addAndMakeVisible (k.slider); addAndMakeVisible (k.label);
+            auto k = std::make_unique<ImageKnob> (lnf, skinIndex);
+            k->setTooltip (exTips[i]);
+            k->setDoubleClickReturnValue (true, 0.0);
+            attachments.push_back (std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, exIds[i], *k));
+            addAndMakeVisible (*k);
+            smallKnobs.push_back (std::move (k));
         }
-        chaos.setSliderStyle (Slider::LinearHorizontal);
-        chaos.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-        chaos.setTooltip ("CHAOS: how far DICE moves away from the current sound.");
-        chaosAtt = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, ID::chaos, chaos);
-        addAndMakeVisible (chaos);
-        chaosLabel.setText ("CHAOS", dontSendNotification);
-        addAndMakeVisible (chaosLabel);
 
-        dice.onRoll = [this] { proc.rollDice (proc.uiTile >= 0 ? proc.uiTile : tileOfCurrent()); };
-        dice.onUndo = [this] { showDiceMenu(); };
-        addAndMakeVisible (dice);
+        chaos.setTooltip ("CHAOS: how far DICE moves away from the current sound.");
+        attachments.push_back (std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, ID::chaos, chaos));
+        addAndMakeVisible (chaos);
+        diceBtn.setTooltip ("DICE: roll a brand-new sound in this category. Right-click: undo, history, locks, save.");
+        diceBtn.onClick = [this] { proc.rollDice (proc.uiTile >= 0 ? proc.uiTile : tileOfCurrent()); proc.captureUndo(); };
+        diceBtn.onRightClick = [this] { showDiceMenu(); };
+        addAndMakeVisible (diceBtn);
         addAndMakeVisible (xy);
 
-        chordBtn.setButtonText ("CHORD"); chordBtn.setClickingTogglesState (true);
-        chordBtn.setTooltip ("CHORD: one key plays a minor 7th chord.");
-        arpBtn.setButtonText ("ARP"); arpBtn.setClickingTogglesState (true);
-        arpBtn.setTooltip ("ARP: tempo-synced arpeggiator (right-click for rate).");
+        chordBtn.setClickingTogglesState (true); arpBtn.setClickingTogglesState (true);
+        chordBtn.setTooltip ("CHORD: one key plays a trap chord. Right-click or the link icon for chord type, strum and key lock.");
+        arpBtn.setTooltip ("ARP: tempo-synced arpeggiator. Right-click or the link icon for rate, mode, octaves, gate and swing.");
         chordAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ID::chord, chordBtn);
         arpAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ID::arp, arpBtn);
-        addAndMakeVisible (chordBtn); addAndMakeVisible (arpBtn);
-        arpBtn.addMouseListener (this, false);
-        addAndMakeVisible (meter);
+        chordBtn.onRightClick = [this] { openPlayPanel(); };
+        arpBtn.onRightClick = [this] { openPlayPanel(); };
+        linkBtn.setTooltip ("CHORD / ARP settings");
+        linkBtn.onClick = [this] { openPlayPanel(); };
+        for (Component* c : { (Component*) &chordBtn, (Component*) &arpBtn, (Component*) &linkBtn, (Component*) &meter }) addAndMakeVisible (c);
+        meter.setInterceptsMouseClicks (false, false);
 
-        // wheels
-        for (auto* w : { &pitchWheel, &modWheel })
-        {
-            w->setSliderStyle (Slider::LinearVertical);
-            w->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
-            addAndMakeVisible (*w);
-        }
         pitchWheel.setRange (-1.0, 1.0); pitchWheel.setValue (0.0);
         pitchWheel.onValueChange = [this] { proc.guiPitch = (float) pitchWheel.getValue(); };
         pitchWheel.onDragEnd = [this] { pitchWheel.setValue (0.0); };
-        pitchWheel.setTooltip ("Pitch wheel (+/- 2 semitones)");
+        pitchWheel.setTooltip ("Pitch wheel");
         modWheel.setRange (0.0, 1.0); modWheel.setValue (0.0);
         modWheel.onValueChange = [this] { proc.guiMod = (float) modWheel.getValue(); };
         modWheel.setTooltip ("Mod wheel: adds vibrato");
-        for (auto* l : { &pitchLabel, &modLabel }) { l->setJustificationType (Justification::centred); addAndMakeVisible (*l); }
-        pitchLabel.setText ("PITCH", dontSendNotification); modLabel.setText ("MOD", dontSendNotification);
-        pitchLabel.setFont (serif (10.0f, false, 0.05f)); modLabel.setFont (serif (10.0f, false, 0.05f));
-
+        addAndMakeVisible (pitchWheel); addAndMakeVisible (modWheel);
         addAndMakeVisible (keyboard);
-        advanced = std::make_unique<AdvancedPage> (proc, lnf, skinIndex);
-        advanced->onSkin = [this] (int sk) { setSkin (sk); };
-        advanced->onSize = [this] (int pct) { setWindowSize (pct); };
-        addChildComponent (*advanced);
-        browser = std::make_unique<PresetBrowser> (proc, lnf);
-        browser->getFavourites = [this] { return favourites(); };
-        browser->toggleFavourite = [this] (const String& n) { toggleFavouriteNamed (n); };
-        browser->onChanged = [this] { refreshState(); };
-        addChildComponent (*browser);
 
         setSize (KeysKillaEditor::designW, KeysKillaEditor::designH);
+        noFocus (*this);
         refreshState();
         startTimerHz (30);
     }
 
     ~MainPage() override { setLookAndFeel (nullptr); }
 
-    // used by tests / screenshots: 0 main, 1..8 advanced tab, 9 preset browser
-    void showView (int v)
+    int preferredScale() const { return jlimit (50, 100, settings->getIntValue ("scale", 60)); }
+
+    void showView (int v)   // used by tests / screenshots: 0 main, 1..8 advanced tab, 9 browser, 10 chord/arp panel
     {
-        if (v >= 1 && v <= 8) { advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
-        if (v == 9) browser->open (-1, -1, false);
+        if (v >= 1 && v <= 8) { ensureAdvanced(); advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
+        if (v == 9) openBrowser();
+        if (v == 10) openPlayPanel();
     }
 
     void paint (Graphics& g) override
     {
-        if (bg.isNull()) renderBackground();
-        g.drawImage (bg, getLocalBounds().toFloat());
-        const auto& s = *lnf.skin;
-        drawPanel (g, browserR, s, "BROWSER");
-        drawPanel (g, exclusiveR, s, "EXCLUSIVE");
-        drawPanel (g, macroR, s);
-        drawPanel (g, playR, s);
-        drawPanel (g, meterR, s);
-        drawPanel (g, wheelR, s);
-        drawPanel (g, keyR, s);
-        // exclusive sub-boxes
-        g.setColour (s.panelEdge.withAlpha (0.7f));
-        g.drawRoundedRectangle (dice.getBounds().toFloat().expanded (4, 4).withBottom ((float) chaos.getBottom() + 18), 6, 1);
-        g.drawRoundedRectangle (xy.getBounds().toFloat().expanded (6, 6), 6, 1);
-        // chord-arp link glyph
-        g.setColour (s.text);
-        auto link = Rectangle<float> ((float) chordBtn.getRight() + 4, (float) chordBtn.getY(), (float) (arpBtn.getX() - chordBtn.getRight() - 8), (float) chordBtn.getHeight());
-        g.drawRoundedRectangle (link.withSizeKeepingCentre (14, 9).translated (-4, 0), 4, 1.6f);
-        g.drawRoundedRectangle (link.withSizeKeepingCentre (14, 9).translated (4, 0), 4, 1.6f);
-        drawLogo (g);
-        // preset bar box
-        g.setColour (s.dark ? Colour (0xee0b0909) : Colour (0xeef3f4f6));
-        g.fillRoundedRectangle (presetR, 4);
-        g.setColour (s.panelEdge); g.drawRoundedRectangle (presetR, 4, 1.4f);
+        g.setImageResamplingQuality (Graphics::highResamplingQuality);
+        g.drawImageAt (skinImages (skinIndex).bg, 0, 0);
     }
 
     void resized() override
     {
-        presetR = { 545, 84, 350, 40 };
-        prevBtn.setBounds (548, 88, 38, 32);
-        nextBtn.setBounds (854, 88, 38, 32);
-        presetLabel.setBounds (590, 88, 225, 32);
-        heartBtn.setBounds (818, 90, 30, 28);
-        saveBtn.setBounds (910, 84, 70, 40);
-        menuBtn.setBounds (986, 84, 76, 40);
-        skinBtn.setBounds (1068, 84, 40, 40);
-
-        browserR = { 20, 168, 810, 222 };
-        for (int i = 0; i < numTiles; ++i) tiles[(size_t) i]->setBounds (30 + i * 79, 205, 77, 108);
-        era.setBounds (30, 320, 610, 58);
-        exclusiveBtn.setBounds (648, 338, 170, 36);
-
-        exclusiveR = { 840, 168, 342, 290 };
-        dice.setBounds (852, 200, 118, 130);
-        chaos.setBounds (852, 330, 118, 22);
-        chaosLabel.setBounds (852, 350, 60, 16);
-        xy.setBounds (984, 206, 188, 162);
-        const int ex = 862;
-        for (int i = 0; i < 3; ++i)
-        {
-            exKnobs[(size_t) i].slider.setBounds (ex + i * 104, 372, 64, 58);
-            exKnobs[(size_t) i].label.setBounds (ex - 18 + i * 104, 430, 100, 20);
-        }
-
-        macroR = { 20, 400, 810, 190 };
+        const auto& G = geo (skinIndex);
+        prevBtn.setBounds (G.prev); nextBtn.setBounds (G.next); nameBtn.setBounds (G.name); heartBtn.setBounds (G.heart);
+        saveBtn.setBounds (G.save); menuBtn.setBounds (G.menu); skinBtn.setBounds (G.skin);
+        for (int i = 0; i < numTiles; ++i) tiles[(size_t) i]->setBounds (G.tiles[(size_t) i]);
+        subChips.setBounds (G.subBar);
+        auto eraBounds = Rectangle<int> (G.era[0].x - 40, G.era[0].y - 42, G.era[5].x - G.era[0].x + 80, 56);
+        era.origin = eraBounds.getPosition();
+        era.setBounds (eraBounds);
+        exclusiveBtn.setBounds (G.exclusive);
         for (int i = 0; i < 6; ++i)
         {
-            macros[(size_t) i].slider.setBounds (40 + i * 131, 412, 118, 128);
-            macros[(size_t) i].label.setBounds (30 + i * 131, 546, 138, 26);
+            macros[(size_t) i]->place (G.macro[(size_t) i], G.macroCap, G.macroArc);
+            captions[(size_t) i]->designPos = { G.macro[(size_t) i].x, G.macroLabelY };
+            captions[(size_t) i]->setBounds (G.macro[(size_t) i].x - 70, G.macroLabelY - 16, 140, 32);
         }
-
-        playR = { 840, 466, 230, 76 };
-        chordBtn.setBounds (852, 486, 88, 36);
-        arpBtn.setBounds (972, 486, 88, 36);
-        meterR = { 1080, 466, 102, 124 };
-        meter.setBounds (1086, 472, 92, 114);
-
-        wheelR = { 20, 600, 86, 138 };
-        pitchWheel.setBounds (28, 608, 32, 104); modWheel.setBounds (66, 608, 32, 104);
-        pitchLabel.setBounds (22, 714, 44, 18); modLabel.setBounds (60, 714, 44, 18);
-        keyR = { 112, 600, 1070, 138 };
-        keyboard.setBounds (120, 606, 1054, 126);
-        keyboard.setKeyWidth (1054.0f / 50.0f);
-        advanced->setBounds (getLocalBounds());
-        browser->setBounds (getLocalBounds().withTrimmedBottom (150));
-    }
-
-    void mouseUp (const MouseEvent& e) override
-    {
-        if (e.eventComponent == &arpBtn && e.mods.isPopupMenu())
-        {
-            PopupMenu m; auto* p = proc.apvts.getParameter (ID::arpRate);
-            const int cur = (int) p->convertFrom0to1 (p->getValue());
-            for (int i = 0; i < Choices::arpRates.size(); ++i) m.addItem (i + 1, "Rate " + Choices::arpRates[i], true, i == cur);
-            m.showMenuAsync (PopupMenu::Options().withTargetComponent (arpBtn), [p] (int r) { if (r > 0) p->setValueNotifyingHost (p->convertTo0to1 ((float) (r - 1))); });
-        }
+        for (int i = 0; i < 3; ++i) smallKnobs[(size_t) i]->place (G.small[(size_t) i], G.smallCap, G.smallArc);
+        diceBtn.setBounds (G.dice); chaos.setBounds (G.chaos); xy.setBounds (G.xy);
+        chordBtn.setBounds (G.chord); arpBtn.setBounds (G.arp); linkBtn.setBounds (G.link);
+        meter.setBounds (G.meter);
+        pitchWheel.setBounds (G.pitch); modWheel.setBounds (G.mod);
+        keyboard.setBounds (G.keyboard);
+        keyboard.setKeyWidth ((float) G.keyboard.getWidth() / 49.0f);
+        if (advanced) advanced->setBounds (getLocalBounds().reduced (30));
+        if (browser) browser->setBounds (getLocalBounds().reduced (30).withTrimmedBottom (170));
+        if (playPanel) playPanel->setBounds (Rectangle<int> (60, 560, 1050, 230));
     }
 
 private:
-    struct Knob
+    // ---------------- panels (created on first use -> fast editor open/close) ----------------
+    void ensureAdvanced()
     {
-        Slider slider { Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox };
-        Label label;
-        std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> att;
-    };
-
-    void setupKnob (Slider& s, const char* id)
+        if (advanced) return;
+        advanced = std::make_unique<AdvancedPage> (proc, lnf, skinIndex);
+        advanced->onSkin = [this] (int sk) { setSkin (sk); };
+        advanced->onSize = [this] (int pct) { setScale (pct); };
+        addChildComponent (*advanced);
+        noFocus (*advanced);
+        resized();
+    }
+    void openBrowser()
     {
-        s.setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
-        s.setVelocityModeParameters (0.6, 1, 0.02, true, ModifierKeys::ctrlModifier);
-        auto* p = proc.apvts.getParameter (id);
-        s.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
-        s.setPopupDisplayEnabled (true, true, this);
+        if (! browser)
+        {
+            browser = std::make_unique<PresetBrowser> (proc, lnf);
+            browser->getFavourites = [this] { return favourites(); };
+            browser->toggleFavourite = [this] (const String& n) { toggleFavouriteNamed (n); };
+            browser->onChanged = [this] { refreshState(); };
+            addChildComponent (*browser);
+            noFocus (*browser);
+            resized();
+        }
+        browser->open (proc.uiExclusive ? -1 : proc.uiTile, proc.uiEra, proc.uiExclusive);
+    }
+    void openPlayPanel()
+    {
+        if (! playPanel)
+        {
+            playPanel = std::make_unique<PlayPanel> (proc, lnf);
+            addChildComponent (*playPanel);
+            noFocus (*playPanel);
+            resized();
+        }
+        playPanel->setVisible (! playPanel->isVisible());
+        playPanel->toFront (false);
     }
 
-    void applySkin (int idx)
+    void setSkin (int idx)
     {
-        skinIndex = jlimit (0, (int) Skin::all().size() - 1, idx);
+        skinIndex = jlimit (0, 1, idx);
         lnf.setSkin (Skin::all()[(size_t) skinIndex]);
-        bg = {};
-    }
-
-    void repaintAll()
-    {
+        settings->setValue ("skin", skinIndex);
+        resized();
         std::function<void (Component&)> rp = [&] (Component& c) { c.repaint(); for (auto* ch : c.getChildren()) rp (*ch); };
         rp (*this);
         sendLookAndFeelChange();
     }
-
-    void renderBackground()
+    void setScale (int pct)
     {
-        const auto& s = *lnf.skin;
-        const int W = KeysKillaEditor::designW, H = KeysKillaEditor::designH;
-        bg = Image (Image::ARGB, W * 2, H * 2, true);
-        Graphics g (bg);
-        g.addTransform (AffineTransform::scale (2.0f));
-        g.setGradientFill (ColourGradient (s.bgTop, 0, 0, s.bgBottom, (float) W * 0.3f, (float) H, false));
-        g.fillAll();
-        Random r (s.dark ? 666 : 777);
-        if (s.dark)
-        {
-            // grunge: blotches and scratches
-            for (int i = 0; i < 90; ++i)
-            {
-                g.setColour ((r.nextBool() ? Colour (0xff3a0508) : Colour (0xff201c1c)).withAlpha (0.05f + r.nextFloat() * 0.12f));
-                const float sz = 20 + r.nextFloat() * 160;
-                g.fillEllipse (r.nextFloat() * W, r.nextFloat() * H, sz, sz * (0.3f + r.nextFloat()));
-            }
-            for (int i = 0; i < 400; ++i)
-            {
-                g.setColour (Colours::white.withAlpha (0.015f + r.nextFloat() * 0.04f));
-                const float x = r.nextFloat() * W, y = r.nextFloat() * H;
-                g.drawLine (x, y, x + r.nextFloat() * 60 - 30, y + r.nextFloat() * 8 - 4, 0.6f);
-            }
-            // barbed wire along edges
-            auto wire = [&] (Point<float> a, Point<float> b)
-            {
-                g.setColour (Colour (0xff8a8a8a).withAlpha (0.55f));
-                const int segs = (int) (a.getDistanceFrom (b) / 14);
-                Path p; p.startNewSubPath (a);
-                for (int i = 1; i <= segs; ++i)
-                {
-                    auto pt = a + (b - a) * ((float) i / segs);
-                    p.lineTo (pt + Point<float> (0, (i % 2 ? 2.5f : -2.5f)));
-                }
-                g.strokePath (p, PathStrokeType (1.3f));
-                for (int i = 1; i < segs; i += 4)
-                {
-                    auto pt = a + (b - a) * ((float) i / segs);
-                    g.drawLine (pt.x - 5, pt.y - 5, pt.x + 5, pt.y + 5, 1.2f);
-                    g.drawLine (pt.x - 5, pt.y + 5, pt.x + 5, pt.y - 5, 1.2f);
-                }
-            };
-            wire ({ 0, 158 }, { 520, 150 }); wire ({ 700, 8 }, { 1200, 70 }); wire ({ 6, 395 }, { 16, 745 });
-            wire ({ 1190, 160 }, { 1194, 740 }); wire ({ 0, 744 }, { 1200, 746 });
-            for (int i = 0; i < 26; ++i)
-            {
-                const bool edgeX = r.nextBool();
-                Point<float> c = edgeX ? Point<float> (r.nextBool() ? r.nextFloat() * 18 : W - r.nextFloat() * 18, r.nextFloat() * H)
-                                       : Point<float> (r.nextFloat() * W, r.nextBool() ? 160 + r.nextFloat() * 8 : 396 + r.nextFloat() * 4);
-                drawStar (g, c, 4 + r.nextFloat() * 8, s.deco.withAlpha (0.8f), 0.12f);
-            }
-            g.setColour (s.textDim); g.setFont (serif (12.0f, false, 0.05f));
-            g.drawText ("SOUNDS FOR A DARKER TOMORROW.", Rectangle<float> (930, 18, 250, 20), Justification::centredRight);
-        }
-        else
-        {
-            // liquid chrome highlights
-            for (int i = 0; i < 26; ++i)
-            {
-                Path p; const float y0 = r.nextFloat() * H * 1.2f - 60;
-                p.startNewSubPath (-20, y0);
-                for (int x = 0; x <= W + 40; x += 60)
-                    p.lineTo ((float) x, y0 + std::sin ((float) x * 0.008f + (float) i) * 40 + (float) x * 0.15f);
-                g.setColour ((r.nextBool() ? Colours::white : Colour (0xff6d7580)).withAlpha (0.08f + r.nextFloat() * 0.12f));
-                g.strokePath (p, PathStrokeType (6 + r.nextFloat() * 28, PathStrokeType::curved, PathStrokeType::rounded));
-            }
-            // diamonds + sparkles on edges only
-            for (int i = 0; i < 40; ++i)
-            {
-                Point<float> c;
-                switch (r.nextInt (4))
-                {
-                    case 0:  c = { r.nextFloat() * 16, r.nextFloat() * H }; break;
-                    case 1:  c = { W - r.nextFloat() * 16, r.nextFloat() * H }; break;
-                    case 2:  c = { 540 + r.nextFloat() * 660, r.nextFloat() * 14 }; break;
-                    default: c = { r.nextFloat() * W, H - r.nextFloat() * 8 }; break;
-                }
-                const float sz = 5 + r.nextFloat() * 12;
-                Path d; d.addPolygon (c, 4, sz, 0.3f);
-                g.setGradientFill (ColourGradient (Colours::white, c.x - sz, c.y - sz, Colour (0xff9fd2ff), c.x + sz, c.y + sz, false));
-                g.fillPath (d);
-                g.setColour (Colour (0xff6f8fb0)); g.strokePath (d, PathStrokeType (0.8f));
-                if (r.nextFloat() < 0.4f) drawStar (g, c + Point<float> (sz, -sz), sz * 0.8f, Colours::white, 0.1f);
-            }
-        }
+        settings->setValue ("scale", pct);
+        if (auto* ed = findParentComponentOfClass<AudioProcessorEditor>())
+            ed->setSize (KeysKillaEditor::designW * pct / 100, KeysKillaEditor::designH * pct / 100);
     }
 
-    void drawLogo (Graphics& g)
-    {
-        const auto& s = *lnf.skin;
-        GlyphArrangement ga;
-        ga.addLineOfText (serif (96.0f, true, 0.02f), "KEYS KILLA", 44, 128);
-        Path p; ga.createPath (p);
-        p.applyTransform (AffineTransform::shear (-0.18f, 0));
-        p.scaleToFit (48, 44, 470, 86, false);
-        // spikes on the logo (blackletter feel)
-        Random r (5);
-        auto pb = p.getBounds();
-        Path spikes;
-        for (int i = 0; i < 18; ++i)
-        {
-            const float x = pb.getX() + 10 + r.nextFloat() * (pb.getWidth() - 20);
-            const bool up = r.nextBool();
-            const float y = up ? pb.getY() + 6 : pb.getBottom() - 6;
-            spikes.addTriangle (x - 3, y, x + 3, y, x + (r.nextFloat() - 0.5f) * 10, y + (up ? -16.0f : 16.0f) * (0.5f + r.nextFloat()));
-        }
-        p.addPath (spikes);
-        DropShadow (s.dark ? s.accent.withAlpha (0.9f) : Colour (0xff4a90d9).withAlpha (0.55f), 14, {}).drawForPath (g, p);
-        ColourGradient chrome (Colours::white, 0, pb.getY(), Colour (0xff2b2f35), 0, pb.getBottom(), false);
-        chrome.addColour (0.45, Colour (0xffc9ced4));
-        chrome.addColour (0.52, Colour (0xff50565e));
-        chrome.addColour (0.7, Colour (0xffe9ecef));
-        g.setGradientFill (chrome);
-        g.fillPath (p);
-        g.setColour (s.dark ? Colour (0xff3a0000) : Colour (0xff1f2328));
-        g.strokePath (p, PathStrokeType (1.4f));
-        g.setColour (s.text);
-        g.setFont (serif (13.0f, false, 0.45f));
-        g.drawText ("RARE & MODERN TRAP MELODIES & BASSES", Rectangle<float> (60, 138, 480, 20), Justification::centred);
-    }
-
-    // ---------- preset browsing ----------
+    // ---------------- browsing ----------------
     std::vector<int> filtered() const
     {
         std::vector<int> out;
@@ -1015,46 +941,32 @@ private:
         {
             const auto& p = ps[(size_t) i];
             if (proc.uiExclusive && ! p.exclusive) continue;
-            if (! proc.uiExclusive && proc.uiTile >= 0 && p.tile != proc.uiTile) continue;
+            if (proc.uiSub >= 0 && p.sub != subCats[(size_t) proc.uiSub].sub) continue;
+            if (! proc.uiExclusive && proc.uiSub < 0 && proc.uiTile >= 0 && p.tile != proc.uiTile) continue;
             if (proc.uiEra >= 0 && p.era != proc.uiEra) continue;
             out.push_back (i);
         }
         return out;
     }
-
-    int tileOfCurrent() const
-    {
-        const int i = proc.currentPresetIndex();
-        return i >= 0 ? factoryPresets()[(size_t) i].tile : tLeads;
-    }
-
+    int tileOfCurrent() const { const int i = proc.currentPresetIndex(); return i >= 0 ? factoryPresets()[(size_t) i].tile : tLeads; }
     void loadFirstMatching()
     {
         auto list = filtered();
-        if (list.empty() && proc.uiEra >= 0)   // nothing in this era: ignore the era for this category
-        {
-            const int keep = proc.uiEra; proc.uiEra = -1; list = filtered(); proc.uiEra = keep;
-        }
+        if (list.empty() && proc.uiEra >= 0) { const int keep = proc.uiEra; proc.uiEra = -1; list = filtered(); proc.uiEra = keep; }
         if (! list.empty()) proc.loadPreset (list.front());
+        proc.captureUndo();
         refreshState();
     }
-
     void step (int dir)
     {
         auto list = filtered();
         if (list.empty()) { list.resize (factoryPresets().size()); std::iota (list.begin(), list.end(), 0); }
-        const int cur = proc.currentPresetIndex();
-        auto it = std::find (list.begin(), list.end(), cur);
+        auto it = std::find (list.begin(), list.end(), proc.currentPresetIndex());
         int pos = it == list.end() ? (dir > 0 ? -1 : 0) : (int) std::distance (list.begin(), it);
         pos = (pos + dir + (int) list.size()) % (int) list.size();
         proc.loadPreset (list[(size_t) pos]);
+        proc.captureUndo();
         refreshState();
-    }
-
-    void mouseDown (const MouseEvent& e) override
-    {
-        if (presetR.contains (e.position) && ! heartBtn.getBounds().contains (e.getPosition()))
-            browser->open (proc.uiExclusive ? -1 : proc.uiTile, proc.uiEra, proc.uiExclusive);
     }
 
     StringArray favourites() const { return StringArray::fromTokens (settings->getValue ("favourites"), "|", ""); }
@@ -1080,7 +992,6 @@ private:
             if (r == 1 && name.isNotEmpty()) done (name);
         }), true);
     }
-
     void savePresetAs()
     {
         askName ("Save preset as", proc.currentName().upToFirstOccurrenceOf (" *", false, false), [this] (const String& name)
@@ -1089,8 +1000,7 @@ private:
             refreshState();
         });
     }
-
-    void savePreset()   // SAVE: overwrite the current user preset, factory presets are read-only -> Save As
+    void savePreset()
     {
         if (proc.currentUserFile().existsAsFile()) { proc.saveUserPreset (proc.currentUserFile()); refreshState(); }
         else savePresetAs();
@@ -1101,7 +1011,7 @@ private:
         const bool user = proc.currentUserFile().existsAsFile();
         PopupMenu m, size, packs;
         m.addSectionHeader ("PRESET");
-        m.addItem (1, "Save", true);
+        m.addItem (1, "Save");
         m.addItem (2, "Save As...");
         m.addItem (3, "Rename...", user);
         m.addItem (4, "Delete", user);
@@ -1113,17 +1023,18 @@ private:
         packs.addItem (22, "Show user preset folder");
         m.addSubMenu ("Preset packs", packs);
         m.addSectionHeader ("EDIT");
-        m.addItem (8, "Undo", proc.undoManager.canUndo());
-        m.addItem (9, "Redo", proc.undoManager.canRedo());
+        m.addItem (8, "Undo", proc.canUndo());
+        m.addItem (9, "Redo", proc.canRedo());
         m.addItem (12, String ("Switch to ") + (proc.currentAB() == 0 ? "B" : "A") + "  (now " + (proc.currentAB() == 0 ? "A" : "B") + ")");
         m.addItem (13, String ("Copy ") + (proc.currentAB() == 0 ? "A > B" : "B > A"));
         m.addItem (14, "Undo last DICE roll", ! proc.diceHistoryNames().isEmpty());
         m.addSeparator();
         m.addItem (15, "ADVANCED page...");
+        m.addItem (17, "CHORD / ARP settings...");
         m.addItem (16, "Eco mode (lower CPU)", true, proc.eco.load());
         m.addItem (10, "Skin: CHROME (light)", true, skinIndex == 0);
         m.addItem (11, "Skin: BLOOD (dark)", true, skinIndex == 1);
-        for (int pct : { 100, 125, 150, 175, 200 }) size.addItem (100 + pct, String (pct) + " %");
+        for (int pct : { 50, 60, 70, 85, 100 }) size.addItem (100 + pct, String (pct) + " %", true, preferredScale() == pct);
         m.addSubMenu ("Window size", size);
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (menuBtn), [this] (int r)
         {
@@ -1138,13 +1049,14 @@ private:
                     break;
                 case 5: proc.revert(); break;
                 case 6: proc.initPatch(); break;
-                case 7: browser->open (-1, -1, false); break;
-                case 8: proc.undoManager.undo(); break;
-                case 9: proc.undoManager.redo(); break;
+                case 7: openBrowser(); break;
+                case 8: proc.undo(); break;
+                case 9: proc.redo(); break;
                 case 12: proc.switchAB(); break;
                 case 13: proc.copyAtoB(); break;
                 case 14: proc.undoDice(); break;
-                case 15: advanced->setVisible (true); advanced->toFront (false); break;
+                case 15: ensureAdvanced(); advanced->setVisible (true); advanced->toFront (false); break;
+                case 17: openPlayPanel(); break;
                 case 16: proc.eco = ! proc.eco.load(); break;
                 case 10: case 11: setSkin (r - 10); break;
                 case 20:
@@ -1163,19 +1075,10 @@ private:
                                           [this] (const FileChooser& fc) { if (fc.getResult() != File()) proc.exportPack (fc.getResult().withFileExtension ("zip")); });
                     break;
                 case 22: KeysKillaProcessor::userPresetDir().startAsProcess(); break;
-                default:
-                    if (r > 100) setWindowSize (r - 100);
-                    break;
+                default: if (r > 100) setScale (r - 100); break;
             }
             refreshState();
         });
-    }
-
-    void setSkin (int idx) { applySkin (idx); settings->setValue ("skin", skinIndex); repaintAll(); }
-    void setWindowSize (int pct)
-    {
-        if (auto* ed = findParentComponentOfClass<AudioProcessorEditor>())
-            ed->setSize (KeysKillaEditor::designW * pct / 100, KeysKillaEditor::designH * pct / 100);
     }
 
     void showDiceMenu()
@@ -1188,7 +1091,7 @@ private:
         for (int i = 0; i < KeysKillaProcessor::numLocks; ++i) locks.addItem (200 + i, String ("Lock ") + KeysKillaProcessor::lockName (i), true, proc.diceLocks[(size_t) i]);
         m.addSubMenu ("Locks", locks);
         m.addItem (2, "Save this sound as preset...");
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (dice), [this] (int r)
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (diceBtn), [this] (int r)
         {
             if (r == 1) proc.undoDice();
             else if (r == 2) savePresetAs();
@@ -1200,101 +1103,107 @@ private:
 
     void refreshState()
     {
-        presetLabel.setFont (serif (19.0f, false, 0.12f));
-        presetLabel.setText (proc.currentName() + (modified ? " *" : ""), dontSendNotification);
-        presetLabel.setColour (Label::textColourId, lnf.skin->text);
         const int cur = proc.currentPresetIndex();
-        const int shownTile = proc.uiTile >= 0 ? proc.uiTile : (cur >= 0 && ! proc.uiExclusive ? factoryPresets()[(size_t) cur].tile : -1);
+        const int shownTile = proc.uiTile >= 0 ? proc.uiTile : (cur >= 0 && ! proc.uiExclusive && proc.uiSub < 0 ? factoryPresets()[(size_t) cur].tile : -1);
         for (int i = 0; i < numTiles; ++i) { tiles[(size_t) i]->selected = (i == shownTile) && ! proc.uiExclusive; tiles[(size_t) i]->repaint(); }
         exclusiveBtn.setToggleState (proc.uiExclusive, dontSendNotification);
         era.selected = proc.uiEra; era.repaint();
-        auto favList = StringArray::fromTokens (settings->getValue ("favourites"), "|", "");
-        isFav = favList.contains (proc.currentName());
-        heartBtn.repaint();
+        subChips.selected = proc.uiSub; subChips.repaint();
+        isFav = favourites().contains (proc.currentName());
+        heartBtn.repaint(); nameBtn.repaint();
+
         const bool bass = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
         static const char* normal[] { "TONE", "SPACE", "DIRT", "LOFI", "MOVE", "WIDTH" };
         static const char* bassL[] { "SUB", "WOBBLE", "DIRT", "GLIDE", "TONE", "PUNCH" };
         static const char* tipsN[] { "Darker / brighter", "Reverb and delay amount", "Distortion and saturation", "Tape wobble, vinyl and bitcrush",
                                      "Filter movement, chorus and vibrato", "Stereo width and detune" };
-        static const char* tipsB[] { "Clean sine sub layer an octave down", "Tempo-synced filter wobble", "Distortion above the low end only",
+        static const char* tipsB[] { "Clean sine sub layer an octave down", "Tempo-synced wobble (target in ADVANCED > MOD)", "Distortion above the low end only",
                                      "Slide time between notes", "Darker / brighter", "Punchy pitch click on the attack" };
         const auto custom = proc.macroNames();
         for (int i = 0; i < 6; ++i)
         {
-            macros[(size_t) i].label.setText (custom.size() == 6 ? custom[i] : String (bass ? bassL[i] : normal[i]), dontSendNotification);
-            macros[(size_t) i].label.setFont (serif (20.0f, false, 0.25f));
-            macros[(size_t) i].slider.setTooltip (bass ? tipsB[i] : tipsN[i]);
+            const String t = custom.size() == 6 ? custom[i] : String (bass ? bassL[i] : normal[i]);
+            captions[(size_t) i]->text = t;
+            captions[(size_t) i]->custom = t != normal[i];
+            captions[(size_t) i]->repaint();
+            macros[(size_t) i]->setTooltip (bass ? tipsB[i] : tipsN[i]);
         }
-        repaint (presetR.toNearestInt().expanded (4));
     }
 
     void timerCallback() override
     {
         const float l = proc.meterL.exchange (0.0f), r = proc.meterR.exchange (0.0f);
-        meter.l = std::max (l, meter.l * 0.82f); meter.r = std::max (r, meter.r * 0.82f);
+        const float nl = std::max (l, meter.l * 0.8f), nr = std::max (r, meter.r * 0.8f);
         if (proc.overload.exchange (false)) warnHold = 45;
-        meter.warn = warnHold > 0 && proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
+        const bool warn = warnHold > 0 && proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
         if (warnHold > 0) --warnHold;
-        meter.repaint();
+        if (std::abs (nl - meter.l) > 1.0e-4f || std::abs (nr - meter.r) > 1.0e-4f || warn != meter.warn)
+        { meter.l = nl < 1.0e-4f ? 0.0f : nl; meter.r = nr < 1.0e-4f ? 0.0f : nr; meter.warn = warn; meter.repaint(); }
 
+        const bool mouseDown = ModifierKeys::currentModifiers.isAnyMouseButtonDown();
+        if (++slowTick % 10 == 0)
+        {
+            modifiedNow = proc.isModified();
+            if (! mouseDown) proc.captureUndo();
+        }
         const bool bassNow = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
-        if (++slowTick % 10 == 0) modifiedNow = proc.isModified();
         if (proc.currentName() != lastName || proc.currentPresetIndex() != lastIndex || modifiedNow != modified || bassNow != lastBass)
         {
             lastName = proc.currentName(); lastIndex = proc.currentPresetIndex(); modified = modifiedNow; lastBass = bassNow;
             refreshState();
         }
-        if (! ModifierKeys::currentModifiers.isAnyMouseButtonDown()) proc.undoManager.beginNewTransaction();
-        const float lockHash = proc.apvts.getRawParameterValue (ID::keyLock)->load() * 1000 + proc.apvts.getRawParameterValue (ID::key)->load() * 10
-                             + proc.apvts.getRawParameterValue (ID::scale)->load();
-        if (lockHash != lastLockHash) { lastLockHash = lockHash; keyboard.repaint(); }
         uint64_t hash = 0;
         for (size_t i = 0; i < 128; ++i) if (proc.playing[i].load()) hash = hash * 131 + i + 1;
-        if (hash != lastPlayHash) { lastPlayHash = hash; keyboard.repaint(); }
+        const float lockHash = proc.apvts.getRawParameterValue (ID::keyLock)->load() * 1000 + proc.apvts.getRawParameterValue (ID::key)->load() * 10
+                             + proc.apvts.getRawParameterValue (ID::scale)->load();
+        if (hash != lastPlayHash || lockHash != lastLockHash) { lastPlayHash = hash; lastLockHash = lockHash; keyboard.repaint(); }
     }
 
     KeysKillaProcessor& proc;
     KKLookAndFeel lnf;
     std::unique_ptr<PropertiesFile> settings;
-    int skinIndex = 0;
-    Image bg;
+    int skinIndex = 1;
 
-    std::vector<std::unique_ptr<TileButton>> tiles;
-    EraTimeline era;
-    TextButton exclusiveBtn, prevBtn, nextBtn, saveBtn, menuBtn, chordBtn, arpBtn;
-    GlyphButton skinBtn { lnf, true }, heartBtn { lnf, false };
-    Label presetLabel, chaosLabel, pitchLabel, modLabel;
-    std::array<Knob, 6> macros;
-    std::array<Knob, 3> exKnobs;
-    Slider chaos, pitchWheel, modWheel;
-    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> chaosAtt;
+    std::vector<std::unique_ptr<HotButton>> tiles;
+    EraOverlay era;
+    SubChips subChips;
+    HotButton exclusiveBtn { lnf, HotButton::toggleFace, "EXCLUSIVE" };
+    HotButton prevBtn { lnf, HotButton::plain }, nextBtn { lnf, HotButton::plain }, saveBtn { lnf, HotButton::plain }, menuBtn { lnf, HotButton::plain };
+    HotButton nameBtn { lnf, HotButton::plain }, heartBtn { lnf, HotButton::plain }, skinBtn { lnf, HotButton::plain }, diceBtn { lnf, HotButton::plain };
+    HotButton chordBtn { lnf, HotButton::toggleFace, "CHORD" }, arpBtn { lnf, HotButton::toggleFace, "ARP" }, linkBtn { lnf, HotButton::plain };
+    std::vector<std::unique_ptr<ImageKnob>> macros, smallKnobs;
+    std::vector<std::unique_ptr<MacroCaption>> captions;
+    std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> attachments;
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> chordAtt, arpAtt;
-    DiceButton dice;
-    XYPad xy;
-    Meter meter;
+    XYOverlay xy;
+    ChaosSlider chaos;
+    WheelSlider pitchWheel, modWheel;
+    MeterOverlay meter;
     KKKeyboard keyboard;
     std::unique_ptr<AdvancedPage> advanced;
+    std::unique_ptr<PresetBrowser> browser;
+    std::unique_ptr<PlayPanel> playPanel;
     std::unique_ptr<FileChooser> chooser;
 
-    Rectangle<float> browserR, exclusiveR, macroR, playR, meterR, wheelR, keyR, presetR;
-    bool isFav = false;
+    bool isFav = false, modified = false, modifiedNow = false, lastBass = false;
     int warnHold = 0, lastIndex = -2, slowTick = 0;
-    bool modified = false, modifiedNow = false, lastBass = false;
-    float lastLockHash = -1;
-    std::unique_ptr<PresetBrowser> browser;
     String lastName;
     uint64_t lastPlayHash = 0;
+    float lastLockHash = -1;
 };
 
 //==============================================================================
 KeysKillaEditor::KeysKillaEditor (KeysKillaProcessor& p) : AudioProcessorEditor (p), proc (p)
 {
+    setWantsKeyboardFocus (false);
+    setMouseClickGrabsKeyboardFocus (false);
     page = std::make_unique<MainPage> (p);
     addAndMakeVisible (*page);
     setResizable (true, true);
-    setResizeLimits (designW, designH, designW * 2, designH * 2);
+    setResizeLimits (designW / 2, designH / 2, designW, designH);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) designW / designH);
-    setSize (designW, designH);
+    const int pct = page->preferredScale();
+    setSize (designW * pct / 100, designH * pct / 100);
 }
 
 KeysKillaEditor::~KeysKillaEditor() = default;

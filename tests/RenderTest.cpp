@@ -152,6 +152,20 @@ int main (int argc, char** argv)
         }
         return 0;
     }
+    if (argc > 1 && juce::String (argv[1]) == "-edtime")   // editor open / close time
+    {
+        for (int k = 0; k < 5; ++k)
+        {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);   // first full paint
+            const auto t1 = juce::Time::getMillisecondCounterHiRes();
+            ed.reset();
+            const auto t2 = juce::Time::getMillisecondCounterHiRes();
+            std::printf ("open+paint %.1f ms, close %.1f ms\n", t1 - t0, t2 - t1);
+        }
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "-stats")
     {
         int ex = 0, bass = 0; std::array<int, numTiles> perTile {};
@@ -252,6 +266,7 @@ int main (int argc, char** argv)
     {
         juce::PropertiesFile::Options o; o.applicationName = "KEYS KILLA"; o.filenameSuffix = "settings"; o.folderName = "KEYS KILLA";
         juce::PropertiesFile (o).setValue ("skin", juce::String (argv[3]).getIntValue());
+        juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
         if (argc > 4) dynamic_cast<KeysKillaEditor*> (ed.get())->showView (juce::String (argv[4]).getIntValue());

@@ -29,8 +29,9 @@ const juce::StringArray keepOnPresetLoad { ID::chord, ID::chordType, ID::strum, 
                                            ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos, ID::bendRange };
 
 // chord shapes (semitones); -1 terminates. Type 8 (scale triad) is built from the scale.
-const int chordTable[8][6] { { 0, 3, 7, -1 }, { 0, 3, 7, 10, -1 }, { 0, 3, 7, 10, 14, -1 }, { 0, 4, 7, -1 },
-                             { 0, 4, 7, 11, -1 }, { 0, 2, 7, -1 }, { 0, 7, 12, -1 }, { 0, 12, -1 } };
+// trap voicings first: open minor (root, 5th, minor 10th), dark minor with octave, add9, sus, power, octaves, phrygian b2
+const int chordTable[9][6] { { 0, 7, 15, -1 }, { 0, 3, 7, 12, -1 }, { 0, 3, 7, 14, -1 }, { 0, 5, 7, 12, -1 },
+                             { 0, 7, 12, -1 }, { 0, 12, -1 }, { 0, 1, 7, -1 }, { 0, 3, 7, 10, -1 }, { 0, 4, 7, -1 } };
 } // namespace
 
 struct KeysKillaProcessor::Idx
@@ -43,7 +44,7 @@ struct KeysKillaProcessor::Idx
 
 KeysKillaProcessor::KeysKillaProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, &undoManager, "KEYSKILLA", createLayout())
+      apvts (*this, nullptr, "KEYSKILLA", createLayout())
 {
     for (auto& p : playing) p = false;
     for (int i = 0; i < kk::numFxSlots; ++i) fxOrder[(size_t) i] = i;
@@ -70,7 +71,7 @@ KeysKillaProcessor::KeysKillaProcessor()
     shRng.seed (99); arpRng.seed (7);
 
     loadPreset (0);
-    undoManager.clearUndoHistory();
+    undoStack.clear(); redoStack.clear(); lastSnap.clear();
 }
 
 KeysKillaProcessor::~KeysKillaProcessor() = default;
@@ -276,7 +277,7 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
     {
         int cnt = 0;
         if (! chord) { outNotes[cnt++] = root; return cnt; }
-        if (ctype == 8)   // scale triad: stack diatonic thirds
+        if (ctype == 9)   // scale triad: stack diatonic thirds
         {
             const int mask = Choices::scaleMask ((int) raw[(size_t) I.scale]->load());
             const int key = (int) raw[(size_t) I.key]->load();
@@ -289,7 +290,7 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
             }
             return cnt;
         }
-        for (const int* iv = chordTable[juce::jlimit (0, 7, ctype)]; *iv >= 0; ++iv)
+        for (const int* iv = chordTable[juce::jlimit (0, 8, ctype)]; *iv >= 0; ++iv)
         {
             int nn = root + *iv;
             if (lock) nn = snapToScale (nn);
@@ -456,6 +457,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     fxPtr->peakPre = 0;
     float peakL = 0, peakR = 0;
     const float bypassTarget = fadingOut ? 0.0f : 1.0f;
+    if (presetJump.exchange (false)) dipPos = 0;
     const float bypassStep = 1.0f / (0.02f * (float) sr);
 
     for (int c0 = 0; c0 < n; c0 += kChunk)
@@ -487,7 +489,9 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         for (int i = 0; i < len; ++i)
         {
             bypassGain = bypassTarget > bypassGain ? std::min (1.0f, bypassGain + bypassStep) : std::max (bypassTarget, bypassGain - bypassStep);
-            const float l = bufL[(size_t) i] * bypassGain, r = bufR[(size_t) i] * bypassGain;
+            float dip = 1.0f;
+            if (dipPos < 512) { dip = dipPos < 128 ? 1.0f - (float) dipPos / 128.0f : (float) (dipPos - 128) / 384.0f; ++dipPos; }
+            const float l = bufL[(size_t) i] * bypassGain * dip, r = bufR[(size_t) i] * bypassGain * dip;
             outL[c0 + i] = l;
             if (outR) outR[c0 + i] = r;
             peakL = std::max (peakL, std::abs (l));
@@ -507,6 +511,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 //==============================================================================
 void KeysKillaProcessor::applyValues (const std::vector<std::pair<juce::String, float>>& values)
 {
+    presetJump = true;
     for (auto* rp : params)
         if (! keepOnPresetLoad.contains (rp->getParameterID()))
             rp->setValueNotifyingHost (rp->getDefaultValue());
@@ -542,6 +547,10 @@ void KeysKillaProcessor::loadPreset (int index)
         vals.insert (vals.begin(), { ID::bassMode, 1.0f });
         vals.insert (vals.begin(), { ID::mono, 1.0f });
     }
+    bool setsArp = false;
+    for (auto& v : vals) setsArp |= v.first == ID::arp;
+    if (! setsArp && presetForcedArp) vals.push_back ({ ID::arp, 0.0f });   // leaving an ARPS preset switches the arp off again
+    presetForcedArp = setsArp;
     applyValues (vals);
     currentPreset = index;
     userFile = juce::File();
@@ -714,6 +723,51 @@ void KeysKillaProcessor::copyAtoB()
 {
     abState[1 - abSlot] = apvts.copyState();
     abState[1 - abSlot].setProperty ("presetName", presetName, nullptr);
+}
+
+std::vector<float> KeysKillaProcessor::snapshot() const
+{
+    std::vector<float> v (params.size());
+    for (size_t i = 0; i < params.size(); ++i) v[i] = params[i]->getValue();
+    return v;
+}
+
+void KeysKillaProcessor::applySnapshot (const std::vector<float>& v)
+{
+    if (v.size() != params.size()) return;
+    for (size_t i = 0; i < params.size(); ++i)
+        if (std::abs (params[i]->getValue() - v[i]) > 1.0e-6f) params[i]->setValueNotifyingHost (v[i]);
+    lastSnap = v;
+}
+
+void KeysKillaProcessor::captureUndo()
+{
+    auto now = snapshot();
+    if (lastSnap.size() != now.size()) { lastSnap = now; return; }
+    if (now == lastSnap) return;
+    undoStack.push_back (lastSnap);
+    if (undoStack.size() > 50) undoStack.erase (undoStack.begin());
+    redoStack.clear();
+    lastSnap = now;
+}
+
+bool KeysKillaProcessor::undo()
+{
+    captureUndo();
+    if (undoStack.empty()) return false;
+    redoStack.push_back (snapshot());
+    applySnapshot (undoStack.back());
+    undoStack.pop_back();
+    return true;
+}
+
+bool KeysKillaProcessor::redo()
+{
+    if (redoStack.empty()) return false;
+    undoStack.push_back (snapshot());
+    applySnapshot (redoStack.back());
+    redoStack.pop_back();
+    return true;
 }
 
 std::array<int, kk::numFxSlots> KeysKillaProcessor::getFxOrder() const

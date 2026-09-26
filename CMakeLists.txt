@@ -48,6 +48,11 @@ juce_add_plugin(KeysKilla
     FORMATS VST3 AU Standalone
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
+# Skin bitmaps cut from the design mockups (tools/make_skin_assets.py)
+juce_add_binary_data(KeysKillaAssets SOURCES
+    assets/blood_bg.jpg assets/blood_white.png assets/blood_black.png
+    assets/chrome_bg.jpg assets/chrome_white.png assets/chrome_black.png)
+
 target_sources(KeysKilla PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
@@ -62,6 +67,7 @@ target_compile_definitions(KeysKilla PUBLIC
 
 target_link_libraries(KeysKilla
     PRIVATE
+        KeysKillaAssets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -82,6 +88,7 @@ if(KK_BUILD_TESTS)
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 KK_TEST_BUILD=1
         JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1)
     target_link_libraries(KeysKillaTests PRIVATE
+        KeysKillaAssets
         juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags)
 endif()

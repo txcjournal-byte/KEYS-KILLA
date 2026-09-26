@@ -52,19 +52,19 @@ const std::vector<Preset>& factoryPresets()
             { release, 1.8f }, { revMix, 0.45f }, { revSize, 0.95f }, { ghost, 0.35f }, { wow, 0.3f }, { m2, 0.4f,  }, { gain, -4.3f } });
 
         // ---------------- KEYS ----------------
-        P ("Bounce Piano", tKeys, 0, false, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.35f }, { wave, 0.2f }, { fdecay, 0.6f },
+        P ("Bounce Piano", tKeys, 0, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.35f }, { wave, 0.2f }, { fdecay, 0.6f },
             { decay, 1.8f }, { sustain, 0.05f }, { release, 0.4f }, { cutoff, 9000 }, { fenv, 0.2f }, { revMix, 0.15f }, { gain, -5.3f } });
         P ("Church Organ Bounce", tKeys, 0, false, "Organs", { { engine, OR }, { wave, 0.55f }, { attack, 0.01f }, { sustain, 1.0f }, { release, 0.3f },
             { lfoPitch, 0.04f }, { lfoRate, 6.0f }, { revMix, 0.35f }, { revSize, 0.9f }, { gain, -8.9f } });
-        P ("Dark Minimal Keys", tKeys, 1, false, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.2f }, { decay, 2.5f }, { sustain, 0.2f },
+        P ("Dark Minimal Keys", tKeys, 1, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.2f }, { decay, 2.5f }, { sustain, 0.2f },
             { release, 0.8f }, { cutoff, 3500 }, { revMix, 0.3f }, { m1, 0.4f }, { m2, 0.35f,  }, { gain, -6.4f } });
-        P ("Dark Piano Loop", tKeys, 2, false, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.4f }, { wave, 0.35f }, { fdecay, 0.4f },
+        P ("Dark Piano Loop", tKeys, 2, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.4f }, { wave, 0.35f }, { fdecay, 0.4f },
             { decay, 2.0f }, { sustain, 0.0f }, { release, 0.6f }, { cutoff, 6000 }, { wow, 0.25f }, { crush, 0.1f }, { revMix, 0.25f }, { m1, 0.4f,  }, { gain, -4.7f } });
         P ("Detroit Keys", tKeys, 3, false, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.45f }, { fdecay, 0.3f }, { decay, 0.9f },
             { sustain, 0.1f }, { release, 0.3f }, { drive, 0.2f }, { driveType, 1 }, { revMix, 0.12f,  }, { gain, -9.8f } });
         P ("Pluggnb Keys", tKeys, 3, false, "", { { engine, FM }, { fmRatio, 2.0f }, { fmAmt, 0.25f }, { unison, 3 }, { detune, 0.12f },
             { decay, 1.6f }, { sustain, 0.3f }, { release, 0.9f }, { chorus, 0.5f }, { revMix, 0.35f }, { m5, 0.3f }, { m6, 0.7f,  }, { gain, -6.3f } });
-        P ("UK Drill Slide Piano", tKeys, 3, false, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 1.8f }, { sustain, 0.1f },
+        P ("UK Drill Slide Piano", tKeys, 3, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 1.8f }, { sustain, 0.1f },
             { release, 0.5f }, { mono, 1 }, { glide, 0.12f }, { revMix, 0.2f,  }, { gain, -2.2f } });
         P ("Rage Keys 2024", tKeys, 4, false, "", { { engine, VA }, { wave, 0.3f }, { unison, 5 }, { detune, 0.35f }, { cutoff, 5000 }, { fenv, 0.4f }, { fdecay, 0.3f },
             { decay, 0.8f }, { sustain, 0.4f }, { release, 0.3f }, { drive, 0.3f }, { revMix, 0.2f }, { gain, -9.7f } });
@@ -335,6 +335,94 @@ const std::vector<Preset>& factoryPresets()
             { release, 1.2f }, { morphX, 1.0f }, { morphY, 0.0f }, { gain, -4 } });
         P ("Classic Era Keys", tKeys, 0, true, "", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 1.8f }, { sustain, 0.1f },
             { morphX, 0.0f }, { morphY, 1.0f } });
+
+
+        // ================= sub-categories: PIANO, ORGANS, STRINGS, BRASS, GUITARS, MALLETS, ARPS =================
+        auto piano = [&] (const char* name, int era, Vals extra)
+        {
+            // FM hammer/tine body + string layer: bright attack that darkens, no sustain
+            Vals v2 { { engine, FM }, { fmAlgo, 0 }, { fmRatio, 1.0f }, { fmAmt, 0.42f }, { wave, 0.22f }, { fdecay, 0.9f },
+                      { attack, 0.001f }, { decay, 3.0f }, { sustain, 0.0f }, { release, 0.45f }, { velSens, 0.75f },
+                      { layerB, 1 }, { engineB, PL }, { waveB, 0.72f }, { levelB, 0.45f }, { fineB, 4.0f },
+                      { cutoff, 7000 }, { keyTrack, 0.6f }, { revType, 1 }, { revMix, 0.22f }, { chorus, 0.08f } };
+            v2.insert (v2.end(), extra.begin(), extra.end());
+            P (name, tKeys, era, false, "Piano", v2);
+        };
+        piano ("Bouncy Atlanta Piano", 0, { { decay, 1.4f }, { cutoff, 9000 } });
+        piano ("Detuned Lo-Fi Piano", 1, { { fineB, 14.0f }, { wow, 0.35f }, { crush, 0.08f }, { cutoff, 4500 } });
+        piano ("Trap Grand Piano", 2, {});
+        piano ("Sad Piano Loop", 2, { { cutoff, 3800 }, { wow, 0.22f }, { revMix, 0.32f }, { revType, 0 } });
+        piano ("Dark Trap Piano", 3, { { cutoff, 2600 }, { revMix, 0.3f }, { revType, 0 }, { m1, 0.42f } });
+        piano ("Drill Slide Piano 2021", 3, { { mono, 1 }, { glide, 0.1f }, { legato, 1 } });
+        piano ("Hyper Piano 2024", 4, { { drive, 0.28f }, { driveType, 1 }, { delayMix, 0.22f }, { cutoff, 9500 } });
+        piano ("Ghost Piano 2026", 5, { { ghost, 0.45f }, { reverse, 0.15f }, { revMix, 0.35f } });
+
+        P ("Dark Church Organ 2011", tKeys, 0, false, "Organs", { { engine, OR }, { wave, 0.4f }, { attack, 0.01f }, { sustain, 1 }, { release, 0.5f },
+            { lfoPitch, 0.03f }, { revMix, 0.45f }, { revSize, 0.95f } });
+        P ("Trap Organ Chords", tKeys, 2, false, "Organs", { { engine, OR }, { wave, 0.55f }, { sustain, 1 }, { release, 0.3f }, { chorus, 0.3f },
+            { cutoff, 5000 }, { revMix, 0.25f } });
+        P ("Rotary Organ 2016", tKeys, 2, false, "Organs", { { engine, OR }, { wave, 0.7f }, { sustain, 1 }, { release, 0.25f }, { chorus, 0.55f },
+            { lfoAmp, 0.18f }, { lfoRate, 6.5f }, { revMix, 0.2f } });
+
+        P ("Epic Trap Strings", tPads, 0, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 7 }, { detune, 0.3f }, { attack, 0.15f },
+            { sustain, 0.9f }, { release, 0.9f }, { lfoPitch, 0.04f }, { revMix, 0.4f }, { revSize, 0.9f } });
+        P ("Staccato Strings 2012", tPads, 0, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 5 }, { detune, 0.25f }, { attack, 0.003f },
+            { decay, 0.25f }, { sustain, 0 }, { release, 0.2f }, { revMix, 0.35f } });
+        P ("Tremolo Strings", tPads, 1, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.1f },
+            { sustain, 0.9f }, { release, 0.8f }, { lfoAmp, 0.7f }, { lfoSync, 1 }, { lfoDiv, 4 }, { revMix, 0.35f } });
+        P ("Drill Violin Lead", tLeads, 3, false, "Strings", { { engine, VA }, { wave, 0.05f }, { unison, 2 }, { detune, 0.1f }, { cutoff, 4500 },
+            { attack, 0.05f }, { sustain, 0.9f }, { release, 0.3f }, { mono, 1 }, { glide, 0.12f }, { lfoPitch, 0.12f }, { revMix, 0.3f } });
+        P ("Dark Cello", tPads, 2, false, "Strings", { { engine, VA }, { wave, 0.0f }, { unison, 3 }, { detune, 0.15f }, { octave, -1 }, { cutoff, 1500 },
+            { attack, 0.1f }, { sustain, 0.9f }, { release, 0.6f }, { lfoPitch, 0.05f }, { revMix, 0.35f } });
+
+        P ("Trap Horns 2011", tLeads, 0, false, "Brass", { { engine, OC }, { wave, 0.0f }, { unison, 5 }, { detune, 0.25f }, { attack, 0.01f },
+            { decay, 0.6f }, { sustain, 0.6f }, { release, 0.3f }, { drive, 0.2f }, { driveType, 1 }, { revMix, 0.35f } });
+        P ("Dark Brass Stab", tLeads, 1, false, "Brass", { { engine, OC }, { wave, 0.0f }, { unison, 3 }, { octave, -1 }, { decay, 0.4f },
+            { sustain, 0.2f }, { release, 0.2f }, { revMix, 0.3f } });
+        P ("Synth Brass 2019", tLeads, 3, false, "Brass", { { engine, VA }, { wave, 0.0f }, { unison, 3 }, { detune, 0.2f }, { cutoff, 800 },
+            { fenv, 0.6f }, { fattack, 0.03f }, { fdecay, 0.35f }, { fsustain, 0.3f }, { sustain, 0.8f }, { release, 0.25f }, { revMix, 0.25f } });
+        P ("Brass Swell Pad", tPads, 1, false, "Brass", { { engine, OC }, { wave, 0.1f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.45f },
+            { sustain, 1 }, { release, 1.0f }, { revMix, 0.4f } });
+        P ("Blown Horns 2025", tLeads, 5, false, "Brass", { { engine, OC }, { wave, 0.0f }, { unison, 5 }, { detune, 0.3f }, { decay, 0.5f },
+            { sustain, 0.5f }, { drive, 0.55f }, { driveType, 3 }, { revMix, 0.2f } });
+
+        P ("Acoustic Trap Guitar", tPlucks, 3, false, "Guitars", { { engine, PL }, { wave, 0.55f }, { decay, 2.5f }, { sustain, 0 }, { release, 0.5f },
+            { body, 6 }, { bodyMix, 0.25f }, { chorus, 0.2f }, { revMix, 0.25f } });
+        P ("Nylon Guitar 2017", tPlucks, 2, false, "Guitars", { { engine, PL }, { wave, 0.35f }, { decay, 2.0f }, { sustain, 0 }, { release, 0.4f },
+            { body, 5 }, { bodyMix, 0.3f }, { revMix, 0.25f } });
+        P ("Clean Electric 2020", tPlucks, 3, false, "Guitars", { { engine, PL }, { wave, 0.75f }, { decay, 3.0f }, { sustain, 0 }, { release, 0.5f },
+            { chorus, 0.4f }, { delayMix, 0.2f }, { revMix, 0.2f } });
+        P ("Dark Guitar Loop", tPlucks, 2, false, "Guitars", { { engine, PL }, { wave, 0.5f }, { decay, 2.5f }, { sustain, 0 }, { cutoff, 3000 },
+            { wow, 0.3f }, { crush, 0.1f }, { revMix, 0.3f } });
+        P ("Distorted Guitar 2023", tPlucks, 4, false, "Guitars", { { engine, PL }, { wave, 0.8f }, { decay, 4.0f }, { sustain, 0 }, { release, 0.4f },
+            { drive, 0.5f }, { driveType, 1 }, { revMix, 0.2f } });
+
+        P ("Vibraphone Night", tExotic, 2, false, "Mallets", { { engine, MD }, { wave, 0.5f }, { fmAmt, 0.2f }, { decay, 2.0f }, { sustain, 0 },
+            { release, 1.0f }, { lfoAmp, 0.3f }, { lfoRate, 5.0f }, { revMix, 0.3f } });
+        P ("Glockenspiel Ice", tBells, 1, false, "Mallets", { { engine, MD }, { wave, 0.85f }, { octave, 1 }, { fmAmt, 0.6f }, { decay, 1.5f },
+            { sustain, 0 }, { release, 1.0f }, { revMix, 0.35f } });
+        P ("Xylo Bounce", tExotic, 3, false, "Mallets", { { engine, MD }, { wave, 0.5f }, { fmAmt, 0.7f }, { decay, 0.35f }, { sustain, 0 },
+            { release, 0.3f }, { revMix, 0.2f } });
+        P ("Steel Drum 2019", tExotic, 3, false, "Mallets", { { engine, FM }, { fmRatio, 2.3f }, { fmAmt, 0.35f }, { fdecay, 0.3f }, { decay, 1.0f },
+            { sustain, 0 }, { revMix, 0.25f } });
+
+        auto arpP = [&] (const char* name, int tile, int era, Vals v2, int rate, int mode, int octs, float gate)
+        {
+            v2.push_back ({ arp, 1 }); v2.push_back ({ arpRate, (float) rate }); v2.push_back ({ arpMode, (float) mode });
+            v2.push_back ({ arpOct, (float) octs }); v2.push_back ({ arpGate, gate });
+            P (name, tile, era, false, "Arps", v2);
+        };
+        arpP ("Arp Bells 1-16", tBells, 1, { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.4f }, { decay, 0.8f }, { sustain, 0 }, { release, 0.4f },
+              { delayMix, 0.25f }, { revMix, 0.3f } }, 1, 0, 2, 0.6f);
+        arpP ("Rage Arp Saw", tLeads, 4, { { engine, VA }, { wave, 0.0f }, { unison, 7 }, { detune, 0.4f }, { cutoff, 3500 }, { fenv, 0.5f },
+              { fdecay, 0.15f }, { decay, 0.25f }, { sustain, 0.1f }, { release, 0.15f }, { drive, 0.3f }, { delayMix, 0.2f } }, 1, 2, 2, 0.5f);
+        arpP ("Plugg Arp", tPlucks, 3, { { engine, VA }, { wave, 0.5f }, { cutoff, 2500 }, { fenv, 0.4f }, { fdecay, 0.15f }, { decay, 0.3f },
+              { sustain, 0.1f }, { revMix, 0.3f }, { delayMix, 0.2f } }, 0, 3, 1, 0.7f);
+        arpP ("Trance Arp 2025", tLeads, 5, { { engine, VA }, { wave, 0.0f }, { unison, 5 }, { detune, 0.35f }, { cutoff, 2800 }, { fenv, 0.5f },
+              { fdecay, 0.12f }, { decay, 0.2f }, { sustain, 0.1f }, { delayMix, 0.3f }, { revMix, 0.25f } }, 1, 0, 2, 0.45f);
+        arpP ("Glassy Arp", tPlucks, 3, { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { wave, 0.3f }, { octave, 1 }, { decay, 0.6f },
+              { sustain, 0.1f }, { chorus, 0.3f }, { delayMix, 0.25f } }, 2, 0, 1, 0.6f);
+        arpP ("Dark Harp Arp", tPlucks, 2, { { engine, PL }, { wave, 0.4f }, { decay, 1.5f }, { sustain, 0 }, { revMix, 0.35f } }, 0, 0, 2, 0.8f);
 
         // ================= variants: lo-fi, dark (old eras) / blown (new eras) =================
         const size_t numBase = v.size();

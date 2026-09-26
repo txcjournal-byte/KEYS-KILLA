@@ -84,6 +84,7 @@ public:
         for (auto& b : bodyS) for (auto& s : b) s.reset();
         for (auto& a : apState) for (auto& v : a) v = 0;
         crackle.seed (777);
+        noiseEnv = 0; noiseRel = std::exp (-1.0f / (0.25f * sr));
         smDrive = smChorus = smDelay = smBody = smPhaser = smFlanger = smReverse = 0; smDelaySamples = -1;
         wowPhase = flutPhase = chPhase = phPhase = flPhase = 0; holdCount = 0; holdL = holdR = 0;
         grainPhase = revGrain = 0; lastStep = -1; evType = 0;
@@ -214,9 +215,16 @@ private:
                 if (wowPhase >= 1) wowPhase -= 1;
                 if (flutPhase >= 1) flutPhase -= 1;
                 l = wowDl[0].read (d); r = wowDl[1].read (d);
-                float noiseV = crackle.bi() * 0.002f * p.wow;
-                if (crackle.uni() < p.wow * 12.0f / sr) noiseV += crackle.bi() * 0.25f * p.wow;
-                l += noiseV; r += noiseV;
+                // vinyl hiss + crackle only while there is sound (no pops in silence)
+                const float in = std::abs (l) + std::abs (r);
+                noiseEnv = in > noiseEnv ? in : noiseEnv * noiseRel;
+                const float gate = std::min (1.0f, noiseEnv * 6.0f);
+                if (gate > 1.0e-4f)
+                {
+                    float noiseV = crackle.bi() * 0.002f * p.wow;
+                    if (crackle.uni() < p.wow * 12.0f / sr) noiseV += crackle.bi() * 0.12f * p.wow;
+                    l += noiseV * gate; r += noiseV * gate;
+                }
             }
             if (p.crush > 0.001f)
             {
@@ -470,6 +478,7 @@ private:
     float lastEqLow = 999, lastEqHigh = 999;
     float apState[2][4] {}, apFb[2] {};
     Rng crackle;
+    float noiseEnv = 0, noiseRel = 0.9999f;
     static constexpr int maxBlock = 4096;
     float gL[maxBlock] {}, gR[maxBlock] {};
     float smDrive = 0, smChorus = 0, smDelay = 0, smBody = 0, smPhaser = 0, smFlanger = 0, smReverse = 0, smDelaySamples = -1;

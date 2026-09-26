@@ -29,7 +29,7 @@ public:
     void paint (juce::Graphics&) override {}
     void showView (int v);   // 0 main, 1..8 advanced tabs, 9 preset browser
 
-    static constexpr int designW = 1200, designH = 750;
+    static constexpr int designW = 1586, designH = 992;   // = design mockup size
 
 private:
     KeysKillaProcessor& proc;
