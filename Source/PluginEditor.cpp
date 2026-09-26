@@ -1173,8 +1173,6 @@ private:
     HotButton chordBtn { lnf, HotButton::toggleFace, "CHORD" }, arpBtn { lnf, HotButton::toggleFace, "ARP" }, linkBtn { lnf, HotButton::plain };
     std::vector<std::unique_ptr<ImageKnob>> macros, smallKnobs;
     std::vector<std::unique_ptr<MacroCaption>> captions;
-    std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> attachments;
-    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> chordAtt, arpAtt;
     XYOverlay xy;
     ChaosSlider chaos;
     WheelSlider pitchWheel, modWheel;
@@ -1190,6 +1188,10 @@ private:
     String lastName;
     uint64_t lastPlayHash = 0;
     float lastLockHash = -1;
+
+    // attachments last: they must be destroyed before the controls they point to
+    std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> attachments;
+    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> chordAtt, arpAtt;
 };
 
 //==============================================================================
