@@ -152,6 +152,14 @@ int main (int argc, char** argv)
         }
         return 0;
     }
+    if (argc > 1 && juce::String (argv[1]) == "-stats")
+    {
+        int ex = 0, bass = 0; std::array<int, numTiles> perTile {};
+        for (auto& pr : factoryPresets()) { ex += pr.exclusive; bass += pr.tile == tBass; ++perTile[(size_t) pr.tile]; }
+        std::printf ("total %d, exclusive %d, bass %d\n", (int) factoryPresets().size(), ex, bass);
+        for (int t = 0; t < numTiles; ++t) std::printf ("  %s %d\n", tileNames()[t].toRawUTF8(), perTile[(size_t) t]);
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "-bench")   // CPU: 8 held notes, 20 s of audio at 48 kHz, normal and eco
     {
         for (const char* name : { "Ice Bells 2013", "Rage Supersaw", "Layered EP Dream", "Wavetable Motion Pad", "Blown Rage Lead", "Reverse Ghost Pad" })
