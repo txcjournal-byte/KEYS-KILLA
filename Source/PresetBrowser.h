@@ -11,7 +11,7 @@ public:
     PresetBrowser (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
         search.setTextToShowWhenEmpty ("Search presets...", lnf.skin->textDim);
-        search.setFont (serif (16.0f, false, 0.05f));
+        search.setFont (serif (24.0f, false, 0.05f));
         search.onTextChange = [this] { refresh(); };
         search.setTooltip ("Type part of a preset name, category, era or sub-category.");
         addAndMakeVisible (search);
@@ -32,12 +32,12 @@ public:
         exclusiveOnly.setButtonText ("EXCLUSIVE"); favOnly.setButtonText ("FAVOURITES"); userOnly.setButtonText ("USER");
         addAndMakeVisible (category); addAndMakeVisible (era);
         list.setModel (this);
-        list.setRowHeight (26);
+        list.setRowHeight (40);
         addAndMakeVisible (list);
         closeBtn.setButtonText ("CLOSE");
         closeBtn.onClick = [this] { setVisible (false); };
         addAndMakeVisible (closeBtn);
-        count.setFont (serif (12.0f, false, 0.1f));
+        count.setFont (serif (18.0f, false, 0.1f));
         addAndMakeVisible (count);
     }
 
@@ -59,17 +59,17 @@ public:
 
     void resized() override
     {
-        closeBtn.setBounds (getWidth() - 116, 18, 90, 26);
+        closeBtn.setBounds (getWidth() - 140, 14, 116, 36);
         auto r = getLocalBounds().reduced (24).withTrimmedTop (34);
-        auto top = r.removeFromTop (32);
-        search.setBounds (top.removeFromLeft (360)); top.removeFromLeft (10);
-        category.setBounds (top.removeFromLeft (170)); top.removeFromLeft (8);
-        era.setBounds (top.removeFromLeft (130)); top.removeFromLeft (8);
-        exclusiveOnly.setBounds (top.removeFromLeft (120)); top.removeFromLeft (6);
-        favOnly.setBounds (top.removeFromLeft (120)); top.removeFromLeft (6);
-        userOnly.setBounds (top.removeFromLeft (80));
+        auto top = r.removeFromTop (44);
+        search.setBounds (top.removeFromLeft (440)); top.removeFromLeft (10);
+        category.setBounds (top.removeFromLeft (220)); top.removeFromLeft (8);
+        era.setBounds (top.removeFromLeft (170)); top.removeFromLeft (8);
+        exclusiveOnly.setBounds (top.removeFromLeft (170)); top.removeFromLeft (6);
+        favOnly.setBounds (top.removeFromLeft (180)); top.removeFromLeft (6);
+        userOnly.setBounds (top.removeFromLeft (110));
         r.removeFromTop (8);
-        count.setBounds (r.removeFromBottom (20));
+        count.setBounds (r.removeFromBottom (28));
         list.setBounds (r);
     }
 
@@ -124,10 +124,10 @@ private:
         if (selected || current) { g.setColour (s.accent.withAlpha (current ? 0.28f : 0.14f)); g.fillRect (0, 0, w, h); }
         const auto favs = getFavourites ? getFavourites() : StringArray();
         g.setColour (favs.contains (e.name) ? s.accent : s.textDim.withAlpha (0.5f));
-        g.setFont (serif (16.0f)); g.drawText (favs.contains (e.name) ? "*" : "+", 6, 0, 20, h, Justification::centred);
-        g.setColour (s.text); g.setFont (serif (15.0f, false, 0.05f));
-        g.drawText (e.name, 32, 0, w / 2, h, Justification::centredLeft);
-        g.setColour (s.textDim); g.setFont (serif (12.0f, false, 0.12f));
+        g.setFont (serif (26.0f)); g.drawText (favs.contains (e.name) ? "*" : "+", 6, 0, 30, h, Justification::centred);
+        g.setColour (s.text); g.setFont (serif (23.0f, false, 0.05f));
+        g.drawText (e.name, 44, 0, w / 2, h, Justification::centredLeft);
+        g.setColour (s.textDim); g.setFont (serif (17.0f, false, 0.12f));
         g.drawText (e.info, w / 2, 0, w / 2 - 10, h, Justification::centredRight);
     }
 
@@ -144,7 +144,7 @@ private:
     void listBoxItemClicked (int row, const MouseEvent& e) override
     {
         if (! isPositiveAndBelow (row, (int) entries.size())) return;
-        if (e.x < 28) { if (toggleFavourite) toggleFavourite (entries[(size_t) row].name); list.repaint(); return; }
+        if (e.x < 40) { if (toggleFavourite) toggleFavourite (entries[(size_t) row].name); list.repaint(); return; }
         activate (row, false);
     }
 

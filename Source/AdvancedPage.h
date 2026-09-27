@@ -19,7 +19,7 @@ public:
             auto item = std::make_unique<Item>();
             item->label.setText (rp->getName (20).toUpperCase(), dontSendNotification);
             item->label.setJustificationType (Justification::centred);
-            item->label.setFont (serif (11.0f, false, 0.05f));
+            item->label.setFont (serif (19.0f, false, 0.05f));
             item->label.setInterceptsMouseClicks (false, false);
             addAndMakeVisible (item->label);
             const auto tip = paramTooltip (id);
@@ -41,7 +41,7 @@ public:
             else
             {
                 item->slider = std::make_unique<Slider> (Slider::RotaryHorizontalVerticalDrag, Slider::TextBoxBelow);
-                item->slider->setTextBoxStyle (Slider::TextBoxBelow, false, 80, 14);
+                item->slider->setTextBoxStyle (Slider::TextBoxBelow, false, 120, 26);
                 item->slider->setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
                 item->slider->setVelocityModeParameters (0.6, 1, 0.02, true, ModifierKeys::ctrlModifier);
                 item->slider->setDoubleClickReturnValue (true, rp->convertFrom0to1 (rp->getDefaultValue()));
@@ -55,15 +55,15 @@ public:
     int rowsNeeded() const { return ((int) items.size() + cols - 1) / cols; }
     void resized() override
     {
-        const int cw = getWidth() / cols, rh = jmin (104, getHeight() / jmax (1, rowsNeeded()));
+        const int cw = getWidth() / cols, rh = jmin (124, getHeight() / jmax (1, rowsNeeded()));
         for (size_t i = 0; i < items.size(); ++i)
         {
             auto& it = *items[i];
             Rectangle<int> cell ((int) (i % (size_t) cols) * cw, (int) (i / (size_t) cols) * rh, cw, rh);
-            it.label.setBounds (cell.removeFromTop (16));
+            it.label.setBounds (cell.removeFromTop (26));
             if (it.slider) it.slider->setBounds (cell.reduced (8, 0).withTrimmedBottom (4));
-            if (it.combo) it.combo->setBounds (cell.withSizeKeepingCentre (cw - 10, 24));
-            if (it.toggle) it.toggle->setBounds (cell.withSizeKeepingCentre (60, 24));
+            if (it.combo) it.combo->setBounds (cell.withSizeKeepingCentre (cw - 10, 32));
+            if (it.toggle) it.toggle->setBounds (cell.withSizeKeepingCentre (80, 32));
         }
     }
 private:
@@ -93,7 +93,7 @@ public:
         g.setColour (s.dark ? Colour (0xff0a0808) : Colour (0xffdde1e5));
         g.fillRoundedRectangle (r, 5);
         g.setColour (s.panelEdge); g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
-        g.setColour (s.textDim); g.setFont (serif (11.0f, false, 0.2f));
+        g.setColour (s.textDim); g.setFont (serif (16.0f, false, 0.2f));
         g.drawText (title, r.reduced (8, 4), Justification::topLeft);
         auto area = r.reduced (10, 22).translated (0, 6);
         Path p; drawCurve (p, area);
@@ -232,9 +232,9 @@ public:
     }
     void paint (Graphics& g) override
     {
-        g.setFont (serif (11.0f, false, 0.2f));
+        g.setFont (serif (15.0f, false, 0.2f));
         g.setColour (findColour (Label::textColourId));
-        g.drawText ("MOD MATRIX   SOURCE", 0, 0, 200, 16, Justification::centredLeft);
+        g.drawText ("MOD MATRIX   SOURCE", 0, 0, 260, 16, Justification::centredLeft);
         g.drawText ("DESTINATION", getWidth() * 36 / 100, 0, 150, 16, Justification::centredLeft);
         g.drawText ("AMOUNT", getWidth() * 70 / 100, 0, 100, 16, Justification::centredLeft);
     }
@@ -445,7 +445,7 @@ public:
         settings->onSkin = [this] (int s) { if (onSkin) onSkin (s); };
         settings->onSize = [this] (int s) { if (onSize) onSize (s); };
         tabs.addTab ("SETTINGS", Colours::transparentBlack, settings, true);
-        tabs.setTabBarDepth (32);
+        tabs.setTabBarDepth (44);
         tabs.setOutline (0);
         addAndMakeVisible (tabs);
         closeBtn.setButtonText ("CLOSE");
@@ -460,7 +460,7 @@ public:
     }
     void resized() override
     {
-        closeBtn.setBounds (getWidth() - 116, 18, 90, 26);
+        closeBtn.setBounds (getWidth() - 140, 14, 116, 36);
         tabs.setBounds (getLocalBounds().reduced (20).withTrimmedTop (34));
         for (int i = 0; i < tabs.getNumTabs(); ++i)
             tabs.getTabbedButtonBar().getTabButton (i)->setColour (TextButton::textColourOffId, lnf.skin->text);
@@ -515,7 +515,7 @@ private:
                         for (auto& v : views) v->setBounds (top.removeFromLeft (w).reduced (4, 0));
                         r.removeFromTop (12);
                     }
-                    grid.setBounds (r.withHeight (jmin (r.getHeight(), grid.rowsNeeded() * 104)));
+                    grid.setBounds (r.withHeight (jmin (r.getHeight(), grid.rowsNeeded() * 124)));
                     break;
                 }
             }

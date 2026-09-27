@@ -14,6 +14,7 @@ public:
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;
     juce::Font getTextButtonFont (juce::TextButton&, int h) override;
     juce::Font getLabelFont (juce::Label&) override;
+    juce::Font getComboBoxFont (juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
 };
 
