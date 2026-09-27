@@ -237,23 +237,37 @@ static const Geo& geo (int skin)
 
 struct SkinImages { Image bg, white, black; };
 
+// Skin bitmaps live only while an editor is open: they are native (Direct2D) images on Windows and
+// must be released before the host shuts its graphics down - static images froze FL Studio on exit.
+struct SkinCache { SkinImages imgs[2]; };
+static SkinCache*& activeSkinCache() { static SkinCache* c = nullptr; return c; }
+struct SkinCacheHolder
+{
+    SharedResourcePointer<SkinCache> cache;
+    SkinCacheHolder() { activeSkinCache() = &cache.get(); }
+    ~SkinCacheHolder() { if (cache.getReferenceCount() <= 1) activeSkinCache() = nullptr; }
+};
+
 static const SkinImages& skinImages (int skin)
 {
-    static SkinImages imgs[2];
-    auto& s = imgs[skin == 1 ? 1 : 0];
+    static SkinImages none;
+    auto* cache = activeSkinCache();
+    if (cache == nullptr) return none;
+    auto& s = cache->imgs[skin == 1 ? 1 : 0];
     if (s.bg.isNull())
     {
+        auto load = [] (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n); };
         if (skin == 1)
         {
-            s.bg = ImageCache::getFromMemory (BinaryData::blood_bg_jpg, BinaryData::blood_bg_jpgSize);
-            s.white = ImageCache::getFromMemory (BinaryData::blood_white_png, BinaryData::blood_white_pngSize);
-            s.black = ImageCache::getFromMemory (BinaryData::blood_black_png, BinaryData::blood_black_pngSize);
+            s.bg = load (BinaryData::blood_bg_jpg, BinaryData::blood_bg_jpgSize);
+            s.white = load (BinaryData::blood_white_png, BinaryData::blood_white_pngSize);
+            s.black = load (BinaryData::blood_black_png, BinaryData::blood_black_pngSize);
         }
         else
         {
-            s.bg = ImageCache::getFromMemory (BinaryData::chrome_bg_jpg, BinaryData::chrome_bg_jpgSize);
-            s.white = ImageCache::getFromMemory (BinaryData::chrome_white_png, BinaryData::chrome_white_pngSize);
-            s.black = ImageCache::getFromMemory (BinaryData::chrome_black_png, BinaryData::chrome_black_pngSize);
+            s.bg = load (BinaryData::chrome_bg_jpg, BinaryData::chrome_bg_jpgSize);
+            s.white = load (BinaryData::chrome_white_png, BinaryData::chrome_white_pngSize);
+            s.black = load (BinaryData::chrome_black_png, BinaryData::chrome_black_pngSize);
         }
     }
     return s;
@@ -1159,6 +1173,7 @@ private:
         if (hash != lastPlayHash || lockHash != lastLockHash) { lastPlayHash = hash; lastLockHash = lockHash; keyboard.repaint(); }
     }
 
+    SkinCacheHolder skinCache;   // first member: images outlive every component that paints them
     KeysKillaProcessor& proc;
     KKLookAndFeel lnf;
     std::unique_ptr<PropertiesFile> settings;
