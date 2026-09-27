@@ -58,6 +58,11 @@ KeysKillaProcessor::KeysKillaProcessor()
             morphable.push_back (! performanceIds.contains (id) && id != ID::seed);
             discrete.push_back (dynamic_cast<juce::AudioParameterChoice*> (rp) != nullptr || dynamic_cast<juce::AudioParameterBool*> (rp) != nullptr);
         }
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        idIndex[params[i]->getParameterID()] = (int) i;
+        keepParam.push_back (keepOnPresetLoad.contains (params[i]->getParameterID()));
+    }
     ix = std::make_unique<Idx>();
    #define KK_SET(n) ix->n = indexOf (ID::n);
     KK_PARAMS (KK_SET)
@@ -78,6 +83,8 @@ KeysKillaProcessor::~KeysKillaProcessor() { cancelPendingUpdate(); }
 
 int KeysKillaProcessor::indexOf (const juce::String& id) const
 {
+    const auto it = idIndex.find (id);
+    if (it != idIndex.end()) return it->second;
     for (size_t i = 0; i < params.size(); ++i) if (params[i]->getParameterID() == id) return (int) i;
     jassertfalse;
     return 0;
@@ -511,15 +518,22 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 }
 
 //==============================================================================
+// Builds the complete target state first and only tells the host about parameters that really change
+// (a preset used to send ~480 notifications, which made hosts crawl or stall while switching sounds).
 void KeysKillaProcessor::applyValues (const std::vector<std::pair<juce::String, float>>& values)
 {
-    presetJump = true;
-    for (auto* rp : params)
-        if (! keepOnPresetLoad.contains (rp->getParameterID()))
-            rp->setValueNotifyingHost (rp->getDefaultValue());
+    std::vector<float> target (params.size());
+    for (size_t i = 0; i < params.size(); ++i)
+        target[i] = keepParam[i] ? params[i]->getValue() : params[i]->getDefaultValue();
     for (auto& [id, val] : values)
-        if (auto* rp = apvts.getParameter (id))
-            rp->setValueNotifyingHost (rp->convertTo0to1 (val));
+    {
+        const auto it = idIndex.find (id);
+        if (it != idIndex.end()) target[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (val);
+    }
+    presetJump = true;
+    for (size_t i = 0; i < params.size(); ++i)
+        if (std::abs (params[i]->getValue() - target[i]) > 1.0e-6f)
+            params[i]->setValueNotifyingHost (target[i]);
 }
 
 void KeysKillaProcessor::snapshotForModified()
@@ -541,7 +555,8 @@ bool KeysKillaProcessor::isModified() const
 void KeysKillaProcessor::loadPreset (int index)
 {
     const auto& ps = factoryPresets();
-    if (! juce::isPositiveAndBelow (index, (int) ps.size())) return;
+    if (! juce::isPositiveAndBelow (index, (int) ps.size()) || loadingPreset) return;
+    const juce::ScopedValueSetter<bool> guard (loadingPreset, true);   // host echoes of the program change are ignored
     const auto& pr = ps[(size_t) index];
     auto vals = pr.values;
     if (pr.tile == tBass)

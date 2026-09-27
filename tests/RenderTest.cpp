@@ -161,6 +161,23 @@ int main (int argc, char** argv)
         }
         return 0;
     }
+    if (argc > 1 && juce::String (argv[1]) == "-loadtime")   // preset switching cost + host notifications
+    {
+        struct Counter : juce::AudioProcessorListener
+        {
+            int params = 0, changes = 0;
+            void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override { ++params; }
+            void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override { ++changes; }
+        } counter;
+        p.addListener (&counter);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 200; ++i) p.setCurrentProgram ((i * 37) % p.getNumPrograms());
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
+        std::printf ("preset load: %.3f ms avg, %.1f host parameter notifications per load, %.1f program notifications\n",
+                     (t1 - t0) / 200.0, counter.params / 200.0, counter.changes / 200.0);
+        p.removeListener (&counter);
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "-edtime")   // editor open / close time
     {
         for (int k = 0; k < 5; ++k)

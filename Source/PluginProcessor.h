@@ -5,6 +5,7 @@
 #include "Synth.h"
 #include "Fx.h"
 #include "Presets.h"
+#include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
@@ -32,6 +33,7 @@ public:
     void setCurrentProgram (int index) override
     {
         // hosts may switch programs from the audio thread - never load a preset there
+        if (index == currentPreset) return;   // hosts echo the current program back - nothing to do
         if (juce::MessageManager::existsAndIsCurrentThread()) loadPreset (index);
         else { pendingProgram = index; triggerAsyncUpdate(); }
     }
@@ -112,7 +114,9 @@ private:
     // parameter table
     std::vector<juce::RangedAudioParameter*> params;
     std::vector<std::atomic<float>*> raw;
-    std::vector<bool> morphable, discrete;
+    std::vector<bool> morphable, discrete, keepParam;
+    std::map<juce::String, int> idIndex;
+    bool loadingPreset = false;
     int indexOf (const juce::String& id) const;
     struct Idx;
     std::unique_ptr<Idx> ix;
