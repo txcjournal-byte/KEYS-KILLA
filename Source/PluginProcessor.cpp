@@ -74,7 +74,7 @@ KeysKillaProcessor::KeysKillaProcessor()
     undoStack.clear(); redoStack.clear(); lastSnap.clear();
 }
 
-KeysKillaProcessor::~KeysKillaProcessor() = default;
+KeysKillaProcessor::~KeysKillaProcessor() { cancelPendingUpdate(); }
 
 int KeysKillaProcessor::indexOf (const juce::String& id) const
 {
@@ -406,6 +406,8 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     bypassed = false;
     const int n = buffer.getNumSamples();
     buffer.clear();
+    // hosts may call before prepareToPlay or with empty buffers (parameter flush) - nothing to render then
+    if (n <= 0 || buffer.getNumChannels() == 0 || bufL.empty() || fxPtr == nullptr) return;
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
     const auto& I = *ix;
 

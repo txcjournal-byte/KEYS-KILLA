@@ -76,6 +76,15 @@ static int unitTests()
         };
         check (render() == render(), "deterministic render");
     }
+    {   // hosts calling process before prepareToPlay, with no channels or no samples must not crash
+        KeysKillaProcessor fresh;
+        juce::AudioBuffer<float> b (2, 256), none (0, 256), empty (2, 0);
+        juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        fresh.processBlock (b, m); fresh.processBlockBypassed (b, m);
+        fresh.prepareToPlay (48000, 256);
+        fresh.processBlock (none, m); fresh.processBlock (empty, m);
+        check (true, "process before prepare / empty buffers");
+    }
     KeysKillaProcessor p;
     p.setCurrentProgram (0);
     p.prepareToPlay (48000, 256);

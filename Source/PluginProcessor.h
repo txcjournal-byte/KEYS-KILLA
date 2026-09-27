@@ -6,7 +6,7 @@
 #include "Fx.h"
 #include "Presets.h"
 
-class KeysKillaProcessor : public juce::AudioProcessor
+class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
     KeysKillaProcessor();
@@ -29,7 +29,12 @@ public:
 
     int getNumPrograms() override { return (int) factoryPresets().size(); }
     int getCurrentProgram() override { return juce::jmax (0, currentPreset); }
-    void setCurrentProgram (int index) override { loadPreset (index); }
+    void setCurrentProgram (int index) override
+    {
+        // hosts may switch programs from the audio thread - never load a preset there
+        if (juce::MessageManager::existsAndIsCurrentThread()) loadPreset (index);
+        else { pendingProgram = index; triggerAsyncUpdate(); }
+    }
     const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
@@ -126,6 +131,8 @@ private:
     float midiPitch = 0, midiMod = 0, midiAT = 0;
     int64_t sampleClock = 0;
     float bypassGain = 1.0f; bool bypassed = false;
+    std::atomic<int> pendingProgram { -1 };
+    void handleAsyncUpdate() override { const int p = pendingProgram.exchange (-1); if (p >= 0) loadPreset (p); }
     std::atomic<bool> presetJump { false }; int dipPos = 1 << 20;   // short dip when many params jump at once
 
     // key lock / chord / arp

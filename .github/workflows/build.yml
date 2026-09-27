@@ -7,6 +7,51 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Fast path for testing: only the Windows plugin + installer, published to one fixed download link
+  # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/KEYS-KILLA-Setup-Windows.exe
+  windows-quick:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: win-quick-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: win-quick-${{ hashFiles('CMakeLists.txt') }}-
+
+      - name: Configure
+        run: cmake -B build -A x64 -DKK_BUILD_TESTS=OFF
+
+      - name: Build plugin
+        run: cmake --build build --config Release --parallel --target KeysKilla_VST3 KeysKilla_Standalone
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(KEYS_KILLA VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\win\keyskilla.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Publish test build (fixed link)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item (Get-ChildItem build\installer\*.exe | Select-Object -First 1).FullName out\KEYS-KILLA-Setup-Windows.exe
+          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\KEYS KILLA.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
+          $notes = "Latest test build`n`nCommit: ${{ github.sha }}`nBranch: ${{ github.ref_name }}`nBuilt: $(Get-Date -Format u)"
+          gh release view test *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "KEYS KILLA - latest test build" --notes $notes --target ${{ github.sha }} }
+          else { gh release edit test --notes $notes }
+          gh release upload test out\KEYS-KILLA-Setup-Windows.exe out\KEYS-KILLA-VST3-Windows.zip --clobber
+
   windows:
     runs-on: windows-latest
     steps:

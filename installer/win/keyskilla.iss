@@ -23,7 +23,7 @@ Compression=lzma2
 SolidCompression=yes
 
 [Files]
-Source: "..\..\build\KeysKilla_artefacts\Release\VST3\KEYS KILLA.vst3\*"; DestDir: "{commoncf64}\VST3\KEYS KILLA.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\build\KeysKilla_artefacts\Release\VST3\KEYS KILLA.vst3\*"; DestDir: "{commoncf64}\VST3\KEYS KILLA.vst3"; Excludes: "*.pdb,*.ilk"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\build\KeysKilla_artefacts\Release\Standalone\KEYS KILLA.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
