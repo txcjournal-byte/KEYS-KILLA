@@ -169,7 +169,7 @@ void KKLookAndFeel::drawButtonText (Graphics& g, TextButton& b, bool, bool)
 Font KKLookAndFeel::getTextButtonFont (TextButton&, int h) { return serif (jmin (26.0f, (float) h * 0.52f), false, 0.2f); }
 Font KKLookAndFeel::getComboBoxFont (ComboBox& c) { return serif (jmin (24.0f, (float) c.getHeight() * 0.62f), false, 0.08f); }
 Font KKLookAndFeel::getLabelFont (Label& l) { return serif (jmax (11.0f, (float) l.getHeight() * 0.72f), false, 0.2f); }
-Font KKLookAndFeel::getPopupMenuFont() { return serif (15.0f, false, 0.05f); }
+Font KKLookAndFeel::getPopupMenuFont() { return serif (25.0f, false, 0.05f); }   // menus scale with the 60 % window
 
 
 //==============================================================================
