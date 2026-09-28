@@ -429,13 +429,14 @@ private:
 //==============================================================================
 // Sub-categories from the spec that have no tile of their own
 struct SubCat { const char* label; const char* sub; };
-static const std::array<SubCat, 7> subCats { { { "PIANO", "Piano" }, { "ORGANS", "Organs" }, { "STRINGS", "Strings" }, { "BRASS", "Brass" },
-                                               { "GUITARS", "Guitars" }, { "MALLETS", "Mallets" }, { "ARPS", "Arps" } } };
+static const std::array<SubCat, 10> subCats { { { "PIANO", "Piano" }, { "ORGANS", "Organs" }, { "STRINGS", "Strings" }, { "BRASS", "Brass" },
+                                                { "GUITARS", "Guitars" }, { "MALLETS", "Mallets" }, { "ARPS", "Arps" },
+                                                { "808", "808" }, { "TEXTURE", "Texture" }, { "FX", "FX" } } };
 
 class SubChips : public Component, public SettableTooltipClient
 {
 public:
-    explicit SubChips (KKLookAndFeel& l) : lnf (l) { setTooltip ("Sub-categories: piano, organs, strings, brass, guitars, mallets and arps."); }
+    explicit SubChips (KKLookAndFeel& l) : lnf (l) { setTooltip ("Sub-categories: piano, organs, strings, brass, guitars, mallets, arps, 808, textures and FX."); }
     std::function<void (int)> onSelect;
     int selected = -1;
     void paint (Graphics& g) override
@@ -451,7 +452,7 @@ public:
             if (on) drawGlowFrame (g, r, s.accent, r.getHeight() * 0.5f);
             else { g.setColour (s.dark ? Colour (0x55ffffff) : Colour (0x66202428)); g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f); }
             g.setColour (on ? (s.dark ? s.accent.brighter (0.3f) : Colour (0xff0b3d73)) : (s.dark ? Colour (0xffd9d4d4) : Colour (0xff1a1d21)));
-            g.setFont (serif (13.0f, ! s.dark, 0.22f));
+            g.setFont (serif (12.0f, ! s.dark, 0.1f));
             g.drawText (subCats[i].label, r, Justification::centred);
         }
     }
@@ -675,7 +676,8 @@ class PlayPanel : public Component
 public:
     PlayPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
         : lnf (l), grid (p, { ID::chord, ID::chordType, ID::strum, ID::keyLock, ID::key, ID::scale,
-                              ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing }, 6)
+                              ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing,
+                              ID::timeM, ID::alive, ID::drift, ID::punch, ID::halftime, ID::glide }, 6)
     {
         addAndMakeVisible (grid);
         close.setButtonText ("CLOSE");
@@ -684,7 +686,7 @@ public:
     }
     void paint (Graphics& g) override
     {
-        drawPanel (g, getLocalBounds().toFloat().reduced (4), *lnf.skin, "CHORD / ARP");
+        drawPanel (g, getLocalBounds().toFloat().reduced (4), *lnf.skin, "PERFORM / CHORD / ARP");
         g.setColour (lnf.skin->dark ? Colour (0xf0080606) : Colour (0xf0e3e6ea));
         g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (6).withTrimmedTop (34), 6);
     }
@@ -888,7 +890,7 @@ public:
         keyboard.setKeyWidth ((float) G.keyboard.getWidth() / 49.0f);
         if (advanced) advanced->setBounds (getLocalBounds().reduced (30));
         if (browser) browser->setBounds (getLocalBounds().reduced (30).withTrimmedBottom (170));
-        if (playPanel) playPanel->setBounds (Rectangle<int> (40, 505, 1080, 300));
+        if (playPanel) playPanel->setBounds (Rectangle<int> (40, 330, 1080, 470));
     }
 
 private:
@@ -1045,8 +1047,9 @@ private:
         m.addItem (14, "Undo last DICE roll", ! proc.diceHistoryNames().isEmpty());
         m.addSeparator();
         m.addItem (15, "ADVANCED page...");
-        m.addItem (17, "CHORD / ARP settings...");
+        m.addItem (17, "PERFORM / CHORD / ARP...");
         m.addItem (16, "Eco mode (lower CPU)", true, proc.eco.load());
+        m.addItem (18, "PANIC (all notes off)");
         m.addItem (10, "Skin: CHROME (light)", true, skinIndex == 0);
         m.addItem (11, "Skin: BLOOD (dark)", true, skinIndex == 1);
         for (int pct : { 50, 60, 70, 85, 100 }) size.addItem (100 + pct, String (pct) + " %", true, preferredScale() == pct);
@@ -1073,6 +1076,7 @@ private:
                 case 15: ensureAdvanced(); advanced->setVisible (true); advanced->toFront (false); break;
                 case 17: openPlayPanel(); break;
                 case 16: proc.eco = ! proc.eco.load(); break;
+                case 18: proc.panic(); break;
                 case 10: case 11: setSkin (r - 10); break;
                 case 20:
                     chooser = std::make_unique<FileChooser> ("Import preset pack", File::getSpecialLocation (File::userDocumentsDirectory), "*.zip");
@@ -1105,10 +1109,27 @@ private:
         m.addSubMenu ("History (last 20)", hist, ! names.isEmpty());
         for (int i = 0; i < KeysKillaProcessor::numLocks; ++i) locks.addItem (200 + i, String ("Lock ") + KeysKillaProcessor::lockName (i), true, proc.diceLocks[(size_t) i]);
         m.addSubMenu ("Locks", locks);
+        m.addSeparator();
+        m.addSectionHeader ("MUTATE (roll with fixed amount)");
+        m.addItem (301, "Mutate 5 %");
+        m.addItem (302, "Mutate 15 %");
+        m.addItem (303, "Mutate 30 %");
+        m.addItem (304, "Mutate 60 %");
+        m.addItem (305, "CHAOS 100 %");
+        m.addItem (3, "BREED with a preset...  (right-click a preset in the browser)");
+        m.addSeparator();
         m.addItem (2, "Save this sound as preset...");
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (diceBtn), [this] (int r)
         {
-            if (r == 1) proc.undoDice();
+            if (r > 300 && r <= 305)
+            {
+                static const float amt[] { 0.05f, 0.15f, 0.3f, 0.6f, 1.0f };
+                if (auto* c = proc.apvts.getParameter (ID::chaos)) c->setValueNotifyingHost (c->convertTo0to1 (amt[r - 301]));
+                proc.rollDice (proc.uiTile >= 0 ? proc.uiTile : tileOfCurrent());
+                proc.captureUndo();
+            }
+            else if (r == 3) openBrowser();
+            else if (r == 1) proc.undoDice();
             else if (r == 2) savePresetAs();
             else if (r >= 200) proc.diceLocks[(size_t) (r - 200)] = ! proc.diceLocks[(size_t) (r - 200)];
             else if (r >= 100) proc.restoreDice (r - 100);

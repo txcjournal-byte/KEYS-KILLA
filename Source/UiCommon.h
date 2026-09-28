@@ -97,7 +97,12 @@ inline String paramTooltip (const String& id)
         { "circuit", "Tempo-synced broken-electronics glitches." }, { "circRate", "How often CIRCUIT can glitch." },
         { "chaos", "How far DICE moves away from the current sound." }, { "morphX", "ERA MORPH horizontal position." }, { "morphY", "ERA MORPH vertical position." },
         { "body", "Plays the sound through the resonant body of another instrument." }, { "bodyMix", "How much of the swapped body you hear." },
-        { "seed", "Random seed for DICE and CIRCUIT, stored with the preset." } };
+        { "seed", "Random seed for DICE and CIRCUIT, stored with the preset." },
+        { "alive", "ALIVE 0-5: every note gets a tiny, musical difference in pitch, attack, tone, pan and level - like a real player." },
+        { "drift", "Pitch drift: slow tape / old ROMpler instability, up to 35 cents." },
+        { "timeMacro", "TIME: left = TIGHT (short tails), middle = NATURAL, right = DREAM (long reverb, echoes), far right = FROZEN." },
+        { "punchFx", "Punch: transient shaper, up to +12 dB on the attack of stabs and plucks." },
+        { "halftime", "Half-Time: replays the sound at half speed in 2-beat windows synced to the host tempo." } };
     if (id.startsWith ("mmSrc")) return "Mod matrix source.";
     if (id.startsWith ("mmDst")) return "Mod matrix destination.";
     if (id.startsWith ("mmAmt")) return "Mod matrix amount (negative inverts).";

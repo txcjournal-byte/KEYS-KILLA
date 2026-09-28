@@ -67,6 +67,7 @@ public:
     enum DiceLock { lockEngine, lockFilter, lockEnv, lockMod, lockFx, lockExclusive, numLocks };
     static const char* lockName (int i);
     void rollDice (int tile);
+    void breedWith (int presetIndex);
     bool undoDice();
     void restoreDice (int historyIndex);
     juce::StringArray diceHistoryNames() const;
@@ -90,6 +91,8 @@ public:
     std::array<int, kk::numFxSlots> getFxOrder() const;
     void setFxOrder (const std::array<int, kk::numFxSlots>& o);
     std::atomic<bool> eco { false };
+    std::atomic<bool> panicFlag { false };   // all notes off, handled on the audio thread
+    void panic() { panicFlag = true; }
 
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;

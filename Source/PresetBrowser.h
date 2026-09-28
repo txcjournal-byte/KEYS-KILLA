@@ -145,6 +145,21 @@ private:
     {
         if (! isPositiveAndBelow (row, (int) entries.size())) return;
         if (e.x < 40) { if (toggleFavourite) toggleFavourite (entries[(size_t) row].name); list.repaint(); return; }
+        if (e.mods.isPopupMenu())
+        {
+            const auto en = entries[(size_t) row];
+            PopupMenu m;
+            m.addItem (1, "Load");
+            m.addItem (2, "Breed with current sound", en.factoryIndex >= 0);
+            m.addItem (3, "Favourite on / off");
+            m.showMenuAsync (PopupMenu::Options(), [this, row, en] (int r)
+            {
+                if (r == 1) activate (row, false);
+                else if (r == 2) { proc.breedWith (en.factoryIndex); proc.captureUndo(); list.repaint(); if (onChanged) onChanged(); }
+                else if (r == 3 && toggleFavourite) { toggleFavourite (en.name); list.repaint(); }
+            });
+            return;
+        }
         activate (row, false);
     }
 

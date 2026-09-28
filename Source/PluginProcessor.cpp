@@ -18,7 +18,8 @@ constexpr int kChunk = 512;
     X(revMix) X(revSize) X(revType) X(eqLow) X(eqHigh) X(reverse) X(freeze) X(width) X(gain) \
     X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) \
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
-    X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed)
+    X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
+    X(alive) X(drift) X(timeM) X(punch) X(halftime)
 
 // performance controls that never morph or get reset by presets
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
@@ -47,7 +48,7 @@ KeysKillaProcessor::KeysKillaProcessor()
       apvts (*this, nullptr, "KEYSKILLA", createLayout())
 {
     for (auto& p : playing) p = false;
-    for (int i = 0; i < kk::numFxSlots; ++i) fxOrder[(size_t) i] = i;
+    { const auto d = kk::defaultFxOrder(); for (int i = 0; i < kk::numFxSlots; ++i) fxOrder[(size_t) i] = d[(size_t) i]; }
 
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
@@ -175,6 +176,22 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
         drive += dA * 0.9f; cutOct += dA * 1.0f; width += dA * 0.4f;
     }
 
+    // TIME macro: 0 TIGHT .. 0.33 NATURAL (neutral) .. DREAM .. >0.9 FROZEN
+    const float tm = P (I.timeM);
+    float relMul = 1.0f, dFb = P (I.delayFb); bool freeze = B (I.freeze);
+    if (tm < 0.33f)
+    {
+        const float k = (0.33f - tm) / 0.33f;   // tighter
+        relMul = 1.0f - 0.8f * k; rMix *= 1.0f - 0.7f * k; dMix *= 1.0f - 0.7f * k; rSize -= 0.3f * k;
+    }
+    else
+    {
+        const float k = std::min (1.0f, (tm - 0.33f) / 0.57f);   // dreamier
+        relMul = 1.0f + 3.0f * k; rMix += 0.35f * k; rSize += 0.4f * k; dMix += 0.15f * k;
+        dFb = std::min (0.9f, dFb + 0.3f * k);
+        if (tm > 0.9f) freeze = true;
+    }
+
     auto c01 = kk::clamp01;
     auto layer = [&] (kk::LayerParams& L, bool on, int eng, int oct, int sem, int fin, int wav, int uni, int det, int r1, int r2, int fa, int alg, int wm, int lvl, float detOverride)
     {
@@ -189,7 +206,7 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     v.cutoff = juce::jlimit (40.0f, 20000.0f, P (I.cutoff) * std::exp2 (cutOct));
     v.reso = P (I.reso); v.keyTrack = P (I.keyTrack); v.fenv = P (I.fenv);
     v.fA = P (I.fattack); v.fD = P (I.fdecay); v.fS = P (I.fsustain); v.fR = P (I.frelease);
-    v.attack = P (I.attack); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = P (I.release); v.velSens = P (I.velSens);
+    v.attack = P (I.attack); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = std::min (8.0f, P (I.release) * relMul); v.velSens = P (I.velSens);
     v.e3A = P (I.e3attack); v.e3D = P (I.e3decay); v.e3S = P (I.e3sustain); v.e3R = P (I.e3release);
     v.lfoPitch = c01 (lfoP); v.lfoFilter = c01 (lfoF); v.lfoAmp = P (I.lfoAmp);
     v.wobTarget = (int) P (I.wobTarget); v.wobble = c01 (wobble);
@@ -198,6 +215,8 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     v.ghost = P (I.ghost); v.ghostOct = (int) P (I.ghostOct);
     v.bend = P (I.bend); v.bendMode = (int) P (I.bendMode); v.bendSemis = P (I.bendSemis); v.tape = B (I.tape);
     v.punch = punch;
+    v.alive = P (I.alive); v.drift = P (I.drift);
+    f.punch = P (I.punch); f.halftime = P (I.halftime);
     v.pitchWheel = juce::jlimit (-1.0f, 1.0f, midiPitch + guiPitch.load());
     v.modWheel = std::max (midiMod, guiMod.load());
     v.aftertouch = midiAT;
@@ -209,8 +228,8 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
 
     f.drive = c01 (drive); f.driveType = (int) P (I.driveType); f.cleanLow = bass; f.monoLows = bass;
     f.crush = c01 (crush); f.wow = c01 (wow); f.chorus = c01 (chorus); f.phaser = P (I.phaser); f.flanger = P (I.flanger);
-    f.delayMix = c01 (dMix); f.delayFb = P (I.delayFb); f.delayBeats = Choices::delayBeats ((int) P (I.delayTime)); f.delayMode = (int) P (I.delayMode);
-    f.revMix = c01 (rMix); f.revSize = c01 (rSize); f.revType = (int) P (I.revType); f.freeze = B (I.freeze);
+    f.delayMix = c01 (dMix); f.delayFb = dFb; f.delayBeats = Choices::delayBeats ((int) P (I.delayTime)); f.delayMode = (int) P (I.delayMode);
+    f.revMix = c01 (rMix); f.revSize = c01 (rSize); f.revType = (int) P (I.revType); f.freeze = freeze;
     f.eqLow = P (I.eqLow); f.eqHigh = P (I.eqHigh); f.reverse = P (I.reverse);
     f.width = c01 (width);
     f.ghost = P (I.ghost); f.ghostBlur = P (I.ghostBlur); f.ghostRev = B (I.ghostRev);
@@ -435,6 +454,11 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     {
         synth.allOff (false); arpHeld.fill (false); arpOrderN = 0; pendingN = 0; noteMap.fill (-1);
         lastChord = chord; lastArp = arp; lastKeyLock = lock;
+    }
+
+    if (panicFlag.exchange (false))
+    {
+        synth.allOff (true); arpHeld.fill (false); arpOrderN = 0; pendingN = 0; noteMap.fill (-1);
     }
 
     buildVoiceParams (vp, fp);
@@ -666,6 +690,48 @@ void KeysKillaProcessor::rollDice (int tile)
     snapshotForModified();
 }
 
+// BREED: child of the current sound (A) and a factory preset (B). Each DNA section comes from one parent,
+// continuous values inside it are blended slightly toward the other. Dice locks keep A's section.
+void KeysKillaProcessor::breedWith (int presetIndex)
+{
+    const auto& ps = factoryPresets();
+    if (! juce::isPositiveAndBelow (presetIndex, (int) ps.size())) return;
+    diceHistory.push_back ({ presetName, apvts.copyState() });
+    if (diceHistory.size() > 20) diceHistory.erase (diceHistory.begin());
+
+    const auto& pr = ps[(size_t) presetIndex];
+    std::vector<float> b (params.size());
+    for (size_t i = 0; i < params.size(); ++i) b[i] = params[i]->getDefaultValue();
+    for (auto& [id, v] : pr.values)
+        if (auto it = idIndex.find (id); it != idIndex.end()) b[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (v);
+
+    juce::Random r ((juce::int64) (presetIndex * 7919 + (int) presetName.hashCode()));
+    std::array<bool, numLocks> fromB {};
+    bool anyB = false, anyA = false;
+    for (int s = 0; s < numLocks; ++s) { fromB[(size_t) s] = ! diceLocks[(size_t) s] && r.nextBool(); anyB |= fromB[(size_t) s]; anyA |= ! fromB[(size_t) s]; }
+    if (! anyB && ! diceLocks[lockFilter]) fromB[lockFilter] = true;
+    if (! anyA && ! diceLocks[lockFx]) fromB[lockFx] = false;
+    const float blend = 0.25f;
+
+    presetJump = true;
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        if (keepParam[i]) continue;
+        const auto id = params[i]->paramID;
+        if (id == ID::mono || id == ID::bassMode) continue;
+        const int sec = lockOf (id);
+        if (diceLocks[(size_t) sec]) continue;
+        const float a = params[i]->getValue(), bv = b[i];
+        float t = fromB[(size_t) sec] ? bv : a;
+        if (! discrete[i]) t = fromB[(size_t) sec] ? bv + (a - bv) * blend : a + (bv - a) * blend;
+        if (std::abs (t - a) > 1.0e-6f) params[i]->setValueNotifyingHost (t);
+    }
+    auto shortName = [] (juce::String n) { return n.upToFirstOccurrenceOf (" 20", false, false).substring (0, 14).trim(); };
+    presetName = shortName (presetName) + " x " + shortName (pr.name);
+    currentPreset = -1; userFile = juce::File();
+    snapshotForModified();
+}
+
 bool KeysKillaProcessor::undoDice()
 {
     if (diceHistory.empty()) return false;
@@ -815,9 +881,20 @@ static juce::String orderToString (const std::array<int, kk::numFxSlots>& o)
 static std::array<int, kk::numFxSlots> orderFromString (const juce::String& str)
 {
     std::array<int, kk::numFxSlots> o {};
-    for (int i = 0; i < kk::numFxSlots; ++i) o[(size_t) i] = i;
+    o = kk::defaultFxOrder();
     auto t = juce::StringArray::fromTokens (str, ",", "");
     if (t.size() == kk::numFxSlots) for (int i = 0; i < kk::numFxSlots; ++i) o[(size_t) i] = t[i].getIntValue();
+    else if (t.size() == kk::fxPunch)   // v0.3 order: keep it, put PUNCH first and HALF-TIME after CIRCUIT
+    {
+        size_t k = 0;
+        o[k++] = kk::fxPunch;
+        for (auto& x : t)
+        {
+            if (k < o.size()) o[k++] = juce::jlimit (0, kk::numFxSlots - 1, x.getIntValue());
+            if (x.getIntValue() == kk::fxCircuit && k < o.size()) o[k++] = kk::fxHalftime;
+        }
+        if (k != (size_t) kk::numFxSlots) o = kk::defaultFxOrder();
+    }
     return o;
 }
 

@@ -433,11 +433,11 @@ public:
                        e3attack, e3decay, e3sustain, e3release },
               { new ModMatrixView (proc), new LfoView (proc, lnf, "LFO 1", lfoShape), new LfoView (proc, lnf, "LFO 2", lfo2Shape),
                 new EnvView (proc, lnf, "MOD ENVELOPE (ENV 3)", e3attack, e3decay, e3sustain, e3release) }, 1);
-        page ("FX", { drive, driveType, crush, wow, chorus, phaser, flanger, eqLow, eqHigh, reverse, delayMix, delayTime, delayFb, delayMode,
+        page ("FX", { punch, halftime, timeM, drive, driveType, crush, wow, chorus, phaser, flanger, eqLow, eqHigh, reverse, delayMix, delayTime, delayFb, delayMode,
                       revMix, revSize, revType, freeze, width, gain },
               { new FxOrderList (proc, lnf) }, 2);
         page ("EXCLUSIVE", { ghost, ghostOct, ghostRev, ghostBlur, bend, bendMode, bendSemis, tape, circuit, circRate, body, bodyMix,
-                             chaos, morphX, morphY, seed },
+                             chaos, morphX, morphY, seed, alive, drift },
               { new MorphCorners (proc), new DiceLocks (proc) }, 3);
         page ("PLAY", { mono, legato, glide, bendRange, bassMode, keyLock, key, scale, chord, chordType, strum,
                         arp, arpRate, arpMode, arpOct, arpSwing, arpGate }, {}, 0);

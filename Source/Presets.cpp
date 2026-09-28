@@ -36,7 +36,7 @@ const std::vector<Preset>& factoryPresets()
         };
 
         // ---------------- BELLS ----------------
-        P ("Southside Bells 2010", tBells, 0, false, "", { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.45f }, { fdecay, 1.0f },
+        P ("Dark Digital Bells 2010", tBells, 0, false, "", { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.45f }, { fdecay, 1.0f },
             { attack, 0.001f }, { decay, 2.2f }, { sustain, 0 }, { release, 1.2f }, { revMix, 0.2f }, { m2, 0.2f }, { gain, -7.0f } });
         P ("Ice Bells 2013", tBells, 1, false, "", { { engine, FM }, { fmRatio, 4.0f }, { fmAmt, 0.5f }, { fdecay, 1.6f }, { unison, 2 }, { detune, 0.15f },
             { decay, 3.0f }, { sustain, 0 }, { release, 2.0f }, { revMix, 0.35f }, { revSize, 0.85f }, { delayMix, 0.2f }, { m2, 0.4f }, { m6, 0.7f,  }, { gain, -7.1f } });
@@ -423,6 +423,84 @@ const std::vector<Preset>& factoryPresets()
         arpP ("Glassy Arp", tPlucks, 3, { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { wave, 0.3f }, { octave, 1 }, { decay, 0.6f },
               { sustain, 0.1f }, { chorus, 0.3f }, { delayMix, 0.25f } }, 2, 0, 1, 0.6f);
         arpP ("Dark Harp Arp", tPlucks, 2, { { engine, PL }, { wave, 0.4f }, { decay, 1.5f }, { sustain, 0 }, { revMix, 0.35f } }, 0, 0, 2, 0.8f);
+
+        // ================= v0.4: 808 / TEXTURE / FX + era banks (TRAP 2010 -> FUTURE) =================
+        auto B8 = [&] (const char* name, int era, Vals vals)
+        {
+            Vals base { { m1, 0.0f }, { m2, 0.0f }, { m3, 0.0f }, { m4, 0.0f }, { m5, 0.5f }, { m6, 0.0f },
+                        { revMix, 0.0f }, { width, 0.4f }, { octave, -1 }, { engine, SB }, { sustain, 0 } };
+            base.insert (base.end(), vals.begin(), vals.end());
+            P (name, tBass, era, false, "808", base);
+        };
+        B8 ("808 Boom Long 2010", 0, { { wave, 0.3f }, { fmAmt, 0.1f }, { decay, 5.0f }, { release, 0.6f }, { m6, 0.25f } });
+        B8 ("808 Tight Knock", 1, { { wave, 0.55f }, { fmAmt, 0.35f }, { decay, 0.7f }, { release, 0.15f }, { m3, 0.3f }, { m6, 0.8f }, { punch, 0.4f } });
+        B8 ("808 Glide Legato", 2, { { wave, 0.45f }, { fmAmt, 0.15f }, { decay, 4.0f }, { sustain, 0.3f }, { release, 0.4f }, { glide, 0.25f }, { legato, 1 } });
+        B8 ("808 Distorted Rage", 4, { { wave, 0.6f }, { fmAmt, 0.25f }, { decay, 2.5f }, { release, 0.3f }, { m3, 0.7f }, { driveType, 3 }, { m6, 0.5f } });
+        B8 ("808 Drill Slide", 4, { { wave, 0.5f }, { fmAmt, 0.2f }, { decay, 3.5f }, { sustain, 0.25f }, { release, 0.35f }, { glide, 0.35f }, { m3, 0.35f } });
+        B8 ("808 Folded Grit", 5, { { wave, 0.7f }, { fmAmt, 0.3f }, { decay, 2.0f }, { release, 0.3f }, { m3, 0.5f }, { driveType, 4 } });
+        B8 ("808 Tape Warm", 2, { { wave, 0.35f }, { fmAmt, 0.1f }, { decay, 3.0f }, { release, 0.4f }, { m3, 0.25f }, { driveType, 1 }, { drift, 0.3f } });
+        B8 ("808 Clean Sine Sub", 0, { { wave, 0.0f }, { decay, 6.0f }, { release, 0.5f } });
+
+        auto TX = [&] (const char* name, int era, Vals vals) { P (name, tExperimental, era, false, "Texture", vals); };
+        TX ("Sub-Harmonic Drone 2026", 5, { { engine, WT }, { wave, 0.2f }, { octave, -1 }, { unison, 5 }, { detune, 0.3f }, { attack, 2.0f }, { sustain, 1 },
+            { release, 4.0f }, { sub, 0.5f }, { cutoff, 1800 }, { crush, 0.25f }, { wow, 0.35f }, { revMix, 0.45f }, { revType, 2 }, { drift, 0.5f }, { alive, 3 } });
+        TX ("Granular String Cloud 2025", 5, { { engine, OC }, { wave, 0.4f }, { unison, 5 }, { detune, 0.35f }, { attack, 1.5f }, { sustain, 1 }, { release, 4.0f },
+            { reverse, 0.35f }, { chorus, 0.4f }, { revMix, 0.5f }, { revType, 2 }, { revSize, 0.9f }, { alive, 4 }, { drift, 0.3f }, { timeM, 0.7f } });
+        TX ("Cassette Hiss Pad", 3, { { engine, VA }, { wave, 0.5f }, { unison, 3 }, { detune, 0.3f }, { cutoff, 2200 }, { attack, 1.0f }, { sustain, 1 },
+            { release, 3.0f }, { crush, 0.4f }, { wow, 0.5f }, { tape, 1 }, { revMix, 0.35f }, { drift, 0.6f } });
+        TX ("Frozen Choir Air", 4, { { engine, VX }, { wave, 0.7f }, { unison, 5 }, { detune, 0.4f }, { attack, 1.2f }, { sustain, 1 }, { release, 4.0f },
+            { revMix, 0.5f }, { revType, 2 }, { timeM, 0.95f }, { alive, 2 } });
+        TX ("Metal Resonance Bed", 5, { { engine, WT }, { wave, 0.6f }, { unison, 3 }, { detune, 0.2f }, { attack, 0.6f }, { sustain, 0.7f }, { release, 3.0f },
+            { body, 4 }, { bodyMix, 0.6f }, { phaser, 0.4f }, { revMix, 0.4f } });
+        TX ("Half-Time Tape Keys", 3, { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 1.5f }, { sustain, 0.4f }, { release, 1.0f },
+            { halftime, 1.0f }, { wow, 0.4f }, { crush, 0.2f }, { revMix, 0.3f } });
+
+        auto FXP = [&] (const char* name, int era, Vals vals) { P (name, tExperimental, era, false, "FX", vals); };
+        { Vals r { { engine, VA }, { wave, 0.0f }, { unison, 7 }, { detune, 0.5f }, { cutoff, 300 }, { reso, 0.4f }, { attack, 3.0f }, { sustain, 1 },
+                   { release, 2.0f }, { e3attack, 4.0f }, { e3sustain, 1 }, { revMix, 0.45f }, { delayMix, 0.25f } };
+          MM (r, 0, srcEnv3, dstCutoff, 0.9f); MM (r, 1, srcEnv3, dstPitch, 0.35f); FXP ("Noise Riser 8 Bars", 4, r); }
+        { Vals r { { engine, SB }, { octave, -2 }, { wave, 0.6f }, { fmAmt, 0.4f }, { decay, 2.5f }, { sustain, 0 }, { release, 1.5f }, { bend, 0.8f },
+                   { bendMode, 0 }, { bendSemis, -24 }, { drive, 0.4f }, { revMix, 0.4f }, { revSize, 0.9f }, { punch, 0.7f } };
+          FXP ("Cinematic Impact Hit", 5, r); }
+        { Vals r { { engine, VA }, { wave, 0.2f }, { unison, 3 }, { detune, 0.3f }, { decay, 2.0f }, { sustain, 0 }, { release, 1.0f },
+                   { bend, 1.0f }, { bendMode, 0 }, { bendSemis, -24 }, { revMix, 0.35f }, { delayMix, 0.3f } };
+          FXP ("Tape Stop Downer", 3, r); }
+        { Vals r { { engine, FM }, { fmRatio, 2.0f }, { fmAmt, 0.35f }, { attack, 2.0f }, { sustain, 1 }, { release, 0.2f }, { reverse, 0.6f },
+                   { revMix, 0.55f }, { revType, 2 } };
+          FXP ("Reverse Swell", 2, r); }
+        { Vals r { { engine, MD }, { wave, 0.9f }, { fmAmt, 0.8f }, { decay, 0.6f }, { sustain, 0 }, { circuit, 0.6f }, { crush, 0.4f },
+                   { delayMix, 0.35f }, { delayMode, 0 } };
+          FXP ("Glitch Scatter FX", 5, r); }
+        { Vals r { { engine, VA }, { wave, 0.5f }, { octave, 1 }, { cutoff, 4000 }, { reso, 0.6f }, { attack, 0.01f }, { decay, 0.8f }, { sustain, 0 },
+                   { bend, 0.9f }, { bendMode, 1 }, { bendSemis, 12 }, { lfoPitch, 0.4f }, { lfoRate, 8.0f }, { delayMix, 0.4f } };
+          FXP ("Laser Zap Up", 4, r); }
+
+        // era banks from the TRAP-CORE taxonomy (neutral names)
+        P ("Tutti Orchestral Stab 2011", tPads, 0, false, "Strings", { { engine, OC }, { wave, 0.5f }, { layerB, 1 }, { engineB, SB }, { octaveB, -1 },
+            { levelB, 0.5f }, { attack, 0.002f }, { decay, 0.5f }, { sustain, 0 }, { release, 0.25f }, { punch, 0.6f }, { revMix, 0.15f } });
+        P ("Harpsichord Stab 2012", tKeys, 1, false, "", { { engine, PL }, { wave, 0.8f }, { fmAmt, 0.2f }, { decay, 0.6f }, { sustain, 0 },
+            { release, 0.2f }, { filterType, 6 }, { cutoff, 3000 }, { reso, 0.4f }, { punch, 0.35f } });
+        P ("Gothic Dark Choir 2010", tChoir, 0, false, "", { { engine, VX }, { wave, 0.2f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.4f },
+            { sustain, 1 }, { release, 1.5f }, { lfoPitch, 0.05f }, { lfoRate, 5.0f }, { crush, 0.15f }, { revMix, 0.35f } });
+        P ("Detuned Music Box 2017", tBells, 2, false, "Mallets", { { engine, MD }, { wave, 0.9f }, { octave, 1 }, { decay, 1.8f }, { sustain, 0 },
+            { release, 1.2f }, { wow, 0.45f }, { drift, 0.45f }, { alive, 3 }, { revMix, 0.4f } });
+        P ("Ethnic Flute Glide 2016", tFlutes, 2, false, "", { { engine, FL }, { wave, 0.4f }, { attack, 0.08f }, { sustain, 0.9f }, { release, 1.0f },
+            { glide, 0.2f }, { legato, 1 }, { mono, 1 }, { lfoPitch, 0.04f }, { revMix, 0.5f }, { revSize, 0.9f }, { alive, 2 } });
+        P ("Reverse Rhodes 2018", tKeys, 3, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.25f }, { attack, 0.7f }, { sustain, 0.7f },
+            { release, 0.3f }, { reverse, 0.5f }, { chorus, 0.3f }, { halftime, 0.4f }, { revMix, 0.35f } });
+        P ("Cinematic Braam 2021", tLeads, 4, false, "Brass", { { engine, VA }, { wave, 0.0f }, { octave, -1 }, { unison, 5 }, { detune, 0.25f },
+            { cutoff, 900 }, { fenv, 0.6f }, { fdecay, 1.2f }, { sustain, 1 }, { release, 1.5f }, { sub, 0.5f }, { drive, 0.5f }, { driveType, 3 }, { revMix, 0.35f } });
+        P ("Distorted Flute 2022", tFlutes, 4, false, "", { { engine, FL }, { wave, 0.6f }, { sustain, 0.9f }, { release, 0.5f }, { drive, 0.55f },
+            { driveType, 4 }, { crush, 0.3f }, { delayMix, 0.25f } });
+        P ("Micro Chop Keys 2026", tKeys, 5, false, "", { { engine, VX }, { wave, 0.5f }, { decay, 0.25f }, { sustain, 0 }, { release, 0.1f },
+            { circuit, 0.5f }, { circRate, 1 }, { halftime, 0.3f }, { alive, 4 } });
+        P ("Staccato Pizz Strings 2013", tPlucks, 1, false, "Strings", { { engine, OC }, { wave, 0.3f }, { decay, 0.25f }, { sustain, 0 },
+            { release, 0.08f }, { punch, 0.8f }, { width, 0.8f } });
+        P ("Marcato Low Horns 2012", tLeads, 1, false, "Brass", { { engine, OC }, { wave, 0.8f }, { octave, -1 }, { attack, 0.01f }, { decay, 0.4f },
+            { sustain, 0.3f }, { release, 0.2f }, { punch, 0.5f }, { drive, 0.2f } });
+
+        // tag the older 808 bass patches for the 808 chip
+        for (auto& pr : v) if (pr.tile == tBass && pr.name.contains ("808")) pr.sub = "808";
 
         // ================= variants: lo-fi, dark (old eras) / blown (new eras) =================
         const size_t numBase = v.size();

@@ -30,6 +30,7 @@ struct VoiceParams
     float bend = 0; int bendMode = 0; float bendSemis = -12; bool tape = false;
     float punch = 0;
     float pitchWheel = 0, modWheel = 0, aftertouch = 0;
+    float alive = 0, drift = 0;
     int   mmSrc[numModSlots] {}, mmDst[numModSlots] {}; float mmAmt[numModSlots] {};
     bool  eco = false;
 };
@@ -91,6 +92,16 @@ public:
         noteTime = 0; relTime = 0;
         noteRand = noise.bi();
         tapePhase = noise.uni();
+        {   // ALIVE: bounded per-note micro variation (deterministic: seeded voice noise)
+            const float a = p.alive / 5.0f;
+            aliveCents = noise.bi() * a * 14.0f;
+            aliveAtk = 1.0f + noise.bi() * a * 0.35f;
+            aliveCut = noise.bi() * a * 0.45f;
+            alivePan = noise.bi() * a * 0.35f;
+            aliveGain = 1.0f + noise.bi() * a * 0.1f;
+            driftPh1 = noise.uni(); driftPh2 = noise.uni();
+            driftF1 = 0.05f + noise.uni() * 0.6f; driftF2 = 0.4f + noise.uni() * 1.6f;
+        }
         ctlIdx = 0;
         if (! wasActive)
         {
@@ -124,9 +135,10 @@ public:
     void render (float* L, float* R, float* G, int num, const VoiceParams& p, const float* lfo1, const float* lfo2)
     {
         if (! active) return;
-        amp.set (sr, p.attack, p.decay, p.sustain, p.release);
+        amp.set (sr, p.attack * aliveAtk, p.decay, p.sustain, p.release);
         env2.set (sr, p.fA, p.fD, p.fS, p.fR);
         env3.set (sr, p.e3A, p.e3D, p.e3S, p.e3R);
+        const float driftCents = p.drift * 35.0f;
 
         const int ctlMask = p.eco ? 31 : 7;
         const float glideCoef = p.glide > 0.0005f ? std::exp (-1.0f / (p.glide * 0.35f * sr)) : 0.0f;
@@ -144,7 +156,10 @@ public:
 
             // ---------------- pitch ---------------------------------------
             curSemi = glideCoef > 0 ? targetSemi + (curSemi - targetSemi) * glideCoef : targetSemi;
-            float semi = curSemi + p.pitchWheel * p.bendRange + modPitch;
+            float semi = curSemi + p.pitchWheel * p.bendRange + modPitch + aliveCents * 0.01f;
+            if (driftCents > 0.01f)
+                semi += driftCents * 0.01f * (0.6f * std::sin (twoPi * (driftF1 * noteTime + driftPh1))
+                                            + 0.4f * std::sin (twoPi * (driftF2 * noteTime + driftPh2)));
             const float vibRamp = std::min (1.0f, noteTime * 3.0f);
             semi += lfo1[i] * (p.lfoPitch + p.modWheel * 0.5f) * 1.5f * vibRamp;
             if (p.wobTarget == 3) semi += lfo1[i] * p.wobble * 2.0f;
@@ -174,6 +189,8 @@ public:
                          yL = fastTanh (fl.lp * 1.6f); yR = fastTanh (fr.lp * 1.6f); break;
                 case 3:  fl.tick (fc, oL); fr.tick (fc, oR); yL = fl.hp; yR = fr.hp; break;
                 case 4:  fl.tick (fc, oL); fr.tick (fc, oR); yL = fl.bp * fc.k; yR = fr.bp * fc.k; break;
+                case 5:  fl.tick (fc, oL); fr.tick (fc, oR); yL = fl.lp + fl.hp; yR = fr.lp + fr.hp; break;             // notch
+                case 6:  fl.tick (fc, oL); fr.tick (fc, oR); yL = oL + fl.bp * fc.k * 1.5f; yR = oR + fr.bp * fc.k * 1.5f; break;   // peak
                 default: fl.tick (fc, oL); fr.tick (fc, oR); yL = fl.lp; yR = fr.lp; break;
             }
 
@@ -253,14 +270,14 @@ private:
                 m[std::clamp (p.mmDst[s], 0, numDests - 1)] += src[std::clamp (p.mmSrc[s], 0, 9)] * p.mmAmt[s];
 
         modPitch = m[dstPitch] * 12.0f;
-        ampMod = std::clamp (1.0f + m[dstAmp], 0.0f, 2.0f);
-        const float pan = std::clamp (m[dstPan], -1.0f, 1.0f);
+        ampMod = std::clamp (1.0f + m[dstAmp], 0.0f, 2.0f) * aliveGain;
+        const float pan = std::clamp (m[dstPan] + alivePan, -1.0f, 1.0f);
         panL = std::sqrt (1.0f - pan) ; panR = std::sqrt (1.0f + pan);
         effSub = clamp01 (p.sub + m[dstSub]);
         effReso = clamp01 (p.reso + m[dstReso]);
 
         float oct = p.fenv * env2.v * 6.0f + p.lfoFilter * 4.0f * (0.5f * l1 - 0.5f)
-                  + p.keyTrack * (curSemi - 60.0f) / 12.0f + p.punch * env2.v * 2.0f + m[dstCutoff] * 6.0f;
+                  + p.keyTrack * (curSemi - 60.0f) / 12.0f + p.punch * env2.v * 2.0f + m[dstCutoff] * 6.0f + aliveCut;
         if (p.wobTarget == 0) oct += p.wobble * 4.0f * (0.5f * l1 - 0.5f);
         const float cut = std::clamp (p.cutoff * std::exp2 (oct), 20.0f, sr * 0.45f);
         if (p.filterType == 1) ladG = std::min (0.95f, 1.0f - std::exp (-twoPi * cut / sr));
@@ -555,6 +572,8 @@ private:
     float subPhase = 0, ghostPhase = 0, ghostEnv = 0, tapePhase = 0, noteRand = 0, bendState = 0;
     float curSemi = 60, targetSemi = 60, noteTime = 0, relTime = 0;
     float modPitch = 0, ampMod = 1, panL = 1, panR = 1, effSub = 0, effReso = 0, ladG = 0.5f;
+    float aliveCents = 0, aliveAtk = 1, aliveCut = 0, alivePan = 0, aliveGain = 1;
+    float driftPh1 = 0, driftPh2 = 0, driftF1 = 0.2f, driftF2 = 1.0f;
     uint32_t ctlIdx = 0;
     SvfCoef fc;
     SvfState fl, fr;
@@ -565,7 +584,7 @@ private:
 class SynthEngine
 {
 public:
-    static constexpr int numVoices = 16;
+    static constexpr int numVoices = 32;
 
     void prepare (float sr)
     {

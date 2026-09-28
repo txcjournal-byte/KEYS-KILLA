@@ -132,6 +132,12 @@ namespace ID
     inline constexpr const char* body     = "body";
     inline constexpr const char* bodyMix  = "bodyMix";
     inline constexpr const char* seed     = "seed";
+    // v0.4 (TRAP 2010 -> FUTURE spec)
+    inline constexpr const char* alive    = "alive";      // 0..5 per-note micro variation
+    inline constexpr const char* drift    = "drift";      // tape / ROMpler pitch drift
+    inline constexpr const char* timeM    = "timeMacro";  // TIGHT - NATURAL - DREAM - FROZEN
+    inline constexpr const char* punch    = "punchFx";    // transient shaper
+    inline constexpr const char* halftime = "halftime";   // half-speed buffer mix
 
     // mod matrix slots: mmSrc1..8, mmDst1..8, mmAmt1..8
     inline juce::String mmSrc (int i) { return "mmSrc" + juce::String (i + 1); }
@@ -146,7 +152,7 @@ namespace Choices
     inline const juce::StringArray engines   { "VA", "FM", "Pluck", "Vox", "Organ", "Flute", "Sub 808", "Wavetable", "Orchestral", "Modal" };
     inline const juce::StringArray fmAlgos   { "2-Op", "4-Stack", "2x2 Pairs", "3 > 1", "Bell", "E-Piano" };
     inline const juce::StringArray warps     { "Bend", "Sync", "Mirror", "Quantize", "FM" };
-    inline const juce::StringArray filters   { "Clean", "Ladder", "Dirty", "High Pass", "Band Pass" };
+    inline const juce::StringArray filters   { "Clean", "Ladder", "Dirty", "High Pass", "Band Pass", "Notch", "Peak" };
     inline const juce::StringArray lfoDivs   { "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/4T", "1/8T", "1/16T" };
     inline const juce::StringArray lfoShapes { "Sine", "Triangle", "Saw", "Square", "S&H" };
     inline const juce::StringArray wobTargets{ "Filter", "Volume", "Wave", "Pitch" };
@@ -366,6 +372,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     c (ID::body, "Body Swap", Choices::bodies, 0);
     f (ID::bodyMix, "Body Mix", 0, 1, 0.5f);
     i (ID::seed, "Seed", 0, 9999, 1234);
+    i (ID::alive, "Alive", 0, 5, 0);
+    f (ID::drift, "Pitch Drift", 0, 1, 0);
+    f (ID::timeM, "Time", 0, 1, 0.33f);
+    f (ID::punch, "Punch", 0, 1, 0);
+    f (ID::halftime, "Half-Time", 0, 1, 0);
 
     for (int s = 0; s < numModSlots; ++s)
     {

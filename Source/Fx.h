@@ -5,11 +5,16 @@
 
 namespace kk
 {
-enum FxSlot { fxDrive, fxBody, fxLofi, fxCircuit, fxChorus, fxPhaser, fxFlanger, fxEq, fxDelay, fxReverb, fxReverse, numFxSlots };
+enum FxSlot { fxDrive, fxBody, fxLofi, fxCircuit, fxChorus, fxPhaser, fxFlanger, fxEq, fxDelay, fxReverb, fxReverse, fxPunch, fxHalftime, numFxSlots };
+
+inline std::array<int, numFxSlots> defaultFxOrder()
+{
+    return { fxPunch, fxDrive, fxBody, fxLofi, fxCircuit, fxHalftime, fxChorus, fxPhaser, fxFlanger, fxEq, fxDelay, fxReverb, fxReverse };
+}
 
 inline const char* fxSlotName (int s)
 {
-    static const char* n[] { "Drive", "Body Swap", "Lo-Fi", "Circuit Bend", "Chorus", "Phaser", "Flanger", "EQ", "Delay", "Reverb", "Reverse" };
+    static const char* n[] { "Drive", "Body Swap", "Lo-Fi", "Circuit Bend", "Chorus", "Phaser", "Flanger", "EQ", "Delay", "Reverb", "Reverse", "Punch", "Half-Time" };
     return n[std::clamp (s, 0, numFxSlots - 1)];
 }
 
@@ -28,7 +33,8 @@ struct FxParams
     float outGain = 1.0f;
     double bpm = 120, beatPos = 0;   // beat position at block start
     uint32_t seed = 1234;
-    std::array<int, numFxSlots> order { fxDrive, fxBody, fxLofi, fxCircuit, fxChorus, fxPhaser, fxFlanger, fxEq, fxDelay, fxReverb, fxReverse };
+    std::array<int, numFxSlots> order = defaultFxOrder();
+    float punch = 0, halftime = 0;
 };
 
 struct Biquad
@@ -63,6 +69,10 @@ public:
         for (auto& d : dly)   d.prepare ((int) (4.5f * sr));
         for (auto& d : ring)  d.prepare ((int) (1.5f * sr));
         for (auto& d : revRing) d.prepare ((int) (1.5f * sr));
+        for (auto& d : htRing) d.prepare ((int) (6.5f * sr));
+        envFast = envSlow = 0; smPunch = smHalf = 0;
+        atkFast = 1.0f - std::exp (-1.0f / (0.0008f * sr)); relFast = 1.0f - std::exp (-1.0f / (0.03f * sr));
+        atkSlow = 1.0f - std::exp (-1.0f / (0.025f * sr)); relSlow = 1.0f - std::exp (-1.0f / (0.25f * sr));
         ghostRing.prepare ((int) (1.5f * sr));
         ghostDly.prepare ((int) (4.5f * sr));
         rev.setSampleRate (sampleRate); rev.reset();
@@ -110,6 +120,8 @@ public:
                 case fxDelay:   delay (L, R, n, p); break;
                 case fxReverb:  reverb (L, R, n, p); break;
                 case fxReverse: reverseStage (L, R, n, p); break;
+                case fxPunch:   punchStage (L, R, n, p); break;
+                case fxHalftime: halftimeStage (L, R, n, p); break;
                 default: break;
             }
         }
@@ -408,6 +420,41 @@ private:
         }
     }
 
+    // Transient shaper: fast vs slow envelope, boosts the attack up to about +12 dB
+    void punchStage (float* L, float* R, int n, const FxParams& p)
+    {
+        if (p.punch <= 0.001f && smPunch <= 0.001f) return;
+        for (int i = 0; i < n; ++i)
+        {
+            smPunch += (p.punch - smPunch) * sm;
+            const float x = std::abs (L[i]) + std::abs (R[i]);
+            envFast += (x - envFast) * (x > envFast ? atkFast : relFast);
+            envSlow += (x - envSlow) * (x > envSlow ? atkSlow : relSlow);
+            const float tr = std::max (0.0f, envFast - envSlow) / (envSlow + 1.0e-3f);
+            const float g = 1.0f + std::min (3.0f, tr * 3.0f) * smPunch;
+            L[i] *= g; R[i] *= g;
+        }
+    }
+
+    // Half-speed buffer: replays each 2-beat window at half speed (half-time feel), synced to the host beat
+    void halftimeStage (float* L, float* R, int n, const FxParams& p)
+    {
+        const double beatsPerSample = p.bpm / 60.0 / sr;
+        const float winLen = (float) (2.0 / beatsPerSample);   // 2 beats of output
+        for (int i = 0; i < n; ++i)
+        {
+            htRing[0].push (L[i]); htRing[1].push (R[i]);
+            smHalf += (p.halftime - smHalf) * sm;
+            if (smHalf < 0.001f) continue;
+            const double beat = p.beatPos + beatsPerSample * i;
+            const float t = (float) (beat / 2.0 - std::floor (beat / 2.0)) * winLen;   // 0 .. winLen
+            const float d = 1.0f + t * 0.5f;                                           // read at half speed
+            const float fade = std::min ({ 1.0f, t / 256.0f, (winLen - t) / 256.0f });
+            const float wl = htRing[0].read (d) * fade, wr = htRing[1].read (d) * fade;
+            L[i] += (wl - L[i]) * smHalf; R[i] += (wr - R[i]) * smHalf;
+        }
+    }
+
     void ghostBus (float* L, float* R, const float* G, int n, const FxParams& p)
     {
         if (p.ghost <= 0.001f) return;
@@ -472,7 +519,8 @@ private:
     OnePole splitA[2], splitB[2], sideLp[2], ghostHp, tapeLp[2];
     DcBlock dc[2];
     SvfState bodyS[2][5];
-    DelayLine wowDl[2], chDl[2], flDl[2], dly[2], ring[2], revRing[2], ghostRing, ghostDly;
+    DelayLine wowDl[2], chDl[2], flDl[2], dly[2], ring[2], revRing[2], htRing[2], ghostRing, ghostDly;
+    float envFast = 0, envSlow = 0, smPunch = 0, smHalf = 0, atkFast = 0.5f, relFast = 0.01f, atkSlow = 0.01f, relSlow = 0.001f;
     juce::Reverb rev, ghostRev;
     Biquad eq[4], subsonic[2];
     float lastEqLow = 999, lastEqHigh = 999;
