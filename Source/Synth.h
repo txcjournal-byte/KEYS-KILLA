@@ -174,6 +174,13 @@ public:
                 if (! lp.on) continue;
                 float ls_ = semi + (float) (lp.octave * 12 + lp.semi) + lp.fine * 0.01f;
                 if (lp.engine == engSub) ls_ += lp.fmAmt * 24.0f * std::exp (-noteTime * 22.0f);
+                if (lp.engine == engOrchestral)   // player feel: brass scoop into the note, delayed natural vibrato on held notes
+                {
+                    const float brassAmt = clamp01 (1.0f - ctl[k].wave * 2.0f);
+                    ls_ -= 0.35f * brassAmt * std::exp (-noteTime * 28.0f);
+                    const float vr = clamp01 ((noteTime - 0.35f) * 1.6f);
+                    if (vr > 0) ls_ += 0.11f * vr * std::sin (twoPi * (5.2f * noteTime + tapePhase));
+                }
                 const float freq = std::clamp (semisToHz (ls_), 8.0f, sr * 0.45f);
                 float a = 0, b = 0;
                 layerSample (ls[k], ctl[k], lp, freq / sr, freq, a, b, wt);
@@ -490,7 +497,7 @@ private:
                 const float bL = s.brassL.lp (sL) * 1.4f, bR = s.brassR.lp (sR) * 1.4f;
                 float cL = sL, cR = sR;
                 if (wc > 0) formant (s, c, cL, cR);
-                const float bow = noise.bi() * 0.03f;
+                const float bow = noise.bi() * (0.025f + 0.09f * (1.0f - s.brassEnv));   // bow / breath scratch on the attack
                 oL = wb * bL + ws * (sL * 0.8f + bow) + wc * cL;
                 oR = wb * bR + ws * (sR * 0.8f + bow) + wc * cR;
                 oL = std::round (oL * 512.0f) / 512.0f; oR = std::round (oR * 512.0f) / 512.0f;   // cheap-workstation grit

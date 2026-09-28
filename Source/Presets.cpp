@@ -499,6 +499,88 @@ const std::vector<Preset>& factoryPresets()
         P ("Marcato Low Horns 2012", tLeads, 1, false, "Brass", { { engine, OC }, { wave, 0.8f }, { octave, -1 }, { attack, 0.01f }, { decay, 0.4f },
             { sustain, 0.3f }, { release, 0.2f }, { punch, 0.5f }, { drive, 0.2f } });
 
+        // ================= v0.4.1: full era banks (TRAP-CORE taxonomy, original synthesized sounds) =================
+        // Bank 1: 2010-2014 hard orchestral era
+        P ("Timpani Hit Stab 2010", tPads, 0, false, "Strings", { { engine, OC }, { wave, 0.4f }, { layerB, 1 }, { engineB, MD }, { octaveB, -2 },
+            { waveB, 0.2f }, { levelB, 0.8f }, { decay, 0.6f }, { sustain, 0 }, { release, 0.3f }, { punch, 0.7f }, { revMix, 0.2f } });
+        P ("Hit Orchestra Low 2011", tPads, 0, false, "Strings", { { engine, OC }, { wave, 0.2f }, { octave, -1 }, { unison, 3 }, { detune, 0.15f },
+            { layerB, 1 }, { engineB, OC }, { waveB, 0.6f }, { levelB, 0.7f }, { decay, 0.45f }, { sustain, 0 }, { release, 0.2f }, { punch, 0.6f }, { crush, 0.1f } });
+        P ("Marcato Violins 2012", tPlucks, 1, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 3 }, { detune, 0.12f }, { decay, 0.35f },
+            { sustain, 0.15f }, { release, 0.12f }, { punch, 0.5f }, { width, 0.75f }, { revMix, 0.12f } });
+        P ("Pizzicato Arp Strings 2013", tPlucks, 1, false, "Strings", { { engine, PL }, { wave, 0.45f }, { decay, 0.3f }, { sustain, 0 }, { release, 0.08f },
+            { body, 6 }, { bodyMix, 0.45f }, { punch, 0.6f }, { revMix, 0.1f } });
+        P ("Low Trombones 2011", tLeads, 0, false, "Brass", { { engine, OC }, { wave, 0.1f }, { octave, -1 }, { unison, 3 }, { detune, 0.1f }, { attack, 0.02f },
+            { decay, 0.6f }, { sustain, 0.5f }, { release, 0.25f }, { drive, 0.2f }, { revMix, 0.15f } });
+        P ("Octave Horn Stab 2013", tLeads, 1, false, "Brass", { { engine, OC }, { wave, 0.15f }, { layerB, 1 }, { engineB, OC }, { waveB, 0.15f }, { octaveB, -1 },
+            { levelB, 0.6f }, { decay, 0.3f }, { sustain, 0.1f }, { release, 0.15f }, { punch, 0.55f } });
+        P ("Full Brass Section 2014", tLeads, 1, false, "Brass", { { engine, OC }, { wave, 0.25f }, { unison, 5 }, { detune, 0.2f }, { attack, 0.03f },
+            { sustain, 0.8f }, { release, 0.3f }, { chorus, 0.2f }, { revMix, 0.25f } });
+        P ("Aah Choir Vibrato 2010", tChoir, 0, false, "", { { engine, VX }, { wave, 0.0f }, { unison, 5 }, { detune, 0.25f }, { attack, 0.3f }, { sustain, 1 },
+            { release, 1.2f }, { lfoPitch, 0.07f }, { lfoRate, 5.5f }, { crush, 0.12f }, { revMix, 0.35f } });
+        P ("Ooh Choir 16-Bit 2012", tChoir, 1, false, "", { { engine, VX }, { wave, 0.95f }, { unison, 5 }, { detune, 0.2f }, { attack, 0.35f }, { sustain, 1 },
+            { release, 1.3f }, { lfoPitch, 0.06f }, { lfoRate, 5.0f }, { crush, 0.2f }, { revMix, 0.3f } });
+        P ("Dry Harpsichord Arp 2013", tKeys, 1, false, "", { { engine, PL }, { wave, 0.9f }, { decay, 0.8f }, { sustain, 0 }, { release, 0.15f },
+            { layerB, 1 }, { engineB, PL }, { waveB, 0.9f }, { octaveB, 1 }, { levelB, 0.35f }, { filterType, 6 }, { cutoff, 2500 }, { reso, 0.3f } });
+        P ("Bell Stab Cutter 2011", tBells, 0, false, "", { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.55f }, { fdecay, 0.25f }, { decay, 0.4f },
+            { sustain, 0 }, { release, 0.2f }, { punch, 0.5f }, { eqHigh, 3 } });
+        // Bank 2: 2015-2019 melodic era
+        P ("Toy Piano Wobble 2016", tKeys, 2, false, "Piano", { { engine, MD }, { wave, 0.7f }, { octave, 1 }, { decay, 0.9f }, { sustain, 0 }, { release, 0.5f },
+            { wow, 0.5f }, { drift, 0.4f }, { alive, 3 }, { revMix, 0.3f } });
+        P ("Celeste Detuned 2017", tBells, 2, false, "Mallets", { { engine, MD }, { wave, 0.8f }, { octave, 1 }, { layerB, 1 }, { engineB, MD }, { waveB, 0.8f },
+            { octaveB, 1 }, { fineB, 18 }, { levelB, 0.6f }, { decay, 1.4f }, { sustain, 0 }, { release, 1.0f }, { wow, 0.3f }, { revMix, 0.4f } });
+        P ("Antique Music Box 2015", tBells, 2, false, "Mallets", { { engine, MD }, { wave, 0.95f }, { octave, 2 }, { decay, 1.2f }, { sustain, 0 }, { release, 1.0f },
+            { crush, 0.2f }, { wow, 0.45f }, { drift, 0.35f }, { revMix, 0.45f }, { revSize, 0.85f } });
+        P ("Bamboo Flute Night 2016", tFlutes, 2, false, "", { { engine, FL }, { wave, 0.3f }, { attack, 0.1f }, { sustain, 0.85f }, { release, 1.2f },
+            { lfoPitch, 0.05f }, { lfoRate, 4.5f }, { revMix, 0.55f }, { revType, 2 }, { alive, 2 } });
+        P ("Breathy Pan Glide 2018", tFlutes, 3, false, "", { { engine, FL }, { wave, 0.6f }, { mono, 1 }, { legato, 1 }, { glide, 0.25f }, { attack, 0.06f },
+            { sustain, 0.9f }, { release, 0.8f }, { delayMix, 0.3f }, { revMix, 0.45f }, { drift, 0.3f } });
+        P ("Shrine Flute Echo 2019", tFlutes, 3, false, "", { { engine, FL }, { wave, 0.45f }, { octave, -1 }, { attack, 0.15f }, { sustain, 0.8f },
+            { release, 1.5f }, { delayMix, 0.4f }, { delayMode, 2 }, { revMix, 0.5f }, { timeM, 0.6f } });
+        P ("Half-Speed Rhodes 2017", tKeys, 2, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 2.0f }, { sustain, 0.3f },
+            { release, 0.8f }, { halftime, 1.0f }, { chorus, 0.3f }, { wow, 0.3f }, { revMix, 0.3f } });
+        P ("Reverse Keys Swell 2019", tKeys, 3, false, "Piano", { { engine, FM }, { fmRatio, 2.0f }, { fmAmt, 0.25f }, { attack, 1.2f }, { sustain, 0.8f },
+            { release, 0.15f }, { reverse, 0.6f }, { revMix, 0.4f } });
+        P ("Clean Bell Pluck 2018", tBells, 3, false, "", { { engine, FM }, { fmRatio, 4.0f }, { fmAmt, 0.35f }, { fdecay, 0.6f }, { decay, 2.5f },
+            { sustain, 0 }, { release, 2.0f }, { revMix, 0.35f }, { delayMix, 0.2f } });
+        P ("Additive Glass Bell 2016", tBells, 2, false, "", { { engine, OR }, { wave, 0.8f }, { octave, 1 }, { decay, 2.0f }, { sustain, 0 },
+            { release, 1.5f }, { body, 3 }, { bodyMix, 0.5f }, { revMix, 0.4f } });
+        // Bank 3: 2020-2023 rage / drill / dark era
+        P ("Hard Clip Supersaw 2021", tLeads, 4, false, "", { { engine, VA }, { wave, 0.0f }, { unison, 8 }, { detune, 0.5f }, { cutoff, 6000 },
+            { sustain, 1 }, { release, 0.2f }, { glide, 0.08f }, { drive, 0.6f }, { driveType, 2 }, { delayMix, 0.2f } });
+        P ("Hyper Glide Lead 2022", tLeads, 4, false, "", { { engine, VA }, { wave, 0.0f }, { unison, 7 }, { detune, 0.4f }, { mono, 1 }, { legato, 1 },
+            { glide, 0.2f }, { sustain, 1 }, { release, 0.15f }, { drive, 0.4f }, { driveType, 3 }, { revMix, 0.2f } });
+        P ("Reese Horn Braam 2020", tLeads, 4, false, "Brass", { { engine, OC }, { wave, 0.1f }, { octave, -1 }, { layerB, 1 }, { engineB, VA }, { waveB, 0.0f },
+            { unisonB, 3 }, { detuneB, 0.35f }, { octaveB, -2 }, { levelB, 0.6f }, { attack, 0.05f }, { sustain, 1 }, { release, 1.2f },
+            { drive, 0.45f }, { driveType, 1 }, { revMix, 0.35f } });
+        P ("Drill Staccato Strings 2021", tPlucks, 4, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 3 }, { detune, 0.2f }, { decay, 0.25f },
+            { sustain, 0 }, { release, 0.1f }, { drift, 0.4f }, { driveType, 1 }, { drive, 0.25f }, { punch, 0.5f } });
+        P ("Tape Warped Violins 2022", tPads, 4, false, "Strings", { { engine, OC }, { wave, 0.5f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.2f },
+            { sustain, 1 }, { release, 1.0f }, { wow, 0.5f }, { drift, 0.6f }, { tape, 1 }, { revMix, 0.3f } });
+        P ("Folded Bell Crush 2023", tBells, 4, false, "", { { engine, FM }, { fmRatio, 3.5f }, { fmAmt, 0.4f }, { decay, 1.2f }, { sustain, 0 },
+            { drive, 0.6f }, { driveType, 4 }, { crush, 0.35f }, { revMix, 0.2f } });
+        P ("Bitcrushed Flute 2021", tFlutes, 4, false, "", { { engine, FL }, { wave, 0.5f }, { sustain, 0.85f }, { release, 0.4f }, { crush, 0.55f },
+            { drive, 0.3f }, { delayMix, 0.25f } });
+        P ("Dark Opera Pad 2022", tChoir, 4, false, "", { { engine, VX }, { wave, 0.3f }, { octave, -1 }, { unison, 6 }, { detune, 0.35f }, { attack, 0.6f },
+            { sustain, 1 }, { release, 2.0f }, { drive, 0.3f }, { driveType, 1 }, { revMix, 0.45f }, { revType, 2 } });
+        // Bank 4: 2024-2026 hybrid / granular era
+        P ("Grain Choir Cloud 2025", tChoir, 5, false, "Texture", { { engine, VX }, { wave, 0.6f }, { unison, 7 }, { detune, 0.45f }, { attack, 1.0f },
+            { sustain, 1 }, { release, 3.5f }, { reverse, 0.4f }, { alive, 4 }, { revMix, 0.5f }, { revType, 2 }, { timeM, 0.75f } });
+        P ("Cello To Digital Morph 2026", tPads, 5, false, "Strings", { { engine, OC }, { wave, 0.5f }, { octave, -1 }, { layerB, 1 }, { engineB, WT },
+            { waveB, 0.7f }, { warpModeB, 2 }, { levelB, 0.7f }, { attack, 0.3f }, { sustain, 1 }, { release, 1.5f }, { revMix, 0.3f },
+            { mmSrc (0), (float) srcModWheel }, { mmDst (0), (float) dstLevelB }, { mmAmt (0), 0.8f } });
+        P ("Hiss Sub Drone 2024", tExperimental, 5, false, "Texture", { { engine, SB }, { octave, -1 }, { wave, 0.3f }, { attack, 1.5f }, { sustain, 1 },
+            { release, 3.0f }, { layerB, 1 }, { engineB, VA }, { waveB, 0.9f }, { octaveB, 2 }, { levelB, 0.25f }, { crush, 0.45f }, { wow, 0.4f }, { revMix, 0.4f } });
+        P ("Formant Chop Piano 2025", tKeys, 5, false, "Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.3f }, { decay, 0.3f }, { sustain, 0 },
+            { layerB, 1 }, { engineB, VX }, { waveB, 0.4f }, { levelB, 0.5f }, { circuit, 0.45f }, { circRate, 1 }, { alive, 3 } });
+        P ("Vocal Slice Keys 2026", tKeys, 5, false, "", { { engine, VX }, { wave, 0.8f }, { decay, 0.18f }, { sustain, 0 }, { release, 0.08f },
+            { circuit, 0.35f }, { circRate, 2 }, { halftime, 0.25f }, { delayMix, 0.2f } });
+        P ("Supertrap Glass Keys 2026", tKeys, 5, false, "", { { engine, WT }, { wave, 0.35f }, { warpMode, 1 }, { decay, 1.0f }, { sustain, 0.2f },
+            { release, 0.8f }, { body, 3 }, { bodyMix, 0.4f }, { alive, 3 }, { drift, 0.25f }, { revMix, 0.35f } });
+        P ("Industrial Pipe Keys 2025", tKeys, 5, false, "", { { engine, MD }, { wave, 0.6f }, { decay, 0.9f }, { sustain, 0 }, { body, 4 }, { bodyMix, 0.6f },
+            { drive, 0.4f }, { driveType, 2 }, { punch, 0.4f }, { revMix, 0.2f } });
+        P ("Frozen Strings Hybrid 2026", tPads, 5, false, "Texture", { { engine, OC }, { wave, 0.5f }, { unison, 5 }, { detune, 0.3f }, { attack, 0.8f },
+            { sustain, 1 }, { release, 4.0f }, { layerB, 1 }, { engineB, WT }, { waveB, 0.5f }, { levelB, 0.4f }, { timeM, 0.93f }, { alive, 3 } });
+
         // tag the older 808 bass patches for the 808 chip
         for (auto& pr : v) if (pr.tile == tBass && pr.name.contains ("808")) pr.sub = "808";
 
