@@ -1,3 +1,4 @@
+#include <map>
 // Offline render of every factory preset: checks for NaN/Inf, silence, DC and loudness spread.
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
@@ -12,7 +13,7 @@ static bool renderPreset (KeysKillaProcessor& p, int idx, double sr, float& rmsD
     if (chord) p.apvts.getParameter (ID::chord)->setValueNotifyingHost (1.0f);
     if (arp)   p.apvts.getParameter (ID::arp)->setValueNotifyingHost (1.0f);
     p.prepareToPlay (sr, 480);
-    const bool bass = factoryPresets()[(size_t) idx].tile == tBass;
+    const bool bass = factoryPresets()[(size_t) idx].isBass();
     const int root = bass ? 36 : 60;
     const int block = 480;
     juce::AudioBuffer<float> buf (2, block);
@@ -64,6 +65,32 @@ static int unitTests()
         float err = 0;
         for (int i = 0; i < 64; ++i) { const float ph = (float) i / 64.0f; err = std::max (err, std::abs (wt.read (ph, 0.0f, 0.001f) - std::sin (kk::twoPi * ph))); }
         check (err < 0.02f, "wavetable sine frame");
+    }
+    // ERA / FUTURE / BREED extremes stay finite and bounded on every category
+    {
+        KeysKillaProcessor p; p.prepareToPlay (48000, 256);
+        juce::AudioBuffer<float> b (2, 256);
+        float worst = 0; bool finite = true;
+        const auto& ps = factoryPresets();
+        for (int i = 0; i < (int) ps.size(); i += 7)
+        {
+            p.setCurrentProgram (i);
+            if (i % 3 == 0) p.breedWith ((i * 13) % (int) ps.size());
+            set (p, ID::era, (float) ((i / 7) % 7)); set (p, ID::future, (i % 2) ? 1.0f : 0.5f);
+            for (int k = 0; k < 120; ++k)
+            {
+                juce::MidiBuffer m;
+                if (k == 0) { m.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 127), 0); m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 127), 0); }
+                if (k == 100) m.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+                p.processBlock (b, m);
+                for (int ch = 0; ch < 2; ++ch) for (int n = 0; n < 256; ++n) { const float x = b.getSample (ch, n); finite &= std::isfinite (x); worst = std::max (worst, std::abs (x)); }
+            }
+            juce::MidiBuffer m; m.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+            for (int k = 0; k < 400; ++k) { p.processBlock (b, m); m.clear(); }   // let tails die
+        }
+        check (finite, "ERA/FUTURE finite");
+        check (worst <= 1.01f, "ERA/FUTURE output bounded");
+        std::printf ("ERA/FUTURE sweep peak %.3f\n", worst);
     }
     // render determinism (offline render == playback)
     {
@@ -194,10 +221,24 @@ int main (int argc, char** argv)
     }
     if (argc > 1 && juce::String (argv[1]) == "-stats")
     {
-        int ex = 0, bass = 0; std::array<int, numTiles> perTile {};
-        for (auto& pr : factoryPresets()) { ex += pr.exclusive; bass += pr.tile == tBass; ++perTile[(size_t) pr.tile]; }
+        int ex = 0, bass = 0; std::array<int, numCategories> perTile {}; std::array<int, numEras> perEra {};
+        std::map<juce::String, int> perSub;
+        for (auto& pr : factoryPresets()) { ex += pr.exclusive; bass += pr.isBass(); ++perTile[(size_t) pr.cat]; ++perEra[(size_t) pr.era];
+                                            ++perSub[categoryNames()[pr.cat] + " / " + pr.sub]; }
         std::printf ("total %d, exclusive %d, bass %d\n", (int) factoryPresets().size(), ex, bass);
-        for (int t = 0; t < numTiles; ++t) std::printf ("  %s %d\n", tileNames()[t].toRawUTF8(), perTile[(size_t) t]);
+        for (int t = 0; t < numCategories; ++t) std::printf ("  %s %d\n", categoryNames()[t].toRawUTF8(), perTile[(size_t) t]);
+        for (int e = 0; e < numEras; ++e) std::printf ("  era %s %d\n", eraNames()[e].toRawUTF8(), perEra[(size_t) e]);
+        int missing = 0;
+        for (int c = 0; c < numCategories; ++c)
+            for (auto& sname : subcategoryNames (c))
+                if (perSub[categoryNames()[c] + " / " + sname] == 0) { std::printf ("  EMPTY SUBCATEGORY %s / %s\n", categoryNames()[c].toRawUTF8(), sname.toRawUTF8()); ++missing; }
+        for (auto& [k, n] : perSub)
+        {
+            bool known = false;
+            for (int c = 0; c < numCategories; ++c) for (auto& sname : subcategoryNames (c)) known |= k == categoryNames()[c] + " / " + sname;
+            if (! known) std::printf ("  UNKNOWN SUBCATEGORY %s (%d)\n", k.toRawUTF8(), n);
+        }
+        std::printf ("  empty subcategories: %d\n", missing);
         return 0;
     }
     if (argc > 1 && juce::String (argv[1]) == "-bench")   // CPU: 8 held notes, 20 s of audio at 48 kHz, normal and eco
@@ -328,7 +369,7 @@ int main (int argc, char** argv)
         {
             p.setCurrentProgram (d % p.getNumPrograms());
             p.apvts.getParameter (ID::chaos)->setValueNotifyingHost ((float) (d % 10) / 9.0f);
-            p.rollDice (factoryPresets()[(size_t) (d % p.getNumPrograms())].tile);
+            p.rollDice (factoryPresets()[(size_t) (d % p.getNumPrograms())].cat);
             juce::AudioBuffer<float> buf (2, 512); p.prepareToPlay (48000, 512);
             bool f = true; float pk = 0;
             for (int b = 0; b < 100; ++b)

@@ -17,12 +17,31 @@ public:
         addAndMakeVisible (search);
 
         category.addItem ("All categories", 1);
-        for (int t = 0; t < numTiles; ++t) category.addItem (tileNames()[t], t + 2);
-        category.onChange = [this] { refresh(); };
+        for (int c = 0; c < numCategories; ++c) category.addItem (categoryNames()[c], c + 2);
+        category.onChange = [this] { fillSubs(); refresh(); };
+        subcat.onChange = [this] { refresh(); };
+        fillSubs();
         era.addItem ("All eras", 1);
-        const char* eraLabels[] { "2010-12", "2013-15", "2016-18", "2019-21", "2022-24", "2025-26" };
-        for (int e = 0; e < 6; ++e) era.addItem (eraLabels[e], e + 2);
+        for (int e = 0; e < numEras; ++e) era.addItem (eraNames()[e], e + 2);
         era.onChange = [this] { refresh(); };
+        auto fill = [this] (ComboBox& cb, const String& all, const StringArray& items)
+        {
+            cb.addItem (all, 1);
+            for (int i = 0; i < items.size(); ++i) cb.addItem (items[i], i + 2);
+            cb.setSelectedId (1, dontSendNotification);
+            cb.onChange = [this] { refresh(); };
+            addAndMakeVisible (cb);
+        };
+        fill (mood, "Mood", moodNames());
+        fill (character, "Character", characterNames());
+        fill (artic, "Articulation", articulationNames());
+        fill (voicing, "Mono/Poly", { "Mono", "Poly" });
+        fill (bright, "Brightness", { "Dark (1-2)", "Medium (3)", "Bright (4-5)" });
+        fill (motion, "Movement", { "Static (0-1)", "Moving (2-3)", "Animated (4-5)" });
+        fill (cpuSel, "CPU", { "Light", "Medium", "Heavy" });
+        category.setTooltip ("Category"); subcat.setTooltip ("Subcategory"); era.setTooltip ("Era 2010 -> FUTURE");
+        mood.setTooltip ("Mood"); character.setTooltip ("Character"); artic.setTooltip ("Articulation");
+        voicing.setTooltip ("Mono / poly"); bright.setTooltip ("Brightness"); motion.setTooltip ("Movement"); cpuSel.setTooltip ("CPU class");
         for (auto* b : { &exclusiveOnly, &favOnly, &userOnly })
         {
             b->setClickingTogglesState (true);
@@ -30,7 +49,7 @@ public:
             addAndMakeVisible (*b);
         }
         exclusiveOnly.setButtonText ("EXCLUSIVE"); favOnly.setButtonText ("FAVOURITES"); userOnly.setButtonText ("USER");
-        addAndMakeVisible (category); addAndMakeVisible (era);
+        addAndMakeVisible (category); addAndMakeVisible (subcat); addAndMakeVisible (era);
         list.setModel (this);
         list.setRowHeight (40);
         addAndMakeVisible (list);
@@ -41,9 +60,10 @@ public:
         addAndMakeVisible (count);
     }
 
-    void open (int tile, int eraIdx, bool exclusive)
+    void open (int cat, int eraIdx, bool exclusive)
     {
-        category.setSelectedId (tile >= 0 ? tile + 2 : 1, dontSendNotification);
+        category.setSelectedId (cat >= 0 ? cat + 2 : 1, dontSendNotification);
+        fillSubs();
         era.setSelectedId (eraIdx >= 0 ? eraIdx + 2 : 1, dontSendNotification);
         exclusiveOnly.setToggleState (exclusive, dontSendNotification);
         refresh();
@@ -62,12 +82,18 @@ public:
         closeBtn.setBounds (getWidth() - 140, 14, 116, 36);
         auto r = getLocalBounds().reduced (24).withTrimmedTop (34);
         auto top = r.removeFromTop (44);
-        search.setBounds (top.removeFromLeft (440)); top.removeFromLeft (10);
-        category.setBounds (top.removeFromLeft (220)); top.removeFromLeft (8);
-        era.setBounds (top.removeFromLeft (170)); top.removeFromLeft (8);
-        exclusiveOnly.setBounds (top.removeFromLeft (170)); top.removeFromLeft (6);
-        favOnly.setBounds (top.removeFromLeft (180)); top.removeFromLeft (6);
-        userOnly.setBounds (top.removeFromLeft (110));
+        search.setBounds (top.removeFromLeft (350)); top.removeFromLeft (8);
+        category.setBounds (top.removeFromLeft (250)); top.removeFromLeft (6);
+        subcat.setBounds (top.removeFromLeft (250)); top.removeFromLeft (6);
+        era.setBounds (top.removeFromLeft (170)); top.removeFromLeft (6);
+        exclusiveOnly.setBounds (top.removeFromLeft (200)); top.removeFromLeft (6);
+        favOnly.setBounds (top);
+        r.removeFromTop (6);
+        auto row2 = r.removeFromTop (38);
+        userOnly.setBounds (row2.removeFromRight (110));
+        const int w = row2.getWidth() / 7;
+        for (auto* cb : { &mood, &character, &artic, &voicing, &bright, &motion, &cpuSel })
+            cb->setBounds (row2.removeFromLeft (w).reduced (3, 0));
         r.removeFromTop (8);
         count.setBounds (r.removeFromBottom (28));
         list.setBounds (r);
@@ -78,13 +104,16 @@ public:
         entries.clear();
         const auto q = search.getText().trim().toLowerCase();
         const auto favs = getFavourites ? getFavourites() : StringArray();
-        const int cat = category.getSelectedId() - 2, er = era.getSelectedId() - 2;
+        const int cat = category.getSelectedId() - 2, er = era.getSelectedId() - 2, sb = subcat.getSelectedId() - 2;
+        const int md = mood.getSelectedId() - 2, chx = character.getSelectedId() - 2, ar = artic.getSelectedId() - 2;
+        const int vo = voicing.getSelectedId() - 2, br = bright.getSelectedId() - 2, mv = motion.getSelectedId() - 2, cp = cpuSel.getSelectedId() - 2;
+        const bool tagFilter = sb >= 0 || md >= 0 || chx >= 0 || ar >= 0 || vo >= 0 || br >= 0 || mv >= 0 || cp >= 0;
         auto matches = [&] (const String& hay) { return q.isEmpty() || hay.toLowerCase().contains (q); };
         if (! exclusiveOnly.getToggleState())
             for (auto& f : proc.userPresets())
             {
                 const auto name = f.getFileNameWithoutExtension();
-                if (cat >= 0 || er >= 0) continue;
+                if (cat >= 0 || er >= 0 || tagFilter) continue;
                 if (favOnly.getToggleState() && ! favs.contains (name)) continue;
                 if (matches (name + " user")) entries.push_back ({ name, "USER", -1, f });
             }
@@ -94,14 +123,20 @@ public:
             for (int i = 0; i < (int) ps.size(); ++i)
             {
                 const auto& pr = ps[(size_t) i];
-                if (cat >= 0 && pr.tile != cat) continue;
+                if (cat >= 0 && pr.cat != cat) continue;
+                if (sb >= 0 && pr.sub != subcategoryNames (cat)[sb]) continue;
                 if (er >= 0 && pr.era != er) continue;
+                if (md >= 0 && pr.mood != moodNames()[md]) continue;
+                if (chx >= 0 && ! pr.character.contains (characterNames()[chx])) continue;
+                if (ar >= 0 && pr.articulation != articulationNames()[ar]) continue;
+                if (vo >= 0 && pr.mono != (vo == 0)) continue;
+                if (br >= 0 && (br == 0 ? pr.brightness > 2 : br == 1 ? pr.brightness != 3 : pr.brightness < 4)) continue;
+                if (mv >= 0 && (mv == 0 ? pr.movement > 1 : mv == 1 ? (pr.movement < 2 || pr.movement > 3) : pr.movement < 4)) continue;
+                if (cp >= 0 && pr.cpu != cp + 1) continue;
                 if (exclusiveOnly.getToggleState() && ! pr.exclusive) continue;
                 if (favOnly.getToggleState() && ! favs.contains (pr.name)) continue;
-                const String eraTxt = pr.era >= 0 ? eraNames()[pr.era] : String ("EXPERIMENTAL");
-                String info = tileNames()[pr.tile] + (pr.sub.isNotEmpty() ? " / " + pr.sub.toUpperCase() : String()) + "  -  " + eraTxt
-                            + (pr.exclusive ? "  -  EXCLUSIVE" : "");
-                if (matches (pr.name + " " + info)) entries.push_back ({ pr.name, info, i, {} });
+                const auto info = pr.info();
+                if (q.isEmpty() || pr.searchText().contains (q)) entries.push_back ({ pr.name, info, i, {} });
             }
         }
         list.updateContent();
@@ -126,9 +161,9 @@ private:
         g.setColour (favs.contains (e.name) ? s.accent : s.textDim.withAlpha (0.5f));
         g.setFont (serif (26.0f)); g.drawText (favs.contains (e.name) ? "*" : "+", 6, 0, 30, h, Justification::centred);
         g.setColour (s.text); g.setFont (serif (23.0f, false, 0.05f));
-        g.drawText (e.name, 44, 0, w / 2, h, Justification::centredLeft);
-        g.setColour (s.textDim); g.setFont (serif (17.0f, false, 0.12f));
-        g.drawText (e.info, w / 2, 0, w / 2 - 10, h, Justification::centredRight);
+        g.drawText (e.name, 44, 0, w * 2 / 5, h, Justification::centredLeft);
+        g.setColour (s.textDim); g.setFont (serif (16.0f, false, 0.06f));
+        g.drawFittedText (e.info, w * 2 / 5 + 50, 0, w * 3 / 5 - 60, h, Justification::centredRight, 1, 0.8f);
     }
 
     void activate (int row, bool close)
@@ -170,7 +205,16 @@ private:
     KeysKillaProcessor& proc;
     KKLookAndFeel& lnf;
     TextEditor search;
-    ComboBox category, era;
+    ComboBox category, subcat, era, mood, character, artic, voicing, bright, motion, cpuSel;
+    void fillSubs()
+    {
+        subcat.clear (dontSendNotification);
+        subcat.addItem ("All subcategories", 1);
+        const int c = category.getSelectedId() - 2;
+        if (c >= 0) { const auto& subs = subcategoryNames (c); for (int i = 0; i < subs.size(); ++i) subcat.addItem (subs[i], i + 2); }
+        subcat.setSelectedId (1, dontSendNotification);
+        subcat.setEnabled (c >= 0);
+    }
     TextButton exclusiveOnly, favOnly, userOnly, closeBtn;
     Label count;
     ListBox list;

@@ -138,6 +138,10 @@ namespace ID
     inline constexpr const char* timeM    = "timeMacro";  // TIGHT - NATURAL - DREAM - FROZEN
     inline constexpr const char* punch    = "punchFx";    // transient shaper
     inline constexpr const char* halftime = "halftime";   // half-speed buffer mix
+    // v0.5
+    inline constexpr const char* era      = "era";        // ERA morph 0..6 (2010-12 ... FUTURE)
+    inline constexpr const char* eraHome  = "eraHome";    // the era the preset was designed in
+    inline constexpr const char* future   = "future";     // FUTURE: ORIGINAL -> HYBRID -> UNKNOWN
 
     // mod matrix slots: mmSrc1..8, mmDst1..8, mmAmt1..8
     inline juce::String mmSrc (int i) { return "mmSrc" + juce::String (i + 1); }
@@ -377,6 +381,14 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     f (ID::timeM, "Time", 0, 1, 0.33f);
     f (ID::punch, "Punch", 0, 1, 0);
     f (ID::halftime, "Half-Time", 0, 1, 0);
+    {
+        auto eraText = [] (float v, int) { static const char* n[] { "2010", "2013", "2016", "2019", "2022", "2025", "FUTURE" };
+                                           const int i = juce::jlimit (0, 6, (int) std::round (v)); return juce::String (n[i]) + (std::abs (v - (float) i) > 0.05f ? "~" : ""); };
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { ID::era, 1 }, "ERA", NormalisableRange<float> (0.0f, 6.0f), 0.0f,
+                                                     AudioParameterFloatAttributes().withStringFromValueFunction (eraText)));
+    }
+    i (ID::eraHome, "ERA Home", 0, 6, 0);
+    f (ID::future, "FUTURE", 0, 1, 0);
 
     for (int s = 0; s < numModSlots; ++s)
     {

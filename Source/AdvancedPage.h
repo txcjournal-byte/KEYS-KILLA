@@ -315,7 +315,7 @@ public:
             const auto& ps = factoryPresets();
             for (int i = 0; i < (int) ps.size(); ++i)
                 if (! ps[(size_t) i].name.endsWith (" Lo-Fi") && ! ps[(size_t) i].name.endsWith (" Dark") && ! ps[(size_t) i].name.endsWith (" Blown"))
-                    cb.addItem (ps[(size_t) i].name + "  (" + tileNames()[ps[(size_t) i].tile] + ")", i + 2);
+                    cb.addItem (ps[(size_t) i].name + "  (" + categoryNames()[ps[(size_t) i].cat] + ")", i + 2);
             cb.setSelectedId (proc.morphCorner (c) + 2, dontSendNotification);
             cb.setTooltip ("Preset placed in this ERA MORPH corner. Moving the XY pad blends the corner sounds.");
             cb.onChange = [this, c] { proc.setMorphCorner (c, boxes[(size_t) c].getSelectedId() - 2); };
@@ -437,7 +437,7 @@ public:
                       revMix, revSize, revType, freeze, width, gain },
               { new FxOrderList (proc, lnf) }, 2);
         page ("EXCLUSIVE", { ghost, ghostOct, ghostRev, ghostBlur, bend, bendMode, bendSemis, tape, circuit, circRate, body, bodyMix,
-                             chaos, morphX, morphY, seed, alive, drift },
+                             era, future, chaos, morphX, morphY, seed, alive, drift },
               { new MorphCorners (proc), new DiceLocks (proc) }, 3);
         page ("PLAY", { mono, legato, glide, bendRange, bassMode, keyLock, key, scale, chord, chordType, strum,
                         arp, arpRate, arpMode, arpOct, arpSwing, arpGate }, {}, 0);

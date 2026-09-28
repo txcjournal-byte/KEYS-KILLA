@@ -17,6 +17,8 @@ SKINS = {
         knobs=[((x, 650), 50, 82) for x in (166, 330, 494, 655, 816, 977)] + [((x, 540), 27, 46) for x in (1206, 1335, 1461)],
         patches=[((1370, 357), (1450, 357), 30), ((1165, 465), (1206, 465), 11)],
         name_box=(775, 118, 1085, 158),
+        tiles=[(43, 127), (133, 231), (237, 330), (336, 433), (440, 539), (546, 649), (654, 751), (757, 856), (862, 960), (966, 1076)],
+        label_rows=(398, 424),
         white=(244, 884, 262, 930), black=(175, 805, 192, 880)),
     "chrome": dict(
         accent="blue",
@@ -25,6 +27,8 @@ SKINS = {
         knobs=[((x, 657), 49, 80) for x in (158, 319, 480, 639, 797, 958)] + [((x, 547), 33, 56) for x in (1190, 1329, 1472)],
         patches=[((1360, 367), (1436, 367), 30), ((1150, 478), (1201, 478), 11)],
         name_box=(792, 110, 1068, 154),
+        tiles=[(47, 128), (135, 224), (231, 319), (325, 415), (421, 515), (521, 619), (626, 722), (729, 826), (832, 927), (933, 1052)],
+        label_rows=(405, 433),
         white=(197, 865, 220, 915), black=(185, 798, 200, 872)),
 }
 
@@ -60,6 +64,14 @@ for name, s in SKINS.items():
     band = np.concatenate([img[y0:y0 + 3, x0:x1], img[y1 - 3:y1, x0:x1]]).reshape(-1, 3).mean(0)
     grad = np.linspace(0.96, 1.04, y1 - y0)[:, None, None]
     img[y0:y1, x0:x1] = np.clip(band[None, None, :] * grad, 0, 255)
+    # tile captions are drawn by the plugin (categories changed in v0.5): wipe the baked labels
+    y0, y1 = s["label_rows"]
+    for (tx0, tx1) in s["tiles"]:
+        a, b = tx0 + 6, tx1 - 6
+        left = img[y0:y1, a - 2:a + 1].mean(1)
+        right = img[y0:y1, b:b + 3].mean(1)
+        t = np.linspace(0, 1, b - a)[None, :, None]
+        img[y0:y1, a:b] = left[:, None, :] * (1 - t) + right[:, None, :] * t
     out = Image.fromarray(img.clip(0, 255).astype(np.uint8))
     out.save(OUT + name + "_bg.jpg", quality=90, optimize=True)
     src = Image.open(SRC + name + ".webp").convert("RGB")

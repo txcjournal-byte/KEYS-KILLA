@@ -180,7 +180,7 @@ struct Geo
     Rectangle<int> prev, name, heart, next, save, menu, skin;
     std::array<Rectangle<int>, 10> tiles;
     Rectangle<int> subBar;
-    std::array<Point<int>, 6> era;
+    std::array<Point<int>, 7> era;   // 2010 ... 2025, FUTURE
     Rectangle<int> exclusive, dice, chaos, xy;
     std::array<Point<int>, 6> macro; int macroCap, macroArc, macroLabelY;
     std::array<Point<int>, 3> small; int smallCap, smallArc;
@@ -201,6 +201,7 @@ static const Geo& geo (int skin)
         g.subBar = R (60, 440, 1040, 461);
         const int ex[6] { 86, 203, 321, 442, 561, 678 };
         for (int i = 0; i < 6; ++i) g.era[(size_t) i] = { ex[i], 494 };
+        g.era[6] = { 785, 494 };
         g.exclusive = R (833, 465, 1043, 507); g.dice = R (1112, 290, 1262, 446); g.chaos = R (1110, 468, 1262, 489); g.xy = R (1312, 300, 1508, 443);
         const int mx[6] { 158, 319, 480, 639, 797, 958 };
         for (int i = 0; i < 6; ++i) g.macro[(size_t) i] = { mx[i], 657 };
@@ -222,6 +223,7 @@ static const Geo& geo (int skin)
         g.subBar = R (56, 431, 1066, 452);
         const int ex[6] { 94, 211, 331, 451, 568, 686 };
         for (int i = 0; i < 6; ++i) g.era[(size_t) i] = { ex[i], 487 };
+        g.era[6] = { 792, 487 };
         g.exclusive = R (849, 457, 1067, 497); g.dice = R (1125, 280, 1275, 450); g.chaos = R (1133, 455, 1269, 476); g.xy = R (1320, 300, 1506, 440);
         const int mx[6] { 166, 330, 494, 655, 816, 977 };
         for (int i = 0; i < 6; ++i) g.macro[(size_t) i] = { mx[i], 650 };
@@ -398,14 +400,24 @@ private:
 class EraOverlay : public Component, public SettableTooltipClient
 {
 public:
-    EraOverlay (KKLookAndFeel& l, const int& s) : lnf (l), skin (s) { setTooltip ("Filter presets by era. Click again to show all eras."); }
-    std::function<void (int)> onSelect;
+    EraOverlay (KKLookAndFeel& l, const int& s) : lnf (l), skin (s)
+    {
+        setTooltip ("Eras 2010 -> FUTURE. Click: show presets from that era (click again for all).  Right-click: move the current sound to that era.");
+    }
+    std::function<void (int)> onSelect, onMorph;
     int selected = -1;
     Point<int> origin;
     void paint (Graphics& g) override
     {
-        if (selected < 0) return;
         const auto& s = *lnf.skin;
+        // FUTURE is not printed on the skin: draw its stop in the same style
+        const auto f = (geo (skin).era[6] - origin).toFloat();
+        g.setColour (s.dark ? Colour (0xff1a1515) : Colour (0xff9aa3ad)); g.fillEllipse (Rectangle<float> (15, 15).withCentre (f));
+        g.setColour (s.dark ? Colour (0xffe8e2e2) : Colour (0xfff7f8fa)); g.fillEllipse (Rectangle<float> (11, 11).withCentre (f));
+        g.setColour (s.dark ? Colour (0xffe8e2e2) : Colour (0xff1a1d21));
+        g.setFont (serif (17.0f, ! s.dark, s.dark ? 0.08f : 0.02f));
+        g.drawText ("FUTURE", Rectangle<float> (90, 20).withCentre (f.translated (0, s.dark ? -18 : -24)), Justification::centred);
+        if (selected < 0) return;
         const auto p = (geo (skin).era[(size_t) selected] - origin).toFloat();
         g.setColour (s.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (30, 30).withCentre (p));
         g.setColour (s.accent.withAlpha (0.5f));  g.fillEllipse (Rectangle<float> (18, 18).withCentre (p));
@@ -416,8 +428,24 @@ public:
     void mouseUp (const MouseEvent& e) override
     {
         int best = 0;
-        for (int i = 1; i < 6; ++i)
+        for (int i = 1; i < 7; ++i)
             if (std::abs (geo (skin).era[(size_t) i].x - origin.x - e.x) < std::abs (geo (skin).era[(size_t) best].x - origin.x - e.x)) best = i;
+        if (e.mods.isPopupMenu())
+        {
+            PopupMenu m;
+            m.addSectionHeader ("ERA " + eraNames()[best]);
+            m.addItem (1, "Move this sound to " + eraNames()[best]);
+            m.addItem (2, "Back to the sound's own era");
+            m.addItem (3, "Show presets from " + eraNames()[best]);
+            m.showMenuAsync (PopupMenu::Options(), [this, best, safe = SafePointer<EraOverlay> (this)] (int r)
+            {
+                if (safe == nullptr || r == 0) return;
+                if (r == 1 && onMorph) onMorph (best);
+                if (r == 2 && onMorph) onMorph (-1);
+                if (r == 3) { selected = best; repaint(); if (onSelect) onSelect (selected); }
+            });
+            return;
+        }
         selected = selected == best ? -1 : best;
         repaint();
         if (onSelect) onSelect (selected);
@@ -427,44 +455,72 @@ private:
 };
 
 //==============================================================================
-// Sub-categories from the spec that have no tile of their own
-struct SubCat { const char* label; const char* sub; };
-static const std::array<SubCat, 10> subCats { { { "PIANO", "Piano" }, { "ORGANS", "Organs" }, { "STRINGS", "Strings" }, { "BRASS", "Brass" },
-                                                { "GUITARS", "Guitars" }, { "MALLETS", "Mallets" }, { "ARPS", "Arps" },
-                                                { "808", "808" }, { "TEXTURE", "Texture" }, { "FX", "FX" } } };
-
+// Category chips of the selected tile, then the subcategories of the selected category
 class SubChips : public Component, public SettableTooltipClient
 {
 public:
-    explicit SubChips (KKLookAndFeel& l) : lnf (l) { setTooltip ("Sub-categories: piano, organs, strings, brass, guitars, mallets, arps, 808, textures and FX."); }
-    std::function<void (int)> onSelect;
-    int selected = -1;
+    explicit SubChips (KKLookAndFeel& l) : lnf (l) { setTooltip ("Categories of this tile, then their subcategories. Click a subcategory again to show the whole category."); }
+    std::function<void (int kind, int index)> onSelect;   // kind 0 = category, 1 = subcategory
+
+    void show (int tile, int cat, int sub)
+    {
+        items.clear();
+        if (tile >= 0)
+            for (int c : tileCategories (tile)) items.push_back ({ categoryNames()[c], 0, c });
+        if (cat >= 0)
+        {
+            const auto& subs = subcategoryNames (cat);
+            for (int i = 0; i < subs.size(); ++i) items.push_back ({ subs[i].toUpperCase(), 1, i });
+        }
+        selCat = cat; selSub = sub;
+        layoutItems();
+        repaint();
+    }
+    void resized() override { layoutItems(); }
+
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        const float w = (float) getWidth() / (float) subCats.size();
-        for (size_t i = 0; i < subCats.size(); ++i)
+        for (auto& it : items)
         {
-            auto r = Rectangle<float> (w * (float) i, 0, w, (float) getHeight()).reduced (5, 1);
-            const bool on = (int) i == selected;
-            g.setColour (s.dark ? Colour (0xcc0c0909) : Colour (0xccf4f6f8));
+            auto r = it.area.reduced (3, 1);
+            const bool on = it.kind == 0 ? it.index == selCat : it.index == selSub;
+            g.setColour (it.kind == 0 ? (s.dark ? Colour (0xee1a0d0d) : Colour (0xeedde4ec)) : (s.dark ? Colour (0xcc0c0909) : Colour (0xccf4f6f8)));
             g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
             if (on) drawGlowFrame (g, r, s.accent, r.getHeight() * 0.5f);
             else { g.setColour (s.dark ? Colour (0x55ffffff) : Colour (0x66202428)); g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f); }
             g.setColour (on ? (s.dark ? s.accent.brighter (0.3f) : Colour (0xff0b3d73)) : (s.dark ? Colour (0xffd9d4d4) : Colour (0xff1a1d21)));
-            g.setFont (serif (12.0f, ! s.dark, 0.1f));
-            g.drawText (subCats[i].label, r, Justification::centred);
+            g.setFont (serif (it.kind == 0 ? 12.5f : 11.0f, it.kind == 0 || ! s.dark, it.kind == 0 ? 0.12f : 0.02f));
+            g.drawFittedText (it.label, r.toNearestInt(), Justification::centred, 1, 0.7f);
         }
     }
     void mouseUp (const MouseEvent& e) override
     {
-        const int i = jlimit (0, (int) subCats.size() - 1, e.x * (int) subCats.size() / jmax (1, getWidth()));
-        selected = selected == i ? -1 : i;
-        repaint();
-        if (onSelect) onSelect (selected);
+        for (auto& it : items)
+            if (it.area.contains (e.position))
+            {
+                if (it.kind == 1) selSub = selSub == it.index ? -1 : it.index;
+                repaint();
+                if (onSelect) onSelect (it.kind, it.kind == 1 ? selSub : it.index);
+                return;
+            }
     }
 private:
+    struct Item { String label; int kind, index; Rectangle<float> area; };
+    void layoutItems()
+    {
+        float total = 0;
+        for (auto& it : items) total += it.kind == 0 ? 1.45f : 1.0f;
+        float x = 0; const float unit = total > 0 ? (float) getWidth() / total : 0;
+        for (auto& it : items)
+        {
+            const float w = unit * (it.kind == 0 ? 1.45f : 1.0f);
+            it.area = { x, 0, w, (float) getHeight() }; x += w;
+        }
+    }
     KKLookAndFeel& lnf;
+    std::vector<Item> items;
+    int selCat = -1, selSub = -1;
 };
 
 //==============================================================================
@@ -677,7 +733,7 @@ public:
     PlayPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
         : lnf (l), grid (p, { ID::chord, ID::chordType, ID::strum, ID::keyLock, ID::key, ID::scale,
                               ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing,
-                              ID::timeM, ID::alive, ID::drift, ID::punch, ID::halftime, ID::glide }, 6)
+                              ID::era, ID::future, ID::timeM, ID::alive, ID::drift, ID::punch, ID::halftime, ID::glide }, 6)
     {
         addAndMakeVisible (grid);
         close.setButtonText ("CLOSE");
@@ -716,21 +772,45 @@ public:
         for (int i = 0; i < numTiles; ++i)
         {
             auto t = std::make_unique<HotButton> (lnf, HotButton::tile);
-            t->setTooltip ("Browse " + tileNames()[i].toLowerCase() + " presets.");
-            t->onClick = [this, i] { proc.uiTile = i; proc.uiExclusive = false; proc.uiSub = -1; subChips.selected = -1; loadFirstMatching(); };
+            String tip = "Browse ";
+            for (int c : tileCategories (i)) tip << categoryNames()[c].toLowerCase() << (c == tileCategories (i).back() ? "" : " / ");
+            t->setTooltip (tip + " presets.");
+            t->glyph = [i] (Graphics& g, Rectangle<float> r, const Skin& s)
+            {
+                auto band = r.withTrimmedTop (r.getHeight() * 0.775f).withHeight (r.getHeight() * 0.17f);
+                g.setColour (s.dark ? Colour (0xffe9e2de) : Colour (0xff15181c));
+                g.setFont (s.dark ? serif (15.5f, false, 0.2f) : Font (FontOptions (15.5f, Font::bold)).withExtraKerningFactor (0.03f));
+                g.drawFittedText (tileNames()[i], band.toNearestInt(), Justification::centred, 1, 0.75f);
+            };
+            t->onClick = [this, i] { proc.uiTile = i; proc.uiCat = tileCategories (i).front(); proc.uiExclusive = false; proc.uiSub = -1; loadFirstMatching(); };
             addAndMakeVisible (*t);
             tiles.push_back (std::move (t));
         }
         era.selected = proc.uiEra;
         era.onSelect = [this] (int e) { proc.uiEra = e; loadFirstMatching(); };
+        era.onMorph = [this] (int e)
+        {
+            auto* p = proc.apvts.getParameter (ID::era);
+            const float target = e >= 0 ? (float) e : proc.apvts.getRawParameterValue (ID::eraHome)->load();
+            p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 (target)); p->endChangeGesture();
+        };
         addAndMakeVisible (era);
-        subChips.selected = proc.uiSub;
-        subChips.onSelect = [this] (int sc) { proc.uiSub = sc; if (sc >= 0) { proc.uiTile = -1; proc.uiExclusive = false; } loadFirstMatching(); };
+        subChips.onSelect = [this] (int kind, int idx)
+        {
+            if (kind == 0) { proc.uiCat = idx; proc.uiSub = -1; proc.uiTile = tileOfCategory (idx); }
+            else
+            {
+                if (proc.uiCat < 0) proc.uiCat = catOfCurrent();
+                proc.uiTile = tileOfCategory (proc.uiCat); proc.uiSub = idx;
+            }
+            proc.uiExclusive = false;
+            loadFirstMatching();
+        };
         addAndMakeVisible (subChips);
 
         exclusiveBtn.setTooltip ("Signature sounds built on the exclusive engine features.");
         exclusiveBtn.setClickingTogglesState (false);
-        exclusiveBtn.onClick = [this] { proc.uiExclusive = ! proc.uiExclusive; if (proc.uiExclusive) { proc.uiTile = -1; proc.uiSub = -1; subChips.selected = -1; } loadFirstMatching(); };
+        exclusiveBtn.onClick = [this] { proc.uiExclusive = ! proc.uiExclusive; if (proc.uiExclusive) { proc.uiTile = -1; proc.uiSub = -1; proc.uiCat = -1; } loadFirstMatching(); };
         addAndMakeVisible (exclusiveBtn);
 
         // top bar
@@ -814,7 +894,7 @@ public:
         attachments.push_back (std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, ID::chaos, chaos));
         addAndMakeVisible (chaos);
         diceBtn.setTooltip ("DICE: roll a brand-new sound in this category. Right-click: undo, history, locks, save.");
-        diceBtn.onClick = [this] { proc.rollDice (proc.uiTile >= 0 ? proc.uiTile : tileOfCurrent()); proc.captureUndo(); };
+        diceBtn.onClick = [this] { proc.rollDice (catOfCurrent()); proc.captureUndo(); };
         diceBtn.onRightClick = [this] { showDiceMenu(); };
         addAndMakeVisible (diceBtn);
         addAndMakeVisible (xy);
@@ -876,7 +956,7 @@ public:
         saveBtn.setBounds (G.save); menuBtn.setBounds (G.menu); skinBtn.setBounds (G.skin);
         for (int i = 0; i < numTiles; ++i) tiles[(size_t) i]->setBounds (G.tiles[(size_t) i]);
         subChips.setBounds (G.subBar);
-        auto eraBounds = Rectangle<int> (G.era[0].x - 40, G.era[0].y - 42, G.era[5].x - G.era[0].x + 80, 56);
+        auto eraBounds = Rectangle<int> (G.era[0].x - 40, G.era[0].y - 42, G.era[6].x - G.era[0].x + 90, 56);
         era.origin = eraBounds.getPosition();
         era.setBounds (eraBounds);
         exclusiveBtn.setBounds (G.exclusive);
@@ -922,7 +1002,7 @@ private:
             noFocus (*browser);
             resized();
         }
-        browser->open (proc.uiExclusive ? -1 : proc.uiTile, proc.uiEra, proc.uiExclusive);
+        browser->open (proc.uiExclusive ? -1 : proc.uiCat, proc.uiEra, proc.uiExclusive);
     }
     void openPlayPanel()
     {
@@ -963,14 +1043,25 @@ private:
         {
             const auto& p = ps[(size_t) i];
             if (proc.uiExclusive && ! p.exclusive) continue;
-            if (proc.uiSub >= 0 && p.sub != subCats[(size_t) proc.uiSub].sub) continue;
-            if (! proc.uiExclusive && proc.uiSub < 0 && proc.uiTile >= 0 && p.tile != proc.uiTile) continue;
+            if (! proc.uiExclusive)
+            {
+                if (proc.uiCat >= 0)
+                {
+                    if (p.cat != proc.uiCat) continue;
+                    if (proc.uiSub >= 0 && p.sub != subcategoryNames (proc.uiCat)[proc.uiSub]) continue;
+                }
+                else if (proc.uiTile >= 0 && tileOfCategory (p.cat) != proc.uiTile) continue;
+            }
             if (proc.uiEra >= 0 && p.era != proc.uiEra) continue;
             out.push_back (i);
         }
         return out;
     }
-    int tileOfCurrent() const { const int i = proc.currentPresetIndex(); return i >= 0 ? factoryPresets()[(size_t) i].tile : tLeads; }
+    int catOfCurrent() const
+    {
+        const int i = proc.currentPresetIndex();
+        return proc.uiCat >= 0 ? proc.uiCat : i >= 0 ? factoryPresets()[(size_t) i].cat : (int) cLead;
+    }
     void loadFirstMatching()
     {
         auto list = filtered();
@@ -1133,7 +1224,7 @@ private:
             {
                 static const float amt[] { 0.05f, 0.15f, 0.3f, 0.6f, 1.0f };
                 if (auto* c = proc.apvts.getParameter (ID::chaos)) c->setValueNotifyingHost (c->convertTo0to1 (amt[r - 301]));
-                proc.rollDice (proc.uiTile >= 0 ? proc.uiTile : tileOfCurrent());
+                proc.rollDice (catOfCurrent());
                 proc.captureUndo();
             }
             else if (r == 3) openBrowser();
@@ -1148,11 +1239,13 @@ private:
     void refreshState()
     {
         const int cur = proc.currentPresetIndex();
-        const int shownTile = proc.uiTile >= 0 ? proc.uiTile : (cur >= 0 && ! proc.uiExclusive && proc.uiSub < 0 ? factoryPresets()[(size_t) cur].tile : -1);
+        const int curCat = cur >= 0 ? factoryPresets()[(size_t) cur].cat : -1;
+        const int shownTile = proc.uiExclusive ? -1 : proc.uiTile >= 0 ? proc.uiTile : (curCat >= 0 ? tileOfCategory (curCat) : -1);
+        const int shownCat = proc.uiExclusive ? -1 : proc.uiCat >= 0 ? proc.uiCat : curCat;
         for (int i = 0; i < numTiles; ++i) { tiles[(size_t) i]->selected = (i == shownTile) && ! proc.uiExclusive; tiles[(size_t) i]->repaint(); }
         exclusiveBtn.setToggleState (proc.uiExclusive, dontSendNotification);
         era.selected = proc.uiEra; era.repaint();
-        subChips.selected = proc.uiSub; subChips.repaint();
+        subChips.show (shownTile, shownCat, proc.uiCat >= 0 ? proc.uiSub : -1);
         isFav = favourites().contains (proc.currentName());
         heartBtn.repaint(); nameBtn.repaint();
 

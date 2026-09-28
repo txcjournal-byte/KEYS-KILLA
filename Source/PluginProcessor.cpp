@@ -19,7 +19,7 @@ constexpr int kChunk = 512;
     X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) \
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
-    X(alive) X(drift) X(timeM) X(punch) X(halftime)
+    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future)
 
 // performance controls that never morph or get reset by presets
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
@@ -176,6 +176,36 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
         drive += dA * 0.9f; cutOct += dA * 1.0f; width += dA * 0.4f;
     }
 
+    // ERA: move the sound through the production eras (difference between the chosen era and the preset's own era)
+    float eraRelMul = 1.0f, eraDetune = 0, eraReverse = 0, eraGhost = 0, eraCircuit = 0, eraPunch = 0, eraDrift = 0, eraAlive = 0;
+    {
+        const float home = P (I.eraHome), target = P (I.era);
+        if (std::abs (target - home) > 1.0e-3f)
+        {
+            const auto a = eraProfile (home), b = eraProfile (target);
+            const float k = bass ? 0.4f : 1.0f;   // bass keeps its low end: only a hint of the era
+            crush += (b.crush - a.crush) * k; wow += (b.wow - a.wow) * k; width += (b.width - a.width) * k;
+            rMix += (b.rev - a.rev) * k; dMix += (b.dly - a.dly) * k; chorus += (b.chorus - a.chorus) * k; drive += (b.drive - a.drive);
+            cutOct += (b.cutOct - a.cutOct) * k; eraDetune = (b.detune - a.detune) * k; eraReverse = (b.reverse - a.reverse) * k;
+            eraGhost = (b.ghost - a.ghost) * k; eraCircuit = b.circuit - a.circuit; eraPunch = b.punch - a.punch;
+            eraDrift = (b.drift - a.drift) * k; eraAlive = (b.alive - a.alive) * k; eraRelMul = b.relMul / a.relMul;
+            detune += eraDetune;
+        }
+    }
+    // FUTURE: ORIGINAL -> HYBRID -> UNKNOWN. Same seed = same result, so a session reopens exactly.
+    const float fut = P (I.future);
+    float futWave = 0, futFm = 0, futHalf = 0, futBodyMix = 0; int futBody = 0;
+    if (fut > 1.0e-3f)
+    {
+        const uint32_t h = kk::hash32 ((uint32_t) P (I.seed) * 2654435761u + 17u);
+        eraReverse += fut * 0.45f; eraGhost += fut * (bass ? 0.1f : 0.4f); eraCircuit += fut * 0.3f; chorus += fut * 0.25f;
+        rMix += bass ? 0.0f : fut * 0.25f; width += bass ? 0.0f : fut * 0.2f; eraDrift += fut * 0.35f; eraAlive += fut * 3.0f;
+        futWave = fut * (0.15f + 0.3f * (float) (h & 255u) / 255.0f) * ((h & 256u) ? 1.0f : -1.0f);
+        futFm = fut * 0.35f;
+        futHalf = std::max (0.0f, fut - 0.7f) * (bass ? 0.0f : 1.2f);
+        futBody = 1 + (int) ((h >> 9) % 6u); futBodyMix = std::max (0.0f, fut - 0.25f) * 0.8f;
+    }
+
     // TIME macro: 0 TIGHT .. 0.33 NATURAL (neutral) .. DREAM .. >0.9 FROZEN
     const float tm = P (I.timeM);
     float relMul = 1.0f, dFb = P (I.delayFb); bool freeze = B (I.freeze);
@@ -206,17 +236,18 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     v.cutoff = juce::jlimit (40.0f, 20000.0f, P (I.cutoff) * std::exp2 (cutOct));
     v.reso = P (I.reso); v.keyTrack = P (I.keyTrack); v.fenv = P (I.fenv);
     v.fA = P (I.fattack); v.fD = P (I.fdecay); v.fS = P (I.fsustain); v.fR = P (I.frelease);
-    v.attack = P (I.attack); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = std::min (8.0f, P (I.release) * relMul); v.velSens = P (I.velSens);
+    v.attack = P (I.attack); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = std::min (8.0f, P (I.release) * relMul * eraRelMul); v.velSens = P (I.velSens);
     v.e3A = P (I.e3attack); v.e3D = P (I.e3decay); v.e3S = P (I.e3sustain); v.e3R = P (I.e3release);
     v.lfoPitch = c01 (lfoP); v.lfoFilter = c01 (lfoF); v.lfoAmp = P (I.lfoAmp);
     v.wobTarget = (int) P (I.wobTarget); v.wobble = c01 (wobble);
     v.mono = B (I.mono); v.legato = B (I.legato); v.glide = juce::jlimit (0.0f, 1.0f, glide);
     v.bendRange = raw[(size_t) I.bendRange]->load();
-    v.ghost = P (I.ghost); v.ghostOct = (int) P (I.ghostOct);
+    v.ghost = c01 (P (I.ghost) + eraGhost); v.ghostOct = (int) P (I.ghostOct);
     v.bend = P (I.bend); v.bendMode = (int) P (I.bendMode); v.bendSemis = P (I.bendSemis); v.tape = B (I.tape);
     v.punch = punch;
-    v.alive = P (I.alive); v.drift = P (I.drift);
-    f.punch = P (I.punch); f.halftime = P (I.halftime);
+    v.alive = juce::jlimit (0.0f, 5.0f, P (I.alive) + eraAlive); v.drift = c01 (P (I.drift) + eraDrift);
+    f.punch = c01 (P (I.punch) + eraPunch); f.halftime = c01 (P (I.halftime) + futHalf);
+    for (auto& L : v.layer) { L.wave = c01 (L.wave + futWave); L.fmAmt = c01 (L.fmAmt + futFm); }
     v.pitchWheel = juce::jlimit (-1.0f, 1.0f, midiPitch + guiPitch.load());
     v.modWheel = std::max (midiMod, guiMod.load());
     v.aftertouch = midiAT;
@@ -230,11 +261,12 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     f.crush = c01 (crush); f.wow = c01 (wow); f.chorus = c01 (chorus); f.phaser = P (I.phaser); f.flanger = P (I.flanger);
     f.delayMix = c01 (dMix); f.delayFb = dFb; f.delayBeats = Choices::delayBeats ((int) P (I.delayTime)); f.delayMode = (int) P (I.delayMode);
     f.revMix = c01 (rMix); f.revSize = c01 (rSize); f.revType = (int) P (I.revType); f.freeze = freeze;
-    f.eqLow = P (I.eqLow); f.eqHigh = P (I.eqHigh); f.reverse = P (I.reverse);
+    f.eqLow = P (I.eqLow); f.eqHigh = P (I.eqHigh); f.reverse = c01 (P (I.reverse) + eraReverse);
     f.width = c01 (width);
-    f.ghost = P (I.ghost); f.ghostBlur = P (I.ghostBlur); f.ghostRev = B (I.ghostRev);
-    f.circuit = P (I.circuit); f.circBeats = Choices::circBeats ((int) P (I.circRate));
+    f.ghost = c01 (P (I.ghost) + eraGhost); f.ghostBlur = P (I.ghostBlur); f.ghostRev = B (I.ghostRev);
+    f.circuit = c01 (P (I.circuit) + eraCircuit); f.circBeats = Choices::circBeats ((int) P (I.circRate));
     f.body = (int) P (I.body); f.bodyMix = P (I.bodyMix);
+    if (futBodyMix > 0 && f.body == 0) { f.body = futBody; f.bodyMix = futBodyMix; }
     f.outGain = juce::Decibels::decibelsToGain (P (I.gain));
     f.seed = (uint32_t) P (I.seed);
     f.eco = v.eco;
@@ -583,7 +615,7 @@ void KeysKillaProcessor::loadPreset (int index)
     const juce::ScopedValueSetter<bool> guard (loadingPreset, true);   // host echoes of the program change are ignored
     const auto& pr = ps[(size_t) index];
     auto vals = pr.values;
-    if (pr.tile == tBass)
+    if (pr.isBass())
     {
         vals.insert (vals.begin(), { ID::bassMode, 1.0f });
         vals.insert (vals.begin(), { ID::mono, 1.0f });
@@ -644,7 +676,7 @@ void KeysKillaProcessor::rollDice (int tile)
     diceHistory.push_back ({ presetName, apvts.copyState() });
     if (diceHistory.size() > 20) diceHistory.erase (diceHistory.begin());
 
-    const bool bass = tile == tBass || raw[(size_t) ix->bassMode]->load() > 0.5f;
+    const bool bass = tile == cBass || tile == c808 || raw[(size_t) ix->bassMode]->load() > 0.5f;
     const float chaos = raw[(size_t) ix->chaos]->load();
     juce::Random r;
 
@@ -674,10 +706,11 @@ void KeysKillaProcessor::rollDice (int tile)
 
     if (! diceLocks[lockEngine] && chaos > 0.6f && r.nextFloat() < chaos - 0.4f)
     {
-        static const std::vector<std::vector<int>> engs {
-            { engFM, engPluck, engModal }, { engFM, engOrgan, engVA }, { engPluck, engVA, engFM, engWavetable }, { engFlute, engVox },
-            { engVox, engOrchestral }, { engVA, engVox, engOrgan, engWavetable }, { engVA, engFM, engWavetable }, { engVA, engSub, engFM, engWavetable },
-            { engPluck, engFM, engFlute, engModal }, { engVA, engFM, engPluck, engVox, engOrgan, engFlute, engWavetable, engModal } };
+        static const std::vector<std::vector<int>> engs {   // per Category
+            { engFM, engPluck }, { engFM, engOrgan, engWavetable }, { engFM, engModal, engWavetable }, { engPluck, engVA, engFM, engWavetable },
+            { engModal, engFM }, { engPluck }, { engOrchestral, engVA }, { engOrchestral, engVA }, { engVox, engOrchestral }, { engFlute, engVA },
+            { engVA, engWavetable, engFM }, { engVA, engWavetable, engVox, engOrchestral }, { engVA, engFM, engWavetable }, { engVA, engSub, engFM },
+            { engSub }, { engFlute, engWavetable, engVox, engOrgan }, { engFM, engPluck, engVA, engModal }, { engVA, engFM, engWavetable } };
         const auto& list = engs[(size_t) juce::jlimit (0, (int) engs.size() - 1, tile)];
         auto* p = apvts.getParameter (ID::engine);
         p->setValueNotifyingHost (p->convertTo0to1 ((float) list[(size_t) r.nextInt ((int) list.size())]));
@@ -776,7 +809,7 @@ void KeysKillaProcessor::rebuildCornerBank()
         for (size_t i = 0; i < params.size(); ++i) vals[i] = params[i]->getDefaultValue();
         auto setv = [&] (const juce::String& id, float v) { const int k = indexOf (id); vals[(size_t) k] = params[(size_t) k]->convertTo0to1 (v); };
         for (auto& [id, v] : pr.values) setv (id, v);
-        if (pr.tile == tBass) { setv (ID::mono, 1); setv (ID::bassMode, 1); }
+        if (pr.isBass()) { setv (ID::mono, 1); setv (ID::bassMode, 1); }
     }
     cornerBankIdx = target;
     morphActive = true;
@@ -970,7 +1003,7 @@ bool KeysKillaProcessor::saveUserPreset (const juce::File& f)
     root->setProperty ("format", "KEYS KILLA preset");
     root->setProperty ("version", 1);
     root->setProperty ("name", f.getFileNameWithoutExtension());
-    root->setProperty ("category", currentPreset >= 0 ? tileNames()[factoryPresets()[(size_t) currentPreset].tile] : juce::String ("USER"));
+    root->setProperty ("category", currentPreset >= 0 ? categoryNames()[factoryPresets()[(size_t) currentPreset].cat] : juce::String ("USER"));
     root->setProperty ("fxOrder", orderToString (getFxOrder()));
     root->setProperty ("macroNames", macroLabels.joinIntoString ("|"));
     auto* vals = new juce::DynamicObject();

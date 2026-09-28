@@ -66,7 +66,7 @@ public:
     // DICE
     enum DiceLock { lockEngine, lockFilter, lockEnv, lockMod, lockFx, lockExclusive, numLocks };
     static const char* lockName (int i);
-    void rollDice (int tile);
+    void rollDice (int category);
     void breedWith (int presetIndex);
     bool undoDice();
     void restoreDice (int historyIndex);
@@ -100,7 +100,7 @@ public:
     std::atomic<bool>  overload { false };
     std::atomic<float> guiPitch { 0 }, guiMod { 0 };   // from on-screen wheels
     std::array<std::atomic<bool>, 128> playing {};
-    int uiTile = -1, uiEra = -1, uiSub = -1; bool uiExclusive = false;   // browser filter (kept while editor is closed)
+    int uiTile = -1, uiEra = -1, uiSub = -1, uiCat = -1; bool uiExclusive = false;   // browser filter (kept while editor is closed)
 
 private:
     void buildVoiceParams (kk::VoiceParams& vp, kk::FxParams& fp);
