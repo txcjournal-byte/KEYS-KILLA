@@ -847,7 +847,12 @@ public:
         startTimerHz (30);
     }
 
-    ~MainPage() override { setLookAndFeel (nullptr); }
+    ~MainPage() override
+    {
+        stopTimer();
+        PopupMenu::dismissAllActiveMenus();   // never leave a menu or tooltip pointing at a closed editor
+        setLookAndFeel (nullptr);
+    }
 
     int preferredScale() const { return jlimit (50, 100, settings->getIntValue ("scale", 60)); }
 
@@ -1003,8 +1008,9 @@ private:
         w->addTextEditor ("name", initial);
         w->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
         w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
-        w->enterModalState (true, ModalCallbackFunction::create ([w, done] (int r)
+        w->enterModalState (true, ModalCallbackFunction::create ([w, done, safe = SafePointer<MainPage> (this)] (int r)
         {
+            if (safe == nullptr) return;
             const auto name = w->getTextEditorContents ("name").trim();
             if (r == 1 && name.isNotEmpty()) done (name);
         }), true);
@@ -1054,8 +1060,9 @@ private:
         m.addItem (11, "Skin: BLOOD (dark)", true, skinIndex == 1);
         for (int pct : { 50, 60, 70, 85, 100 }) size.addItem (100 + pct, String (pct) + " %", true, preferredScale() == pct);
         m.addSubMenu ("Window size", size);
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (menuBtn), [this] (int r)
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (menuBtn), [this, safe = SafePointer<MainPage> (this)] (int r)
         {
+            if (safe == nullptr || r == 0) return;   // editor closed (host shutting down) or menu dismissed
             switch (r)
             {
                 case 1: savePreset(); break;
@@ -1063,7 +1070,7 @@ private:
                 case 3: askName ("Rename preset", proc.currentName(), [this] (const String& n) { proc.renameUserPreset (n); refreshState(); }); break;
                 case 4:
                     AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, "Delete preset", "Delete \"" + proc.currentName() + "\"?", "Delete", "Cancel", this,
-                                                  ModalCallbackFunction::create ([this] (int ok) { if (ok) proc.deleteUserPreset(); refreshState(); }));
+                                                  ModalCallbackFunction::create ([this, safe = SafePointer<MainPage> (this)] (int ok) { if (safe == nullptr) return; if (ok) proc.deleteUserPreset(); refreshState(); }));
                     break;
                 case 5: proc.revert(); break;
                 case 6: proc.initPatch(); break;
@@ -1119,8 +1126,9 @@ private:
         m.addItem (3, "BREED with a preset...  (right-click a preset in the browser)");
         m.addSeparator();
         m.addItem (2, "Save this sound as preset...");
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (diceBtn), [this] (int r)
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (diceBtn), [this, safe = SafePointer<MainPage> (this)] (int r)
         {
+            if (safe == nullptr || r == 0) return;
             if (r > 300 && r <= 305)
             {
                 static const float amt[] { 0.05f, 0.15f, 0.3f, 0.6f, 1.0f };
@@ -1248,6 +1256,17 @@ KeysKillaEditor::KeysKillaEditor (KeysKillaProcessor& p) : AudioProcessorEditor 
 KeysKillaEditor::~KeysKillaEditor() = default;
 
 void KeysKillaEditor::showView (int v) { page->showView (v); }
+
+// Windows: draw with the software renderer. The GUI is bitmap based, so it costs nothing, and it keeps the
+// plugin out of the host's Direct2D device - hosts can hang on exit when plugin windows hold GPU resources.
+void KeysKillaEditor::parentHierarchyChanged()
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = getPeer())
+        if (peer->getCurrentRenderingEngine() != 0)
+            peer->setCurrentRenderingEngine (0);
+   #endif
+}
 
 void KeysKillaEditor::resized()
 {

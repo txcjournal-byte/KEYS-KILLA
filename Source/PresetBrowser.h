@@ -152,8 +152,9 @@ private:
             m.addItem (1, "Load");
             m.addItem (2, "Breed with current sound", en.factoryIndex >= 0);
             m.addItem (3, "Favourite on / off");
-            m.showMenuAsync (PopupMenu::Options(), [this, row, en] (int r)
+            m.showMenuAsync (PopupMenu::Options(), [this, row, en, safe = Component::SafePointer<Component> (this)] (int r)
             {
+                if (safe == nullptr || r == 0) return;
                 if (r == 1) activate (row, false);
                 else if (r == 2) { proc.breedWith (en.factoryIndex); proc.captureUndo(); list.repaint(); if (onChanged) onChanged(); }
                 else if (r == 3 && toggleFavourite) { toggleFavourite (en.name); list.repaint(); }
