@@ -7,6 +7,9 @@ public:
     std::function<void()> onChanged;
     std::function<StringArray()> getFavourites;
     std::function<void (const String&)> toggleFavourite;
+    std::function<void (int)> pickHandler;          // BREED LAB: choose a parent instead of loading
+    std::function<void()> onBred;
+    String title { "PRESETS" };
 
     PresetBrowser (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
@@ -60,8 +63,9 @@ public:
         addAndMakeVisible (count);
     }
 
-    void open (int cat, int eraIdx, bool exclusive)
+    void open (int cat, int eraIdx, bool exclusive, std::function<void (int)> pick = nullptr, const String& heading = "PRESETS")
     {
+        pickHandler = std::move (pick); title = heading;
         category.setSelectedId (cat >= 0 ? cat + 2 : 1, dontSendNotification);
         fillSubs();
         era.setSelectedId (eraIdx >= 0 ? eraIdx + 2 : 1, dontSendNotification);
@@ -74,7 +78,7 @@ public:
     void paint (Graphics& g) override
     {
         g.fillAll (lnf.skin->dark ? Colour (0xf2080606) : Colour (0xf2dfe3e8));
-        drawPanel (g, getLocalBounds().toFloat().reduced (10), *lnf.skin, "PRESETS");
+        drawPanel (g, getLocalBounds().toFloat().reduced (10), *lnf.skin, title);
     }
 
     void resized() override
@@ -170,6 +174,14 @@ private:
     {
         if (! isPositiveAndBelow (row, (int) entries.size())) return;
         const auto en = entries[(size_t) row];
+        if (pickHandler)
+        {
+            if (en.factoryIndex < 0) proc.loadUserPreset (en.file);   // user sound: load it, then it becomes the parent
+            auto h = pickHandler; pickHandler = nullptr; title = "PRESETS";
+            h (en.factoryIndex);
+            setVisible (false);
+            return;
+        }
         if (en.factoryIndex >= 0) proc.loadPreset (en.factoryIndex); else proc.loadUserPreset (en.file);
         list.repaint();
         if (onChanged) onChanged();
@@ -185,13 +197,16 @@ private:
             const auto en = entries[(size_t) row];
             PopupMenu m;
             m.addItem (1, "Load");
-            m.addItem (2, "Breed with current sound", en.factoryIndex >= 0);
+            m.addItem (2, "BREED: current sound x this preset", en.factoryIndex >= 0);
+            m.addItem (4, "Use as PARENT A", en.factoryIndex >= 0);
+            m.addItem (5, "Use as PARENT B", en.factoryIndex >= 0);
             m.addItem (3, "Favourite on / off");
             m.showMenuAsync (PopupMenu::Options(), [this, row, en, safe = Component::SafePointer<Component> (this)] (int r)
             {
                 if (safe == nullptr || r == 0) return;
                 if (r == 1) activate (row, false);
-                else if (r == 2) { proc.breedWith (en.factoryIndex); proc.captureUndo(); list.repaint(); if (onChanged) onChanged(); }
+                else if (r == 2) { proc.setParentCurrent (0); proc.setParentPreset (1, en.factoryIndex); proc.breed(); setVisible (false); if (onBred) onBred(); }
+                else if (r == 4 || r == 5) { proc.setParentPreset (r - 4, en.factoryIndex); if (onBred) onBred(); }
                 else if (r == 3 && toggleFavourite) { toggleFavourite (en.name); list.repaint(); }
             });
             return;

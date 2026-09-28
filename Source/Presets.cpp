@@ -1173,6 +1173,11 @@ const std::vector<Preset>& factoryPresets()
         R (cFX, "Tonal FX", "Tonal Zap", { 5, 6 }, { { engine, FM }, { fmRatio, 7.0f }, { fmAmt, 0.6f }, { decay, 0.6f }, { sustain, 0 }, { bend, 0.9f }, { bendMode, 1 },
                                                       { bendSemis, 12 }, { delayMix, 0.35f } });
 
+        // ---- v0.6: macro 1 is DARK (turn right = darker) on melodic sounds
+        for (auto& pr : v)
+            if (! pr.isBass())
+                for (auto& [k, x] : pr.values) if (k == ID::m1) x = 1.0f - x;
+
         // ---- metadata for the whole library
         for (auto& pr : v) deriveTags (pr);
 

@@ -31,7 +31,7 @@ public:
     void parentHierarchyChanged() override;
     void showView (int v);   // 0 main, 1..8 advanced tabs, 9 preset browser
 
-    static constexpr int designW = 1586, designH = 992;   // = design mockup size
+    static constexpr int designW = 1672, designH = 941;   // = BREED LAB design size
 
 private:
     KeysKillaProcessor& proc;

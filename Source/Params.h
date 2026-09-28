@@ -115,6 +115,8 @@ namespace ID
     inline constexpr const char* m4 = "macro4";
     inline constexpr const char* m5 = "macro5";
     inline constexpr const char* m6 = "macro6";
+    inline constexpr const char* m7 = "macro7";   // PUNCH (bass: KNOCK)
+    inline constexpr const char* m8 = "macro8";   // MIX (effects wet balance)
     // exclusive
     inline constexpr const char* ghost    = "ghost";
     inline constexpr const char* ghostOct = "ghostOct";
@@ -359,6 +361,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     f (ID::m4, "Macro 4", 0, 1, 0.0f);
     f (ID::m5, "Macro 5", 0, 1, 0.2f);
     f (ID::m6, "Macro 6", 0, 1, 0.5f);
+    f (ID::m7, "Macro 7", 0, 1, 0.0f);
+    f (ID::m8, "Macro 8", 0, 1, 0.5f);
 
     f (ID::ghost, "Ghost", 0, 1, 0);
     c (ID::ghostOct, "Ghost Octave", Choices::ghostOcts, 0);

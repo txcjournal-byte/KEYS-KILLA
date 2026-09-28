@@ -73,6 +73,43 @@ public:
     juce::StringArray diceHistoryNames() const;
     std::array<bool, numLocks> diceLocks {};
 
+    // ---------------- BREED LAB ----------------
+    enum Gene { geneBody, geneAttack, geneTexture, geneSpace, geneMovement, geneCharacter, numGenes };
+    static const char* geneName (int g);
+    struct Genome
+    {
+        juce::String name; int cat = -1, era = 0, gen = 0, preset = -1;
+        std::vector<float> v;              // normalised parameter values
+        bool valid() const { return ! v.empty(); }
+    };
+    struct Child
+    {
+        Genome g; std::array<int, numGenes> genes {}; uint32_t seed = 0; int rating = 0;
+        std::array<float, 64> wave {}; bool waveReady = false;
+    };
+    struct Generation { Genome parents[2]; std::vector<Child> kids; };
+    void setParentPreset (int slot, int presetIndex);
+    void setParentCurrent (int slot);
+    void setParentChild (int slot, int childIndex);
+    void randomParent (int slot);
+    void stepParent (int slot, int dir);
+    int  breed();                                       // 6 children from the two parents
+    void selectChild (int i);                           // loads it as the current sound
+    void setChildGene (int child, int gene, int parentSlot);
+    void toggleGeneLock (int gene);
+    void rateChild (int child, int stars);
+    void restoreGeneration (int h);
+    void previewChild (int i);                          // select + play a short note
+    bool renderNextThumbnail();                         // message thread, one child per call
+    const Genome& parent (int s) const { return parents[(size_t) juce::jlimit (0, 1, s)]; }
+    const std::vector<Child>& kids() const { return children; }
+    int  selectedChild() const { return selChild; }
+    bool geneLocked (int g) const { return geneLock[(size_t) g]; }
+    int  geneLockSource (int g) const { return geneLockSrc[(size_t) g]; }
+    const std::vector<Generation>& generations() const { return history; }
+    int  labVersion() const { return labVer; }
+    std::atomic<int> previewNote { -1 };
+
     // ERA MORPH corners (0 classic, 1 melodic, 2 raw, 3 aggressive): factory preset index or -1
     void setMorphCorner (int corner, int presetIndex);
     int  morphCorner (int corner) const { return corners[(size_t) corner]; }
@@ -153,6 +190,24 @@ private:
     struct Pending { int64_t due; int note; float vel; bool on; };
     std::array<Pending, 256> pending {}; int pendingN = 0;
     void addPending (int64_t due, int note, float vel, bool on);
+
+    // breed lab
+    std::array<Genome, 2> parents;
+    std::vector<Child> children;
+    int selChild = -1, labVer = 0;
+    std::array<bool, numGenes> geneLock {};
+    std::array<int, numGenes> geneLockSrc {};
+    uint32_t breedCount = 0;
+    std::vector<Generation> history;
+    std::vector<int> geneOfParam;                       // per parameter, -1 = not inherited
+    std::unique_ptr<KeysKillaProcessor> thumbRenderer;  // offline copy for the children's waveforms
+    int previewOffIn = -1, previewActive = -1;
+    Genome genomeFromPreset (int idx) const;
+    Genome genomeFromCurrent() const;
+    Child makeChild (int k, uint32_t seed, const std::array<int, numGenes>* forcedGenes) const;
+    void applyGenome (const Genome& g, bool asPreset);
+    void saveLab (juce::ValueTree& state) const;
+    void loadLab (const juce::ValueTree& state);
 
     // morph
     std::array<int, 4> corners { -1, -1, -1, -1 };

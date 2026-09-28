@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.5.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,8 +50,7 @@ juce_add_plugin(KeysKilla
 
 # Skin bitmaps cut from the design mockups (tools/make_skin_assets.py)
 juce_add_binary_data(KeysKillaAssets SOURCES
-    assets/blood_bg.jpg assets/blood_white.png assets/blood_black.png
-    assets/chrome_bg.jpg assets/chrome_white.png assets/chrome_black.png)
+    assets/lab_bg.jpg assets/lab_white.png assets/lab_black.png assets/lab_icons.png)
 
 target_sources(KeysKilla PRIVATE
     Source/PluginProcessor.cpp

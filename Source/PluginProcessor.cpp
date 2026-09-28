@@ -16,7 +16,7 @@ constexpr int kChunk = 512;
     X(arp) X(arpRate) X(arpMode) X(arpOct) X(arpSwing) X(arpGate) \
     X(drive) X(driveType) X(crush) X(wow) X(chorus) X(phaser) X(flanger) X(delayMix) X(delayTime) X(delayFb) X(delayMode) \
     X(revMix) X(revSize) X(revType) X(eqLow) X(eqHigh) X(reverse) X(freeze) X(width) X(gain) \
-    X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) \
+    X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) X(m7) X(m8) \
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
     X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future)
@@ -25,7 +25,7 @@ constexpr int kChunk = 512;
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
                                          ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos,
                                          ID::morphX, ID::morphY, ID::bendRange,
-                                         ID::m1, ID::m2, ID::m3, ID::m4, ID::m5, ID::m6 };
+                                         ID::m1, ID::m2, ID::m3, ID::m4, ID::m5, ID::m6, ID::m7, ID::m8 };
 const juce::StringArray keepOnPresetLoad { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
                                            ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos, ID::bendRange };
 
@@ -73,11 +73,31 @@ KeysKillaProcessor::KeysKillaProcessor()
         ix->mmSrc[s] = indexOf (ID::mmSrc (s)); ix->mmDst[s] = indexOf (ID::mmDst (s)); ix->mmAmt[s] = indexOf (ID::mmAmt (s));
     }
     for (auto& bank : cornerBank) for (auto& c : bank) c.assign (params.size(), 0.0f);
+    for (auto* prm : params)
+    {
+        const auto id = prm->getParameterID();
+        auto any = [&] (std::initializer_list<const char*> ids) { for (auto* x : ids) if (id == x) return true; return false; };
+        int gene = geneBody;
+        if (keepOnPresetLoad.contains (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange })) gene = -1;
+        else if (any ({ ID::attack, ID::decay, ID::sustain, ID::release, ID::velSens, ID::fattack, ID::fdecay, ID::fsustain, ID::frelease,
+                        ID::fenv, ID::punch, ID::bend, ID::bendMode, ID::bendSemis })) gene = geneAttack;
+        else if (any ({ ID::crush, ID::wow, ID::drive, ID::driveType, ID::tape, ID::circuit, ID::circRate, ID::body, ID::bodyMix,
+                        ID::seed, ID::halftime })) gene = geneTexture;
+        else if (any ({ ID::revMix, ID::revSize, ID::revType, ID::freeze, ID::delayMix, ID::delayTime, ID::delayFb, ID::delayMode,
+                        ID::width, ID::reverse, ID::timeM })) gene = geneSpace;
+        else if (id.startsWith ("lfo") || id.startsWith ("e3") || id.startsWith ("mm")
+                 || any ({ ID::wobTarget, ID::chorus, ID::phaser, ID::flanger, ID::alive, ID::drift })) gene = geneMovement;
+        else if (id.startsWith ("ghost") || any ({ ID::filterType, ID::cutoff, ID::reso, ID::keyTrack, ID::eqLow, ID::eqHigh,
+                                                     ID::era, ID::eraHome, ID::future })) gene = geneCharacter;
+        geneOfParam.push_back (gene);
+    }
     noteMap.fill (-1);
     shRng.seed (99); arpRng.seed (7);
 
     loadPreset (0);
     undoStack.clear(); redoStack.clear(); lastSnap.clear();
+    setParentPreset (0, 0);
+    setParentPreset (1, juce::jmin ((int) factoryPresets().size() - 1, 250));
 }
 
 KeysKillaProcessor::~KeysKillaProcessor() { cancelPendingUpdate(); }
@@ -151,10 +171,11 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     float lfoF = P (I.lfoFilter), lfoP = P (I.lfoPitch), sub = P (I.sub), glide = P (I.glide), punch = 0, wobble = 0;
     const float m1 = raw[(size_t) I.m1]->load(), m2 = raw[(size_t) I.m2]->load(), m3 = raw[(size_t) I.m3]->load();
     const float m4 = raw[(size_t) I.m4]->load(), m5 = raw[(size_t) I.m5]->load(), m6 = raw[(size_t) I.m6]->load();
+    const float m7 = raw[(size_t) I.m7]->load(), m8 = raw[(size_t) I.m8]->load();
 
     if (! bass)
     {
-        cutOct += (m1 - 0.5f) * 5.0f;
+        cutOct += (0.5f - m1) * 5.0f;   // DARK
         rMix += m2 * 0.45f; dMix += m2 * 0.25f; rSize += m2 * 0.3f;
         drive += m3 * 0.8f;
         crush += m4 * 0.45f; wow += m4 * 0.7f;
@@ -222,6 +243,11 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
         if (tm > 0.9f) freeze = true;
     }
 
+    {   // MIX macro: overall effect balance, 0.5 = as designed
+        const float wet = 0.2f + 1.6f * m8;
+        rMix *= wet; dMix *= wet; chorus *= wet; eraReverse *= wet;
+    }
+
     auto c01 = kk::clamp01;
     auto layer = [&] (kk::LayerParams& L, bool on, int eng, int oct, int sem, int fin, int wav, int uni, int det, int r1, int r2, int fa, int alg, int wm, int lvl, float detOverride)
     {
@@ -236,7 +262,7 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     v.cutoff = juce::jlimit (40.0f, 20000.0f, P (I.cutoff) * std::exp2 (cutOct));
     v.reso = P (I.reso); v.keyTrack = P (I.keyTrack); v.fenv = P (I.fenv);
     v.fA = P (I.fattack); v.fD = P (I.fdecay); v.fS = P (I.fsustain); v.fR = P (I.frelease);
-    v.attack = P (I.attack); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = std::min (8.0f, P (I.release) * relMul * eraRelMul); v.velSens = P (I.velSens);
+    v.attack = P (I.attack) * (1.0f - 0.6f * m7); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = std::min (8.0f, P (I.release) * relMul * eraRelMul); v.velSens = P (I.velSens);
     v.e3A = P (I.e3attack); v.e3D = P (I.e3decay); v.e3S = P (I.e3sustain); v.e3R = P (I.e3release);
     v.lfoPitch = c01 (lfoP); v.lfoFilter = c01 (lfoF); v.lfoAmp = P (I.lfoAmp);
     v.wobTarget = (int) P (I.wobTarget); v.wobble = c01 (wobble);
@@ -246,7 +272,7 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     v.bend = P (I.bend); v.bendMode = (int) P (I.bendMode); v.bendSemis = P (I.bendSemis); v.tape = B (I.tape);
     v.punch = punch;
     v.alive = juce::jlimit (0.0f, 5.0f, P (I.alive) + eraAlive); v.drift = c01 (P (I.drift) + eraDrift);
-    f.punch = c01 (P (I.punch) + eraPunch); f.halftime = c01 (P (I.halftime) + futHalf);
+    f.punch = c01 (P (I.punch) + eraPunch + m7 * 0.9f); f.halftime = c01 (P (I.halftime) + futHalf);
     for (auto& L : v.layer) { L.wave = c01 (L.wave + futWave); L.fmAmt = c01 (L.fmAmt + futFm); }
     v.pitchWheel = juce::jlimit (-1.0f, 1.0f, midiPitch + guiPitch.load());
     v.modWheel = std::max (midiMod, guiMod.load());
@@ -466,6 +492,17 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     buffer.clear();
     // hosts may call before prepareToPlay or with empty buffers (parameter flush) - nothing to render then
     if (n <= 0 || buffer.getNumChannels() == 0 || bufL.empty() || fxPtr == nullptr) return;
+    if (previewActive >= 0 && previewOffIn >= 0)   // BREED LAB audition note
+    {
+        if (previewOffIn < n) { midi.addEvent (juce::MidiMessage::noteOff (1, previewActive), previewOffIn); previewActive = -1; previewOffIn = -1; }
+        else previewOffIn -= n;
+    }
+    if (const int pn = previewNote.exchange (-1); pn >= 0)
+    {
+        if (previewActive >= 0) midi.addEvent (juce::MidiMessage::noteOff (1, previewActive), 0);
+        midi.addEvent (juce::MidiMessage::noteOn (1, pn, (juce::uint8) 100), 0);
+        previewActive = pn; previewOffIn = (int) (sr * 0.9);
+    }
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
     const auto& I = *ix;
 
@@ -738,7 +775,7 @@ void KeysKillaProcessor::breedWith (int presetIndex)
     for (auto& [id, v] : pr.values)
         if (auto it = idIndex.find (id); it != idIndex.end()) b[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (v);
 
-    juce::Random r ((juce::int64) (presetIndex * 7919 + (int) presetName.hashCode()));
+    juce::Random r ((juce::int64) presetIndex * 7919 + (juce::int64) presetName.hashCode());
     std::array<bool, numLocks> fromB {};
     bool anyB = false, anyA = false;
     for (int s = 0; s < numLocks; ++s) { fromB[(size_t) s] = ! diceLocks[(size_t) s] && r.nextBool(); anyB |= fromB[(size_t) s]; anyA |= ! fromB[(size_t) s]; }
@@ -789,6 +826,356 @@ juce::StringArray KeysKillaProcessor::diceHistoryNames() const
     juce::StringArray s;
     for (auto& e : diceHistory) s.add (e.name);
     return s;
+}
+
+
+//==============================================================================
+// BREED LAB: two parents -> six children. A child takes each of its six genes from one parent,
+// continuous values drift a little toward the other parent, some children get a mutation.
+const char* KeysKillaProcessor::geneName (int g)
+{
+    static const char* n[] { "BODY", "ATTACK", "TEXTURE", "SPACE", "MOVEMENT", "CHARACTER" };
+    return n[juce::jlimit (0, (int) numGenes - 1, g)];
+}
+
+KeysKillaProcessor::Genome KeysKillaProcessor::genomeFromPreset (int idx) const
+{
+    Genome g;
+    const auto& ps = factoryPresets();
+    if (! juce::isPositiveAndBelow (idx, (int) ps.size())) return g;
+    const auto& pr = ps[(size_t) idx];
+    g.name = pr.name; g.cat = pr.cat; g.era = pr.era; g.preset = idx;
+    g.v.resize (params.size());
+    for (size_t i = 0; i < params.size(); ++i) g.v[i] = params[i]->getDefaultValue();
+    auto setv = [&] (const juce::String& id, float x) { if (auto it = idIndex.find (id); it != idIndex.end()) g.v[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (x); };
+    for (auto& [id, x] : pr.values) setv (id, x);
+    if (pr.isBass()) { setv (ID::mono, 1); setv (ID::bassMode, 1); }
+    return g;
+}
+
+KeysKillaProcessor::Genome KeysKillaProcessor::genomeFromCurrent() const
+{
+    Genome g;
+    g.name = presetName; g.v = snapshot();
+    g.cat = currentPreset >= 0 ? factoryPresets()[(size_t) currentPreset].cat : -1;
+    g.era = (int) std::round (params[(size_t) ix->eraHome]->convertFrom0to1 (g.v[(size_t) ix->eraHome]));
+    for (auto& c : children) if (c.g.name == presetName) { g.gen = c.g.gen; g.cat = c.g.cat; }
+    return g;
+}
+
+void KeysKillaProcessor::setParentPreset (int slot, int idx)
+{
+    auto g = genomeFromPreset (idx);
+    if (! g.valid()) return;
+    parents[(size_t) juce::jlimit (0, 1, slot)] = std::move (g); ++labVer;
+}
+void KeysKillaProcessor::setParentCurrent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = genomeFromCurrent(); ++labVer; }
+void KeysKillaProcessor::setParentChild (int slot, int c)
+{
+    if (! juce::isPositiveAndBelow (c, (int) children.size())) return;
+    parents[(size_t) juce::jlimit (0, 1, slot)] = children[(size_t) c].g; ++labVer;
+}
+void KeysKillaProcessor::randomParent (int slot)
+{
+    juce::Random r ((juce::int64) (juce::Time::getHighResolutionTicks() ^ (juce::int64) (slot * 7919)));
+    setParentPreset (slot, r.nextInt ((int) factoryPresets().size()));
+}
+void KeysKillaProcessor::stepParent (int slot, int dir)
+{
+    const auto& p = parents[(size_t) juce::jlimit (0, 1, slot)];
+    const auto& ps = factoryPresets();
+    const int n = (int) ps.size();
+    int i = p.preset >= 0 ? p.preset : 0;
+    for (int k = 0; k < n; ++k)   // next preset of the same category
+    {
+        i = ((i + dir) % n + n) % n;
+        if (p.cat < 0 || ps[(size_t) i].cat == p.cat) break;
+    }
+    setParentPreset (slot, i);
+}
+
+KeysKillaProcessor::Child KeysKillaProcessor::makeChild (int k, uint32_t seed, const std::array<int, numGenes>* forced) const
+{
+    Child c; c.seed = seed;
+    const auto& A = parents[0].v; const auto& B = parents[1].v;
+    kk::Rng rng; rng.seed (seed);
+    static const float pA[6] { 0.85f, 0.15f, 0.5f, 0.5f, 0.7f, 0.3f };       // how much each child leans to parent A
+    static const float blend[6] { 0.18f, 0.18f, 0.3f, 0.25f, 0.12f, 0.12f };  // drift toward the other parent
+    static const float mutation[6] { 0.0f, 0.0f, 0.0f, 0.07f, 0.12f, 0.2f };
+    const int kk_ = juce::jlimit (0, 5, k);
+    if (forced != nullptr) c.genes = *forced;
+    else
+    {
+        bool fromA = false, fromB = false;
+        for (int g = 0; g < numGenes; ++g)
+        {
+            c.genes[(size_t) g] = geneLock[(size_t) g] ? geneLockSrc[(size_t) g] : (rng.uni() < pA[kk_] ? 0 : 1);
+            (c.genes[(size_t) g] == 0 ? fromA : fromB) = true;
+        }
+        if (! fromA || ! fromB)   // a child is always a mix of both parents
+            for (int tries = 0; tries < 12; ++tries)
+            {
+                const int g = (int) (rng.uni() * numGenes) % numGenes;
+                if (geneLock[(size_t) g]) continue;
+                c.genes[(size_t) g] = fromA ? 1 : 0; break;
+            }
+    }
+    c.g.v.resize (params.size());
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        const int gene = geneOfParam[i];
+        if (gene < 0) { c.g.v[i] = params[i]->getValue(); continue; }   // performance settings stay as they are
+        const bool srcA = c.genes[(size_t) gene] == 0;
+        const float own = srcA ? A[i] : B[i], other = srcA ? B[i] : A[i];
+        float x = own;
+        if (! discrete[i])
+        {
+            x += (other - own) * blend[kk_] * (0.5f + 0.5f * rng.uni());
+            if (mutation[kk_] > 0 && ! geneLock[(size_t) gene]) x += (rng.uni() * 2.0f - 1.0f) * mutation[kk_];
+        }
+        c.g.v[i] = juce::jlimit (0.0f, 1.0f, x);
+    }
+    // keep children playable
+    auto real = [&] (int idx) { return params[(size_t) idx]->convertFrom0to1 (c.g.v[(size_t) idx]); };
+    auto setReal = [&] (int idx, float x) { c.g.v[(size_t) idx] = params[(size_t) idx]->convertTo0to1 (x); };
+    const auto& I = *ix;
+    const bool bass = real (I.bassMode) > 0.5f;
+    if (bass)   // clean, mono low end
+    {
+        setReal (I.revMix, std::min (real (I.revMix), 0.12f)); setReal (I.delayMix, std::min (real (I.delayMix), 0.1f));
+        setReal (I.width, std::min (real (I.width), 0.55f)); setReal (I.reverse, 0.0f); setReal (I.ghost, std::min (real (I.ghost), 0.1f));
+        setReal (I.cutoff, std::max (real (I.cutoff), 250.0f)); setReal (I.freeze, 0.0f);
+    }
+    if (real (I.sustain) < 0.02f && real (I.decay) < 0.08f) setReal (I.decay, 0.25f);   // never a silent click
+    // loudness: the body parent's level, a bit less when the child is dirtier than it
+    const auto& body = c.genes[geneBody] == 0 ? A : B;
+    const float bodyGain = params[(size_t) I.gain]->convertFrom0to1 (body[(size_t) I.gain]);
+    const float dirt = std::max (0.0f, real (I.drive) - params[(size_t) I.drive]->convertFrom0to1 (body[(size_t) I.drive]));
+    setReal (I.gain, juce::jlimit (-24.0f, 12.0f, bodyGain - 6.0f * dirt));
+
+    auto shortName = [] (juce::String n)
+    {
+        n = n.upToFirstOccurrenceOf (juce::String::fromUTF8 (" \xc2\xb7 GEN"), false, false);
+        if (n.length() > 5 && n.substring (0, 4).containsOnly ("0123456789")) n = n.substring (5);   // drop the year tag
+        if (n.startsWith ("FUTURE ")) n = n.substring (7);
+        auto words = juce::StringArray::fromTokens (n, " ", "");
+        if (words.size() > 1 && words[words.size() - 1].length() == 4 && words[words.size() - 1].containsOnly ("0123456789")) words.remove (words.size() - 1);
+        juce::String out;
+        for (auto& w : words) { if ((out + " " + w).trim().length() > 20) break; out = (out + " " + w).trim(); }
+        return out.isEmpty() ? n.substring (0, 20) : out;
+    };
+    c.g.gen = std::max (parents[0].gen, parents[1].gen) + 1;
+    c.g.cat = parents[(size_t) c.genes[geneBody]].cat;
+    c.g.era = parents[(size_t) c.genes[geneCharacter]].era;
+    c.g.name = shortName (parents[0].name) + juce::String::fromUTF8 (" \xc3\x97 ") + shortName (parents[1].name) + juce::String::fromUTF8 (" \xc2\xb7 GEN ") + juce::String (c.g.gen) + " #" + juce::String (k + 1);
+    return c;
+}
+
+int KeysKillaProcessor::breed()
+{
+    if (! parents[0].valid()) setParentCurrent (0);
+    if (! parents[1].valid()) randomParent (1);
+    if (! children.empty()) { history.push_back ({ { parents[0], parents[1] }, children }); if (history.size() > 30) history.erase (history.begin()); }
+    ++breedCount;
+    const uint32_t base = kk::hash32 (((uint32_t) parents[0].name.hashCode() * 31u + (uint32_t) parents[1].name.hashCode()) ^ (breedCount * 2654435761u));
+    children.clear();
+    for (int k = 0; k < 6; ++k) children.push_back (makeChild (k, kk::hash32 (base + (uint32_t) k * 7919u), nullptr));
+    ++labVer;
+    selectChild (0);
+    return (int) children.size();
+}
+
+void KeysKillaProcessor::applyGenome (const Genome& g, bool asPreset)
+{
+    if (! g.valid()) return;
+    presetJump = true;
+    for (size_t i = 0; i < params.size(); ++i)
+        if (geneOfParam[i] >= 0 && std::abs (params[i]->getValue() - g.v[i]) > 1.0e-6f) params[i]->setValueNotifyingHost (g.v[i]);
+    if (asPreset)
+    {
+        presetName = g.name; currentPreset = -1; userFile = juce::File(); macroLabels.clear();
+        snapshotForModified();
+        updateHostDisplay (ChangeDetails().withProgramChanged (true));
+    }
+}
+
+void KeysKillaProcessor::selectChild (int i)
+{
+    if (! juce::isPositiveAndBelow (i, (int) children.size())) return;
+    selChild = i; ++labVer;
+    applyGenome (children[(size_t) i].g, true);
+    captureUndo();
+}
+
+void KeysKillaProcessor::setChildGene (int c, int gene, int src)
+{
+    if (! juce::isPositiveAndBelow (c, (int) children.size()) || ! juce::isPositiveAndBelow (gene, (int) numGenes)) return;
+    auto genes = children[(size_t) c].genes;
+    genes[(size_t) gene] = juce::jlimit (0, 1, src);
+    const int rating = children[(size_t) c].rating;
+    children[(size_t) c] = makeChild (c, children[(size_t) c].seed, &genes);
+    children[(size_t) c].rating = rating;
+    if (geneLock[(size_t) gene]) geneLockSrc[(size_t) gene] = genes[(size_t) gene];
+    selectChild (c);
+}
+
+void KeysKillaProcessor::toggleGeneLock (int gene)
+{
+    if (! juce::isPositiveAndBelow (gene, (int) numGenes)) return;
+    geneLock[(size_t) gene] = ! geneLock[(size_t) gene];
+    if (juce::isPositiveAndBelow (selChild, (int) children.size())) geneLockSrc[(size_t) gene] = children[(size_t) selChild].genes[(size_t) gene];
+    ++labVer;
+}
+
+void KeysKillaProcessor::rateChild (int c, int stars)
+{
+    if (! juce::isPositiveAndBelow (c, (int) children.size())) return;
+    auto& ch = children[(size_t) c];
+    const bool wasGood = ch.rating >= 4;
+    ch.rating = ch.rating == stars ? 0 : juce::jlimit (0, 5, stars);
+    ++labVer;
+    if (ch.rating >= 4 && ! wasGood)   // favourite children are kept as user presets
+    {
+        const auto keep = snapshot(); const auto keepName = presetName; const int keepPreset = currentPreset; const auto keepFile = userFile;
+        applyGenome (ch.g, true);
+        auto f = userPresetDir().getChildFile ("Bred").getChildFile (juce::File::createLegalFileName (ch.g.name) + ".kkpreset");
+        f.getParentDirectory().createDirectory();
+        saveUserPreset (f);
+        applySnapshot (keep); presetName = keepName; currentPreset = keepPreset; userFile = keepFile;
+        snapshotForModified();
+    }
+}
+
+void KeysKillaProcessor::restoreGeneration (int h)
+{
+    if (! juce::isPositiveAndBelow (h, (int) history.size())) return;
+    if (! children.empty()) history.push_back ({ { parents[0], parents[1] }, children });
+    auto gen = history[(size_t) h];
+    history.erase (history.begin() + h);
+    parents[0] = gen.parents[0]; parents[1] = gen.parents[1]; children = gen.kids;
+    ++labVer;
+    selectChild (0);
+}
+
+void KeysKillaProcessor::previewChild (int i)
+{
+    if (i != selChild) selectChild (i);
+    previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
+}
+
+bool KeysKillaProcessor::renderNextThumbnail()
+{
+    for (auto& c : children)
+    {
+        if (c.waveReady) continue;
+        if (thumbRenderer == nullptr) thumbRenderer = std::make_unique<KeysKillaProcessor>();
+        auto& r = *thumbRenderer;
+        for (size_t i = 0; i < r.params.size() && i < c.g.v.size(); ++i)
+            if (std::abs (r.params[i]->getValue() - c.g.v[i]) > 1.0e-6f) r.params[i]->setValueNotifyingHost (c.g.v[i]);
+        r.eco = true;
+        const double rate = 16000.0; const int block = 400, total = 12000;
+        r.prepareToPlay (rate, block);
+        const int note = r.raw[(size_t) r.ix->bassMode]->load() > 0.5f ? 36 : 60;
+        juce::AudioBuffer<float> buf (2, block);
+        c.wave.fill (0.0f);
+        float peak = 1.0e-6f;
+        for (int pos = 0; pos < total; pos += block)
+        {
+            juce::MidiBuffer m;
+            if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+            if (pos == 7200) m.addEvent (juce::MidiMessage::noteOff (1, note), 0);
+            r.processBlock (buf, m);
+            for (int s = 0; s < block; ++s)
+            {
+                const float x = std::abs (buf.getSample (0, s)) + std::abs (buf.getSample (1, s));
+                auto& bin = c.wave[(size_t) std::min (63, (pos + s) * 64 / total)];
+                bin = std::max (bin, x); peak = std::max (peak, x);
+            }
+        }
+        for (auto& b : c.wave) b /= peak;
+        c.waveReady = true;
+        ++labVer;
+        return true;
+    }
+    return false;
+}
+
+static juce::String floatsToString (const std::vector<float>& v)
+{
+    juce::String s; s.preallocateBytes (v.size() * 8);
+    for (auto x : v) s << juce::String (x, 5) << ",";
+    return s;
+}
+static std::vector<float> stringToFloats (const juce::String& s)
+{
+    std::vector<float> v;
+    for (auto& t : juce::StringArray::fromTokens (s, ",", "")) if (t.isNotEmpty()) v.push_back (t.getFloatValue());
+    return v;
+}
+
+void KeysKillaProcessor::saveLab (juce::ValueTree& state) const
+{
+    juce::ValueTree lab ("BREEDLAB");
+    auto genome = [] (const Genome& g, const juce::Identifier& type)
+    {
+        juce::ValueTree t (type);
+        t.setProperty ("name", g.name, nullptr); t.setProperty ("cat", g.cat, nullptr); t.setProperty ("era", g.era, nullptr);
+        t.setProperty ("gen", g.gen, nullptr); t.setProperty ("preset", g.preset, nullptr); t.setProperty ("v", floatsToString (g.v), nullptr);
+        return t;
+    };
+    lab.setProperty ("count", (int) breedCount, nullptr);
+    lab.setProperty ("sel", selChild, nullptr);
+    juce::String locks;
+    for (int g = 0; g < numGenes; ++g) locks << (geneLock[(size_t) g] ? "1" : "0") << geneLockSrc[(size_t) g] << ",";
+    lab.setProperty ("locks", locks, nullptr);
+    lab.appendChild (genome (parents[0], "PA"), nullptr);
+    lab.appendChild (genome (parents[1], "PB"), nullptr);
+    for (auto& c : children)
+    {
+        auto t = genome (c.g, "CHILD");
+        juce::String gs; for (auto x : c.genes) gs << x;
+        t.setProperty ("genes", gs, nullptr); t.setProperty ("seed", (juce::int64) c.seed, nullptr); t.setProperty ("rating", c.rating, nullptr);
+        lab.appendChild (t, nullptr);
+    }
+    state.appendChild (lab, nullptr);
+}
+
+void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
+{
+    auto lab = state.getChildWithName ("BREEDLAB");
+    if (! lab.isValid()) return;
+    auto genome = [this] (const juce::ValueTree& t)
+    {
+        Genome g;
+        g.name = t.getProperty ("name").toString(); g.cat = t.getProperty ("cat", -1); g.era = t.getProperty ("era", 0);
+        g.gen = t.getProperty ("gen", 0); g.preset = t.getProperty ("preset", -1); g.v = stringToFloats (t.getProperty ("v").toString());
+        if (g.v.size() != params.size()) g.v.clear();
+        return g;
+    };
+    breedCount = (uint32_t) (int) lab.getProperty ("count", 0);
+    const auto locks = juce::StringArray::fromTokens (lab.getProperty ("locks").toString(), ",", "");
+    for (int g = 0; g < numGenes && g < locks.size(); ++g)
+    {
+        geneLock[(size_t) g] = locks[g].startsWith ("1");
+        geneLockSrc[(size_t) g] = locks[g].getLastCharacter() == '1' ? 1 : 0;
+    }
+    children.clear();
+    for (auto t : lab)
+    {
+        if (t.hasType ("PA")) { auto g = genome (t); if (g.valid()) parents[0] = g; }
+        else if (t.hasType ("PB")) { auto g = genome (t); if (g.valid()) parents[1] = g; }
+        else if (t.hasType ("CHILD"))
+        {
+            Child c; c.g = genome (t);
+            if (! c.g.valid()) continue;
+            const auto gs = t.getProperty ("genes").toString();
+            for (int g = 0; g < numGenes && g < gs.length(); ++g) c.genes[(size_t) g] = gs[g] == '1' ? 1 : 0;
+            c.seed = (uint32_t) (juce::int64) t.getProperty ("seed", 0); c.rating = t.getProperty ("rating", 0);
+            children.push_back (std::move (c));
+        }
+    }
+    selChild = juce::jlimit (-1, (int) children.size() - 1, (int) lab.getProperty ("sel", -1));
+    ++labVer;
 }
 
 //==============================================================================
@@ -942,6 +1329,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("corners", juce::String (corners[0]) + "," + juce::String (corners[1]) + "," + juce::String (corners[2]) + "," + juce::String (corners[3]), nullptr);
     state.setProperty ("eco", eco.load(), nullptr);
     state.setProperty ("macroNames", macroLabels.joinIntoString ("|"), nullptr);
+    saveLab (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -958,6 +1346,8 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             eco = (bool) vt.getProperty ("eco", false);
             macroLabels = juce::StringArray::fromTokens (vt.getProperty ("macroNames", "").toString(), "|", "");
             macroLabels.removeEmptyStrings();
+            loadLab (vt);
+            vt.removeChild (vt.getChildWithName ("BREEDLAB"), nullptr);
             apvts.replaceState (vt);
             syncParamsToState();
             auto cs = juce::StringArray::fromTokens (vt.getProperty ("corners", "-1,-1,-1,-1").toString(), ",", "");

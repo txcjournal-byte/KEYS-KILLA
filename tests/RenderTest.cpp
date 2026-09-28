@@ -66,6 +66,43 @@ static int unitTests()
         for (int i = 0; i < 64; ++i) { const float ph = (float) i / 64.0f; err = std::max (err, std::abs (wt.read (ph, 0.0f, 0.001f) - std::sin (kk::twoPi * ph))); }
         check (err < 0.02f, "wavetable sine frame");
     }
+    // BREED LAB: six playable children, deterministic genes, gene switch + lock, state round trip
+    {
+        KeysKillaProcessor p; p.prepareToPlay (48000, 256);
+        const auto& ps = factoryPresets();
+        juce::AudioBuffer<float> b (2, 256);
+        bool finite = true; float worst = 0;
+        for (int round = 0; round < 12; ++round)
+        {
+            p.setParentPreset (0, (round * 37) % (int) ps.size()); p.setParentPreset (1, (round * 91 + 11) % (int) ps.size());
+            check (p.breed() == 6, "breed makes 6 children");
+            for (int c = 0; c < 6; ++c)
+            {
+                p.previewChild (c);
+                for (int k = 0; k < 60; ++k)
+                {
+                    juce::MidiBuffer m; p.processBlock (b, m);
+                    for (int ch = 0; ch < 2; ++ch) for (int n = 0; n < 256; ++n) { const float x = b.getSample (ch, n); finite &= std::isfinite (x); worst = std::max (worst, std::abs (x)); }
+                }
+            }
+        }
+        check (finite && worst <= 1.01f, "children finite and bounded");
+        const auto before = p.kids()[2].g.v;
+        p.setChildGene (2, KeysKillaProcessor::geneSpace, 1 - p.kids()[2].genes[KeysKillaProcessor::geneSpace]);
+        check (p.kids()[2].g.v != before, "gene switch changes the child");
+        p.toggleGeneLock (KeysKillaProcessor::geneBody);
+        const int src = p.kids()[p.selectedChild()].genes[KeysKillaProcessor::geneBody];
+        p.breed();
+        bool held = true; for (auto& c : p.kids()) held &= c.genes[KeysKillaProcessor::geneBody] == src;
+        check (held, "locked gene is inherited by every child");
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (q.kids().size() == 6 && q.kids()[3].g.name == p.kids()[3].g.name && q.parent (1).name == p.parent (1).name, "breed lab state round trip");
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        int n = 0; while (p.renderNextThumbnail()) ++n;
+        std::printf ("BREED: %d thumbnails in %.1f ms, children peak %.3f, e.g. %s\n", n, juce::Time::getMillisecondCounterHiRes() - t0, worst,
+                     p.kids()[0].g.name.toRawUTF8());
+    }
     // ERA / FUTURE / BREED extremes stay finite and bounded on every category
     {
         KeysKillaProcessor p; p.prepareToPlay (48000, 256);

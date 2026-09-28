@@ -1,11 +1,22 @@
 # KEYS KILLA
 
-*rare & modern trap melodies & basses* – VST3 / AU / Standalone syntezátor (JUCE 8, C++20, CMake) od výrobce 808 KILLA.
+**Don't browse sounds. Breed them.** – trapový VST3 / AU / Standalone nástroj (JUCE 8, C++20, CMake) od výrobce 808 KILLA.
 Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
-![BLOOD](docs/screenshot_blood.png)
+![BREED LAB](docs/screenshot_lab.png)
 
-## Co umí (verze 0.3)
+## BREED LAB (verze 0.6)
+
+1. **PARENT A + PARENT B** – dva zvuky z knihovny 2010 → FUTURE (šipky = další zvuk kategorie, kostka = náhodný, klik = výběr / prohlížeč).
+2. **BREED** – 6 dětí najednou. Každé dítě dědí 6 genů (BODY, ATTACK, TEXTURE, SPACE, MOVEMENT, CHARACTER) od jednoho z rodičů,
+   spojité hodnoty se trochu přiblíží druhému rodiči, děti 4–6 mají mutaci. Hlasitost a čistý sub u basů hlídá engine.
+3. **CHILD 1–6** – skutečná vlna zvuku, ▶ poslech, hvězdičky (4+ se uloží do User / Bred), pravý klik = rodič další generace.
+4. **GENES** – A/B přepne gen vybraného dítěte, zámek = všechny další děti ho zdědí.
+5. **MUTATE** 5 / 15 / 30 / 60 % / CHAOS, **FAMILY TREE** (starší generace), **UNDO**.
+6. **ERA** 2010 → FUTURE (tah), **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
+7. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · 808 · KILLA vysunou panel s nastavením.
+
+## Engine
 
 | Oblast | Obsah |
 |---|---|
@@ -18,7 +29,7 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 | **EXCLUSIVE** | DICE + CHAOS (zámky sekcí, historie 20 hodů, uložení jako preset – pravý klik), ERA MORPH (XY pad, do rohů lze vložit presety a míchat je, jinak mění charakter), GHOST (obrácený stín ±oktáva, blur), BEND (dive/rise/dip/octave jump/random + broken tape), CIRCUIT (glitche v tempu, deterministické), BODY SWAP (6 těles) |
 | **Presety** | **516 factory presetů**: 10 dlaždic + podkategorie Piano, Organs, Strings, Brass, Guitars, Mallets, Arps; éry 2010–2026, Experimental, Exclusive (72), Bass (105); varianty Lo-Fi / Dark / Blown; hlasitost srovnaná na −15 dB |
 | **Správa presetů** | prohlížeč s vyhledáváním a filtry (kategorie, éra, exclusive, oblíbené, user), Save / Save As / Rename / Delete, `*` při změně + Revert, A/B, Undo/Redo, Init, import/export packů (.zip), JSON formát s verzí |
-| **GUI** | postavené přímo z předloh designu (`assets/`, `tools/make_skin_assets.py`), skiny CHROME / BLOOD (☀/☾), velikost 50–100 % (výchozí 60 %), panel CHORD / ARP, ADVANCED se záložkami ENGINE A/B, FILTER, MOD, FX, EXCLUSIVE, PLAY, SETTINGS, vizualizace vlny, obálek a LFO, tooltip u každého prvku, dvojklik = default, Ctrl + tah = jemně |
+| **GUI** | postavené přímo z předlohy designu (`assets/src/breed.webp`, `tools/make_breed_assets.py`), skin BLOOD, velikost 50–100 % (výchozí 70 %), panel CHORD / ARP, ADVANCED se záložkami ENGINE A/B, FILTER, MOD, FX, EXCLUSIVE, PLAY, SETTINGS, vizualizace vlny, obálek a LFO, tooltip u každého prvku, dvojklik = default, Ctrl + tah = jemně |
 | **Technika** | klávesnice zůstává hostiteli (mezerník = play/stop), rychlé otevření editoru, žádné alokace v audio threadu, deterministický render (export = přehrávání), bypass s fade, tail 10 s, 44,1–192 kHz, Eco režim |
 
 ![ADVANCED](docs/screenshot_advanced.png)
