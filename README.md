@@ -15,7 +15,7 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 5. **MUTATE** 5 / 15 / 30 / 60 % / CHAOS, **FAMILY TREE** (starší generace), **UNDO**.
 6. **WILD** (SAFE → CRAZY): jak daleko BREED smí jít – geny přeskakují, přepínače se mění, víc HYBRID dětí (zvuk druhého rodiče jako vrstva B) a FUTURE.
 7. **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
-8. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · **ARP** (16 kroků s velocity, trapové stupnice Scale Up/Down, Chord, triolové rychlosti, vzory) · KILLA; každý panel má **RESET** (vrátí zvuk, jak byl nahraný).
+8. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · **ARP** (16 kroků jako noty: posun ±12 půltónů, délka přes více kroků, pauzy, trapové stupnice Scale Up/Down, Chord, triolové rychlosti) · KILLA; každý panel má **RESET** (vrátí zvuk, jak byl nahraný).
 
 ## Engine
 

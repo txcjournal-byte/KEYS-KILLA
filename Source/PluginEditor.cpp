@@ -504,82 +504,138 @@ private:
     ParamGrid grid;
 };
 
-// ARP: step arpeggiator - 16 steps with velocity, trap scale runs, patterns
-class StepGrid : public Component, public SettableTooltipClient, private Timer
+// ARP: step arpeggiator like the classic workstation arps - every step is a note brick you move up / down
+// in semitones (number under the step), drag its right edge to make it longer, double-click to delete.
+class NoteGrid : public Component, public SettableTooltipClient, private Timer
 {
 public:
-    StepGrid (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    NoteGrid (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
-        setTooltip ("Click a step to switch it on / off, drag up / down for its velocity. Steps after ARP STEPS are skipped.");
+        setTooltip ("Click an empty step: new note.  Drag a note up / down: pitch (semitones).  Drag its right edge: longer / shorter.  Double-click or right-click: delete.");
         startTimerHz (20);
     }
+    static constexpr int range = 12;   // -12 ... +12 semitones
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        const int steps = (int) proc.apvts.getRawParameterValue (ID::arpSteps)->load();
-        const bool on = proc.apvts.getRawParameterValue (ID::arp)->load() > 0.5f;
+        const int steps = stepsNow();
+        auto area = gridArea();
+        g.setColour (Colour (0xff0e0b0b)); g.fillRoundedRectangle (area, 4);
+        for (int r = -range; r <= range; ++r)   // semitone rows, octave and root lines stronger
+        {
+            const float y = rowY (r);
+            g.setColour (r == 0 ? Colour (0xff4a3a3a) : (r % 12 == 0 ? Colour (0xff332828) : Colour (0xff1c1717)));
+            g.drawHorizontalLine ((int) y, area.getX(), area.getRight());
+        }
+        for (int i = 0; i <= 16; ++i)
+        {
+            const float x = colX (i);
+            g.setColour (i % 4 == 0 ? Colour (0xff3a3030) : Colour (0xff221c1c));
+            g.drawVerticalLine ((int) x, area.getY(), area.getBottom());
+        }
+        if (steps < 16) { g.setColour (Colour (0xaa000000)); g.fillRect (Rectangle<float> (colX (steps), area.getY(), area.getRight() - colX (steps), area.getHeight())); }
         const int cur = proc.arpCurStep.load();
+        if (cur >= 0 && proc.apvts.getRawParameterValue (ID::arp)->load() > 0.5f)
+        {
+            g.setColour (s.accent.withAlpha (0.12f));
+            g.fillRect (Rectangle<float> (colX (cur), area.getY(), colX (cur + 1) - colX (cur), area.getHeight()));
+        }
         for (int i = 0; i < 16; ++i)
         {
-            auto c = cell (i);
-            const float v = proc.apvts.getRawParameterValue (ID::arpStep (i))->load();
-            const bool active = i < steps;
-            g.setColour (Colour (0xff141010)); g.fillRoundedRectangle (c, 4);
-            g.setColour (active ? Colour (0xff3b3434) : Colour (0xff201c1c)); g.drawRoundedRectangle (c, 4, 1.2f);
-            if (v > 0.02f)
+            if (! on (i)) continue;
+            auto b = brick (i).reduced (1.5f, 0.5f);
+            const bool inside = i < steps;
+            g.setColour (s.accent.withAlpha (inside ? 0.35f : 0.12f)); g.fillRoundedRectangle (b.expanded (2), 4);
+            g.setGradientFill (ColourGradient (s.accent.brighter (0.25f).withAlpha (inside ? 1.0f : 0.35f), 0, b.getY(),
+                                               s.accent.darker (0.35f).withAlpha (inside ? 1.0f : 0.35f), 0, b.getBottom(), false));
+            g.fillRoundedRectangle (b, 3);
+            g.setColour (Colours::white.withAlpha (inside ? 0.5f : 0.2f)); g.fillRect (b.withLeft (b.getRight() - 3).reduced (0, 2));   // length handle
+        }
+        g.setFont (serif (15.0f, false, 0.02f));
+        for (int i = 0; i < 16; ++i)
+        {
+            const int t = note (i);
+            auto cell = Rectangle<float> (colX (i), area.getBottom() + 4, colX (i + 1) - colX (i), 20);
+            if (on (i) && t != 0)
             {
-                auto bar = c.reduced (5).withTrimmedTop ((c.getHeight() - 10) * (1.0f - v));
-                g.setColour ((active ? s.accent : s.accent.withAlpha (0.3f)).withAlpha (active ? 0.9f : 0.3f));
-                g.fillRoundedRectangle (bar, 3);
+                g.setColour (Colour (0xff2a2020)); g.fillRoundedRectangle (cell.reduced (4, 1), 3);
+                g.setColour (Colour (0xffece6e6)); g.drawText ((t > 0 ? "+" : "") + String (t), cell, Justification::centred);
             }
-            if (on && i == cur) { g.setColour (Colours::white.withAlpha (0.8f)); g.drawRoundedRectangle (c.expanded (2), 5, 2.0f); }
-            g.setColour (Colour (0x99d9d3d3)); g.setFont (serif (13.0f));
-            g.drawText (String (i + 1), c.withY (c.getBottom() + 2).withHeight (16), Justification::centred);
+            g.setColour (Colour (0x66d9d3d3)); g.setFont (serif (11.0f));
+            g.drawText (String (i + 1), Rectangle<float> (colX (i), area.getY() - 16, colX (i + 1) - colX (i), 14), Justification::centred);
+            g.setFont (serif (15.0f, false, 0.02f));
         }
     }
     void mouseDown (const MouseEvent& e) override
     {
-        drag = -1;
-        for (int i = 0; i < 16; ++i) if (cell (i).contains (e.position)) drag = i;
-        if (drag < 0) return;
-        auto* prm = proc.apvts.getParameter (ID::arpStep (drag));
-        startVal = prm->getValue();
-        prm->beginChangeGesture();
-        moved = false;
+        dragStep = -1; resize = false;
+        for (int i = 15; i >= 0; --i)
+            if (on (i) && brick (i).expanded (0, 3).contains (e.position))
+            {
+                if (e.mods.isPopupMenu()) { setOn (i, false); repaint(); return; }
+                dragStep = i;
+                resize = e.position.x > brick (i).getRight() - 9;
+                startNote = note (i); startLen = len (i);
+                return;
+            }
+        const int col = colAt (e.position.x);
+        if (col < 0 || e.mods.isPopupMenu()) return;
+        for (int i = 0; i < col; ++i)   // shorten a note that runs over this step
+            if (on (i) && i + len (i) > col) setParam (ID::arpLen (i), (float) (col - i));
+        setOn (col, true); setParam (ID::arpLen (col), 1.0f); setParam (ID::arpNote (col), (float) rowAt (e.position.y));
+        dragStep = col; resize = false; startNote = note (col); startLen = 1;
+        repaint();
     }
     void mouseDrag (const MouseEvent& e) override
     {
-        if (drag < 0) return;
-        moved = moved || std::abs (e.getDistanceFromDragStartY()) > 3;
-        if (! moved) return;
-        auto c = cell (drag);
-        const float v = jlimit (0.0f, 1.0f, 1.0f - (e.position.y - c.getY()) / c.getHeight());
-        proc.apvts.getParameter (ID::arpStep (drag))->setValueNotifyingHost (v);
+        if (dragStep < 0) return;
+        if (resize)
+        {
+            const int end = jlimit (dragStep + 1, 16, colAt (e.position.x) + 1);
+            const int newLen = jlimit (1, 16 - dragStep, end - dragStep);
+            for (int j = dragStep + 1; j < dragStep + newLen; ++j) setOn (j, false);   // swallowed steps become part of the note
+            setParam (ID::arpLen (dragStep), (float) newLen);
+        }
+        else setParam (ID::arpNote (dragStep), (float) rowAt (e.position.y));
         repaint();
     }
-    void mouseUp (const MouseEvent&) override
+    void mouseDoubleClick (const MouseEvent& e) override
     {
-        if (drag < 0) return;
-        auto* prm = proc.apvts.getParameter (ID::arpStep (drag));
-        if (! moved) prm->setValueNotifyingHost (startVal > 0.02f ? 0.0f : 1.0f);
-        prm->endChangeGesture();
-        drag = -1; repaint();
+        for (int i = 15; i >= 0; --i) if (on (i) && brick (i).contains (e.position)) { setOn (i, false); repaint(); return; }
     }
 private:
-    Rectangle<float> cell (int i) const
+    Rectangle<float> gridArea() const { return getLocalBounds().toFloat().withTrimmedTop (18).withTrimmedBottom (28); }
+    float colX (int i) const { auto a = gridArea(); return a.getX() + a.getWidth() * (float) i / 16.0f; }
+    float rowH() const { return gridArea().getHeight() / (float) (2 * range + 1); }
+    float rowY (int semis) const { return gridArea().getY() + ((float) (range - semis) + 0.5f) * rowH(); }
+    int colAt (float x) const { auto a = gridArea(); return (x < a.getX() || x >= a.getRight()) ? -1 : jlimit (0, 15, (int) ((x - a.getX()) / a.getWidth() * 16.0f)); }
+    int rowAt (float y) const { return jlimit (-range, range, range - (int) std::floor ((y - gridArea().getY()) / rowH())); }
+    Rectangle<float> brick (int i) const
     {
-        const float w = (float) getWidth() / 16.0f;
-        return { w * (float) i + 4.0f, 0.0f, w - 8.0f, (float) getHeight() - 20.0f };
+        const float h = std::max (13.0f, rowH() * 1.4f);
+        return { colX (i), rowY (note (i)) - h * 0.5f, colX (jmin (16, i + len (i))) - colX (i), h };
+    }
+    bool on (int i) const { return proc.apvts.getRawParameterValue (ID::arpStep (i))->load() > 0.5f; }
+    int note (int i) const { return (int) proc.apvts.getRawParameterValue (ID::arpNote (i))->load(); }
+    int len (int i) const { return (int) proc.apvts.getRawParameterValue (ID::arpLen (i))->load(); }
+    int stepsNow() const { return (int) proc.apvts.getRawParameterValue (ID::arpSteps)->load(); }
+    void setOn (int i, bool v) { setParam (ID::arpStep (i), v ? 1.0f : 0.0f); }
+    void setParam (const String& id, float v)
+    {
+        auto* prm = proc.apvts.getParameter (id);
+        const float n = prm->convertTo0to1 (v);
+        if (std::abs (prm->getValue() - n) < 1.0e-6f) return;
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (n); prm->endChangeGesture();
     }
     void timerCallback() override { const int c = proc.arpCurStep.load(); if (c != lastCur) { lastCur = c; repaint(); } }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    int drag = -1, lastCur = -2; float startVal = 0; bool moved = false;
+    int dragStep = -1, startNote = 0, startLen = 1, lastCur = -2; bool resize = false;
 };
 
 static StringArray arpIds()
 {
     StringArray ids { ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::arpSteps, ID::keyLock, ID::key, ID::scale };
-    for (int i = 0; i < 16; ++i) ids.add (ID::arpStep (i));
+    for (int i = 0; i < 16; ++i) { ids.add (ID::arpStep (i)); ids.add (ID::arpNote (i)); ids.add (ID::arpLen (i)); }
     return ids;
 }
 
@@ -589,56 +645,20 @@ public:
     ArpPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
         : TabPanel (p, l, "ARP", arpIds()),
           grid (p, { ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::arpSteps, ID::keyLock, ID::key, ID::scale }, 10,
-                { "ARP", "SPEED", "MODE", "OCTAVES", "GATE", "SHUFFLE", "STEPS", "KEY LOCK", "KEY", "SCALE" }),
-          steps (p, l)
+                { "ARP", "SPEED", "MODE", "OCTAVES", "GATE", "SHUFFLE", "LENGTH", "KEY LOCK", "KEY", "SCALE" }),
+          notes (p, l)
     {
-        addAndMakeVisible (grid); addAndMakeVisible (steps);
-        static const char* names[] { "ALL ON", "TRAP BOUNCE", "OFFBEAT", "DOTTED", "ROLL", "RANDOM" };
-        for (int i = 0; i < 6; ++i)
-        {
-            auto b = std::make_unique<TextButton> (names[i]);
-            b->onClick = [this, i] { pattern (i); };
-            addAndMakeVisible (*b);
-            patterns.push_back (std::move (b));
-        }
-        hint.setText ("MODE Scale Up / Scale Down plays trap runs in KEY + SCALE (e.g. C Minor, Phrygian, Harmonic Minor). KEY LOCK keeps every note in the scale.",
-                      dontSendNotification);
-        hint.setFont (serif (15.0f, false, 0.04f));
-        hint.setColour (Label::textColourId, Colour (0xffb9b0ac));
-        addAndMakeVisible (hint);
+        addAndMakeVisible (grid); addAndMakeVisible (notes);
     }
     void layout (Rectangle<int> r) override
     {
         grid.setBounds (r.removeFromTop (118));
-        r.removeFromTop (10);
-        auto row = r.removeFromBottom (40);
-        hint.setBounds (r.removeFromBottom (26));
-        const int w = row.getWidth() / 6;
-        for (auto& b : patterns) b->setBounds (row.removeFromLeft (w).reduced (6, 2));
-        steps.setBounds (r.reduced (0, 6));
+        r.removeFromTop (8);
+        notes.setBounds (r);
     }
 private:
-    void pattern (int i)
-    {
-        static const float pat[5][16] {
-            { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
-            { 1, 0, 0.6f, 1, 0, 1, 0.6f, 0, 1, 0, 0.6f, 1, 0, 0.8f, 1, 0.6f },
-            { 0, 1, 0, 0.9f, 0, 1, 0, 0.9f, 0, 1, 0, 0.9f, 0, 1, 0, 0.9f },
-            { 1, 0, 0, 0.9f, 0, 0, 1, 0, 0, 0.9f, 0, 0, 1, 0, 0.8f, 0 },
-            { 1, 0.45f, 0.7f, 0.45f, 1, 0.45f, 0.7f, 0.45f, 1, 0.5f, 0.75f, 0.5f, 1, 0.6f, 0.8f, 0.9f } };
-        Random rnd;
-        for (int st = 0; st < 16; ++st)
-        {
-            auto* prm = proc.apvts.getParameter (ID::arpStep (st));
-            const float v = i < 5 ? pat[i][st] : (rnd.nextFloat() < 0.3f ? 0.0f : 0.4f + 0.6f * rnd.nextFloat());
-            prm->beginChangeGesture(); prm->setValueNotifyingHost (v); prm->endChangeGesture();
-        }
-        steps.repaint();
-    }
     ParamGrid grid;
-    StepGrid steps;
-    std::vector<std::unique_ptr<TextButton>> patterns;
-    Label hint;
+    NoteGrid notes;
 };
 
 //==============================================================================
@@ -893,8 +913,8 @@ public:
         setLookAndFeel (&lnf);
 
         // ---- header
-        prevBtn.onClick = [this] { step (-1); }; prevBtn.setTooltip ("Previous preset");
-        nextBtn.onClick = [this] { step (1); };  nextBtn.setTooltip ("Next preset");
+        prevBtn.onClick = [this] { step (-1); }; prevBtn.setTooltip ("Previous preset (inside the category chosen in the browser)");
+        nextBtn.onClick = [this] { step (1); };  nextBtn.setTooltip ("Next preset (inside the category chosen in the browser)");
         saveBtn.onClick = [this] { savePreset(); }; saveBtn.setTooltip ("Save this sound as a user preset.");
         menuBtn.onClick = [this] { showMenu(); };  menuBtn.setTooltip ("Presets, A/B, undo, ADVANCED, size.");
         nameBtn.onClick = [this] { openTab (tabBrowser); }; nameBtn.setTooltip ("Click to browse and search all presets.");
@@ -989,7 +1009,7 @@ public:
         static const char* tabTips[] { "BROWSER: all sounds by category, subcategory, era, mood and more",
                                        "SOUND: engines A + B, filter and envelopes", "MOD: LFOs, modulation matrix, envelope 3",
                                        "MOVEMENT: chord, arp, glide, perform controls", "FX: effect rack (drag to reorder)",
-                                       "ARP: 16-step arpeggiator with velocity, trap scale runs, patterns",
+                                       "ARP: 16-step arpeggiator - move the notes up / down, make them longer, trap scale runs",
                                        "KILLA: ghost, bend, circuit, body swap, tape, future" };
         for (int i = 0; i < numTabs; ++i)
         {
@@ -1037,6 +1057,7 @@ public:
     {
         stopTimer();
         PopupMenu::dismissAllActiveMenus();   // never leave a menu pointing at a closed editor
+        proc.releaseThumbnailRenderer();      // nothing heavy stays alive after the window is closed
         setLookAndFeel (nullptr);
     }
 
@@ -1193,6 +1214,7 @@ private:
         const auto& ps = factoryPresets();
         for (int c = 0; c < numCategories; ++c)
         {
+            if (c == c808) continue;
             PopupMenu sub;
             for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].cat == c) sub.addItem (1000 + i, ps[(size_t) i].name);
             cats.addSubMenu (categoryNames()[c], sub);
@@ -1274,10 +1296,20 @@ private:
     }
     void step (int dir)
     {
+        // stay inside the category / subcategory picked in the browser
         const auto& ps = factoryPresets();
-        const int n = (int) ps.size();
-        const int cur = proc.currentPresetIndex();
-        proc.loadPreset (cur < 0 ? 0 : ((cur + dir) % n + n) % n);
+        std::vector<int> list;
+        for (int i = 0; i < (int) ps.size(); ++i)
+        {
+            if (proc.uiCat >= 0 && ps[(size_t) i].cat != proc.uiCat) continue;
+            if (proc.uiCat >= 0 && proc.uiSub >= 0 && ps[(size_t) i].sub != subcategoryNames (proc.uiCat)[proc.uiSub]) continue;
+            list.push_back (i);
+        }
+        if (list.empty()) { list.resize (ps.size()); std::iota (list.begin(), list.end(), 0); }
+        auto it = std::find (list.begin(), list.end(), proc.currentPresetIndex());
+        int pos = it == list.end() ? (dir > 0 ? -1 : 0) : (int) std::distance (list.begin(), it);
+        pos = (pos + dir + (int) list.size()) % (int) list.size();
+        proc.loadPreset (list[(size_t) pos]);
         proc.captureUndo();
         refreshState();
     }

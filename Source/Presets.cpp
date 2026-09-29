@@ -2,6 +2,7 @@
 #include "Params.h"
 #include "PresetGains.h"
 #include <array>
+#include <algorithm>
 #include <map>
 
 // Factory presets. Values are real parameter values; anything not listed uses the default.
@@ -1212,10 +1213,38 @@ const std::vector<Preset>& factoryPresets()
         R (cArp, "Melodic", "Trap Bell Arp", { 0, 4 }, arpOn (with (bellB, { { decay, 0.5f }, { delayMix, 0.2f } }), 1, 5, 2, 0.5f));
         R (cArp, "Triplet", "Triplet Flute Arp", { 1, 5 }, arpOn (with (fluteB, { { attack, 0.01f }, { sustain, 0.5f }, { release, 0.2f } }), 2, 5, 2, 0.45f));
 
+
+        // ---- v0.8 basses: analog-style mono basses instead of 808s
+        const Vals moogB { { engine, VA }, { wave, 0.1f }, { filterType, 1 }, { cutoff, 700 }, { reso, 0.35f }, { fenv, 0.65f }, { fdecay, 0.35f },
+                           { fsustain, 0.2f }, { attack, 0.002f }, { decay, 0.8f }, { sustain, 0.8f }, { release, 0.15f }, { glide, 0.06f }, { drive, 0.15f } };
+        R (cBass, "Synth Bass", "Moog Bass", { 0, 3, 4 }, moogB);
+        R (cBass, "Synth Bass", "Round Moog Bass", { 1, 5 }, with (moogB, { { wave, 0.45f }, { cutoff, 500 }, { reso, 0.2f }, { fenv, 0.4f } }));
+        R (cBass, "Pluck Bass", "Moog Pluck Bass", { 2, 4 }, with (moogB, { { decay, 0.35f }, { sustain, 0 }, { fdecay, 0.18f }, { fenv, 0.8f }, { cutoff, 450 } }));
+        R (cBass, "Distorted", "Growl Moog", { 4, 5 }, with (moogB, { { unison, 2 }, { detune, 0.15f }, { drive, 0.5f }, { driveType, 3 }, { reso, 0.5f },
+                                                                      { lfoFilter, 0.2f }, { lfoSync, 1 }, { lfoDiv, 4 } }));
+        R (cBass, "Synth Bass", "Acid Moog", { 1, 3 }, with (moogB, { { wave, 0.0f }, { reso, 0.7f }, { fenv, 0.9f }, { fdecay, 0.2f }, { cutoff, 400 }, { glide, 0.12f } }));
+        R (cBass, "Synth Bass", "Deep Saw Bass", { 0, 2 }, with (moogB, { { cutoff, 350 }, { reso, 0.1f }, { fenv, 0.3f }, { sub, 0.5f } }));
+        R (cBass, "Reese", "Moog Reese", { 3, 5 }, with (moogB, { { unison, 3 }, { detune, 0.35f }, { cutoff, 900 }, { fenv, 0.2f }, { sustain, 1 } }));
+        R (cBass, "Distorted", "Fuzz Bass", { 4, 5 }, with (moogB, { { wave, 0.5f }, { drive, 0.65f }, { driveType, 4 }, { cutoff, 1200 } }));
+        R (cBass, "Sub", "Square Sub Bass", { 3, 5 }, { { engine, VA }, { wave, 0.5f }, { filterType, 1 }, { cutoff, 600 }, { sustain, 1 }, { release, 0.15f } });
+        R (cBass, "Pluck Bass", "Finger Bass", { 0, 3 }, { { engine, PL }, { wave, 0.35f }, { decay, 1.2f }, { sustain, 0 }, { release, 0.15f }, { body, 5 },
+                                                          { bodyMix, 0.35f }, { cutoff, 1500 } });
+        R (cBass, "Pluck Bass", "Upright Bass", { 1, 2 }, { { engine, PL }, { wave, 0.4f }, { decay, 1.6f }, { sustain, 0 }, { release, 0.2f }, { body, 5 }, { sub, 0.35f },
+                                                           { bodyMix, 0.5f }, { cutoff, 1200 } });
+        R (cBass, "Hybrid Bass", "FM Bass", { 1, 4 }, { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.45f }, { fdecay, 0.3f }, { decay, 0.6f }, { sustain, 0.5f },
+                                                       { cutoff, 3000 } });
+
         // ---- v0.6: macro 1 is DARK (turn right = darker) on melodic sounds
         for (auto& pr : v)
             if (! pr.isBass())
                 for (auto& [k, x] : pr.values) if (k == ID::m1) x = 1.0f - x;
+
+        // ---- v0.8: no 808 sounds at all (decaying sub hits) - the bass section is synth basses
+        v.erase (std::remove_if (v.begin(), v.end(), [] (const Preset& pr)
+        {
+            if (pr.cat == c808 || pr.name.contains ("808")) return true;
+            return pr.isBass() && (int) getV (pr.values, ID::engine, 0) == engSub && getV (pr.values, ID::sustain, 1.0f) < 0.05f;
+        }), v.end());
 
         // ---- unique names
         {
@@ -1226,7 +1255,7 @@ const std::vector<Preset>& factoryPresets()
         // ---- first impression: trap essentials open the library
         {
             static const char* heroes[] { "Classic Trap Bell", "Classic Hard Horn Stab", "Classic Orchestra Brass Hit", "Classic Trap Staccato Violins",
-                                          "Classic Trap Flute Lead", "Classic Trap Piano Keys", "Anthem Lead", "Rage Anthem Lead", "Classic Clean 808",
+                                          "Classic Trap Flute Lead", "Classic Trap Piano Keys", "Anthem Lead", "Rage Anthem Lead", "Classic Moog Bass",
                                           "Atmos Plugg Pluck", "Classic Trap Bell Arp", "Classic Dark Trap Strings", "Classic Icy Trap Bell",
                                           "Rage Drill Horn Riff", "Classic Epic Stab Hit", "Classic Whistle Lead" };
             std::vector<Preset> front, rest;

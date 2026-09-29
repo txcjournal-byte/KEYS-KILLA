@@ -20,7 +20,7 @@ public:
         addAndMakeVisible (search);
 
         category.addItem ("All categories", 1);
-        for (int c = 0; c < numCategories; ++c) category.addItem (categoryNames()[c], c + 2);
+        for (int c = 0; c < numCategories; ++c) if (c != c808) category.addItem (categoryNames()[c], c + 2);   // 808 sounds are in BASS
         category.onChange = [this] { fillSubs(); refresh(); };
         subcat.onChange = [this] { refresh(); };
         fillSubs();
@@ -68,6 +68,7 @@ public:
         pickHandler = std::move (pick); title = heading;
         category.setSelectedId (cat >= 0 ? cat + 2 : 1, dontSendNotification);
         fillSubs();
+        if (cat >= 0 && proc.uiSub >= 0 && ! pick) subcat.setSelectedId (proc.uiSub + 2, dontSendNotification);
         era.setSelectedId (1, dontSendNotification); ignoreUnused (eraIdx);
         exclusiveOnly.setToggleState (exclusive, dontSendNotification);
         refresh();
@@ -181,6 +182,9 @@ private:
             setVisible (false);
             return;
         }
+        // the header arrows keep browsing inside the category / subcategory chosen here
+        proc.uiCat = category.getSelectedId() - 2;
+        proc.uiSub = proc.uiCat >= 0 ? subcat.getSelectedId() - 2 : -1;
         if (en.factoryIndex >= 0) proc.loadPreset (en.factoryIndex); else proc.loadUserPreset (en.file);
         list.repaint();
         if (onChanged) onChanged();

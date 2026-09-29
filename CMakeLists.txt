@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.7.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,7 +84,7 @@ if(KK_BUILD_TESTS)
         Source/PluginEditor.cpp
         Source/Presets.cpp)
     target_compile_definitions(KeysKillaTests PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 KK_TEST_BUILD=1
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 KK_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1
         JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1)
     target_link_libraries(KeysKillaTests PRIVATE
         KeysKillaAssets

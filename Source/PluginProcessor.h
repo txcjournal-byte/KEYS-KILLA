@@ -101,6 +101,7 @@ public:
     void restoreGeneration (int h);
     void previewChild (int i);                          // select + play a short note
     bool renderNextThumbnail();                         // message thread, one child per call
+    void releaseThumbnailRenderer();                    // editor closed: free the offline renderer
     const Genome& parent (int s) const { return parents[(size_t) juce::jlimit (0, 1, s)]; }
     const std::vector<Child>& kids() const { return children; }
     int  selectedChild() const { return selChild; }

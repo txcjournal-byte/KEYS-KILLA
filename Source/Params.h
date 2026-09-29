@@ -146,7 +146,10 @@ namespace ID
     inline constexpr const char* future   = "future";     // FUTURE: ORIGINAL -> HYBRID -> UNKNOWN
     // v0.7: step arpeggiator (length + 16 step velocities, 0 = rest)
     inline constexpr const char* arpSteps = "arpSteps";
-    inline juce::String arpStep (int i) { return "arpStep" + juce::String (i + 1); }
+    inline juce::String arpStep (int i) { return "arpStep" + juce::String (i + 1); }   // step on (> 0.5) / rest
+    inline juce::String arpNote (int i) { return "arpNote" + juce::String (i + 1); }   // semitones -12 ... +12
+    inline juce::String arpLen (int i)  { return "arpLen" + juce::String (i + 1); }    // length in steps (tie)
+    inline bool isArpPattern (const juce::String& id) { return id.startsWith ("arpStep") || id.startsWith ("arpNote") || id.startsWith ("arpLen"); }
 
     // mod matrix slots: mmSrc1..8, mmDst1..8, mmAmt1..8
     inline juce::String mmSrc (int i) { return "mmSrc" + juce::String (i + 1); }
@@ -399,6 +402,10 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     i (ID::arpSteps, "Arp Steps", 1, 16, 16);
     for (int st = 0; st < 16; ++st)
         f (ID::arpStep (st), "Arp Step " + String (st + 1), 0, 1, 1.0f);
+    for (int st = 0; st < 16; ++st)
+        i (ID::arpNote (st), "Arp Note " + String (st + 1), -12, 12, 0);
+    for (int st = 0; st < 16; ++st)
+        i (ID::arpLen (st), "Arp Length " + String (st + 1), 1, 16, 1);
 
     for (int s = 0; s < numModSlots; ++s)
     {

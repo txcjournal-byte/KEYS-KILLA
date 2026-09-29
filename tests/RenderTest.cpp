@@ -1,3 +1,5 @@
+#include <thread>
+#include <atomic>
 #include <map>
 // Offline render of every factory preset: checks for NaN/Inf, silence, DC and loudness spread.
 #include "../Source/PluginProcessor.h"
@@ -267,6 +269,58 @@ int main (int argc, char** argv)
         p.removeListener (&counter);
         return 0;
     }
+    if (argc > 1 && juce::String (argv[1]) == "-longuse")   // host-like long session, then measure shutdown
+    {
+        const int seconds = argc > 2 ? juce::String (argv[2]).getIntValue() : 20;
+        auto proc = std::make_unique<KeysKillaProcessor>();
+        proc->prepareToPlay (48000, 256);
+        std::atomic<bool> run { true };
+        std::thread audio ([&]
+        {
+            juce::AudioBuffer<float> b (2, 256); kk::Rng r; r.seed (5); int k = 0;
+            while (run)
+            {
+                juce::MidiBuffer m;
+                if (k % 40 == 0) m.addEvent (juce::MidiMessage::noteOn (1, 48 + (int) (r.uni() * 24), (juce::uint8) 100), 0);
+                if (k % 40 == 30) m.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+                proc->processBlock (b, m); ++k;
+                std::this_thread::sleep_for (std::chrono::microseconds (2000));
+            }
+        });
+        std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
+       
+        auto* ke = dynamic_cast<KeysKillaEditor*> (ed.get());
+        const auto end = juce::Time::getMillisecondCounterHiRes() + seconds * 1000.0;
+        int action = 0;
+        while (juce::Time::getMillisecondCounterHiRes() < end)
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            switch (action++ % 12)
+            {
+                case 0: proc->breed(); break;
+                case 1: proc->previewChild (action % 6); break;
+                case 2: proc->setCurrentProgram (action % proc->getNumPrograms()); break;
+                case 3: ke->showView (1 + action % 8); break;
+                case 4: ke->showView (9); break;
+                case 5: ke->showView (11); break;
+                case 6: proc->setParentChild (0, 2); break;
+                case 7: { juce::MemoryBlock mb; proc->getStateInformation (mb); } break;
+                case 8: proc->rollDice (0); break;
+                case 9: ed.reset(); ed.reset (proc->createEditor()); ke = dynamic_cast<KeysKillaEditor*> (ed.get()); break;
+                default: break;
+            }
+        }
+        run = false; audio.join();
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        ed.reset();
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
+        juce::MemoryBlock mb; proc->getStateInformation (mb);
+        const auto t2 = juce::Time::getMillisecondCounterHiRes();
+        proc->releaseResources(); proc.reset();
+        const auto t3 = juce::Time::getMillisecondCounterHiRes();
+        std::printf ("after %d s: close editor %.1f ms, save state %.1f ms (%d bytes), destroy plugin %.1f ms\n", seconds, t1 - t0, t2 - t1, (int) mb.getSize(), t3 - t2);
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "-edtime")   // editor open / close time
     {
         for (int k = 0; k < 5; ++k)
@@ -293,7 +347,7 @@ int main (int argc, char** argv)
         int missing = 0;
         for (int c = 0; c < numCategories; ++c)
             for (auto& sname : subcategoryNames (c))
-                if (perSub[categoryNames()[c] + " / " + sname] == 0) { std::printf ("  EMPTY SUBCATEGORY %s / %s\n", categoryNames()[c].toRawUTF8(), sname.toRawUTF8()); ++missing; }
+                if (c != c808 && perSub[categoryNames()[c] + " / " + sname] == 0) { std::printf ("  EMPTY SUBCATEGORY %s / %s\n", categoryNames()[c].toRawUTF8(), sname.toRawUTF8()); ++missing; }
         for (auto& [k, n] : perSub)
         {
             bool known = false;

@@ -41,7 +41,7 @@ struct KeysKillaProcessor::Idx
     KK_PARAMS (KK_DECL)
    #undef KK_DECL
     int mmSrc[numModSlots] {}, mmDst[numModSlots] {}, mmAmt[numModSlots] {};
-    int arpStep[16] {};
+    int arpStep[16] {}, arpNote[16] {}, arpLen[16] {};
 };
 
 KeysKillaProcessor::KeysKillaProcessor()
@@ -57,13 +57,13 @@ KeysKillaProcessor::KeysKillaProcessor()
             params.push_back (rp);
             raw.push_back (apvts.getRawParameterValue (rp->getParameterID()));
             const auto id = rp->getParameterID();
-            morphable.push_back (! performanceIds.contains (id) && ! id.startsWith ("arpStep") && id != ID::seed);
+            morphable.push_back (! performanceIds.contains (id) && ! ID::isArpPattern (id) && id != ID::seed);
             discrete.push_back (dynamic_cast<juce::AudioParameterChoice*> (rp) != nullptr || dynamic_cast<juce::AudioParameterBool*> (rp) != nullptr);
         }
     for (size_t i = 0; i < params.size(); ++i)
     {
         idIndex[params[i]->getParameterID()] = (int) i;
-        keepParam.push_back (keepOnPresetLoad.contains (params[i]->getParameterID()) || params[i]->getParameterID().startsWith ("arpStep"));
+        keepParam.push_back (keepOnPresetLoad.contains (params[i]->getParameterID()) || ID::isArpPattern (params[i]->getParameterID()));
     }
     ix = std::make_unique<Idx>();
    #define KK_SET(n) ix->n = indexOf (ID::n);
@@ -73,14 +73,14 @@ KeysKillaProcessor::KeysKillaProcessor()
     {
         ix->mmSrc[s] = indexOf (ID::mmSrc (s)); ix->mmDst[s] = indexOf (ID::mmDst (s)); ix->mmAmt[s] = indexOf (ID::mmAmt (s));
     }
-    for (int st = 0; st < 16; ++st) ix->arpStep[st] = indexOf (ID::arpStep (st));
+    for (int st = 0; st < 16; ++st) { ix->arpStep[st] = indexOf (ID::arpStep (st)); ix->arpNote[st] = indexOf (ID::arpNote (st)); ix->arpLen[st] = indexOf (ID::arpLen (st)); }
     for (auto& bank : cornerBank) for (auto& c : bank) c.assign (params.size(), 0.0f);
     for (auto* prm : params)
     {
         const auto id = prm->getParameterID();
         auto any = [&] (std::initializer_list<const char*> ids) { for (auto* x : ids) if (id == x) return true; return false; };
         int gene = geneBody;
-        if (keepOnPresetLoad.contains (id) || id.startsWith ("arpStep") || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange })) gene = -1;
+        if (keepOnPresetLoad.contains (id) || ID::isArpPattern (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange })) gene = -1;
         else if (any ({ ID::attack, ID::decay, ID::sustain, ID::release, ID::velSens, ID::fattack, ID::fdecay, ID::fsustain, ID::frelease,
                         ID::fenv, ID::punch, ID::bend, ID::bendMode, ID::bendSemis })) gene = geneAttack;
         else if (any ({ ID::crush, ID::wow, ID::drive, ID::driveType, ID::tape, ID::circuit, ID::circRate, ID::body, ID::bodyMix,
@@ -102,7 +102,14 @@ KeysKillaProcessor::KeysKillaProcessor()
     setParentPreset (1, juce::jmin ((int) factoryPresets().size() - 1, 250));
 }
 
-KeysKillaProcessor::~KeysKillaProcessor() { cancelPendingUpdate(); }
+KeysKillaProcessor::~KeysKillaProcessor()
+{
+    cancelPendingUpdate();
+    thumbRenderer.reset();   // the offline waveform renderer goes first
+    history.clear(); children.clear();
+}
+
+void KeysKillaProcessor::releaseThumbnailRenderer() { thumbRenderer.reset(); }
 
 int KeysKillaProcessor::indexOf (const juce::String& id) const
 {
@@ -440,7 +447,7 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
         }
     }
 
-    if (! arp) return;
+    if (! arp) { arpCurStep = -1; return; }
 
     // ------------------------ arpeggiator (step sequenced) ------------------------
     int list[128 * 4]; int count = 0;
@@ -482,19 +489,25 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
         if (b < beatPos || step <= arpLastStep) continue;
         arpLastStep = step;
         const int stepIdx = (int) (((step % steps) + steps) % steps);
-        arpCurStep = stepIdx;
+        arpCurStep = count > 0 ? stepIdx : -1;   // the playhead only moves while notes are held
         if (count == 0) continue;
-        const float stepVel = raw[(size_t) I.arpStep[stepIdx]]->load();
-        if (stepVel < 0.02f) continue;   // rest
+        auto stepOn = [&] (int st) { return raw[(size_t) I.arpStep[st]]->load() > 0.5f; };
+        auto stepLen = [&] (int st) { return juce::jlimit (1, steps - st, (int) raw[(size_t) I.arpLen[st]]->load()); };
+        bool tied = false;   // inside a longer note that started earlier
+        for (int st = 0; st < stepIdx; ++st) if (stepOn (st) && st + stepLen (st) > stepIdx) { tied = true; break; }
+        if (tied || ! stepOn (stepIdx)) continue;
+        const int transpose = (int) raw[(size_t) I.arpNote[stepIdx]]->load();
         const int pos = juce::jlimit (0, n - 1, (int) ((b - beatPos) / bps));
-        const auto vel = (juce::uint8) juce::jlimit (1, 127, (int) std::round (127.0f * stepVel));
-        const auto dur = juce::jmax ((int64_t) 16, (int64_t) (gate * stepBeats / bps));
+        const auto vel = (juce::uint8) 100;
+        const auto dur = juce::jmax ((int64_t) 16, (int64_t) (((double) stepLen (stepIdx) - 1.0 + gate) * stepBeats / bps));
         if (mode == 7)   // chord: every held note on each step
         {
             for (int k = 0; k < count && k < 12; ++k)
             {
-                out.addEvent (juce::MidiMessage::noteOn (1, list[k], vel), pos);
-                addPending (sampleClock + pos + dur, list[k], 0, false);
+                int cn = juce::jlimit (0, 127, list[k] + transpose);
+                if (lock) cn = snapToScale (cn);
+                out.addEvent (juce::MidiMessage::noteOn (1, cn, vel), pos);
+                addPending (sampleClock + pos + dur, cn, 0, false);
             }
             continue;
         }
@@ -508,6 +521,7 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
             case 3:  note = list[(int) (arpRng.uni() * (float) count) % count]; break;
             default: arpIndex = (arpIndex + 1) % count; note = list[arpIndex]; break;
         }
+        note = juce::jlimit (0, 127, note + transpose);
         if (lock) note = snapToScale (note);
         out.addEvent (juce::MidiMessage::noteOn (1, note, vel), pos);
         addPending (sampleClock + pos + dur, note, 0, false);
