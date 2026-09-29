@@ -144,6 +144,9 @@ namespace ID
     inline constexpr const char* era      = "era";        // ERA morph 0..6 (2010-12 ... FUTURE)
     inline constexpr const char* eraHome  = "eraHome";    // the era the preset was designed in
     inline constexpr const char* future   = "future";     // FUTURE: ORIGINAL -> HYBRID -> UNKNOWN
+    // v0.7: step arpeggiator (length + 16 step velocities, 0 = rest)
+    inline constexpr const char* arpSteps = "arpSteps";
+    inline juce::String arpStep (int i) { return "arpStep" + juce::String (i + 1); }
 
     // mod matrix slots: mmSrc1..8, mmDst1..8, mmAmt1..8
     inline juce::String mmSrc (int i) { return "mmSrc" + juce::String (i + 1); }
@@ -165,8 +168,8 @@ namespace Choices
     inline const juce::StringArray keys      { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     inline const juce::StringArray scales    { "Minor", "Major", "Harmonic Minor", "Phrygian", "Dorian", "Minor Pent.", "Blues", "Chromatic" };
     inline const juce::StringArray chordTypes{ "Trap Minor", "Dark Minor", "Minor Add9", "Dark Sus", "Power", "Octaves", "Phrygian", "Minor 7", "Major", "Scale Triad" };
-    inline const juce::StringArray arpRates  { "1/8", "1/16", "1/16T", "1/32" };
-    inline const juce::StringArray arpModes  { "Up", "Down", "Up/Down", "Random", "As Played" };
+    inline const juce::StringArray arpRates  { "1/8", "1/16", "1/16T", "1/32", "1/4", "1/8T", "1/32T" };
+    inline const juce::StringArray arpModes  { "Up", "Down", "Up/Down", "Random", "As Played", "Scale Up", "Scale Down", "Chord" };
     inline const juce::StringArray drives    { "Soft", "Tape", "Hard", "Blown", "Fold" };
     inline const juce::StringArray delays    { "1/4", "1/8", "1/8D", "1/16", "1/4T" };
     inline const juce::StringArray delayModes{ "Ping-Pong", "Stereo", "Tape" };
@@ -185,8 +188,8 @@ namespace Choices
     }
     inline double arpBeats (int i)
     {
-        static const double v[] { 0.5, 0.25, 1.0 / 6.0, 0.125 };
-        return v[juce::jlimit (0, 3, i)];
+        static const double v[] { 0.5, 0.25, 1.0 / 6.0, 0.125, 1.0, 1.0 / 3.0, 1.0 / 12.0 };
+        return v[juce::jlimit (0, 6, i)];
     }
     inline double delayBeats (int i)
     {
@@ -330,7 +333,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     b (ID::arp, "Arp", false);
     c (ID::arpRate, "Arp Rate", Choices::arpRates, 1);
     c (ID::arpMode, "Arp Mode", Choices::arpModes, 0);
-    i (ID::arpOct, "Arp Octaves", 1, 3, 1);
+    i (ID::arpOct, "Arp Octaves", 1, 4, 1);
     f (ID::arpSwing, "Arp Swing", 0, 0.5f, 0);
     f (ID::arpGate, "Arp Gate", 0.1f, 1.0f, 0.8f);
 
@@ -393,6 +396,9 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     }
     i (ID::eraHome, "ERA Home", 0, 6, 0);
     f (ID::future, "FUTURE", 0, 1, 0);
+    i (ID::arpSteps, "Arp Steps", 1, 16, 16);
+    for (int st = 0; st < 16; ++st)
+        f (ID::arpStep (st), "Arp Step " + String (st + 1), 0, 1, 1.0f);
 
     for (int s = 0; s < numModSlots; ++s)
     {

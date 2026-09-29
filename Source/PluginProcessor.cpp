@@ -19,7 +19,7 @@ constexpr int kChunk = 512;
     X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) X(m7) X(m8) \
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
-    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future)
+    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps)
 
 // performance controls that never morph or get reset by presets
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
@@ -41,6 +41,7 @@ struct KeysKillaProcessor::Idx
     KK_PARAMS (KK_DECL)
    #undef KK_DECL
     int mmSrc[numModSlots] {}, mmDst[numModSlots] {}, mmAmt[numModSlots] {};
+    int arpStep[16] {};
 };
 
 KeysKillaProcessor::KeysKillaProcessor()
@@ -56,13 +57,13 @@ KeysKillaProcessor::KeysKillaProcessor()
             params.push_back (rp);
             raw.push_back (apvts.getRawParameterValue (rp->getParameterID()));
             const auto id = rp->getParameterID();
-            morphable.push_back (! performanceIds.contains (id) && id != ID::seed);
+            morphable.push_back (! performanceIds.contains (id) && ! id.startsWith ("arpStep") && id != ID::seed);
             discrete.push_back (dynamic_cast<juce::AudioParameterChoice*> (rp) != nullptr || dynamic_cast<juce::AudioParameterBool*> (rp) != nullptr);
         }
     for (size_t i = 0; i < params.size(); ++i)
     {
         idIndex[params[i]->getParameterID()] = (int) i;
-        keepParam.push_back (keepOnPresetLoad.contains (params[i]->getParameterID()));
+        keepParam.push_back (keepOnPresetLoad.contains (params[i]->getParameterID()) || params[i]->getParameterID().startsWith ("arpStep"));
     }
     ix = std::make_unique<Idx>();
    #define KK_SET(n) ix->n = indexOf (ID::n);
@@ -72,13 +73,14 @@ KeysKillaProcessor::KeysKillaProcessor()
     {
         ix->mmSrc[s] = indexOf (ID::mmSrc (s)); ix->mmDst[s] = indexOf (ID::mmDst (s)); ix->mmAmt[s] = indexOf (ID::mmAmt (s));
     }
+    for (int st = 0; st < 16; ++st) ix->arpStep[st] = indexOf (ID::arpStep (st));
     for (auto& bank : cornerBank) for (auto& c : bank) c.assign (params.size(), 0.0f);
     for (auto* prm : params)
     {
         const auto id = prm->getParameterID();
         auto any = [&] (std::initializer_list<const char*> ids) { for (auto* x : ids) if (id == x) return true; return false; };
         int gene = geneBody;
-        if (keepOnPresetLoad.contains (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange })) gene = -1;
+        if (keepOnPresetLoad.contains (id) || id.startsWith ("arpStep") || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange })) gene = -1;
         else if (any ({ ID::attack, ID::decay, ID::sustain, ID::release, ID::velSens, ID::fattack, ID::fdecay, ID::fsustain, ID::frelease,
                         ID::fenv, ID::punch, ID::bend, ID::bendMode, ID::bendSemis })) gene = geneAttack;
         else if (any ({ ID::crush, ID::wow, ID::drive, ID::driveType, ID::tape, ID::circuit, ID::circRate, ID::body, ID::bodyMix,
@@ -314,8 +316,12 @@ void KeysKillaProcessor::handleMidi (const juce::MidiMessage& m)
 
 int KeysKillaProcessor::snapToScale (int note) const
 {
-    const int mask = Choices::scaleMask ((int) raw[(size_t) ix->scale]->load());
-    const int root = (int) raw[(size_t) ix->key]->load();
+    return snapToScaleWith (note, (int) raw[(size_t) ix->key]->load(), Choices::scaleMask ((int) raw[(size_t) ix->scale]->load()));
+}
+
+int KeysKillaProcessor::snapToScaleWith (int note, int root, int mask)
+{
+    if (mask == 0) return note;
     for (int d = 0; d < 12; ++d)
         for (int sgn : { -1, 1 })
         {
@@ -436,18 +442,35 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
 
     if (! arp) return;
 
-    // ------------------------ arpeggiator ------------------------
-    int list[128 * 3]; int count = 0;
+    // ------------------------ arpeggiator (step sequenced) ------------------------
+    int list[128 * 4]; int count = 0;
     const int mode = (int) raw[(size_t) I.arpMode]->load();
-    const int octs = juce::jlimit (1, 3, (int) raw[(size_t) I.arpOct]->load());
+    const int octs = juce::jlimit (1, 4, (int) raw[(size_t) I.arpOct]->load());
     int base[128]; int nb = 0;
     if (mode == 4) for (int k = 0; k < arpOrderN; ++k) base[nb++] = arpOrder[(size_t) k];
     else for (int i = 0; i < 128; ++i) if (arpHeld[(size_t) i]) base[nb++] = i;
-    for (int o = 0; o < octs; ++o) for (int k = 0; k < nb; ++k) if (base[k] + 12 * o < 128) list[count++] = base[k] + 12 * o;
+    if (mode == 5 || mode == 6)   // trap scale runs: walk the key / scale up from the lowest held note
+    {
+        if (nb > 0)
+        {
+            const int mask = Choices::scaleMask ((int) raw[(size_t) I.scale]->load());
+            const int key = (int) raw[(size_t) I.key]->load();
+            int nn = snapToScaleWith (base[0], key, mask);
+            const int total = std::min (7 * octs, 7 * 4);
+            for (int k = 0; k < total && nn < 128; ++k)
+            {
+                list[count++] = nn;
+                do ++nn; while (nn < 128 && ! (mask & (1 << (((nn - key) % 12 + 12) % 12))));
+            }
+        }
+    }
+    else
+        for (int o = 0; o < octs; ++o) for (int k = 0; k < nb; ++k) if (base[k] + 12 * o < 128) list[count++] = base[k] + 12 * o;
 
     const double stepBeats = Choices::arpBeats ((int) raw[(size_t) I.arpRate]->load());
     const double swing = raw[(size_t) I.arpSwing]->load();
     const double gate = raw[(size_t) I.arpGate]->load();
+    const int steps = juce::jlimit (1, 16, (int) raw[(size_t) I.arpSteps]->load());
     const double bps = bpm / 60.0 / sr;
     const double endBeat = beatPos + bps * n;
     if ((int64_t) std::floor (beatPos / stepBeats) < arpLastStep - 1) arpLastStep = -1;   // transport jumped back
@@ -458,20 +481,36 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
         if (b >= endBeat) break;
         if (b < beatPos || step <= arpLastStep) continue;
         arpLastStep = step;
+        const int stepIdx = (int) (((step % steps) + steps) % steps);
+        arpCurStep = stepIdx;
         if (count == 0) continue;
+        const float stepVel = raw[(size_t) I.arpStep[stepIdx]]->load();
+        if (stepVel < 0.02f) continue;   // rest
         const int pos = juce::jlimit (0, n - 1, (int) ((b - beatPos) / bps));
+        const auto vel = (juce::uint8) juce::jlimit (1, 127, (int) std::round (127.0f * stepVel));
+        const auto dur = juce::jmax ((int64_t) 16, (int64_t) (gate * stepBeats / bps));
+        if (mode == 7)   // chord: every held note on each step
+        {
+            for (int k = 0; k < count && k < 12; ++k)
+            {
+                out.addEvent (juce::MidiMessage::noteOn (1, list[k], vel), pos);
+                addPending (sampleClock + pos + dur, list[k], 0, false);
+            }
+            continue;
+        }
         int note;
         switch (mode)
         {
-            case 1:  arpIndex = (arpIndex - 1 + count) % count; note = list[arpIndex]; break;
+            case 1: case 6: arpIndex = (arpIndex - 1 + count) % count; note = list[arpIndex]; break;
             case 2:  if (count == 1) arpIndex = 0;
                      else { arpIndex += arpDir; if (arpIndex >= count) { arpIndex = count - 2; arpDir = -1; } else if (arpIndex < 0) { arpIndex = 1; arpDir = 1; } }
                      note = list[juce::jlimit (0, count - 1, arpIndex)]; break;
             case 3:  note = list[(int) (arpRng.uni() * (float) count) % count]; break;
             default: arpIndex = (arpIndex + 1) % count; note = list[arpIndex]; break;
         }
-        out.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), pos);
-        addPending (sampleClock + pos + juce::jmax ((int64_t) 16, (int64_t) (gate * stepBeats / bps)), note, 0, false);
+        if (lock) note = snapToScale (note);
+        out.addEvent (juce::MidiMessage::noteOn (1, note, vel), pos);
+        addPending (sampleClock + pos + dur, note, 0, false);
     }
 }
 
@@ -633,6 +672,18 @@ void KeysKillaProcessor::snapshotForModified()
 {
     loadedSnapshot.resize (params.size());
     for (size_t i = 0; i < params.size(); ++i) loadedSnapshot[i] = params[i]->getValue();
+}
+
+void KeysKillaProcessor::resetParams (const juce::StringArray& ids)
+{
+    if (loadedSnapshot.size() != params.size()) return;
+    for (auto& id : ids)
+        if (auto it = idIndex.find (id); it != idIndex.end())
+        {
+            auto* prm = params[(size_t) it->second];
+            const float v = loadedSnapshot[(size_t) it->second];
+            if (std::abs (prm->getValue() - v) > 1.0e-6f) { prm->beginChangeGesture(); prm->setValueNotifyingHost (v); prm->endChangeGesture(); }
+        }
 }
 
 bool KeysKillaProcessor::isModified() const
@@ -903,6 +954,7 @@ KeysKillaProcessor::Child KeysKillaProcessor::makeChild (int k, uint32_t seed, c
     static const float blend[6] { 0.18f, 0.18f, 0.3f, 0.25f, 0.12f, 0.12f };  // drift toward the other parent
     static const float mutation[6] { 0.0f, 0.0f, 0.0f, 0.07f, 0.12f, 0.2f };
     const int kk_ = juce::jlimit (0, 5, k);
+    const float wild = juce::jlimit (0.0f, 1.0f, breedWild);
     if (forced != nullptr) c.genes = *forced;
     else
     {
@@ -925,20 +977,39 @@ KeysKillaProcessor::Child KeysKillaProcessor::makeChild (int k, uint32_t seed, c
     {
         const int gene = geneOfParam[i];
         if (gene < 0) { c.g.v[i] = params[i]->getValue(); continue; }   // performance settings stay as they are
-        const bool srcA = c.genes[(size_t) gene] == 0;
+        bool srcA = c.genes[(size_t) gene] == 0;
+        const bool locked = geneLock[(size_t) gene];
+        if (! locked && rng.uni() < wild * 0.45f) srcA = rng.uni() < 0.5f;   // WILD: single parameters jump parents
         const float own = srcA ? A[i] : B[i], other = srcA ? B[i] : A[i];
         float x = own;
+        const float mut = locked ? 0.0f : mutation[kk_] + wild * 0.22f;
         if (! discrete[i])
         {
-            x += (other - own) * blend[kk_] * (0.5f + 0.5f * rng.uni());
-            if (mutation[kk_] > 0 && ! geneLock[(size_t) gene]) x += (rng.uni() * 2.0f - 1.0f) * mutation[kk_];
+            x += (other - own) * blend[kk_] * (1.0f + wild) * (0.5f + 0.5f * rng.uni());
+            if (mut > 0) x += (rng.uni() * 2.0f - 1.0f) * mut;
         }
+        else if (! locked && rng.uni() < wild * wild * 0.25f)
+            x = rng.uni();   // WILD: switches (engine, filter type, drive type...) can flip
         c.g.v[i] = juce::jlimit (0.0f, 1.0f, x);
     }
-    // keep children playable
     auto real = [&] (int idx) { return params[(size_t) idx]->convertFrom0to1 (c.g.v[(size_t) idx]); };
     auto setReal = [&] (int idx, float x) { c.g.v[(size_t) idx] = params[(size_t) idx]->convertTo0to1 (x); };
     const auto& I = *ix;
+    // HYBRID child: the other parent's sound source becomes layer B (child 6 always, more when WILD)
+    const bool hybrid = forced == nullptr ? (k == 5 || (k >= 3 && wild > 0.55f)) : hybridHint;
+    c.hybrid = hybrid;
+    if (hybrid)
+    {
+        const auto& other = c.genes[geneBody] == 0 ? B : A;
+        const int from[] { I.engine, I.octave, I.semi, I.fine, I.wave, I.unison, I.detune, I.fmRatio, I.fmRatio2, I.fmAmt, I.fmAlgo, I.warpMode };
+        const int to[]   { I.engineB, I.octaveB, I.semiB, I.fineB, I.waveB, I.unisonB, I.detuneB, I.fmRatioB, I.fmRatio2B, I.fmAmtB, I.fmAlgoB, I.warpModeB };
+        for (int q = 0; q < 12; ++q)
+            c.g.v[(size_t) to[q]] = params[(size_t) to[q]]->convertTo0to1 (params[(size_t) from[q]]->convertFrom0to1 (other[(size_t) from[q]]));
+        setReal (I.layerB, 1.0f);
+        setReal (I.levelB, 0.55f + 0.2f * rng.uni());
+    }
+    if (wild > 0.7f && k >= 3 && ! geneLock[geneCharacter]) setReal (I.future, std::max (real (I.future), (wild - 0.7f) * 2.0f * rng.uni()));
+    // keep children playable
     const bool bass = real (I.bassMode) > 0.5f;
     if (bass)   // clean, mono low end
     {
@@ -1013,6 +1084,7 @@ void KeysKillaProcessor::setChildGene (int c, int gene, int src)
     auto genes = children[(size_t) c].genes;
     genes[(size_t) gene] = juce::jlimit (0, 1, src);
     const int rating = children[(size_t) c].rating;
+    hybridHint = children[(size_t) c].hybrid;
     children[(size_t) c] = makeChild (c, children[(size_t) c].seed, &genes);
     children[(size_t) c].rating = rating;
     if (geneLock[(size_t) gene]) geneLockSrc[(size_t) gene] = genes[(size_t) gene];
@@ -1124,6 +1196,7 @@ void KeysKillaProcessor::saveLab (juce::ValueTree& state) const
         return t;
     };
     lab.setProperty ("count", (int) breedCount, nullptr);
+    lab.setProperty ("wild", breedWild, nullptr);
     lab.setProperty ("sel", selChild, nullptr);
     juce::String locks;
     for (int g = 0; g < numGenes; ++g) locks << (geneLock[(size_t) g] ? "1" : "0") << geneLockSrc[(size_t) g] << ",";
@@ -1135,6 +1208,7 @@ void KeysKillaProcessor::saveLab (juce::ValueTree& state) const
         auto t = genome (c.g, "CHILD");
         juce::String gs; for (auto x : c.genes) gs << x;
         t.setProperty ("genes", gs, nullptr); t.setProperty ("seed", (juce::int64) c.seed, nullptr); t.setProperty ("rating", c.rating, nullptr);
+        t.setProperty ("hybrid", c.hybrid, nullptr);
         lab.appendChild (t, nullptr);
     }
     state.appendChild (lab, nullptr);
@@ -1153,6 +1227,7 @@ void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
         return g;
     };
     breedCount = (uint32_t) (int) lab.getProperty ("count", 0);
+    breedWild = (float) lab.getProperty ("wild", 0.25f);
     const auto locks = juce::StringArray::fromTokens (lab.getProperty ("locks").toString(), ",", "");
     for (int g = 0; g < numGenes && g < locks.size(); ++g)
     {
@@ -1171,6 +1246,7 @@ void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
             const auto gs = t.getProperty ("genes").toString();
             for (int g = 0; g < numGenes && g < gs.length(); ++g) c.genes[(size_t) g] = gs[g] == '1' ? 1 : 0;
             c.seed = (uint32_t) (juce::int64) t.getProperty ("seed", 0); c.rating = t.getProperty ("rating", 0);
+            c.hybrid = (bool) t.getProperty ("hybrid", false);
             children.push_back (std::move (c));
         }
     }
@@ -1351,7 +1427,8 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             apvts.replaceState (vt);
             syncParamsToState();
             auto cs = juce::StringArray::fromTokens (vt.getProperty ("corners", "-1,-1,-1,-1").toString(), ",", "");
-            for (int c = 0; c < 4; ++c) corners[(size_t) c] = cs.size() == 4 ? cs[c].getIntValue() : -1;
+            for (int c = 0; c < 4; ++c) corners[(size_t) c] = -1;   // v0.7: morph corners retired (they froze the sound)
+            juce::ignoreUnused (cs);
             rebuildCornerBank();
             snapshotForModified();
         }

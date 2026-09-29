@@ -52,7 +52,7 @@ public:
             addAndMakeVisible (*b);
         }
         exclusiveOnly.setButtonText ("EXCLUSIVE"); favOnly.setButtonText ("FAVOURITES"); userOnly.setButtonText ("USER");
-        addAndMakeVisible (category); addAndMakeVisible (subcat); addAndMakeVisible (era);
+        addAndMakeVisible (category); addAndMakeVisible (subcat); addChildComponent (era);   // eras are not shown any more (v0.7)
         list.setModel (this);
         list.setRowHeight (40);
         addAndMakeVisible (list);
@@ -68,7 +68,7 @@ public:
         pickHandler = std::move (pick); title = heading;
         category.setSelectedId (cat >= 0 ? cat + 2 : 1, dontSendNotification);
         fillSubs();
-        era.setSelectedId (eraIdx >= 0 ? eraIdx + 2 : 1, dontSendNotification);
+        era.setSelectedId (1, dontSendNotification); ignoreUnused (eraIdx);
         exclusiveOnly.setToggleState (exclusive, dontSendNotification);
         refresh();
         setVisible (true); toFront (true);
@@ -87,9 +87,8 @@ public:
         auto r = getLocalBounds().reduced (24).withTrimmedTop (34);
         auto top = r.removeFromTop (44);
         search.setBounds (top.removeFromLeft (350)); top.removeFromLeft (8);
-        category.setBounds (top.removeFromLeft (250)); top.removeFromLeft (6);
-        subcat.setBounds (top.removeFromLeft (250)); top.removeFromLeft (6);
-        era.setBounds (top.removeFromLeft (170)); top.removeFromLeft (6);
+        category.setBounds (top.removeFromLeft (290)); top.removeFromLeft (6);
+        subcat.setBounds (top.removeFromLeft (300)); top.removeFromLeft (6);
         exclusiveOnly.setBounds (top.removeFromLeft (200)); top.removeFromLeft (6);
         favOnly.setBounds (top);
         r.removeFromTop (6);

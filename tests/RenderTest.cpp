@@ -66,6 +66,30 @@ static int unitTests()
         for (int i = 0; i < 64; ++i) { const float ph = (float) i / 64.0f; err = std::max (err, std::abs (wt.read (ph, 0.0f, 0.001f) - std::sin (kk::twoPi * ph))); }
         check (err < 0.02f, "wavetable sine frame");
     }
+    // step arp: rests are silent, steps play; RESET restores the loaded sound
+    {
+        auto run = [&] (float stepValue)
+        {
+            KeysKillaProcessor p; p.setCurrentProgram (0); p.prepareToPlay (48000, 256);
+            set (p, ID::arp, 1); set (p, ID::arpRate, 1); set (p, ID::arpSteps, 4);
+            for (int st = 0; st < 16; ++st) set (p, ID::arpStep (st).toRawUTF8(), stepValue);
+            juce::AudioBuffer<float> b (2, 256); float peak = 0;
+            for (int k = 0; k < 200; ++k)
+            {
+                juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                p.processBlock (b, m); peak = std::max (peak, b.getMagnitude (0, 256));
+            }
+            return std::make_pair (peak, p.arpCurStep.load());
+        };
+        const auto rest = run (0.0f), play = run (1.0f);
+        check (rest.first < 1.0e-4f, "arp rests are silent");
+        check (play.first > 0.01f && play.second >= 0 && play.second < 4, "arp steps play within the step length");
+        KeysKillaProcessor p; p.setCurrentProgram (3);
+        const float before = p.apvts.getParameter (ID::cutoff)->getValue();
+        set (p, ID::cutoff, 200.0f);
+        p.resetParams ({ ID::cutoff });
+        check (std::abs (p.apvts.getParameter (ID::cutoff)->getValue() - before) < 1.0e-5f, "RESET restores the loaded value");
+    }
     // BREED LAB: six playable children, deterministic genes, gene switch + lock, state round trip
     {
         KeysKillaProcessor p; p.prepareToPlay (48000, 256);
@@ -74,6 +98,7 @@ static int unitTests()
         bool finite = true; float worst = 0;
         for (int round = 0; round < 12; ++round)
         {
+            p.breedWild = (round % 2) ? 1.0f : 0.0f;   // SAFE and CRAZY
             p.setParentPreset (0, (round * 37) % (int) ps.size()); p.setParentPreset (1, (round * 91 + 11) % (int) ps.size());
             check (p.breed() == 6, "breed makes 6 children");
             for (int c = 0; c < 6; ++c)

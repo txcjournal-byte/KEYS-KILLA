@@ -2,6 +2,7 @@
 #include "Params.h"
 #include "PresetGains.h"
 #include <array>
+#include <map>
 
 // Factory presets. Values are real parameter values; anything not listed uses the default.
 // Names are neutral descriptions only (instrument, scene, mood, year).
@@ -23,7 +24,7 @@ const juce::StringArray& subcategoryNames (int cat)
         juce::StringArray { "Marimba", "Kalimba", "Xylophone", "Celesta", "Metallic", "Wooden", "Hybrid" },
         juce::StringArray { "Nylon", "Acoustic", "Electric", "Clean", "Muted", "Processed", "Reverse", "Ambient", "Synth Hybrid" },
         juce::StringArray { "Ensemble", "Solo", "Pizzicato", "Staccato", "Sustained", "Synthetic", "Dark", "Cinematic", "Hybrid" },
-        juce::StringArray { "Horns", "Trumpets", "Sections", "Synth Brass", "Dark Brass", "Trap Brass", "Hybrid Brass" },
+        juce::StringArray { "Horns", "Trumpets", "Sections", "Synth Brass", "Dark Brass", "Trap Brass", "Hybrid Brass", "Hits" },
         juce::StringArray { "Male", "Female", "Mixed", "Vowels", "Air", "Vocal Texture", "Reverse Vocal", "Synthetic Vocal", "Ghost Choir" },
         juce::StringArray { "Flute", "Piccolo", "Clarinet-like", "Breath", "Ethnic Flute", "Synthetic Wind" },
         juce::StringArray { "Analog", "Digital", "Mono", "Portamento", "Rage", "Detuned", "Distorted", "Metallic", "Future" },
@@ -84,7 +85,7 @@ juce::String Preset::info() const
 {
     juce::String s = categoryNames()[cat];
     if (sub.isNotEmpty()) s << " / " << sub.toUpperCase();
-    s << "   " << eraNames()[juce::jlimit (0, 6, era)] << "   " << mood;
+    s << "   " << mood;
     if (character.isNotEmpty()) s << " . " << character;
     s << " . " << articulation << (mono ? " . MONO" : "");
     if (exclusive) s << "   EXCLUSIVE";
@@ -900,12 +901,17 @@ const std::vector<Preset>& factoryPresets()
             auto& pr = v[i];
             classify (pr, pr.cat);
             setV (pr.values, ID::era, (float) pr.era); setV (pr.values, eraHome, (float) pr.era);
+            // v0.7: no years in names
+            auto words = juce::StringArray::fromTokens (pr.name, " ", "");
+            if (words.size() > 1 && words[words.size() - 1].length() == 4 && words[words.size() - 1].containsOnly ("0123456789")) words.remove (words.size() - 1);
+            if (words.size() > 1 && words[0].length() == 4 && words[0].containsOnly ("0123456789")) words.remove (0);
+            pr.name = words.joinIntoString (" ");
         }
 
         // ================= v0.5: TRAP 2010 -> FUTURE factory bank =================
         // Every recipe is a neutral sound; each era it is released in bakes that era's production policy into it
         // (2010 dry workstation, 2013 layered digital, 2016 atmospheric, 2019 lo-fi texture, 2022 rage, 2025 fast, FUTURE).
-        static const char* yearTag[numEras] { "2011", "2014", "2017", "2020", "2023", "2026", "FUTURE" };
+        static const char* yearTag[numEras] { "Classic", "Layered", "Atmos", "Lo-Fi", "Rage", "Hyper", "Future" };   // production style of the release
         auto R = [&] (int cat, const char* sub, const char* name, std::initializer_list<int> eras, Vals vals)
         {
             const bool bass = cat == cBass || cat == c808;
@@ -1173,10 +1179,61 @@ const std::vector<Preset>& factoryPresets()
         R (cFX, "Tonal FX", "Tonal Zap", { 5, 6 }, { { engine, FM }, { fmRatio, 7.0f }, { fmAmt, 0.6f }, { decay, 0.6f }, { sustain, 0 }, { bend, 0.9f }, { bendMode, 1 },
                                                       { bendSemis, 12 }, { delayMix, 0.35f } });
 
+
+        // ---- v0.7 trap essentials (what trap producers reach for most: brass, bells, strings, flutes, hits)
+        R (cBrass, "Trap Brass", "Hard Horn Stab", { 0, 4, 5 }, with (brassB, { { attack, 0.003f }, { decay, 0.35f }, { sustain, 0 }, { release, 0.15f }, { punch, 0.7f }, { drive, 0.2f } }));
+        R (cBrass, "Hits", "Orchestra Brass Hit", { 0, 1, 4 }, with (brassB, { { layerB, 1 }, { engineB, OC }, { waveB, 0.5f }, { octaveB, -1 }, { levelB, 0.7f },
+                                                                                { attack, 0.002f }, { decay, 0.6f }, { sustain, 0 }, { release, 0.3f }, { punch, 0.8f } }));
+        R (cBrass, "Hits", "Epic Stab Hit", { 0, 5 }, with (brassB, { { wave, 0.1f }, { unison, 5 }, { layerB, 1 }, { engineB, SB }, { octaveB, -2 }, { levelB, 0.5f },
+                                                                      { attack, 0.002f }, { decay, 0.5f }, { sustain, 0 }, { punch, 0.9f }, { drive, 0.25f } }));
+        R (cBrass, "Sections", "Anthem Brass", { 0, 3, 4 }, with (brassB, { { unison, 6 }, { detune, 0.2f }, { attack, 0.03f }, { sustain, 0.9f }, { chorus, 0.15f }, { revMix, 0.3f } }));
+        R (cBrass, "Dark Brass", "Low Brass Swell", { 1, 3 }, with (brassB, { { octave, -1 }, { attack, 0.5f }, { sustain, 1 }, { release, 1.0f }, { cutoff, 1600 } }));
+        R (cBrass, "Horns", "Drill Horn Riff", { 4, 5 }, with (brassB, { { wave, 0.2f }, { mono, 1 }, { legato, 1 }, { glide, 0.12f }, { sustain, 0.8f }, { punch, 0.4f } }));
+        R (cBrass, "Synth Brass", "Saw Brass Stab", { 4, 5 }, { { engine, VA }, { wave, 0.0f }, { unison, 5 }, { detune, 0.25f }, { cutoff, 900 }, { fenv, 0.8f },
+                                                                { fdecay, 0.25f }, { decay, 0.4f }, { sustain, 0.2f }, { punch, 0.5f } });
+        R (cBells, "Trap Bell", "Icy Trap Bell", { 0, 3, 5 }, with (bellB, { { fmRatio, 4.0f }, { fmAmt, 0.5f }, { fdecay, 0.5f }, { decay, 1.2f }, { revMix, 0.3f }, { delayMix, 0.2f } }));
+        R (cBells, "Trap Bell", "Minor Bell Lead", { 1, 4 }, with (bellB, { { fmRatio, 3.0f }, { sustain, 0.3f }, { decay, 2.0f }, { release, 1.5f } }));
+        R (cBells, "Dark", "Horror Bell", { 0, 6 }, { { engine, MD }, { wave, 0.9f }, { fmAmt, 0.6f }, { decay, 3.0f }, { sustain, 0 }, { release, 2.0f }, { wow, 0.2f },
+                                                     { cutoff, 2500 }, { revMix, 0.45f }, { ghost, 0.3f } });
+        R (cStrings, "Staccato", "Trap Staccato Violins", { 0, 1, 4 }, with (orchB, { { attack, 0.003f }, { decay, 0.22f }, { sustain, 0 }, { release, 0.1f }, { punch, 0.7f }, { width, 0.8f } }));
+        R (cStrings, "Ensemble", "Dark Trap Strings", { 0, 3, 5 }, with (orchB, { { cutoff, 3000 }, { attack, 0.12f }, { revMix, 0.35f } }));
+        R (cStrings, "Pizzicato", "Pizz Bounce", { 1, 5 }, with (orchB, { { unison, 3 }, { attack, 0.002f }, { decay, 0.12f }, { sustain, 0 }, { punch, 0.7f }, { delayMix, 0.2f } }));
+        R (cStrings, "Cinematic", "Movie Strings Arp", { 2, 4 }, arpOn (with (orchB, { { attack, 0.01f }, { decay, 0.3f }, { sustain, 0.2f } }), 1, 0, 2, 0.5f));
+        R (cWoodwind, "Flute", "Trap Flute Lead", { 0, 1, 4, 5 }, with (fluteB, { { wave, 0.3f }, { mono, 1 }, { legato, 1 }, { glide, 0.06f }, { lfoPitch, 0.04f }, { delayMix, 0.2f } }));
+        R (cWoodwind, "Ethnic Flute", "Pan Flute Riff", { 2, 4 }, with (fluteB, { { wave, 0.55f }, { attack, 0.03f }, { sustain, 0.8f }, { revMix, 0.4f } }));
+        R (cGuitar, "Acoustic", "Dark Acoustic Riff", { 1, 3 }, with (guitB, { { wave, 0.7f }, { decay, 1.6f }, { cutoff, 5000 }, { revMix, 0.25f } }));
+        R (cGuitar, "Electric", "Dark Electric Guitar", { 3, 5 }, with (guitB, { { wave, 0.85f }, { body, 0 }, { drive, 0.45f }, { driveType, 1 }, { cutoff, 3500 }, { revMix, 0.3f } }));
+        R (cPiano, "Grand", "Trap Piano Keys", { 0, 3, 4 }, with (pianoB, { { cutoff, 6000 }, { revMix, 0.25f } }));
+        R (cLead, "Rage", "Anthem Lead", { 4, 5 }, with (leadB, { { unison, 8 }, { detune, 0.55f }, { drive, 0.45f }, { driveType, 3 }, { delayMix, 0.25f }, { mono, 0 } }));
+        R (cLead, "Digital", "Whistle Lead", { 0, 1, 5 }, { { engine, FL }, { wave, 0.1f }, { octave, 1 }, { sustain, 0.9f }, { release, 0.3f }, { mono, 1 }, { legato, 1 },
+                                                           { glide, 0.08f }, { lfoPitch, 0.05f }, { revMix, 0.3f } });
+        R (cPlucks, "Soft", "Plugg Pluck", { 2, 3 }, with (pluckB, { { wave, 0.45f }, { cutoff, 1800 }, { decay, 0.35f }, { revMix, 0.3f }, { delayMix, 0.2f } }));
+        R (cPads, "Dark", "Vinyl Dark Pad", { 3 }, with (padB, { { cutoff, 1200 }, { crush, 0.35f }, { wow, 0.4f } }));
+        R (cArp, "Melodic", "Trap Bell Arp", { 0, 4 }, arpOn (with (bellB, { { decay, 0.5f }, { delayMix, 0.2f } }), 1, 5, 2, 0.5f));
+        R (cArp, "Triplet", "Triplet Flute Arp", { 1, 5 }, arpOn (with (fluteB, { { attack, 0.01f }, { sustain, 0.5f }, { release, 0.2f } }), 2, 5, 2, 0.45f));
+
         // ---- v0.6: macro 1 is DARK (turn right = darker) on melodic sounds
         for (auto& pr : v)
             if (! pr.isBass())
                 for (auto& [k, x] : pr.values) if (k == ID::m1) x = 1.0f - x;
+
+        // ---- unique names
+        {
+            std::map<juce::String, int> seen;
+            for (auto& pr : v)
+                if (const int nSeen = seen[pr.name]++; nSeen > 0) pr.name << (nSeen == 1 ? " II" : nSeen == 2 ? " III" : " IV");
+        }
+        // ---- first impression: trap essentials open the library
+        {
+            static const char* heroes[] { "Classic Trap Bell", "Classic Hard Horn Stab", "Classic Orchestra Brass Hit", "Classic Trap Staccato Violins",
+                                          "Classic Trap Flute Lead", "Classic Trap Piano Keys", "Anthem Lead", "Rage Anthem Lead", "Classic Clean 808",
+                                          "Atmos Plugg Pluck", "Classic Trap Bell Arp", "Classic Dark Trap Strings", "Classic Icy Trap Bell",
+                                          "Rage Drill Horn Riff", "Classic Epic Stab Hit", "Classic Whistle Lead" };
+            std::vector<Preset> front, rest;
+            for (auto* h : heroes) for (auto& pr : v) if (pr.name == h) { front.push_back (pr); break; }
+            for (auto& pr : v) { bool isHero = false; for (auto& f : front) isHero |= f.name == pr.name; if (! isHero) rest.push_back (pr); }
+            v = front; v.insert (v.end(), rest.begin(), rest.end());
+        }
 
         // ---- metadata for the whole library
         for (auto& pr : v) deriveTags (pr);

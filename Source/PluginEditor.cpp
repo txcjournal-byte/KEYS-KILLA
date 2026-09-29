@@ -168,7 +168,12 @@ void KKLookAndFeel::drawButtonText (Graphics& g, TextButton& b, bool, bool)
 
 Font KKLookAndFeel::getTextButtonFont (TextButton&, int h) { return serif (jmin (26.0f, (float) h * 0.52f), false, 0.2f); }
 Font KKLookAndFeel::getComboBoxFont (ComboBox& c) { return serif (jmin (24.0f, (float) c.getHeight() * 0.62f), false, 0.08f); }
-Font KKLookAndFeel::getLabelFont (Label& l) { return serif (jmax (11.0f, (float) l.getHeight() * 0.72f), false, 0.2f); }
+Font KKLookAndFeel::getLabelFont (Label& l)
+{
+    if (dynamic_cast<Slider*> (l.getParentComponent()) != nullptr)   // knob value boxes scale with their box
+        return serif (jmax (11.0f, (float) l.getHeight() * 0.72f), false, 0.2f);
+    return l.getFont();
+}
 Font KKLookAndFeel::getPopupMenuFont() { return serif (25.0f, false, 0.05f); }   // menus scale with the 60 % window
 
 
@@ -456,11 +461,15 @@ private:
 class TabPanel : public Component
 {
 public:
-    TabPanel (KKLookAndFeel& l, String t) : lnf (l), title (std::move (t))
+    TabPanel (KeysKillaProcessor& p, KKLookAndFeel& l, String t, StringArray ids) : proc (p), lnf (l), title (std::move (t)), resetIds (std::move (ids))
     {
         close.setButtonText ("CLOSE");
         close.onClick = [this] { setVisible (false); if (onClose) onClose(); };
         addAndMakeVisible (close);
+        reset.setButtonText ("RESET");
+        reset.setTooltip ("RESET: put every control of this panel back to how the sound was loaded");
+        reset.onClick = [this] { proc.resetParams (resetIds); };
+        addAndMakeVisible (reset);
     }
     std::function<void()> onClose;
     void paint (Graphics& g) override
@@ -468,43 +477,168 @@ public:
         g.fillAll (Colour (0xf4080606));
         drawPanel (g, getLocalBounds().toFloat().reduced (8), *lnf.skin, title);
     }
-    void resized() override { close.setBounds (getWidth() - 140, 14, 116, 36); layout (getLocalBounds().reduced (24).withTrimmedTop (40)); }
+    void resized() override
+    {
+        close.setBounds (getWidth() - 140, 14, 116, 36);
+        reset.setBounds (getWidth() - 268, 14, 116, 36);
+        layout (getLocalBounds().reduced (24).withTrimmedTop (40));
+    }
     virtual void layout (Rectangle<int>) {}
 protected:
+    KeysKillaProcessor& proc;
     KKLookAndFeel& lnf;
     String title;
-    TextButton close;
+    StringArray resetIds;
+    TextButton close, reset;
 };
 
-// MOVEMENT: performance, chord and arp
+// MOVEMENT: chord, key, glide and the performance controls
+static const StringArray movementIds { ID::chord, ID::chordType, ID::strum, ID::keyLock, ID::key, ID::scale, ID::mono, ID::legato, ID::glide, ID::bendRange,
+                                       ID::timeM, ID::alive, ID::drift, ID::punch, ID::halftime, ID::lfoRate, ID::lfoPitch, ID::lfoSync, ID::lfoDiv, ID::future };
 class PlayPanel : public TabPanel
 {
 public:
-    PlayPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
-        : TabPanel (l, "MOVEMENT"),
-          grid (p, { ID::chord, ID::chordType, ID::strum, ID::keyLock, ID::key, ID::scale, ID::mono, ID::legato, ID::glide,
-                     ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::bendRange, ID::lfoSync, ID::lfoDiv,
-                     ID::era, ID::future, ID::timeM, ID::alive, ID::drift, ID::punch, ID::halftime, ID::lfoRate, ID::lfoPitch }, 9)
-    { addAndMakeVisible (grid); }
-    void layout (Rectangle<int> r) override { grid.setBounds (r); }
+    PlayPanel (KeysKillaProcessor& p, KKLookAndFeel& l) : TabPanel (p, l, "MOVEMENT", movementIds), grid (p, movementIds, 10) { addAndMakeVisible (grid); }
+    void layout (Rectangle<int> r) override { grid.setBounds (r.withHeight (jmin (r.getHeight(), 250))); }
 private:
     ParamGrid grid;
 };
 
-// 808: the bass controls under producer names
-class Panel808 : public TabPanel
+// ARP: step arpeggiator - 16 steps with velocity, trap scale runs, patterns
+class StepGrid : public Component, public SettableTooltipClient, private Timer
 {
 public:
-    Panel808 (KeysKillaProcessor& p, KKLookAndFeel& l)
-        : TabPanel (l, "808"),
-          grid (p, { ID::bassMode, ID::mono, ID::m1, ID::wave, ID::m6, ID::m7, ID::decay, ID::release, ID::octave, ID::semi,
-                     ID::fmAmt, ID::m3, ID::driveType, ID::glide, ID::legato, ID::m5, ID::m2, ID::wobTarget, ID::sustain, ID::gain }, 10,
-                { "BASS MODE", "MONO", "SUB", "BODY", "CLICK", "KNOCK", "LENGTH", "TAIL", "OCTAVE", "TUNE",
-                  "PITCH DROP", "DISTORT", "CLIP TYPE", "GLIDE", "LEGATO", "TONE", "WOBBLE", "WOBBLE TO", "HOLD", "OUTPUT" })
-    { addAndMakeVisible (grid); }
-    void layout (Rectangle<int> r) override { grid.setBounds (r); }
+    StepGrid (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        setTooltip ("Click a step to switch it on / off, drag up / down for its velocity. Steps after ARP STEPS are skipped.");
+        startTimerHz (20);
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        const int steps = (int) proc.apvts.getRawParameterValue (ID::arpSteps)->load();
+        const bool on = proc.apvts.getRawParameterValue (ID::arp)->load() > 0.5f;
+        const int cur = proc.arpCurStep.load();
+        for (int i = 0; i < 16; ++i)
+        {
+            auto c = cell (i);
+            const float v = proc.apvts.getRawParameterValue (ID::arpStep (i))->load();
+            const bool active = i < steps;
+            g.setColour (Colour (0xff141010)); g.fillRoundedRectangle (c, 4);
+            g.setColour (active ? Colour (0xff3b3434) : Colour (0xff201c1c)); g.drawRoundedRectangle (c, 4, 1.2f);
+            if (v > 0.02f)
+            {
+                auto bar = c.reduced (5).withTrimmedTop ((c.getHeight() - 10) * (1.0f - v));
+                g.setColour ((active ? s.accent : s.accent.withAlpha (0.3f)).withAlpha (active ? 0.9f : 0.3f));
+                g.fillRoundedRectangle (bar, 3);
+            }
+            if (on && i == cur) { g.setColour (Colours::white.withAlpha (0.8f)); g.drawRoundedRectangle (c.expanded (2), 5, 2.0f); }
+            g.setColour (Colour (0x99d9d3d3)); g.setFont (serif (13.0f));
+            g.drawText (String (i + 1), c.withY (c.getBottom() + 2).withHeight (16), Justification::centred);
+        }
+    }
+    void mouseDown (const MouseEvent& e) override
+    {
+        drag = -1;
+        for (int i = 0; i < 16; ++i) if (cell (i).contains (e.position)) drag = i;
+        if (drag < 0) return;
+        auto* prm = proc.apvts.getParameter (ID::arpStep (drag));
+        startVal = prm->getValue();
+        prm->beginChangeGesture();
+        moved = false;
+    }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (drag < 0) return;
+        moved = moved || std::abs (e.getDistanceFromDragStartY()) > 3;
+        if (! moved) return;
+        auto c = cell (drag);
+        const float v = jlimit (0.0f, 1.0f, 1.0f - (e.position.y - c.getY()) / c.getHeight());
+        proc.apvts.getParameter (ID::arpStep (drag))->setValueNotifyingHost (v);
+        repaint();
+    }
+    void mouseUp (const MouseEvent&) override
+    {
+        if (drag < 0) return;
+        auto* prm = proc.apvts.getParameter (ID::arpStep (drag));
+        if (! moved) prm->setValueNotifyingHost (startVal > 0.02f ? 0.0f : 1.0f);
+        prm->endChangeGesture();
+        drag = -1; repaint();
+    }
 private:
+    Rectangle<float> cell (int i) const
+    {
+        const float w = (float) getWidth() / 16.0f;
+        return { w * (float) i + 4.0f, 0.0f, w - 8.0f, (float) getHeight() - 20.0f };
+    }
+    void timerCallback() override { const int c = proc.arpCurStep.load(); if (c != lastCur) { lastCur = c; repaint(); } }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    int drag = -1, lastCur = -2; float startVal = 0; bool moved = false;
+};
+
+static StringArray arpIds()
+{
+    StringArray ids { ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::arpSteps, ID::keyLock, ID::key, ID::scale };
+    for (int i = 0; i < 16; ++i) ids.add (ID::arpStep (i));
+    return ids;
+}
+
+class ArpPanel : public TabPanel
+{
+public:
+    ArpPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
+        : TabPanel (p, l, "ARP", arpIds()),
+          grid (p, { ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::arpSteps, ID::keyLock, ID::key, ID::scale }, 10,
+                { "ARP", "SPEED", "MODE", "OCTAVES", "GATE", "SHUFFLE", "STEPS", "KEY LOCK", "KEY", "SCALE" }),
+          steps (p, l)
+    {
+        addAndMakeVisible (grid); addAndMakeVisible (steps);
+        static const char* names[] { "ALL ON", "TRAP BOUNCE", "OFFBEAT", "DOTTED", "ROLL", "RANDOM" };
+        for (int i = 0; i < 6; ++i)
+        {
+            auto b = std::make_unique<TextButton> (names[i]);
+            b->onClick = [this, i] { pattern (i); };
+            addAndMakeVisible (*b);
+            patterns.push_back (std::move (b));
+        }
+        hint.setText ("MODE Scale Up / Scale Down plays trap runs in KEY + SCALE (e.g. C Minor, Phrygian, Harmonic Minor). KEY LOCK keeps every note in the scale.",
+                      dontSendNotification);
+        hint.setFont (serif (15.0f, false, 0.04f));
+        hint.setColour (Label::textColourId, Colour (0xffb9b0ac));
+        addAndMakeVisible (hint);
+    }
+    void layout (Rectangle<int> r) override
+    {
+        grid.setBounds (r.removeFromTop (118));
+        r.removeFromTop (10);
+        auto row = r.removeFromBottom (40);
+        hint.setBounds (r.removeFromBottom (26));
+        const int w = row.getWidth() / 6;
+        for (auto& b : patterns) b->setBounds (row.removeFromLeft (w).reduced (6, 2));
+        steps.setBounds (r.reduced (0, 6));
+    }
+private:
+    void pattern (int i)
+    {
+        static const float pat[5][16] {
+            { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+            { 1, 0, 0.6f, 1, 0, 1, 0.6f, 0, 1, 0, 0.6f, 1, 0, 0.8f, 1, 0.6f },
+            { 0, 1, 0, 0.9f, 0, 1, 0, 0.9f, 0, 1, 0, 0.9f, 0, 1, 0, 0.9f },
+            { 1, 0, 0, 0.9f, 0, 0, 1, 0, 0, 0.9f, 0, 0, 1, 0, 0.8f, 0 },
+            { 1, 0.45f, 0.7f, 0.45f, 1, 0.45f, 0.7f, 0.45f, 1, 0.5f, 0.75f, 0.5f, 1, 0.6f, 0.8f, 0.9f } };
+        Random rnd;
+        for (int st = 0; st < 16; ++st)
+        {
+            auto* prm = proc.apvts.getParameter (ID::arpStep (st));
+            const float v = i < 5 ? pat[i][st] : (rnd.nextFloat() < 0.3f ? 0.0f : 0.4f + 0.6f * rnd.nextFloat());
+            prm->beginChangeGesture(); prm->setValueNotifyingHost (v); prm->endChangeGesture();
+        }
+        steps.repaint();
+    }
     ParamGrid grid;
+    StepGrid steps;
+    std::vector<std::unique_ptr<TextButton>> patterns;
+    Label hint;
 };
 
 //==============================================================================
@@ -541,7 +675,7 @@ public:
         String tags;
         if (pg.valid())
         {
-            tags = (pg.cat >= 0 ? categoryNames()[pg.cat] : String ("USER")) + "  .  " + eraNames()[jlimit (0, 6, pg.era)];
+            tags = pg.cat >= 0 ? categoryNames()[pg.cat] : String ("USER");
             if (pg.preset >= 0) tags << "  .  " << factoryPresets()[(size_t) pg.preset].mood.toUpperCase();
             if (pg.gen > 0) tags << "  .  GEN " << pg.gen;
         }
@@ -704,44 +838,42 @@ private:
 };
 
 //==============================================================================
-// ERA column: 2010 ... FUTURE, the glowing stop is the ERA parameter
-class EraColumn : public Component, public SettableTooltipClient
+// WILD rail: how crazy BREED is allowed to get (safe siblings ... crazy mutants)
+class WildRail : public Component, public SettableTooltipClient
 {
 public:
-    EraColumn (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    WildRail (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
-        setTooltip ("ERA: drag or click to move this sound through 2010 -> FUTURE. Double-click: back to its own era.");
+        setTooltip ("WILD: how far BREED may go. SAFE = close relatives, CRAZY = genes jump, switches flip, more HYBRID layers and FUTURE.");
     }
-    static constexpr float top = 15.0f, stepY = 35.0f;   // local: first stop, distance between stops
+    static constexpr float top = 52.0f, bottom = 232.0f;
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        const float era = proc.apvts.getRawParameterValue (ID::era)->load();
-        const float home = proc.apvts.getRawParameterValue (ID::eraHome)->load();
-        const float x = 20.0f;
-        g.setColour (s.accent.withAlpha (0.75f)); g.fillRect (x - 1.2f, top + std::min (era, home) * stepY, 2.4f, std::abs (era - home) * stepY);
-        const Point<float> h (x, top + home * stepY);
-        g.setColour (Colour (0x99ffffff)); g.drawEllipse (Rectangle<float> (15, 15).withCentre (h), 1.2f);
-        const Point<float> p (x, top + era * stepY);
-        g.setColour (s.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (30, 30).withCentre (p));
-        g.setColour (s.accent.withAlpha (0.5f)); g.fillEllipse (Rectangle<float> (19, 19).withCentre (p));
-        g.setColour (s.accent); g.fillEllipse (Rectangle<float> (12, 12).withCentre (p));
-        g.setColour (Colours::white); g.fillEllipse (Rectangle<float> (4, 4).withCentre (p));
+        g.setColour (Colour (0xffe6e0dc)); g.setFont (serif (24.0f, false, 0.12f));
+        g.drawText ("WILD", Rectangle<float> (0, 4, (float) getWidth(), 30), Justification::centred);
+        const float x = 26.0f;
+        g.setColour (Colour (0xff5a5252)); g.fillRect (x - 1.0f, top, 2.0f, bottom - top);
+        static const char* labels[] { "CRAZY", "WILD", "MIXED", "SOFT", "SAFE" };
+        for (int i = 0; i < 5; ++i)
+        {
+            const float y = top + (bottom - top) * (float) i / 4.0f;
+            g.setColour (Colour (0xff8e8686)); g.fillEllipse (Rectangle<float> (9, 9).withCentre ({ x, y }));
+            g.drawLine (x + 8, y, x + 18, y, 1.0f);
+            g.setColour (Colour (0xffd9d3d3)); g.setFont (serif (15.0f, false, 0.1f));
+            g.drawText (labels[i], Rectangle<float> (x + 24, y - 9, 90, 18), Justification::centredLeft);
+        }
+        const float y = bottom - (bottom - top) * proc.breedWild;
+        g.setColour (s.accent.withAlpha (0.7f)); g.fillRect (x - 1.5f, y, 3.0f, bottom - y);
+        g.setColour (s.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (30, 30).withCentre ({ x, y }));
+        g.setColour (s.accent.withAlpha (0.5f)); g.fillEllipse (Rectangle<float> (19, 19).withCentre ({ x, y }));
+        g.setColour (s.accent); g.fillEllipse (Rectangle<float> (12, 12).withCentre ({ x, y }));
+        g.setColour (Colours::white); g.fillEllipse (Rectangle<float> (4, 4).withCentre ({ x, y }));
     }
-    void mouseDown (const MouseEvent& e) override { proc.apvts.getParameter (ID::era)->beginChangeGesture(); mouseDrag (e); }
+    void mouseDown (const MouseEvent& e) override { mouseDrag (e); }
     void mouseDrag (const MouseEvent& e) override
     {
-        float v = jlimit (0.0f, 6.0f, (e.position.y - top) / stepY);
-        if (! e.mods.isShiftDown() && std::abs (v - std::round (v)) < 0.18f) v = std::round (v);   // snap to the eras
-        auto* prm = proc.apvts.getParameter (ID::era);
-        prm->setValueNotifyingHost (prm->convertTo0to1 (v));
-        repaint();
-    }
-    void mouseUp (const MouseEvent&) override { proc.apvts.getParameter (ID::era)->endChangeGesture(); }
-    void mouseDoubleClick (const MouseEvent&) override
-    {
-        auto* prm = proc.apvts.getParameter (ID::era);
-        prm->setValueNotifyingHost (prm->convertTo0to1 (proc.apvts.getRawParameterValue (ID::eraHome)->load()));
+        proc.breedWild = jlimit (0.0f, 1.0f, (bottom - e.position.y) / (bottom - top));
         repaint();
     }
 private:
@@ -753,7 +885,7 @@ class MainPage : public Component, private Timer
 {
 public:
     explicit MainPage (KeysKillaProcessor& p)
-        : proc (p), parentA (p, lnf, 0), parentB (p, lnf, 1), breedBtn (lnf), eraCol (p, lnf),
+        : proc (p), parentA (p, lnf, 0), parentB (p, lnf, 1), breedBtn (lnf), wildRail (p, lnf),
           pitchWheel (lnf), modWheel (lnf), meter (lnf), keyboard (p, lnf)
     {
         settings = openSettings();
@@ -835,8 +967,8 @@ public:
         undoBtn.onClick = [this] { proc.undo(); refreshState(); }; undoBtn.setTooltip ("UNDO the last change of the sound");
         addAndMakeVisible (treeBtn); addAndMakeVisible (undoBtn);
 
-        // ---- era column + FUTURE / ALIVE / TIME
-        addAndMakeVisible (eraCol);
+        // ---- WILD rail + FUTURE / ALIVE / TIME
+        addAndMakeVisible (wildRail);
         const char* sideIds[] { ID::future, ID::alive, ID::timeM };
         const char* sideTips[] { "FUTURE: ORIGINAL -> HYBRID -> UNKNOWN. Turns the sound into a new hybrid (same seed = same result).",
                                  "ALIVE 0-5: every note a little different, like a real player.",
@@ -853,12 +985,12 @@ public:
         }
 
         // ---- tabs
-        static const char* tabNames[] { "", "", "", "", "", "", "KILLA" };
+        static const char* tabNames[] { "", "", "", "", "", "ARP", "KILLA" };
         static const char* tabTips[] { "BROWSER: all sounds by category, subcategory, era, mood and more",
                                        "SOUND: engines A + B, filter and envelopes", "MOD: LFOs, modulation matrix, envelope 3",
                                        "MOVEMENT: chord, arp, glide, perform controls", "FX: effect rack (drag to reorder)",
-                                       "808: sub, body, click, length, pitch drop, distortion, glide",
-                                       "KILLA: ghost, bend, circuit, body swap, morph corners, dice locks" };
+                                       "ARP: 16-step arpeggiator with velocity, trap scale runs, patterns",
+                                       "KILLA: ghost, bend, circuit, body swap, tape, future" };
         for (int i = 0; i < numTabs; ++i)
         {
             auto b = std::make_unique<HotButton> (lnf, tabNames[i]);
@@ -916,7 +1048,7 @@ public:
         if (v >= 1 && v <= 8) { ensureAdvanced(); advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
         if (v == 9) openTab (tabBrowser);
         if (v == 10) openTab (tabMovement);
-        if (v == 11) openTab (tab808);
+        if (v == 11) openTab (tabArp);
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
     }
 
@@ -945,7 +1077,7 @@ public:
         for (int i = 0; i < 5; ++i) mutateBtns[(size_t) i]->setBounds (R (mx[i][0], 555, mx[i][1], 595));
         treeBtn.setBounds (R (1300, 528, 1374, 604)); undoBtn.setBounds (R (1379, 528, 1442, 604));
 
-        eraCol.setBounds (R (1470, 150, 1600, 392));
+        wildRail.setBounds (R (1466, 118, 1608, 392));
         sideKnobs[0]->place ({ 1532, 447 }, 33, 43);
         sideKnobs[1]->place ({ 1490, 552 }, 20, 28);
         sideKnobs[2]->place ({ 1575, 552 }, 20, 28);
@@ -969,11 +1101,11 @@ public:
         if (advanced) advanced->setBounds (panelArea);
         if (browser) browser->setBounds (panelArea);
         if (playPanel) playPanel->setBounds (panelArea);
-        if (panel808) panel808->setBounds (panelArea);
+        if (arpPanel) arpPanel->setBounds (panelArea);
     }
 
 private:
-    enum { tabBrowser, tabSound, tabMod, tabMovement, tabFx, tab808, tabKilla, numTabs, tabSettings = 100 };
+    enum { tabBrowser, tabSound, tabMod, tabMovement, tabFx, tabArp, tabKilla, numTabs, tabSettings = 100 };
 
     // ---------------- tab panels (created on first use -> fast editor open/close) ----------------
     void ensureAdvanced()
@@ -999,7 +1131,7 @@ private:
     }
     void hidePanels()
     {
-        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) panel808.get() })
+        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get() })
             if (c != nullptr) c->setVisible (false);
     }
     void openTab (int t)
@@ -1021,19 +1153,19 @@ private:
                 case tabMovement:
                     if (! playPanel) { playPanel = std::make_unique<PlayPanel> (proc, lnf); addChildComponent (*playPanel); noFocus (*playPanel); resized(); }
                     playPanel->setVisible (true); break;
-                case tab808:
-                    if (! panel808) { panel808 = std::make_unique<Panel808> (proc, lnf); addChildComponent (*panel808); noFocus (*panel808); resized(); }
-                    panel808->setVisible (true); break;
+                case tabArp:
+                    if (! arpPanel) { arpPanel = std::make_unique<ArpPanel> (proc, lnf); addChildComponent (*arpPanel); noFocus (*arpPanel); resized(); }
+                    arpPanel->setVisible (true); break;
                 default: break;
             }
-            for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) panel808.get() })
+            for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get() })
                 if (c != nullptr && c->isVisible()) c->toFront (false);
         }
         updateTabs();
     }
     bool isPanelVisible() const
     {
-        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) panel808.get() })
+        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get() })
             if (c != nullptr && c->isVisible()) return true;
         return false;
     }
@@ -1309,7 +1441,7 @@ private:
             for (auto& c : childCards) c->repaint();
             for (auto& gsw : genes) gsw->repaint();
         }
-        eraCol.repaint();
+        wildRail.repaint();
         updateTabs();
     }
 
@@ -1334,7 +1466,7 @@ private:
             updateTabs();
         }
         const bool bassNow = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
-        const float eraNow = proc.apvts.getRawParameterValue (ID::era)->load() + proc.apvts.getRawParameterValue (ID::eraHome)->load() * 10.0f;
+        const float eraNow = proc.breedWild;
         if (proc.currentName() != lastName || proc.currentPresetIndex() != lastIndex || modifiedNow != modified || bassNow != lastBass
             || proc.labVersion() != lastLab || eraNow != lastEra)
         {
@@ -1361,7 +1493,7 @@ private:
     std::vector<std::unique_ptr<GeneSwitch>> genes;
     std::vector<std::unique_ptr<HotButton>> mutateBtns, tabs;
     HotButton treeBtn { lnf }, undoBtn { lnf };
-    EraColumn eraCol;
+    WildRail wildRail;
     std::vector<std::unique_ptr<ImageKnob>> macros, sideKnobs;
     std::vector<std::unique_ptr<MacroCaption>> captions;
     WheelSlider pitchWheel, modWheel;
@@ -1370,7 +1502,7 @@ private:
     std::unique_ptr<AdvancedPage> advanced;
     std::unique_ptr<PresetBrowser> browser;
     std::unique_ptr<PlayPanel> playPanel;
-    std::unique_ptr<Panel808> panel808;
+    std::unique_ptr<ArpPanel> arpPanel;
     std::unique_ptr<FileChooser> chooser;
 
     bool isFav = false, modified = false, modifiedNow = false, lastBass = false;

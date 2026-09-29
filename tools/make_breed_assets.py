@@ -75,6 +75,9 @@ unlight(box(1474, 150, 1506, 392), 0.8)
 # SOUND tab: take the unlit MOD tab around the caption
 unlight(box(255, 612, 480, 660), 0.35, 10)
 unlight(box(1330, 712, 1600, 765), 0.7)
+# v0.7: the ERA column becomes the WILD rail (drawn by the plugin), the 808 tab becomes ARP
+inpaint(1466, 120, 1608, 392)
+inpaint(1196, 626, 1290, 650)
 # knob value arcs
 knobs = [((x, 715), 30, 58) for x in (132, 284, 435, 587, 742, 895, 1047, 1202)] + [((1532, 447), 34, 66), ((1490, 552), 21, 40), ((1575, 552), 21, 40)]
 ring = np.zeros((H, W), bool)

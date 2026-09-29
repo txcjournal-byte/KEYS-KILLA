@@ -85,7 +85,7 @@ public:
     struct Child
     {
         Genome g; std::array<int, numGenes> genes {}; uint32_t seed = 0; int rating = 0;
-        std::array<float, 64> wave {}; bool waveReady = false;
+        std::array<float, 64> wave {}; bool waveReady = false; bool hybrid = false;
     };
     struct Generation { Genome parents[2]; std::vector<Child> kids; };
     void setParentPreset (int slot, int presetIndex);
@@ -109,6 +109,9 @@ public:
     const std::vector<Generation>& generations() const { return history; }
     int  labVersion() const { return labVer; }
     std::atomic<int> previewNote { -1 };
+    std::atomic<int> arpCurStep { -1 };               // playing arp step (UI)
+    float breedWild = 0.25f;                          // WILD rail: 0 safe ... 1 crazy
+    void resetParams (const juce::StringArray& ids);  // back to the sound as it was loaded
 
     // ERA MORPH corners (0 classic, 1 melodic, 2 raw, 3 aggressive): factory preset index or -1
     void setMorphCorner (int corner, int presetIndex);
@@ -150,6 +153,7 @@ private:
     int  lockOf (const juce::String& id) const;
     float value (int i) const;
     int  snapToScale (int note) const;
+    static int snapToScaleWith (int note, int key, int mask);
 
     // parameter table
     std::vector<juce::RangedAudioParameter*> params;
@@ -195,6 +199,7 @@ private:
     std::array<Genome, 2> parents;
     std::vector<Child> children;
     int selChild = -1, labVer = 0;
+    bool hybridHint = false;
     std::array<bool, numGenes> geneLock {};
     std::array<int, numGenes> geneLockSrc {};
     uint32_t breedCount = 0;

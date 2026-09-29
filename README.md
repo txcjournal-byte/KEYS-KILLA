@@ -5,16 +5,17 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
-## BREED LAB (verze 0.6)
+## BREED LAB (verze 0.7)
 
-1. **PARENT A + PARENT B** – dva zvuky z knihovny 2010 → FUTURE (šipky = další zvuk kategorie, kostka = náhodný, klik = výběr / prohlížeč).
+1. **PARENT A + PARENT B** – dva zvuky z knihovny (šipky = další zvuk kategorie, kostka = náhodný, klik = výběr / prohlížeč).
 2. **BREED** – 6 dětí najednou. Každé dítě dědí 6 genů (BODY, ATTACK, TEXTURE, SPACE, MOVEMENT, CHARACTER) od jednoho z rodičů,
    spojité hodnoty se trochu přiblíží druhému rodiči, děti 4–6 mají mutaci. Hlasitost a čistý sub u basů hlídá engine.
 3. **CHILD 1–6** – skutečná vlna zvuku, ▶ poslech, hvězdičky (4+ se uloží do User / Bred), pravý klik = rodič další generace.
 4. **GENES** – A/B přepne gen vybraného dítěte, zámek = všechny další děti ho zdědí.
 5. **MUTATE** 5 / 15 / 30 / 60 % / CHAOS, **FAMILY TREE** (starší generace), **UNDO**.
-6. **ERA** 2010 → FUTURE (tah), **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
-7. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · 808 · KILLA vysunou panel s nastavením.
+6. **WILD** (SAFE → CRAZY): jak daleko BREED smí jít – geny přeskakují, přepínače se mění, víc HYBRID dětí (zvuk druhého rodiče jako vrstva B) a FUTURE.
+7. **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
+8. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · **ARP** (16 kroků s velocity, trapové stupnice Scale Up/Down, Chord, triolové rychlosti, vzory) · KILLA; každý panel má **RESET** (vrátí zvuk, jak byl nahraný).
 
 ## Engine
 
