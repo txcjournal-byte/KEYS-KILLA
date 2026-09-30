@@ -116,6 +116,8 @@ public:
         for (auto& a : air) a.shelf (true, 10000.0f, 1.8f, sr);
         for (auto& b : body) b.shelf (false, 110.0f, 1.2f, sr);
         for (auto& s : sideLp) s.setHz (140.0f, sr);
+        widHp.setHz (200.0f, sr);
+        wid.prepare ((int) (0.03f * sr) + 8);
         reset();
     }
     void reset()
@@ -124,9 +126,11 @@ public:
         for (auto& a : air) a.z1 = a.z2 = 0;
         for (auto& b : body) b.z1 = b.z2 = 0;
         for (auto& s : sideLp) s.reset();
+        widHp.reset(); wid.clear();
     }
     // returns the output peak before limiting (for the overload light)
-    float process (float* L, float* R, int n, float amount)
+    // width 0..1 (the preset's stereo width): mono-safe widening from a decorrelated copy above 250 Hz
+    float process (float* L, float* R, int n, float amount, float width = 0.5f)
     {
         float peak = 0;
         const float a = std::clamp (amount, 0.0f, 1.0f);
@@ -141,6 +145,9 @@ public:
                 // mono lows: side signal below 140 Hz removed
                 float s = (l - r) * 0.5f; const float m = (l + r) * 0.5f;
                 s -= sideLp[0].lp (s) * a;
+                // stereo: a 9 ms decorrelated copy of the mid (above 250 Hz) added as side - cancels in mono
+                wid.push (m - widHp.lp (m));
+                if (width >= 0.0f) s += wid.read (0.009f * sr) * 0.95f * a * std::clamp (0.45f + width * 0.9f, 0.0f, 1.0f);   // width < 0: bass, keep it centred
                 l = m + s; r = m - s;
                 // glue compressor (RMS-ish detector, soft knee)
                 const float lev = std::sqrt (0.5f * (l * l + r * r));
@@ -187,6 +194,7 @@ private:
     float sr = 44100, atk = 0.01f, rel = 0.001f, limRel = 0.001f, env = 0, limGain = 1, gr = 1;
     static constexpr float ceiling = 0.912f;   // -0.8 dBFS
     Shelf air[2], body[2];
-    OnePole sideLp[2];
+    OnePole sideLp[2], widHp;
+    DelayLine wid;
 };
 } // namespace kk

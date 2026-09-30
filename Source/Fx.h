@@ -140,7 +140,7 @@ public:
             if (p.monoLows) { l = subsonic[0].tick (l); r = subsonic[1].tick (r); }
             L[i] = l; R[i] = r;
         }
-        peakPre = std::max (peakPre, mastering.process (L, R, n, p.master));   // MASTER stage + limiter
+        peakPre = std::max (peakPre, mastering.process (L, R, n, p.master, p.monoLows ? -1.0f : p.width));   // MASTER stage + limiter
     }
 
     float peakPre = 0;   // pre-limiter peak (for overload warning), reset by owner
