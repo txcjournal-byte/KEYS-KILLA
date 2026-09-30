@@ -176,7 +176,8 @@ inline std::vector<LoopNote> buildLoop (const LoopGenes& l, int keyOverride, int
         for (int b = 0; b < 2; ++b)
             for (auto [st, ln] : cs[(size_t) (b == 0 ? cellA : cellB)]) m.push_back ({ b * TPB + st, ln, 0 });
         const int shape = (int) (r.next() % 4);   // arch, falling, rising, wave
-        int cur = (int[]) { 0, 2, 4, 7 } [r.next() % 4];
+        static constexpr int starts[4] { 0, 2, 4, 7 };
+        int cur = starts[r.next() % 4];
         int prev = 99, same = 0;
         for (size_t i = 0; i < m.size(); ++i)
         {
