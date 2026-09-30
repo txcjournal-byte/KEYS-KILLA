@@ -181,6 +181,8 @@ static int unitTests()
         for (auto& r : p.treeKids()) mel.insert (sig (r.g));
         p.treeBreed(); for (auto& r : p.treeKids()) mel.insert (sig (r.g));
         check (mel.size() >= 10, "every BREED gives new melodies");
+        std::set<uint32_t> openers; for (auto& r : p.treeKids()) openers.insert (r.g.loop.g[kk::loopOpener]);
+        check (openers.size() == 6, "six different openings in one BREED");
         bool valid = true; for (auto& r : p.treeKids()) valid &= r.g.valid() && r.g.loop.valid && r.g.name.contains ("+");
         check (valid, "results are full sounds named after their family");
         p.clearAncestor (2); p.clearAncestor (3);

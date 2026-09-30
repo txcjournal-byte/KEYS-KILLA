@@ -18,7 +18,7 @@
 // 20 openers x 16 answers x 10 turns x 7 endings x 5 bass plans x 2 bass rhythms x 3 registers x 12 keys.
 namespace kk
 {
-enum LoopGene { loopOpener, loopAnswer, loopTurn, loopEnding, loopBass, loopBassRhythm, loopRegister, numLoopGenes };
+enum LoopGene { loopOpener, loopAnswer, loopTurn, loopEnding, loopBass, loopBassRhythm, loopRegister, loopOpenerVar, loopAnswerVar, numLoopGenes };
 
 struct LoopGenes
 {
@@ -34,7 +34,67 @@ namespace loopdata
 {
     using namespace loopfrag;
     inline constexpr uint32_t size[numLoopGenes] { (uint32_t) numOpeners, (uint32_t) numAnswers, (uint32_t) numTurns, (uint32_t) numEndings,
-                                                   (uint32_t) numBass, 2, 3 };
+                                                   (uint32_t) numBass, 2, 3, 6, 6 };
+    inline constexpr int numVariants = 6;
+
+    // phrase variants: rhythm and register change, notes on beats 1 and 3 stay (so the chords still fit)
+    inline Frag variant (const Frag& f, int v)
+    {
+        Frag o {};
+        auto add = [&o] (int st, int ln, int s) { if (o.n < 16 && ln > 0) o.v[o.n++] = { (signed char) st, (signed char) ln, (signed char) s }; };
+        auto strong = [] (int st) { return st == 0 || st == 8; };
+        switch (v % numVariants)
+        {
+            case 1:   // dotted: straight 8th pairs become long-short
+                for (int i = 0; i < f.n; ++i)
+                {
+                    const auto n = f.v[i];
+                    if (i + 1 < f.n && n.ln == 2 && f.v[i + 1].ln == 2 && f.v[i + 1].st == n.st + 2 && n.st % 4 == 0 && ! strong (n.st + 2))
+                    { add (n.st, 3, n.s); add (n.st + 3, 1, f.v[i + 1].s); ++i; }
+                    else add (n.st, n.ln, n.s);
+                }
+                break;
+            case 2:   // syncopated: off-beat notes land a 16th later
+                for (int i = 0; i < f.n; ++i)
+                {
+                    const auto n = f.v[i];
+                    const int next = i + 1 < f.n ? f.v[i + 1].st : 16;
+                    if (! strong (n.st) && n.st % 2 == 0 && n.st + 1 < next && n.ln >= 2) add (n.st + 1, n.ln - 1, n.s);
+                    else add (n.st, n.ln, n.s);
+                }
+                break;
+            case 3:   // octave leaps on every second off-beat note
+            {
+                int k = 0;
+                for (int i = 0; i < f.n; ++i)
+                {
+                    const auto n = f.v[i];
+                    int s = n.s;
+                    if (! strong (n.st) && (k++ % 2) == 1) s = s + 12 <= 27 ? s + 12 : s - 12;
+                    add (n.st, n.ln, s);
+                }
+                break;
+            }
+            case 4:   // stutter: long notes become 16th rolls
+                for (int i = 0; i < f.n; ++i)
+                {
+                    const auto n = f.v[i];
+                    if (n.ln >= 4) { add (n.st, 1, n.s); add (n.st + 1, 1, n.s); add (n.st + 2, n.ln - 2, n.s); }
+                    else add (n.st, n.ln, n.s);
+                }
+                break;
+            case 5:   // sparser: off-beat 8ths are held from the note before
+                for (int i = 0; i < f.n; ++i)
+                {
+                    const auto n = f.v[i];
+                    if (o.n > 0 && ! strong (n.st) && n.st % 4 == 2) { o.v[o.n - 1].ln = (signed char) (n.st + n.ln - o.v[o.n - 1].st); continue; }
+                    add (n.st, n.ln, n.s);
+                }
+                break;
+            default: return f;
+        }
+        return o.n > 0 ? o : f;
+    }
     inline bool fits (const Frag& f, int chordMask)
     {
         for (int i = 0; i < f.n; ++i)
@@ -106,6 +166,8 @@ inline LoopGenes mixLoops (const std::vector<LoopGenes>& from, uint32_t seed, fl
         const int gene = (int) (r.next() % 4u);   // opener / answer / turn / ending
         c.g[(size_t) gene] = (c.g[(size_t) gene] + 1 + r.next() % (loopdata::size[gene] - 1)) % loopdata::size[gene];
     }
+    c.g[loopOpenerVar] = randomGene (loopOpenerVar, r);   // every melody gets its own rhythm / register variants
+    c.g[loopAnswerVar] = randomGene (loopAnswerVar, r);
     c.key = src[r.next() % src.size()]->key;
     c.valid = true;
     fixLoop (c);
@@ -127,7 +189,7 @@ inline LoopGenes rerollLoop (const LoopGenes& l, uint32_t seed)
 {
     LoopGenes c = l.valid ? l : loopFromSeed (seed);
     Rng r; r.seed (hash32 (seed ^ 0x7f4a7c15u));
-    for (int i : { (int) loopOpener, (int) loopAnswer, (int) loopTurn, (int) loopEnding }) c.g[(size_t) i] = randomGene (i, r);
+    for (int i : { (int) loopOpener, (int) loopAnswer, (int) loopTurn, (int) loopEnding, (int) loopOpenerVar, (int) loopAnswerVar }) c.g[(size_t) i] = randomGene (i, r);
     fixLoop (c);
     return c;
 }
@@ -159,13 +221,17 @@ inline std::vector<LoopNote> buildLoop (const LoopGenes& l, int keyOverride, int
     {
         const bool second = bar >= 8;
         const int pos = bar % 8;
-        const Frag* f = &openers[o];
+        // the opener changes its variant every other time (and again in the second 8 bars), the answer has its own
+        const int pair = pos / 2 + (second ? 1 : 0);
+        const int ov = (int) (l.g[loopOpenerVar] % numVariants), av = (int) (l.g[loopAnswerVar] % numVariants);
+        Frag frag = variant (openers[o], pair % 2 == 0 ? ov : (ov + 3) % numVariants);
         int bassSemi = 0;
         if (pos % 2 == 1)
         {
             bassSemi = pos == 7 ? bass[bp].ending : bass[bp].bar2;
-            f = pos == 7 ? &endings[e] : pos == 3 ? &turns[second ? t2 : t1] : &answers[second ? a2 : a1];
+            frag = pos == 7 ? endings[e] : pos == 3 ? turns[second ? t2 : t1] : variant (answers[second ? a2 : a1], second ? (av + 2) % numVariants : av);
         }
+        const Frag* f = &frag;
         const float b0 = (float) bar * 4.0f;
         if (! riffOnly)
         {
