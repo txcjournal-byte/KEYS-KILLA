@@ -662,6 +662,59 @@ private:
 };
 
 //==============================================================================
+// BREED LOOPS helpers
+static void drawLoopIcon (Graphics& g, Point<float> c, float r, Colour col, bool on)
+{
+    if (on) { g.setColour (col.withAlpha (0.3f)); g.fillEllipse (Rectangle<float> (r * 2.6f, r * 2.6f).withCentre (c)); }
+    Path p;
+    p.addCentredArc (c.x, c.y, r, r * 0.8f, 0, 0.35f, MathConstants<float>::pi - 0.2f, true);
+    p.addCentredArc (c.x, c.y, r, r * 0.8f, 0, MathConstants<float>::pi + 0.35f, MathConstants<float>::twoPi - 0.2f, true);
+    g.setColour (col); g.strokePath (p, PathStrokeType (1.8f, PathStrokeType::curved, PathStrokeType::rounded));
+    for (float a : { MathConstants<float>::pi - 0.2f, MathConstants<float>::twoPi - 0.2f })   // arrow heads
+    {
+        const Point<float> tip (c.x + std::sin (a) * r, c.y - std::cos (a) * r * 0.8f);
+        Path h; h.addTriangle (tip.translated (-3.5f, -3.0f), tip.translated (3.5f, -3.0f), tip.translated (0, 3.5f));
+        h.applyTransform (AffineTransform::rotation (a + MathConstants<float>::halfPi, tip.x, tip.y));
+        g.fillPath (h);
+    }
+}
+
+// piano roll of a loop: low line darker, riff bright
+static void drawLoopRoll (Graphics& g, Rectangle<float> r, const std::vector<kk::LoopNote>& notes, float lenBeats, Colour col, float playBeat = -1.0f)
+{
+    if (notes.empty()) return;
+    // two bands: the riff on top (its own pitch range, so the melody shape reads), the low line below
+    int lo[2] { 127, 127 }, hi[2] { 0, 0 };
+    for (auto& n : notes) { lo[n.low] = std::min (lo[n.low], n.note); hi[n.low] = std::max (hi[n.low], n.note); }
+    const bool both = hi[0] > 0 && hi[1] > 0;
+    const Rectangle<float> band[2] { both ? r.withTrimmedBottom (r.getHeight() * 0.3f) : r, both ? r.withTrimmedTop (r.getHeight() * 0.78f) : r };
+    for (auto& n : notes)
+    {
+        const auto& b = band[n.low];
+        const float span = (float) std::max (n.low ? 6 : 10, hi[n.low] - lo[n.low]);
+        const float nh = std::max (1.5f, std::min (b.getHeight() / (span + 1.0f), 5.0f));
+        const float x = r.getX() + r.getWidth() * n.start / lenBeats;
+        const float w = std::max (1.5f, r.getWidth() * n.len / lenBeats);
+        const float y = b.getBottom() - nh - (float) (n.note - lo[n.low]) / span * (b.getHeight() - nh);
+        const bool lit = playBeat >= n.start && playBeat < n.start + n.len;
+        g.setColour (lit ? Colours::white : (n.low ? col.withAlpha (0.45f) : col));
+        g.fillRect (x, y, w, nh);
+    }
+    if (playBeat >= 0)
+    {
+        g.setColour (Colours::white.withAlpha (0.6f));
+        g.drawVerticalLine ((int) (r.getX() + r.getWidth() * playBeat / lenBeats), r.getY(), r.getBottom());
+    }
+}
+
+// drag a loop out of the plugin: FL Studio (and other hosts) take it as a MIDI clip
+static void dragLoopOut (KeysKillaProcessor& proc, const KeysKillaProcessor::Genome& g, Component* from)
+{
+    const auto f = proc.exportLoopMidi (g);
+    if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, from);
+}
+
+//==============================================================================
 // PARENT A / B card: category picture, name, tags
 class ParentCard : public Component, public SettableTooltipClient
 {
@@ -771,6 +824,9 @@ public:
             g.fillRect (x, wv.getCentreY() - h, 1.3f, h * 2.0f);
         }
         if (sel) { g.setColour (s.accent.withAlpha (0.15f)); g.fillRect (wv.withHeight (8).withCentre (wv.getCentre())); }
+        // loop button: plays this child with its melody loop
+        const bool looping = proc.loopPlaying() && proc.currentNode() == c.g.node && c.g.node >= 0;
+        drawLoopIcon (g, loopCentre(), 8.0f, looping ? s.accent : Colour (0xffd8d2d2), looping);
         // stars
         for (int st = 0; st < 5; ++st)
         {
@@ -780,15 +836,32 @@ public:
     }
     void mouseEnter (const MouseEvent&) override { over = true; repaint(); }
     void mouseExit (const MouseEvent&) override { over = false; repaint(); }
+    void mouseDown (const MouseEvent&) override { dragged = false; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || index >= (int) proc.kids().size() || e.getDistanceFromDragStart() < 12) return;
+        dragged = true;   // drag the child's loop into the host as MIDI
+        dragLoopOut (proc, proc.kids()[(size_t) index].g, this);
+    }
     void mouseUp (const MouseEvent& e) override
     {
-        if (index >= (int) proc.kids().size()) return;
+        if (index >= (int) proc.kids().size() || dragged) return;
         if (e.mods.isPopupMenu()) { if (onMenu) onMenu (index); return; }
+        if (e.position.getDistanceFrom (loopCentre()) < 14.0f)
+        {
+            const bool mine = proc.currentNode() == proc.kids()[(size_t) index].g.node;
+            if (! mine) proc.selectChild (index);
+            if (mine || ! proc.loopPlaying()) proc.toggleLoop();
+            if (auto* p = getParentComponent()) p->repaint();
+            return;
+        }
         for (int st = 0; st < 5; ++st) if (starRect (st).expanded (3).contains (e.position)) { proc.rateChild (index, st + 1); repaint(); return; }
         if (e.position.getDistanceFrom ({ 160.0f, 66.0f }) < 20.0f) proc.previewChild (index);   // play button
         else proc.selectChild (index);
     }
 private:
+    bool dragged = false;
+    Point<float> loopCentre() const { return { 160.0f, 104.0f }; }
     Rectangle<float> starRect (int i) const { return { 44.0f + (float) i * 18.5f, 97.0f, 15.0f, 15.0f }; }
     static void drawStar (Graphics& g, Point<float> c, float r, Colour fill, Colour line)
     {
@@ -901,6 +974,376 @@ private:
 };
 
 //==============================================================================
+// FAMILY TREE: great-grandparents -> grandparents -> parents -> children, every member is a sound + its loop
+class LoopRoll : public Component, public SettableTooltipClient
+{
+public:
+    LoopRoll (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l) { setTooltip ("The loop of the sound you hear. Drag it into FL Studio as MIDI."); }
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat();
+        g.setColour (Colour (0xff0e0b0b)); g.fillRoundedRectangle (r, 5);
+        const float len = (float) proc.loopBars() * 4.0f;
+        for (int b = 1; b < proc.loopBars(); ++b)
+        {
+            g.setColour (b % 2 == 0 ? Colour (0xff3a3030) : Colour (0xff1f1919));
+            g.drawVerticalLine ((int) (r.getX() + r.getWidth() * (float) b / (float) proc.loopBars()), r.getY() + 3, r.getBottom() - 3);
+        }
+        drawLoopRoll (g, r.reduced (8, 8), proc.loopNotes (proc.currentGenome()), len, s.accent, proc.loopPlaying() ? proc.loopBeat.load() : -1.0f);
+    }
+    void mouseDown (const MouseEvent&) override { dragged = false; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || e.getDistanceFromDragStart() < 10) return;
+        dragged = true; dragLoopOut (proc, proc.currentGenome(), this);
+    }
+    void mouseUp (const MouseEvent&) override { if (! dragged) proc.toggleLoop(); }
+private:
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf; bool dragged = false;
+};
+
+class DragMidiButton : public Component, public SettableTooltipClient
+{
+public:
+    DragMidiButton (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l) { setTooltip ("DRAG MIDI: drag this into the FL Studio playlist or piano roll - you get the loop as a MIDI clip."); }
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat().reduced (1.5f);
+        g.setColour (Colour (0xff120f0f)); g.fillRoundedRectangle (r, 4);
+        g.setColour (over ? s.accent : s.panelEdge); g.drawRoundedRectangle (r, 4, over ? 2.0f : 1.2f);
+        for (int i = 0; i < 3; ++i) { g.setColour (s.accent); g.fillRect (r.getX() + 12, r.getCentreY() - 7 + (float) i * 6, 14.0f - (float) i * 3, 3.0f); }
+        g.setColour (s.text); g.setFont (serif (17.0f, false, 0.15f));
+        g.drawText ("DRAG MIDI", r.withTrimmedLeft (32), Justification::centred);
+    }
+    void mouseEnter (const MouseEvent&) override { over = true; repaint(); }
+    void mouseExit (const MouseEvent&) override { over = false; repaint(); }
+    void mouseDown (const MouseEvent&) override { dragged = false; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || e.getDistanceFromDragStart() < 6) return;
+        dragged = true; dragLoopOut (proc, proc.currentGenome(), this);
+    }
+private:
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf; bool over = false, dragged = false;
+};
+
+// earlier generations (click = go back to it)
+class GenerationList : public Component, public SettableTooltipClient
+{
+public:
+    GenerationList (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l) { setTooltip ("GENERATIONS: click an earlier generation to bring its parents and children back."); }
+    std::function<void()> onChanged;
+    static constexpr int rowH = 38, top = 34;
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat();
+        g.setColour (Colour (0xff0e0b0b)); g.fillRoundedRectangle (r, 5);
+        g.setColour (s.text); g.setFont (serif (16.0f, false, 0.3f));
+        g.drawText ("GENERATIONS", r.withHeight ((float) top).reduced (12, 0), Justification::centredLeft);
+        const auto& hist = proc.generations();
+        int y = top;
+        auto row = [&] (const String& title, const String& sub, bool now, bool hot)
+        {
+            auto rr = Rectangle<float> (6, (float) y, r.getWidth() - 12, (float) rowH - 4);
+            if (now) drawGlowFrame (g, rr.reduced (2), s.accent, 4);
+            else if (hot) { g.setColour (s.accent.withAlpha (0.12f)); g.fillRoundedRectangle (rr, 4); }
+            g.setColour (now ? s.accent : Colour (0xffd9d3d3)); g.setFont (serif (14.0f, false, 0.15f));
+            g.drawText (title, rr.withHeight (17).translated (8, 2).withWidth (rr.getWidth() - 16), Justification::centredLeft);
+            g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.02f));
+            g.drawFittedText (sub, rr.withTrimmedTop (18).reduced (8, 0).toNearestInt(), Justification::centredLeft, 1, 0.8f);
+            y += rowH;
+        };
+        if (! proc.kids().empty())
+            row ("NOW", proc.parent (0).name + "  x  " + proc.parent (1).name, true, false);
+        for (int h = (int) hist.size(); --h >= 0 && y + rowH <= getHeight();)
+            row ("GEN " + String (h + 1), hist[(size_t) h].parents[0].name + "  x  " + hist[(size_t) h].parents[1].name, false, hover == h);
+        if (proc.kids().empty())
+        {
+            g.setColour (Colour (0x88ffffff)); g.setFont (serif (14.0f));
+            g.drawFittedText ("Press BREED.\nEvery generation\nshows up here.", Rectangle<int> (12, top + 10, getWidth() - 24, 70), Justification::centredLeft, 3);
+        }
+    }
+    void mouseMove (const MouseEvent& e) override { const int h = histAt (e.y); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit (const MouseEvent&) override { hover = -1; repaint(); }
+    void mouseUp (const MouseEvent& e) override
+    {
+        const int h = histAt (e.y);
+        if (h < 0) return;
+        proc.restoreGeneration (h);
+        hover = -1;
+        if (onChanged) onChanged();
+    }
+private:
+    int histAt (int y) const
+    {
+        const int first = top + (proc.kids().empty() ? 0 : rowH);
+        if (y < first) return -1;
+        const int k = (y - first) / rowH;
+        const int h = (int) proc.generations().size() - 1 - k;
+        return h >= 0 ? h : -1;
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf; int hover = -1;
+};
+
+class PedigreeView : public Component, public SettableTooltipClient
+{
+public:
+    PedigreeView (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        setTooltip ("FAMILY TREE: click anyone to hear their sound and loop. Right-click: use as a parent again. Drag: loop as MIDI.");
+    }
+    std::function<void()> onChanged;
+    std::function<void()> onSaveAs;
+
+    struct Slot { Rectangle<float> r; int node = -1; int kid = -1; const KeysKillaProcessor::Genome* g = nullptr; int rating = 0; bool hybrid = false; int row = 0, index = 0; };
+
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        layoutSlots();
+        static const char* rowNames[] { "GREAT-GRANDPARENTS", "GRANDPARENTS", "PARENTS", "CHILDREN" };
+        for (int row = 0; row < 4; ++row)
+        {
+            g.setColour (Colour (0xff8e8686)); g.setFont (serif (12.0f, false, 0.3f));
+            g.drawText (rowNames[row], Rectangle<float> (4, rowTop (row) - 17, 300, 15), Justification::centredLeft);
+        }
+        // lines to the parents
+        g.setColour (s.accent.withAlpha (0.45f));
+        for (auto& sl : slots)
+        {
+            if (sl.row == 0 || sl.row == 3 || sl.g == nullptr) continue;
+            for (int k = 0; k < 2; ++k)
+                if (auto* up = slotAt (sl.row - 1, sl.index * 2 + k); up != nullptr && up->g != nullptr)
+                    link (g, up->r, sl.r);
+        }
+        if (auto* pa = slotAt (2, 0), *pb = slotAt (2, 1); pa != nullptr && pb != nullptr)
+        {
+            const float busY = rowTop (3) - 22;
+            for (auto* par : { pa, pb }) if (par->g != nullptr) g.drawLine (par->r.getCentreX(), par->r.getBottom(), par->r.getCentreX(), busY, 1.5f);
+            float x0 = 1e9f, x1 = -1e9f;
+            for (auto& sl : slots) if (sl.row == 3 && sl.g != nullptr) { x0 = std::min (x0, sl.r.getCentreX()); x1 = std::max (x1, sl.r.getCentreX()); g.drawLine (sl.r.getCentreX(), busY, sl.r.getCentreX(), sl.r.getY(), 1.5f); }
+            if (x1 > x0) g.drawLine (std::min (x0, pa->r.getCentreX()), busY, std::max (x1, pb->r.getCentreX()), busY, 1.5f);
+        }
+        const float len = (float) proc.loopBars() * 4.0f;
+        for (int i = 0; i < (int) slots.size(); ++i)
+        {
+            auto& sl = slots[(size_t) i];
+            auto r = sl.r;
+            if (sl.g == nullptr)
+            {
+                g.setColour (Colour (0xff2a2222));
+                Path outline; outline.addRoundedRectangle (r.reduced (6), 5);
+                const float dash[] { 5, 5 };
+                PathStrokeType (1.0f).createDashedStroke (outline, outline, dash, 2);
+                g.fillPath (outline);
+                continue;
+            }
+            const bool cur = sl.node >= 0 && sl.node == proc.currentNode();
+            g.setColour (Colour (cur ? 0xff241414 : 0xff161111)); g.fillRoundedRectangle (r, 6);
+            if (cur) drawGlowFrame (g, r, s.accent, 6);
+            else { g.setColour (i == hover ? s.accent.withAlpha (0.8f) : Colour (0xff3a3030)); g.drawRoundedRectangle (r, 6, 1.2f); }
+            auto inner = r.reduced (8, 5);
+            g.setColour (Colour (0xffeee8e4)); g.setFont (serif (r.getWidth() < 170 ? 13.0f : 15.0f, false, 0.02f));
+            g.drawFittedText (sl.g->name.upToFirstOccurrenceOf (String::fromUTF8 (" \xc2\xb7 GEN"), false, false), inner.removeFromTop (34).toNearestInt(), Justification::centredLeft, 2, 0.7f);
+            String tag = sl.g->cat >= 0 ? categoryNames()[sl.g->cat].toUpperCase() : String ("USER");
+            tag << "  " << kk::keyName (proc.effectiveLoopKey (sl.g->loop)) << " MIN";
+            if (sl.g->gen > 0) tag << "  GEN " << sl.g->gen;
+            if (sl.hybrid) tag << "  HYBRID";
+            g.setColour (Colour (0xffa39a9a)); g.setFont (serif (11.0f, false, 0.15f));
+            g.drawText (tag, inner.removeFromTop (14), Justification::centredLeft);
+            for (int st = 0; st < sl.rating; ++st)
+            {
+                g.setColour (s.accent);
+                g.fillEllipse (Rectangle<float> (6, 6).withCentre ({ r.getRight() - 12.0f - (float) st * 9.0f, r.getY() + 10.0f }));
+            }
+            drawLoopRoll (g, inner.reduced (0, 2), proc.loopNotes (*sl.g), len, cur ? s.accent : Colour (0xffb9aeae));
+        }
+    }
+    void mouseMove (const MouseEvent& e) override { const int h = slotIndexAt (e.position); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit (const MouseEvent&) override { hover = -1; repaint(); }
+    void mouseDown (const MouseEvent& e) override { dragged = false; downSlot = slotIndexAt (e.position); }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || downSlot < 0 || e.getDistanceFromDragStart() < 12) return;
+        if (auto* gen = slots[(size_t) downSlot].g) { dragged = true; dragLoopOut (proc, *gen, this); }
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (dragged) return;
+        const int i = slotIndexAt (e.position);
+        if (i < 0 || slots[(size_t) i].g == nullptr) return;
+        const auto sl = slots[(size_t) i];
+        if (e.mods.isPopupMenu()) { menu (sl); return; }
+        play (sl);
+        if (onChanged) onChanged();
+    }
+private:
+    void play (const Slot& sl)
+    {
+        if (sl.kid >= 0) proc.previewChild (sl.kid);
+        else if (sl.node >= 0) proc.auditionNode (sl.node);
+    }
+    void menu (const Slot& sl)
+    {
+        PopupMenu m;
+        m.addSectionHeader (sl.g->name);
+        m.addItem (1, "Play");
+        m.addItem (2, "Use as PARENT A", sl.node >= 0);
+        m.addItem (3, "Use as PARENT B", sl.node >= 0);
+        m.addItem (4, "Load and save as preset...", sl.node >= 0 || sl.kid >= 0);
+        m.addItem (5, "Keep this loop for the next children (LOCK LOOP)");
+        m.showMenuAsync (PopupMenu::Options(), [this, sl, safe = SafePointer<PedigreeView> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1 || r == 4 || r == 5) play (sl);
+            if (r == 2 || r == 3) proc.setParentNode (r - 2, sl.node);
+            if (r == 5) { if (proc.loopLocked()) proc.toggleLoopLock(); proc.toggleLoopLock(); }
+            if (r == 4 && onSaveAs) onSaveAs();
+            if (onChanged) onChanged();
+        });
+    }
+    static void link (Graphics& g, Rectangle<float> up, Rectangle<float> down)
+    {
+        Path p;
+        p.startNewSubPath (down.getCentreX(), down.getY());
+        const float my = (up.getBottom() + down.getY()) * 0.5f;
+        p.cubicTo (down.getCentreX(), my, up.getCentreX(), my, up.getCentreX(), up.getBottom());
+        g.strokePath (p, PathStrokeType (1.5f));
+    }
+    float rowTop (int row) const { return 18.0f + (float) row * ((float) getHeight() - 18.0f) / 4.0f; }
+    float boxH() const { return ((float) getHeight() - 18.0f) / 4.0f - 26.0f; }
+    const Slot* slotAt (int row, int index) const
+    {
+        for (auto& sl : slots) if (sl.row == row && sl.index == index) return &sl;
+        return nullptr;
+    }
+    int slotIndexAt (Point<float> p) const
+    {
+        for (int i = 0; i < (int) slots.size(); ++i) if (slots[(size_t) i].r.contains (p)) return i;
+        return -1;
+    }
+    void layoutSlots()
+    {
+        slots.clear();
+        const float W = (float) getWidth();
+        auto place = [&] (int row, int index, int count, float maxW, const KeysKillaProcessor::Genome* g, int node, int kid, int rating, bool hybrid)
+        {
+            const float slotW = W / (float) count;
+            const float w = std::min (maxW, slotW - 12.0f);
+            Slot sl;
+            sl.r = Rectangle<float> (w, boxH()).withCentre ({ slotW * ((float) index + 0.5f), rowTop (row) + boxH() * 0.5f });
+            sl.g = g; sl.node = node; sl.kid = kid; sl.rating = rating; sl.hybrid = hybrid; sl.row = row; sl.index = index;
+            slots.push_back (sl);
+        };
+        // parents and their ancestors
+        std::array<int, 2> par { proc.parent (0).node, proc.parent (1).node };
+        std::vector<int> ids (par.begin(), par.end());
+        for (int k = 0; k < 2; ++k) place (2, k, 2, 300, proc.parent (k).valid() ? &proc.parent (k) : nullptr, par[(size_t) k], -1, 0, false);
+        for (int row = 1; row >= 0; --row)
+        {
+            std::vector<int> up;
+            for (int id : ids)
+            {
+                auto* n = proc.findNode (id);
+                up.push_back (n != nullptr ? n->pa : -1); up.push_back (n != nullptr ? n->pb : -1);
+            }
+            for (int k = 0; k < (int) up.size(); ++k)
+            {
+                auto* n = proc.findNode (up[(size_t) k]);
+                place (row, k, (int) up.size(), 260, n != nullptr ? &n->g : nullptr, n != nullptr ? n->id : -1, -1, n != nullptr ? n->rating : 0, n != nullptr && n->hybrid);
+            }
+            ids = up;
+        }
+        const auto& kids = proc.kids();
+        for (int k = 0; k < 6; ++k)
+            place (3, k, 6, 260, k < (int) kids.size() ? &kids[(size_t) k].g : nullptr, k < (int) kids.size() ? kids[(size_t) k].g.node : -1, k < (int) kids.size() ? k : -1,
+                   k < (int) kids.size() ? kids[(size_t) k].rating : 0, k < (int) kids.size() && kids[(size_t) k].hybrid);
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    std::vector<Slot> slots;
+    int hover = -1, downSlot = -1; bool dragged = false;
+};
+
+class FamilyTreePanel : public TabPanel, private Timer
+{
+public:
+    FamilyTreePanel (KeysKillaProcessor& p, KKLookAndFeel& l)
+        : TabPanel (p, l, "FAMILY TREE", {}), roll (p, l), dragBtn (p, l), gens (p, l), pedigree (p, l)
+    {
+        reset.setVisible (false);
+        loopBtn.setTooltip ("LOOP: play the melody loop of the sound you hear (host tempo; bar-synced when FL plays).");
+        loopBtn.onClick = [this] { proc.toggleLoop(); refresh(); };
+        keyBox.addItem ("KEY: AUTO", 1);
+        for (int k = 0; k < 12; ++k) keyBox.addItem (String ("KEY: ") + kk::keyName (k) + " MIN", k + 2);
+        keyBox.setTooltip ("Loop key. AUTO = every sound keeps its own key (or the KEY of Key Lock when it is on).");
+        keyBox.onChange = [this] { proc.setLoopKey (keyBox.getSelectedId() - 2); refresh(); };
+        for (int i = 0; i < 2; ++i)
+        {
+            auto& b = i == 0 ? bars8 : bars16;
+            b.setButtonText (i == 0 ? "8 BARS" : "16 BARS");
+            b.setTooltip (i == 0 ? "8-bar loop" : "16 bars: the second half answers with a new fall and a new high jump");
+            b.onClick = [this, i] { proc.setLoopBars (i == 0 ? 8 : 16); refresh(); };
+        }
+        lockBtn.setButtonText ("LOCK LOOP");
+        lockBtn.setTooltip ("LOCK LOOP: every new child gets the loop you hear now - only the sounds change.");
+        lockBtn.onClick = [this] { proc.toggleLoopLock(); refresh(); };
+        gens.onChanged = [this] { refresh(); if (onLab) onLab(); };
+        pedigree.onChanged = [this] { refresh(); if (onLab) onLab(); };
+        pedigree.onSaveAs = [this] { if (onSaveAs) onSaveAs(); };
+        for (Component* c : { (Component*) &loopBtn, (Component*) &keyBox, (Component*) &bars8, (Component*) &bars16, (Component*) &lockBtn,
+                              (Component*) &dragBtn, (Component*) &roll, (Component*) &gens, (Component*) &pedigree })
+            addAndMakeVisible (c);
+        refresh();
+        startTimerHz (24);
+    }
+    std::function<void()> onLab, onSaveAs;
+    void layout (Rectangle<int> r) override
+    {
+        auto bar = Rectangle<int> (330, 14, getWidth() - 330 - 290, 36);
+        loopBtn.setBounds (bar.removeFromLeft (150)); bar.removeFromLeft (10);
+        keyBox.setBounds (bar.removeFromLeft (190)); bar.removeFromLeft (10);
+        bars8.setBounds (bar.removeFromLeft (100)); bar.removeFromLeft (4);
+        bars16.setBounds (bar.removeFromLeft (110)); bar.removeFromLeft (10);
+        lockBtn.setBounds (bar.removeFromLeft (150)); bar.removeFromLeft (10);
+        dragBtn.setBounds (bar.removeFromLeft (190));
+        r.removeFromTop (6);
+        roll.setBounds (r.removeFromTop (76));
+        r.removeFromTop (10);
+        gens.setBounds (r.removeFromLeft (260));
+        r.removeFromLeft (16);
+        pedigree.setBounds (r);
+    }
+    void refresh()
+    {
+        loopBtn.setButtonText (proc.loopPlaying() ? "STOP LOOP" : "PLAY LOOP");
+        loopBtn.setToggleState (proc.loopPlaying(), dontSendNotification);
+        keyBox.setSelectedId (proc.loopKey() + 2, dontSendNotification);
+        bars8.setToggleState (proc.loopBars() == 8, dontSendNotification);
+        bars16.setToggleState (proc.loopBars() == 16, dontSendNotification);
+        lockBtn.setToggleState (proc.loopLocked(), dontSendNotification);
+        lastLab = proc.labVersion(); lastNode = proc.currentNode();
+        repaint();
+    }
+private:
+    void timerCallback() override
+    {
+        if (! isVisible()) return;
+        if (proc.labVersion() != lastLab || proc.currentNode() != lastNode || proc.loopPlaying() != loopBtn.getToggleState()) { refresh(); return; }
+        if (proc.loopPlaying()) roll.repaint();
+    }
+    TextButton loopBtn, bars8, bars16, lockBtn;
+    ComboBox keyBox;
+    LoopRoll roll;
+    DragMidiButton dragBtn;
+    GenerationList gens;
+    PedigreeView pedigree;
+    int lastLab = -1, lastNode = -2;
+};
+
+//==============================================================================
 class MainPage : public Component, private Timer
 {
 public:
@@ -961,7 +1404,8 @@ public:
         {
             auto c = std::make_unique<ChildCard> (proc, lnf, i);
             c->onMenu = [this] (int idx) { childMenu (idx); };
-            c->setTooltip ("CHILD " + String (i + 1) + ": click to load, play button to hear it, stars to rate (4+ stars are kept in User > Bred). Right-click: use as parent.");
+            c->setTooltip ("CHILD " + String (i + 1) + ": click to load, play button to hear it, loop button to hear it with its melody loop, stars to rate (4+ stars are kept in User > Bred). "
+                           "Drag the card into FL Studio: the loop as MIDI. Right-click: use as parent.");
             addAndMakeVisible (*c);
             childCards.push_back (std::move (c));
         }
@@ -983,7 +1427,7 @@ public:
             addAndMakeVisible (*b);
             mutateBtns.push_back (std::move (b));
         }
-        treeBtn.onClick = [this] { familyTree(); }; treeBtn.setTooltip ("FAMILY TREE: earlier generations and their children");
+        treeBtn.onClick = [this] { openTab (tabTree); }; treeBtn.setTooltip ("FAMILY TREE: parents, grandparents and great-grandparents of your sounds - every one with its loop");
         undoBtn.onClick = [this] { proc.undo(); refreshState(); }; undoBtn.setTooltip ("UNDO the last change of the sound");
         addAndMakeVisible (treeBtn); addAndMakeVisible (undoBtn);
 
@@ -1058,6 +1502,7 @@ public:
         stopTimer();
         PopupMenu::dismissAllActiveMenus();   // never leave a menu pointing at a closed editor
         proc.releaseThumbnailRenderer();      // nothing heavy stays alive after the window is closed
+        proc.stopLoop();                      // the audition loop never keeps playing in a closed plugin
         setLookAndFeel (nullptr);
     }
 
@@ -1071,6 +1516,13 @@ public:
         if (v == 10) openTab (tabMovement);
         if (v == 11) openTab (tabArp);
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
+        if (v == 13)   // three generations, then the family tree
+        {
+            proc.breed(); proc.setParentChild (0, 2); proc.setParentChild (1, 5);
+            proc.breed(); proc.setParentChild (0, 1); proc.randomParent (1);
+            proc.breed(); proc.selectChild (3); proc.rateChild (3, 4);
+            labChanged(); openTab (tabTree);
+        }
     }
 
     void paint (Graphics& g) override
@@ -1123,10 +1575,11 @@ public:
         if (browser) browser->setBounds (panelArea);
         if (playPanel) playPanel->setBounds (panelArea);
         if (arpPanel) arpPanel->setBounds (panelArea);
+        if (treePanel) treePanel->setBounds (panelArea);
     }
 
 private:
-    enum { tabBrowser, tabSound, tabMod, tabMovement, tabFx, tabArp, tabKilla, numTabs, tabSettings = 100 };
+    enum { tabBrowser, tabSound, tabMod, tabMovement, tabFx, tabArp, tabKilla, numTabs, tabSettings = 100, tabTree = 101 };
 
     // ---------------- tab panels (created on first use -> fast editor open/close) ----------------
     void ensureAdvanced()
@@ -1152,7 +1605,7 @@ private:
     }
     void hidePanels()
     {
-        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get() })
+        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get(), (Component*) treePanel.get() })
             if (c != nullptr) c->setVisible (false);
     }
     void openTab (int t)
@@ -1177,16 +1630,25 @@ private:
                 case tabArp:
                     if (! arpPanel) { arpPanel = std::make_unique<ArpPanel> (proc, lnf); addChildComponent (*arpPanel); noFocus (*arpPanel); resized(); }
                     arpPanel->setVisible (true); break;
+                case tabTree:
+                    if (! treePanel)
+                    {
+                        treePanel = std::make_unique<FamilyTreePanel> (proc, lnf);
+                        treePanel->onLab = [this] { labChanged(); };
+                        treePanel->onSaveAs = [this] { savePresetAs(); };
+                        addChildComponent (*treePanel); noFocus (*treePanel); resized();
+                    }
+                    treePanel->refresh(); treePanel->setVisible (true); break;
                 default: break;
             }
-            for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get() })
+            for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get(), (Component*) treePanel.get() })
                 if (c != nullptr && c->isVisible()) c->toFront (false);
         }
         updateTabs();
     }
     bool isPanelVisible() const
     {
-        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get() })
+        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get(), (Component*) treePanel.get() })
             if (c != nullptr && c->isVisible()) return true;
         return false;
     }
@@ -1245,38 +1707,18 @@ private:
         m.addItem (2, "Use as PARENT B  (next generation)");
         m.addItem (3, "Load and save as preset...");
         m.addItem (4, "Play");
+        m.addItem (5, "Play with its loop");
+        m.addItem (6, "Keep this loop for the next children (LOCK LOOP)", true, proc.loopLocked());
+        m.addItem (7, "Show in the FAMILY TREE");
         m.showMenuAsync (PopupMenu::Options(), [this, idx, safe = SafePointer<MainPage> (this)] (int r)
         {
             if (safe == nullptr || r == 0) return;
             if (r == 1 || r == 2) proc.setParentChild (r - 1, idx);
             if (r == 3) { proc.selectChild (idx); savePresetAs(); }
             if (r == 4) proc.previewChild (idx);
-            labChanged();
-        });
-    }
-    void familyTree()
-    {
-        PopupMenu m;
-        const auto& hist = proc.generations();
-        m.addSectionHeader ("FAMILY TREE");
-        if (hist.empty()) m.addItem (-1, "Breed a few times - earlier generations show up here", false);
-        for (int h = (int) hist.size(); --h >= 0;)
-        {
-            const auto& gen = hist[(size_t) h];
-            PopupMenu kids;
-            for (int k = 0; k < (int) gen.kids.size(); ++k)
-            {
-                String stars; for (int s = 0; s < gen.kids[(size_t) k].rating; ++s) stars << "*";
-                kids.addItem (1 + h * 10 + k, gen.kids[(size_t) k].g.name + (stars.isNotEmpty() ? "   " + stars : String()));
-            }
-            m.addSubMenu (gen.parents[0].name + "  x  " + gen.parents[1].name, kids);
-        }
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (treeBtn), [this, safe = SafePointer<MainPage> (this)] (int r)
-        {
-            if (safe == nullptr || r <= 0) return;
-            const int h = (r - 1) / 10, k = (r - 1) % 10;
-            proc.restoreGeneration (h);
-            proc.selectChild (k);
+            if (r == 5) { proc.selectChild (idx); if (! proc.loopPlaying()) proc.toggleLoop(); }
+            if (r == 6) { if (! proc.loopLocked()) proc.selectChild (idx); proc.toggleLoopLock(); }
+            if (r == 7) { proc.selectChild (idx); openTab (tabTree); }
             labChanged();
         });
     }
@@ -1535,6 +1977,7 @@ private:
     std::unique_ptr<PresetBrowser> browser;
     std::unique_ptr<PlayPanel> playPanel;
     std::unique_ptr<ArpPanel> arpPanel;
+    std::unique_ptr<FamilyTreePanel> treePanel;
     std::unique_ptr<FileChooser> chooser;
 
     bool isFav = false, modified = false, modifiedNow = false, lastBass = false;

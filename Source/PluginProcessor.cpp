@@ -1,4 +1,6 @@
 #include "PluginProcessor.h"
+#include <set>
+#include <functional>
 #include "PluginEditor.h"
 
 namespace
@@ -588,6 +590,8 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     processedMidi.clear();
     processMidi (midi, processedMidi, n, beatPos, bpm);
+    lastBpm = bpm;
+    renderLoop (processedMidi, n, beatPos, bps, hostPlaying);
 
     auto lfoInfo = [&] (int syncI, int divI, int rateI, int shapeI, float& phase, float& lastPh, float& sh, std::vector<float>& buf, int c0, int len)
     {
@@ -732,6 +736,7 @@ void KeysKillaProcessor::loadPreset (int index)
     presetName = pr.name;
     macroLabels = pr.macroNames;
     snapshotForModified();
+    setCurrentLoop (kk::loopFromSeed ((uint32_t) pr.name.hashCode()), -1);
     updateHostDisplay (ChangeDetails().withProgramChanged (true));
 }
 
@@ -915,6 +920,7 @@ KeysKillaProcessor::Genome KeysKillaProcessor::genomeFromPreset (int idx) const
     auto setv = [&] (const juce::String& id, float x) { if (auto it = idIndex.find (id); it != idIndex.end()) g.v[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (x); };
     for (auto& [id, x] : pr.values) setv (id, x);
     if (pr.isBass()) { setv (ID::mono, 1); setv (ID::bassMode, 1); }
+    g.loop = kk::loopFromSeed ((uint32_t) pr.name.hashCode());
     return g;
 }
 
@@ -925,6 +931,9 @@ KeysKillaProcessor::Genome KeysKillaProcessor::genomeFromCurrent() const
     g.cat = currentPreset >= 0 ? factoryPresets()[(size_t) currentPreset].cat : -1;
     g.era = (int) std::round (params[(size_t) ix->eraHome]->convertFrom0to1 (g.v[(size_t) ix->eraHome]));
     for (auto& c : children) if (c.g.name == presetName) { g.gen = c.g.gen; g.cat = c.g.cat; }
+    g.loop = curLoop.valid ? curLoop : kk::loopFromSeed ((uint32_t) presetName.hashCode());
+    if (! isModified())   // unchanged family member: keep its place in the tree
+        if (auto* n = findNode (curNode)) { g.node = curNode; g.gen = n->g.gen; g.cat = n->g.cat; }
     return g;
 }
 
@@ -932,9 +941,14 @@ void KeysKillaProcessor::setParentPreset (int slot, int idx)
 {
     auto g = genomeFromPreset (idx);
     if (! g.valid()) return;
-    parents[(size_t) juce::jlimit (0, 1, slot)] = std::move (g); ++labVer;
+    parents[(size_t) juce::jlimit (0, 1, slot)] = std::move (g);
+    ensureNode (parents[(size_t) juce::jlimit (0, 1, slot)]); pruneTree(); ++labVer;
 }
-void KeysKillaProcessor::setParentCurrent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = genomeFromCurrent(); ++labVer; }
+void KeysKillaProcessor::setParentCurrent (int slot)
+{
+    auto& p = parents[(size_t) juce::jlimit (0, 1, slot)];
+    p = genomeFromCurrent(); ensureNode (p); pruneTree(); ++labVer;
+}
 void KeysKillaProcessor::setParentChild (int slot, int c)
 {
     if (! juce::isPositiveAndBelow (c, (int) children.size())) return;
@@ -1038,9 +1052,11 @@ KeysKillaProcessor::Child KeysKillaProcessor::makeChild (int k, uint32_t seed, c
     const float dirt = std::max (0.0f, real (I.drive) - params[(size_t) I.drive]->convertFrom0to1 (body[(size_t) I.drive]));
     setReal (I.gain, juce::jlimit (-24.0f, 12.0f, bodyGain - 6.0f * dirt));
 
-    auto shortName = [] (juce::String n)
+    auto shortName = [] (juce::String n, bool lastFamily)
     {
         n = n.upToFirstOccurrenceOf (juce::String::fromUTF8 (" \xc2\xb7 GEN"), false, false);
+        const auto x = juce::String::fromUTF8 (" \xc3\x97 ");   // a bred parent: A keeps its first family, B its last
+        if (n.contains (x)) n = lastFamily ? n.fromLastOccurrenceOf (x, false, false) : n.upToFirstOccurrenceOf (x, false, false);
         if (n.length() > 5 && n.substring (0, 4).containsOnly ("0123456789")) n = n.substring (5);   // drop the year tag
         if (n.startsWith ("FUTURE ")) n = n.substring (7);
         auto words = juce::StringArray::fromTokens (n, " ", "");
@@ -1049,10 +1065,12 @@ KeysKillaProcessor::Child KeysKillaProcessor::makeChild (int k, uint32_t seed, c
         for (auto& w : words) { if ((out + " " + w).trim().length() > 20) break; out = (out + " " + w).trim(); }
         return out.isEmpty() ? n.substring (0, 20) : out;
     };
+    c.g.loop = loopLockOn && lockedLoop.valid ? lockedLoop
+             : kk::crossLoops (parents[0].loop, parents[1].loop, kk::hash32 (seed ^ 0x10095u), pA[kk_], wild);
     c.g.gen = std::max (parents[0].gen, parents[1].gen) + 1;
     c.g.cat = parents[(size_t) c.genes[geneBody]].cat;
     c.g.era = parents[(size_t) c.genes[geneCharacter]].era;
-    c.g.name = shortName (parents[0].name) + juce::String::fromUTF8 (" \xc3\x97 ") + shortName (parents[1].name) + juce::String::fromUTF8 (" \xc2\xb7 GEN ") + juce::String (c.g.gen) + " #" + juce::String (k + 1);
+    c.g.name = shortName (parents[0].name, false) + juce::String::fromUTF8 (" \xc3\x97 ") + shortName (parents[1].name, true) + juce::String::fromUTF8 (" \xc2\xb7 GEN ") + juce::String (c.g.gen) + " #" + juce::String (k + 1);
     return c;
 }
 
@@ -1064,7 +1082,16 @@ int KeysKillaProcessor::breed()
     ++breedCount;
     const uint32_t base = kk::hash32 (((uint32_t) parents[0].name.hashCode() * 31u + (uint32_t) parents[1].name.hashCode()) ^ (breedCount * 2654435761u));
     children.clear();
-    for (int k = 0; k < 6; ++k) children.push_back (makeChild (k, kk::hash32 (base + (uint32_t) k * 7919u), nullptr));
+    ensureNode (parents[0]); ensureNode (parents[1]);
+    for (int k = 0; k < 6; ++k)
+    {
+        children.push_back (makeChild (k, kk::hash32 (base + (uint32_t) k * 7919u), nullptr));
+        auto& c = children.back();
+        TreeNode n; n.id = nextNodeId++; n.pa = parents[0].node; n.pb = parents[1].node; n.hybrid = c.hybrid;
+        c.g.node = n.id; n.g = c.g;
+        tree.push_back (std::move (n));
+    }
+    pruneTree();
     ++labVer;
     selectChild (0);
     return (int) children.size();
@@ -1089,6 +1116,7 @@ void KeysKillaProcessor::selectChild (int i)
     if (! juce::isPositiveAndBelow (i, (int) children.size())) return;
     selChild = i; ++labVer;
     applyGenome (children[(size_t) i].g, true);
+    setCurrentLoop (children[(size_t) i].g.loop, children[(size_t) i].g.node);
     captureUndo();
 }
 
@@ -1098,9 +1126,13 @@ void KeysKillaProcessor::setChildGene (int c, int gene, int src)
     auto genes = children[(size_t) c].genes;
     genes[(size_t) gene] = juce::jlimit (0, 1, src);
     const int rating = children[(size_t) c].rating;
+    const int node = children[(size_t) c].g.node;
+    const auto loop = children[(size_t) c].g.loop;
     hybridHint = children[(size_t) c].hybrid;
     children[(size_t) c] = makeChild (c, children[(size_t) c].seed, &genes);
     children[(size_t) c].rating = rating;
+    children[(size_t) c].g.node = node; children[(size_t) c].g.loop = loop;
+    for (auto& n : tree) if (n.id == node) n.g = children[(size_t) c].g;
     if (geneLock[(size_t) gene]) geneLockSrc[(size_t) gene] = genes[(size_t) gene];
     selectChild (c);
 }
@@ -1119,6 +1151,7 @@ void KeysKillaProcessor::rateChild (int c, int stars)
     auto& ch = children[(size_t) c];
     const bool wasGood = ch.rating >= 4;
     ch.rating = ch.rating == stars ? 0 : juce::jlimit (0, 5, stars);
+    for (auto& n : tree) if (n.id == ch.g.node) n.rating = ch.rating;
     ++labVer;
     if (ch.rating >= 4 && ! wasGood)   // favourite children are kept as user presets
     {
@@ -1145,8 +1178,191 @@ void KeysKillaProcessor::restoreGeneration (int h)
 
 void KeysKillaProcessor::previewChild (int i)
 {
-    if (i != selChild) selectChild (i);
+    if (i != selChild || curNode != children[(size_t) juce::jlimit (0, (int) children.size() - 1, i)].g.node) selectChild (i);
+    if (loopOn) return;   // the loop is already playing the new sound
     previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
+}
+
+//==============================================================================
+// FAMILY TREE
+const KeysKillaProcessor::TreeNode* KeysKillaProcessor::findNode (int id) const
+{
+    if (id < 0) return nullptr;
+    for (auto& n : tree) if (n.id == id) return &n;
+    return nullptr;
+}
+
+int KeysKillaProcessor::ensureNode (Genome& g)
+{
+    if (! g.valid()) return -1;
+    if (findNode (g.node) != nullptr) return g.node;
+    TreeNode n; n.id = nextNodeId++; n.g = g; n.g.node = n.id;
+    g.node = n.id;
+    tree.push_back (std::move (n));
+    return g.node;
+}
+
+void KeysKillaProcessor::pruneTree()
+{
+    if (tree.size() <= 400) return;
+    std::set<int> keep;
+    std::function<void (int, int)> up = [&] (int id, int depth)
+    {
+        if (id < 0 || depth > 5 || ! keep.insert (id).second) return;
+        if (auto* n = findNode (id)) { up (n->pa, depth + 1); up (n->pb, depth + 1); }
+    };
+    for (auto& p : parents) up (p.node, 0);
+    for (auto& c : children) up (c.g.node, 0);
+    for (auto& h : history) { up (h.parents[0].node, 0); up (h.parents[1].node, 0); for (auto& c : h.kids) up (c.g.node, 0); }
+    size_t excess = tree.size() - 300;
+    tree.erase (std::remove_if (tree.begin(), tree.end(), [&] (const TreeNode& n)
+    {
+        if (excess == 0 || keep.count (n.id) > 0) return false;
+        --excess; return true;
+    }), tree.end());
+}
+
+void KeysKillaProcessor::auditionNode (int id)
+{
+    for (int i = 0; i < (int) children.size(); ++i)
+        if (children[(size_t) i].g.node == id) { previewChild (i); return; }
+    auto* n = findNode (id);
+    if (n == nullptr) return;
+    const Genome g = n->g;
+    selChild = -1; ++labVer;
+    applyGenome (g, true);
+    setCurrentLoop (g.loop, id);
+    captureUndo();
+    if (! loopOn) previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
+}
+
+void KeysKillaProcessor::setParentNode (int slot, int id)
+{
+    if (auto* n = findNode (id)) { parents[(size_t) juce::jlimit (0, 1, slot)] = n->g; ++labVer; }
+}
+
+//==============================================================================
+// BREED LOOPS
+int KeysKillaProcessor::effectiveLoopKey (const kk::LoopGenes& l) const
+{
+    if (loopKeyN >= 0) return loopKeyN;
+    if (raw[(size_t) ix->keyLock]->load() > 0.5f) return (int) raw[(size_t) ix->key]->load();
+    return l.key;
+}
+
+std::vector<kk::LoopNote> KeysKillaProcessor::loopNotes (const Genome& g) const
+{
+    const bool bass = g.v.size() == params.size() && g.v[(size_t) ix->bassMode] > 0.5f;
+    const bool mono = g.v.size() == params.size() && g.v[(size_t) ix->mono] > 0.5f;
+    return kk::buildLoop (g.loop, effectiveLoopKey (g.loop), loopBarsN, bass, mono && ! bass);
+}
+
+void KeysKillaProcessor::rebuildLoopSeq()
+{
+    const bool bass = raw[(size_t) ix->bassMode]->load() > 0.5f;
+    const bool mono = raw[(size_t) ix->mono]->load() > 0.5f;
+    auto seq = kk::buildLoop (curLoop, effectiveLoopKey (curLoop), loopBarsN, bass, mono && ! bass);
+    {
+        const juce::SpinLock::ScopedLockType sl (loopLock);
+        loopSeq.swap (seq);
+        loopLenBeats = loopBarsN * 4.0;
+    }
+    loopDirty = true;
+}
+
+void KeysKillaProcessor::setCurrentLoop (const kk::LoopGenes& l, int node)
+{
+    curNode = node;
+    if (l == curLoop && ! loopSeq.empty()) { rebuildLoopSeq(); return; }
+    curLoop = l;
+    rebuildLoopSeq();
+}
+
+void KeysKillaProcessor::toggleLoop()
+{
+    if (! curLoop.valid) curLoop = kk::loopFromSeed ((uint32_t) presetName.hashCode());
+    if (! loopOn) rebuildLoopSeq();
+    loopOn = ! loopOn.load();
+    ++labVer;
+}
+void KeysKillaProcessor::setLoopBars (int bars) { loopBarsN = bars > 8 ? 16 : 8; rebuildLoopSeq(); ++labVer; }
+void KeysKillaProcessor::setLoopKey (int key) { loopKeyN = juce::jlimit (-1, 11, key); rebuildLoopSeq(); ++labVer; }
+void KeysKillaProcessor::toggleLoopLock()
+{
+    loopLockOn = ! loopLockOn;
+    if (loopLockOn) lockedLoop = curLoop;
+    ++labVer;
+}
+
+void KeysKillaProcessor::renderLoop (juce::MidiBuffer& out, int n, double beatPos, double bps, bool hostPlaying)
+{
+    auto allOff = [&]
+    {
+        for (int i = 0; i < 128; ++i)
+            if (loopActive[(size_t) i]) { out.addEvent (juce::MidiMessage::noteOff (1, i), 0); loopActive[(size_t) i] = false; }
+    };
+    if (! loopOn.load())
+    {
+        if (loopRunning) { allOff(); loopRunning = false; loopBeat = -1.0f; }
+        return;
+    }
+    if (loopDirty.exchange (false)) allOff();
+    if (! loopRunning || hostPlaying != loopHostWas)
+    {
+        allOff();
+        loopOrigin = hostPlaying ? 0.0 : beatPos;   // host playing: bar-synced to the song, stopped: start now
+        loopRunning = true; loopHostWas = hostPlaying;
+    }
+    const juce::SpinLock::ScopedTryLockType sl (loopLock);
+    if (! sl.isLocked() || loopSeq.empty() || bps <= 0.0) return;
+    const double len = loopLenBeats;
+    const double b0 = beatPos - loopOrigin, b1 = b0 + bps * n;
+    struct Ev { int at, note; bool on; };
+    std::array<Ev, 96> ev; int evN = 0;
+    for (auto& nt : loopSeq)
+        for (int edge = 0; edge < 2 && evN < (int) ev.size(); ++edge)
+        {
+            const double t = edge == 0 ? nt.start : nt.start + nt.len;
+            for (double tt = t + std::ceil ((b0 - t) / len) * len; tt < b1 && evN < (int) ev.size(); tt += len)
+                ev[(size_t) evN++] = { juce::jlimit (0, n - 1, (int) ((tt - b0) / bps)), nt.note, edge == 0 };
+        }
+    std::sort (ev.begin(), ev.begin() + evN, [] (const Ev& a, const Ev& b) { return a.at != b.at ? a.at < b.at : (! a.on && b.on); });
+    for (int i = 0; i < evN; ++i)
+    {
+        const auto& e = ev[(size_t) i];
+        auto& act = loopActive[(size_t) juce::jlimit (0, 127, e.note)];
+        if (! e.on) { if (act) { out.addEvent (juce::MidiMessage::noteOff (1, e.note), e.at); act = false; } continue; }
+        if (act) out.addEvent (juce::MidiMessage::noteOff (1, e.note), e.at);
+        out.addEvent (juce::MidiMessage::noteOn (1, e.note, (juce::uint8) 100), e.at);
+        act = true;
+    }
+    const double pos = std::fmod (b1, len);
+    loopBeat = (float) (pos < 0 ? pos + len : pos);
+}
+
+juce::File KeysKillaProcessor::exportLoopMidi (const Genome& g) const
+{
+    const auto notes = loopNotes (g);
+    const double bpm = lastBpm.load();
+    const int ppq = 96;
+    juce::MidiMessageSequence seq;
+    auto tempo = juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / bpm)); tempo.setTimeStamp (0); seq.addEvent (tempo);
+    auto name = g.name.replace (juce::String::fromUTF8 ("\xc3\x97"), "x").replace (juce::String::fromUTF8 ("\xc2\xb7"), "-");
+    auto title = juce::MidiMessage::textMetaEvent (3, "KEYS KILLA loop"); title.setTimeStamp (0); seq.addEvent (title);
+    for (auto& nt : notes)
+    {
+        seq.addEvent (juce::MidiMessage::noteOn (1, nt.note, (juce::uint8) 100), std::round (nt.start * ppq));
+        seq.addEvent (juce::MidiMessage::noteOff (1, nt.note), std::round ((nt.start + nt.len) * ppq));
+    }
+    seq.updateMatchedPairs();
+    juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq); mf.addTrack (seq);
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("KEYS KILLA Loops");
+    dir.createDirectory();
+    const juce::String file = "KK Loop - " + name.trim() + " - " + kk::keyName (effectiveLoopKey (g.loop)) + " MIN " + juce::String (juce::roundToInt (bpm)) + "BPM";
+    auto f = dir.getChildFile (juce::File::createLegalFileName (file).substring (0, 120) + ".mid");
+    f.deleteFile();
+    if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
+    return f;
 }
 
 bool KeysKillaProcessor::renderNextThumbnail()
@@ -1199,6 +1415,24 @@ static std::vector<float> stringToFloats (const juce::String& s)
     return v;
 }
 
+static juce::String loopToString (const kk::LoopGenes& l)
+{
+    if (! l.valid) return {};
+    juce::String s;
+    for (auto x : l.g) s << x << ",";
+    return s + juce::String (l.key);
+}
+static kk::LoopGenes loopFromString (const juce::String& s)
+{
+    kk::LoopGenes l;
+    const auto t = juce::StringArray::fromTokens (s, ",", "");
+    if (t.size() != kk::numLoopGenes + 1) return l;
+    for (int i = 0; i < kk::numLoopGenes; ++i) l.g[(size_t) i] = juce::jlimit (0, kk::loopdata::size[i] - 1, t[i].getIntValue());
+    l.key = juce::jlimit (0, 11, t[kk::numLoopGenes].getIntValue());
+    l.valid = true;
+    return l;
+}
+
 void KeysKillaProcessor::saveLab (juce::ValueTree& state) const
 {
     juce::ValueTree lab ("BREEDLAB");
@@ -1207,6 +1441,7 @@ void KeysKillaProcessor::saveLab (juce::ValueTree& state) const
         juce::ValueTree t (type);
         t.setProperty ("name", g.name, nullptr); t.setProperty ("cat", g.cat, nullptr); t.setProperty ("era", g.era, nullptr);
         t.setProperty ("gen", g.gen, nullptr); t.setProperty ("preset", g.preset, nullptr); t.setProperty ("v", floatsToString (g.v), nullptr);
+        t.setProperty ("node", g.node, nullptr); t.setProperty ("loop", loopToString (g.loop), nullptr);
         return t;
     };
     lab.setProperty ("count", (int) breedCount, nullptr);
@@ -1215,6 +1450,32 @@ void KeysKillaProcessor::saveLab (juce::ValueTree& state) const
     juce::String locks;
     for (int g = 0; g < numGenes; ++g) locks << (geneLock[(size_t) g] ? "1" : "0") << geneLockSrc[(size_t) g] << ",";
     lab.setProperty ("locks", locks, nullptr);
+    lab.setProperty ("loopBars", loopBarsN, nullptr);
+    lab.setProperty ("loopKey", loopKeyN, nullptr);
+    lab.setProperty ("loopLock", loopLockOn, nullptr);
+    lab.setProperty ("lockedLoop", loopToString (lockedLoop), nullptr);
+    lab.setProperty ("nextNode", nextNodeId, nullptr);
+    lab.setProperty ("curNode", curNode, nullptr);
+    lab.setProperty ("curLoop", loopToString (curLoop), nullptr);
+    {   // the family tree: ancestors of the parents and children (5 generations back)
+        std::set<int> keep;
+        std::function<void (int, int)> up = [&] (int id, int depth)
+        {
+            if (id < 0 || depth > 4 || ! keep.insert (id).second) return;
+            if (auto* n = findNode (id)) { up (n->pa, depth + 1); up (n->pb, depth + 1); }
+        };
+        for (auto& p : parents) up (p.node, 0);
+        for (auto& c : children) up (c.g.node, 0);
+        up (curNode, 0);
+        for (auto& n : tree)
+            if (keep.count (n.id) > 0)
+            {
+                auto t = genome (n.g, "NODE");
+                t.setProperty ("id", n.id, nullptr); t.setProperty ("pa", n.pa, nullptr); t.setProperty ("pb", n.pb, nullptr);
+                t.setProperty ("hybrid", n.hybrid, nullptr); t.setProperty ("rating", n.rating, nullptr);
+                lab.appendChild (t, nullptr);
+            }
+    }
     lab.appendChild (genome (parents[0], "PA"), nullptr);
     lab.appendChild (genome (parents[1], "PB"), nullptr);
     for (auto& c : children)
@@ -1238,6 +1499,9 @@ void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
         g.name = t.getProperty ("name").toString(); g.cat = t.getProperty ("cat", -1); g.era = t.getProperty ("era", 0);
         g.gen = t.getProperty ("gen", 0); g.preset = t.getProperty ("preset", -1); g.v = stringToFloats (t.getProperty ("v").toString());
         if (g.v.size() != params.size()) g.v.clear();
+        g.node = t.getProperty ("node", -1);
+        g.loop = loopFromString (t.getProperty ("loop").toString());
+        if (! g.loop.valid) g.loop = kk::loopFromSeed ((uint32_t) g.name.hashCode());
         return g;
     };
     breedCount = (uint32_t) (int) lab.getProperty ("count", 0);
@@ -1248,7 +1512,25 @@ void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
         geneLock[(size_t) g] = locks[g].startsWith ("1");
         geneLockSrc[(size_t) g] = locks[g].getLastCharacter() == '1' ? 1 : 0;
     }
-    children.clear();
+    children.clear(); tree.clear();
+    loopBarsN = (int) lab.getProperty ("loopBars", 8) > 8 ? 16 : 8;
+    loopKeyN = juce::jlimit (-1, 11, (int) lab.getProperty ("loopKey", -1));
+    loopLockOn = (bool) lab.getProperty ("loopLock", false);
+    lockedLoop = loopFromString (lab.getProperty ("lockedLoop").toString());
+    nextNodeId = std::max (1, (int) lab.getProperty ("nextNode", 1));
+    for (auto t : lab)
+    {
+        if (t.hasType ("NODE"))
+        {
+            TreeNode n; n.g = genome (t);
+            if (! n.g.valid()) continue;
+            n.id = t.getProperty ("id", 0); n.pa = t.getProperty ("pa", -1); n.pb = t.getProperty ("pb", -1);
+            n.hybrid = (bool) t.getProperty ("hybrid", false); n.rating = t.getProperty ("rating", 0);
+            n.g.node = n.id;
+            nextNodeId = std::max (nextNodeId, n.id + 1);
+            tree.push_back (std::move (n));
+        }
+    }
     for (auto t : lab)
     {
         if (t.hasType ("PA")) { auto g = genome (t); if (g.valid()) parents[0] = g; }
@@ -1265,6 +1547,13 @@ void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
         }
     }
     selChild = juce::jlimit (-1, (int) children.size() - 1, (int) lab.getProperty ("sel", -1));
+    auto dropMissing = [this] (Genome& g) { if (findNode (g.node) == nullptr) g.node = -1; };
+    dropMissing (parents[0]); dropMissing (parents[1]);
+    ensureNode (parents[0]); ensureNode (parents[1]);
+    for (auto& c : children) dropMissing (c.g);
+    const int cn = lab.getProperty ("curNode", -1);
+    const auto cl = loopFromString (lab.getProperty ("curLoop").toString());
+    if (cl.valid) setCurrentLoop (cl, findNode (cn) != nullptr ? cn : -1);
     ++labVer;
 }
 
@@ -1445,6 +1734,8 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             juce::ignoreUnused (cs);
             rebuildCornerBank();
             snapshotForModified();
+            if (! curLoop.valid) curLoop = kk::loopFromSeed ((uint32_t) presetName.hashCode());
+            rebuildLoopSeq();   // bass / mono of the restored sound decide which lines the loop plays
         }
 }
 
@@ -1511,6 +1802,7 @@ bool KeysKillaProcessor::loadUserPreset (const juce::File& f)
     macroLabels = juce::StringArray::fromTokens (v["macroNames"].toString(), "|", ""); macroLabels.removeEmptyStrings();
     presetName = f.getFileNameWithoutExtension(); currentPreset = -1; userFile = f;
     snapshotForModified();
+    setCurrentLoop (kk::loopFromSeed ((uint32_t) presetName.hashCode()), -1);
     return true;
 }
 

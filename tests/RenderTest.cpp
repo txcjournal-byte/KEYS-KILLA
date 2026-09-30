@@ -130,6 +130,72 @@ static int unitTests()
         std::printf ("BREED: %d thumbnails in %.1f ms, children peak %.3f, e.g. %s\n", n, juce::Time::getMillisecondCounterHiRes() - t0, worst,
                      p.kids()[0].g.name.toRawUTF8());
     }
+    // BREED LOOPS + FAMILY TREE
+    {
+        const auto l = kk::loopFromSeed (1234);
+        check (kk::buildLoop (l, -1, 8, false, false).size() == 68, "8-bar loop has the recipe's 68 notes");
+        check (kk::buildLoop (l, -1, 16, false, false).size() == 136, "16-bar loop doubles it");
+        bool lowOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, true, false)) lowOnly &= n.low;
+        bool riffOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, false, true)) riffOnly &= ! n.low;
+        check (lowOnly && riffOnly, "bass sounds play the low line, mono leads the riff");
+        bool inRange = true; for (auto& n : kk::buildLoop (l, 3, 16, false, false)) inRange &= n.note >= 20 && n.note <= 100 && n.start >= 0 && n.start + n.len <= 64.0f;
+        check (inRange, "loop notes in range and inside 16 bars");
+
+        KeysKillaProcessor p; p.prepareToPlay (48000, 256);
+        p.breedWild = 0.0f;
+        p.setParentPreset (0, 3); p.setParentPreset (1, 40);
+        p.breed();
+        const auto pa = p.parent (0), pb = p.parent (1);
+        bool linked = true, inherited = true; int same = 0, total = 0;
+        for (auto& c : p.kids())
+        {
+            auto* n = p.findNode (c.g.node);
+            linked &= n != nullptr && n->pa == pa.node && n->pb == pb.node && pa.node >= 0 && pb.node >= 0;
+            inherited &= c.g.loop.valid;
+            for (int g = 0; g < kk::numLoopGenes; ++g) { ++total; same += (c.g.loop.g[(size_t) g] == pa.loop.g[(size_t) g] || c.g.loop.g[(size_t) g] == pb.loop.g[(size_t) g]) ? 1 : 0; }
+        }
+        check (linked, "children are linked to both parents in the tree");
+        check (inherited && same >= total * 8 / 10, "child loops are inherited from the parents");
+        // next generation: a child becomes a parent -> grandparents appear
+        p.setParentChild (0, 2); p.setParentChild (1, 4);
+        p.breed();
+        auto* par = p.findNode (p.parent (0).node);
+        check (par != nullptr && par->pa == pa.node, "a bred parent keeps its own parents (grandparents)");
+        // loop lock
+        p.selectChild (1);
+        const auto keep = p.kids()[1].g.loop;
+        p.toggleLoopLock(); p.breed();
+        bool locked = true; for (auto& c : p.kids()) locked &= c.g.loop == keep;
+        check (locked, "LOCK LOOP keeps the loop for every new child");
+        p.toggleLoopLock();
+        // audition an ancestor
+        p.auditionNode (pa.node);
+        check (p.currentNode() == pa.node && p.currentLoop() == pa.loop, "family tree audition loads sound + loop");
+        // loop playback makes sound without any MIDI input, and stops cleanly
+        p.selectChild (0);
+        p.toggleLoop();
+        juce::AudioBuffer<float> b (2, 256); float peakOn = 0, peakOff = 0;
+        for (int k = 0; k < 375; ++k) { juce::MidiBuffer m; p.processBlock (b, m); peakOn = std::max (peakOn, b.getMagnitude (0, 256)); }
+        p.toggleLoop();
+        for (int k = 0; k < 1500; ++k) { juce::MidiBuffer m; p.processBlock (b, m); if (k > 1100) peakOff = std::max (peakOff, b.getMagnitude (0, 256)); }
+        check (peakOn > 0.01f && peakOff < 1.0e-3f, "loop plays and stops");
+        // MIDI export for drag & drop
+        const auto f = p.exportLoopMidi (p.kids()[0].g);
+        juce::MidiFile mf; int notes = 0;
+        if (juce::FileInputStream in { f }; in.openedOk() && mf.readFrom (in))
+            for (int t = 0; t < mf.getNumTracks(); ++t) for (auto* e : *mf.getTrack (t)) notes += e->message.isNoteOn() ? 1 : 0;
+        const auto expect = (int) p.loopNotes (p.kids()[0].g).size();
+        check (f.existsAsFile() && notes == expect && notes > 0, "loop exports as a MIDI file");
+        // state round trip keeps loops, tree links and loop settings
+        p.setLoopBars (16); p.setLoopKey (5);
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        bool same2 = q.kids().size() == p.kids().size();
+        for (size_t c = 0; same2 && c < p.kids().size(); ++c) same2 &= q.kids()[c].g.loop == p.kids()[c].g.loop && q.kids()[c].g.node == p.kids()[c].g.node;
+        auto* qp = q.findNode (q.parent (0).node);
+        check (same2 && qp != nullptr && qp->pa == pa.node && q.loopBars() == 16 && q.loopKey() == 5, "loops + family tree survive save / load");
+        std::printf ("LOOPS: %s, %d notes exported, tree ok\n", f.getFileName().toRawUTF8(), notes);
+    }
     // ERA / FUTURE / BREED extremes stay finite and bounded on every category
     {
         KeysKillaProcessor p; p.prepareToPlay (48000, 256);
@@ -372,6 +438,8 @@ int main (int argc, char** argv)
                 case 7: { juce::MemoryBlock mb; proc->getStateInformation (mb); } break;
                 case 8: proc->rollDice (0); break;
                 case 9: ed.reset(); ed.reset (proc->createEditor()); ke = dynamic_cast<KeysKillaEditor*> (ed.get()); break;
+                case 10: proc->toggleLoop(); proc->auditionNode (proc->parent (0).node); break;
+                case 11: ke->showView (13); break;
                 default: break;
             }
         }

@@ -5,6 +5,7 @@
 #include "Synth.h"
 #include "Fx.h"
 #include "Presets.h"
+#include "Loops.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -80,6 +81,8 @@ public:
     {
         juce::String name; int cat = -1, era = 0, gen = 0, preset = -1;
         std::vector<float> v;              // normalised parameter values
+        kk::LoopGenes loop;                // its melody loop (BREED LOOPS)
+        int node = -1;                     // FAMILY TREE node, -1 = not in the tree yet
         bool valid() const { return ! v.empty(); }
     };
     struct Child
@@ -88,6 +91,7 @@ public:
         std::array<float, 64> wave {}; bool waveReady = false; bool hybrid = false;
     };
     struct Generation { Genome parents[2]; std::vector<Child> kids; };
+    struct TreeNode { int id = 0, pa = -1, pb = -1; Genome g; bool hybrid = false; int rating = 0; };
     void setParentPreset (int slot, int presetIndex);
     void setParentCurrent (int slot);
     void setParentChild (int slot, int childIndex);
@@ -113,6 +117,30 @@ public:
     std::atomic<int> arpCurStep { -1 };               // playing arp step (UI)
     float breedWild = 0.25f;                          // WILD rail: 0 safe ... 1 crazy
     void resetParams (const juce::StringArray& ids);  // back to the sound as it was loaded
+
+    // ---------------- FAMILY TREE ----------------
+    const TreeNode* findNode (int id) const;
+    void auditionNode (int id);                       // load a family member (sound + loop) and play it
+    void setParentNode (int slot, int id);            // any ancestor can become a parent again
+    int  currentNode() const { return curNode; }
+
+    // ---------------- BREED LOOPS ----------------
+    void toggleLoop();                                // play the current sound's loop (host tempo, bar synced)
+    void stopLoop() { loopOn = false; }
+    bool loopPlaying() const { return loopOn.load(); }
+    void setLoopBars (int bars);                      // 8 or 16
+    int  loopBars() const { return loopBarsN; }
+    void setLoopKey (int key);                        // -1 = AUTO (the loop's own key, or KEY when Key Lock is on)
+    int  loopKey() const { return loopKeyN; }
+    int  effectiveLoopKey (const kk::LoopGenes& l) const;
+    void toggleLoopLock();                            // new children keep the selected child's loop
+    bool loopLocked() const { return loopLockOn; }
+    const kk::LoopGenes& currentLoop() const { return curLoop; }
+    std::vector<kk::LoopNote> loopNotes (const Genome& g) const;
+    juce::File exportLoopMidi (const Genome& g) const; // temp .mid for drag & drop into the host
+    Genome currentGenome() const { return genomeFromCurrent(); }
+    std::atomic<float> loopBeat { -1.0f };            // playhead in beats (UI), -1 = stopped
+    std::atomic<double> lastBpm { 140.0 };
 
     // ERA MORPH corners (0 classic, 1 melodic, 2 raw, 3 aggressive): factory preset index or -1
     void setMorphCorner (int corner, int presetIndex);
@@ -207,6 +235,23 @@ private:
     std::vector<Generation> history;
     std::vector<int> geneOfParam;                       // per parameter, -1 = not inherited
     std::unique_ptr<KeysKillaProcessor> thumbRenderer;  // offline copy for the children's waveforms
+    std::vector<TreeNode> tree;
+    int nextNodeId = 1, curNode = -1;
+    int ensureNode (Genome& g);
+    void pruneTree();
+    void setCurrentLoop (const kk::LoopGenes& l, int node);
+    // loop player (notes swapped under a spin lock, the audio thread only try-locks)
+    kk::LoopGenes curLoop, lockedLoop;
+    bool loopLockOn = false;
+    int loopBarsN = 8, loopKeyN = -1;
+    std::atomic<bool> loopOn { false }, loopDirty { false };
+    juce::SpinLock loopLock;
+    std::vector<kk::LoopNote> loopSeq;                  // guarded by loopLock
+    double loopLenBeats = 32.0, loopOrigin = 0.0;
+    bool loopRunning = false, loopHostWas = false;
+    std::array<bool, 128> loopActive {};
+    void renderLoop (juce::MidiBuffer& out, int n, double beatPos, double bps, bool hostPlaying);
+    void rebuildLoopSeq();
     int previewOffIn = -1, previewActive = -1;
     Genome genomeFromPreset (int idx) const;
     Genome genomeFromCurrent() const;

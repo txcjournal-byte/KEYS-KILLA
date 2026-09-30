@@ -5,17 +5,25 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
-## BREED LAB (verze 0.7)
+## BREED LAB (verze 0.10)
 
 1. **PARENT A + PARENT B** – dva zvuky z knihovny (šipky = další zvuk kategorie, kostka = náhodný, klik = výběr / prohlížeč).
 2. **BREED** – 6 dětí najednou. Každé dítě dědí 6 genů (BODY, ATTACK, TEXTURE, SPACE, MOVEMENT, CHARACTER) od jednoho z rodičů,
    spojité hodnoty se trochu přiblíží druhému rodiči, děti 4–6 mají mutaci. Hlasitost a čistý sub u basů hlídá engine.
 3. **CHILD 1–6** – skutečná vlna zvuku, ▶ poslech, hvězdičky (4+ se uloží do User / Bred), pravý klik = rodič další generace.
 4. **GENES** – A/B přepne gen vybraného dítěte, zámek = všechny další děti ho zdědí.
-5. **MUTATE** 5 / 15 / 30 / 60 % / CHAOS, **FAMILY TREE** (starší generace), **UNDO**.
-6. **WILD** (SAFE → CRAZY): jak daleko BREED smí jít – geny přeskakují, přepínače se mění, víc HYBRID dětí (zvuk druhého rodiče jako vrstva B) a FUTURE.
-7. **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
-8. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · **ARP** (16 kroků jako noty: posun ±12 půltónů, délka přes více kroků, pauzy, trapové stupnice Scale Up/Down, Chord, triolové rychlosti) · KILLA; každý panel má **RESET** (vrátí zvuk, jak byl nahraný).
+5. **MUTATE** 5 / 15 / 30 / 60 % / CHAOS, **UNDO**.
+6. **BREED LOOPS** – každý zvuk (rodič i dítě) nese 8taktovou melodickou smyčku podle receptu z vybraných smyček 02/08
+   (tools/trap_loop_recipe.py): nízký tón + osminový riff, pád k malé sekundě, skok v taktu 4, sestup v taktu 8. Smyčka má
+   5 genů (START, FALL, CLIMB, JUMP, BASS) + tóninu a dítě je dědí od rodičů stejně jako zvuk (WILD přidává mutace).
+   ⟳ na kartě dítěte = zvuk se smyčkou (tempo hosta, při přehrávání FL synchronně s takty). Přetažení karty do FL = MIDI.
+   Basy hrají jen spodní linku, mono leady jen riff.
+7. **FAMILY TREE** – prarodiče → rodiče → děti (4 řady: praprarodiče, prarodiče, rodiče, děti) + seznam generací.
+   Klik = poslech zvuku se smyčkou, pravý klik = znovu rodičem, tah = MIDI. Nahoře PLAY LOOP, KEY (AUTO / C–B moll),
+   8 / 16 taktů, LOCK LOOP (nové děti dostanou stejnou smyčku, mění se jen zvuk) a DRAG MIDI.
+8. **WILD** (SAFE → CRAZY): jak daleko BREED smí jít – geny přeskakují, přepínače se mění, víc HYBRID dětí (zvuk druhého rodiče jako vrstva B) a FUTURE.
+9. **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
+10. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · **ARP** (16 kroků jako noty: posun ±12 půltónů, délka přes více kroků, pauzy, trapové stupnice Scale Up/Down, Chord, triolové rychlosti) · KILLA; každý panel má **RESET** (vrátí zvuk, jak byl nahraný).
 
 ## Engine
 
