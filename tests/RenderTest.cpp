@@ -269,6 +269,53 @@ int main (int argc, char** argv)
         p.removeListener (&counter);
         return 0;
     }
+    if (argc > 5 && juce::String (argv[1]) == "-rendermidi")   // -rendermidi in.mid out.wav "melody preset" "chord preset"
+    {
+        juce::MidiFile mf;
+        { const juce::File midFile { juce::String (argv[2]) }; juce::FileInputStream in { midFile }; if (! in.openedOk() || ! mf.readFrom (in)) return 1; }
+        const double rate = 32000.0;
+        double bpm = 140;
+        juce::MidiMessageSequence tempo; mf.findAllTempoEvents (tempo);
+        if (tempo.getNumEvents() > 0) bpm = 60.0 / tempo.getEventPointer (0)->message.getTempoSecondsPerQuarterNote();
+        const double secPerTick = 60.0 / bpm / mf.getTimeFormat();
+        auto findPreset = [] (const char* n) { const auto& ps = factoryPresets(); for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].name == n) return i; return 0; };
+        const int presetsFor[2] { findPreset (argv[4]), findPreset (argv[5]) };
+        std::vector<float> mix;
+        for (int tr = 0; tr < juce::jmin (2, mf.getNumTracks()); ++tr)
+        {
+            KeysKillaProcessor p; p.setCurrentProgram (presetsFor[tr]); p.prepareToPlay (rate, 512);
+            const auto* seq = mf.getTrack (tr);
+            double endSec = 0; for (auto* e : *seq) endSec = std::max (endSec, e->message.getTimeStamp() * secPerTick);
+            const int total = (int) ((endSec + 2.5) * rate);
+            if ((int) mix.size() < total) mix.resize ((size_t) total, 0.0f);
+            juce::AudioBuffer<float> b (2, 512);
+            int ei = 0;
+            for (int pos = 0; pos < total; pos += 512)
+            {
+                juce::MidiBuffer m;
+                while (ei < seq->getNumEvents())
+                {
+                    const auto& msg = seq->getEventPointer (ei)->message;
+                    const int at = (int) (msg.getTimeStamp() * secPerTick * rate);
+                    if (at >= pos + 512) break;
+                    if (msg.isNoteOnOrOff()) m.addEvent (msg, juce::jmax (0, at - pos));
+                    ++ei;
+                }
+                p.processBlock (b, m);
+                const float g = tr == 0 ? 1.0f : 0.45f;   // chords under the melody
+                for (int i = 0; i < 512 && pos + i < total; ++i) mix[(size_t) (pos + i)] += g * 0.5f * (b.getSample (0, i) + b.getSample (1, i));
+            }
+        }
+        float peak = 1.0e-6f; for (auto x : mix) peak = std::max (peak, std::abs (x));
+        juce::AudioBuffer<float> out (1, (int) mix.size());
+        for (int i = 0; i < (int) mix.size(); ++i) out.setSample (0, i, mix[(size_t) i] * 0.9f / peak);
+        const juce::File f { juce::String (argv[3]) }; f.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), rate, 1, 16, {}, 0));
+        if (w) w->writeFromAudioSampleBuffer (out, 0, out.getNumSamples());
+        std::printf ("%s: %.1f s, melody %s, chords %s\n", argv[3], (double) mix.size() / rate, argv[4], argv[5]);
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "-longuse")   // host-like long session, then measure shutdown
     {
         const int seconds = argc > 2 ? juce::String (argv[2]).getIntValue() : 20;
