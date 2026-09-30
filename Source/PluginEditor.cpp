@@ -1410,6 +1410,9 @@ public:
 
         setSize (KeysKillaEditor::designW, KeysKillaEditor::designH);
         noFocus (*this);
+        applyKeyMode();
+        focusGrabber.page = this;
+        addMouseListener (&focusGrabber, true);   // a click anywhere in the plugin gives it the PC keyboard
         refreshState();
         startTimerHz (30);
     }
@@ -1420,10 +1423,29 @@ public:
         PopupMenu::dismissAllActiveMenus();   // never leave a menu pointing at a closed editor
         proc.releaseThumbnailRenderer();      // nothing heavy stays alive after the window is closed
         proc.stopLoop();                      // the audition loop never keeps playing in a closed plugin
+        removeMouseListener (&focusGrabber);
         setLookAndFeel (nullptr);
     }
 
     int preferredScale() const { return jlimit (50, 100, settings->getIntValue ("labScale", 70)); }
+
+    // ---------------- SPACE = play / stop in the plugin (while the plugin window has focus), other keys go to the host ----------------
+    bool keysToPlugin() const { return settings->getBoolValue ("keysToPlugin", true); }
+    void applyKeyMode()
+    {
+        setWantsKeyboardFocus (keysToPlugin());
+        setMouseClickGrabsKeyboardFocus (false);
+        if (! keysToPlugin() && hasKeyboardFocus (false)) giveAwayKeyboardFocus();
+    }
+    bool keyPressed (const KeyPress& k) override
+    {
+        if (! keysToPlugin() || typingText()) return false;
+        const auto mods = k.getModifiers();
+        if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;   // host shortcuts (save, undo...) stay with the host
+        if (k.getKeyCode() == KeyPress::spaceKey) { spaceAction(); return true; }
+        return false;
+    }
+    static bool typingText() { return dynamic_cast<TextEditor*> (Component::getCurrentlyFocusedComponent()) != nullptr; }
 
     // tests / screenshots: 0 main, 1..8 advanced tab, 9 browser, 10 movement, 11 808
     void showView (int v)
@@ -1781,6 +1803,7 @@ private:
         m.addItem (15, "ADVANCED page...");
         m.addItem (16, "Eco mode (lower CPU)", true, proc.eco.load());
         m.addItem (18, "PANIC (all notes off)");
+        m.addItem (19, "SPACE plays / stops KEYS KILLA (not the host)", true, keysToPlugin());
         for (int pct : { 50, 60, 70, 85, 100 }) size.addItem (100 + pct, String (pct) + " %", true, preferredScale() == pct);
         m.addSubMenu ("Window size", size);
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (menuBtn), [this, safe = SafePointer<MainPage> (this)] (int r)
@@ -1805,6 +1828,7 @@ private:
                 case 15: hidePanels(); ensureAdvanced(); advanced->setVisible (true); advanced->toFront (false); break;
                 case 16: proc.eco = ! proc.eco.load(); break;
                 case 18: proc.panic(); break;
+                case 19: settings->setValue ("keysToPlugin", ! keysToPlugin()); applyKeyMode(); break;
                 case 20:
                     chooser = std::make_unique<FileChooser> ("Import preset pack", File::getSpecialLocation (File::userDocumentsDirectory), "*.zip");
                     chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectDirectories,
@@ -1941,6 +1965,28 @@ private:
     std::unique_ptr<ArpPanel> arpPanel;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
+
+    void spaceAction()
+    {
+        if (treePanel != nullptr && treePanel->isVisible() && ! proc.treeKids().empty())
+        {
+            if (proc.loopPlaying()) proc.stopLoop();
+            else if (proc.getTreeMode() == KeysKillaProcessor::treeLoop) proc.playTreeResult (jmax (0, proc.treeSelected()));
+            else proc.previewNote = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f ? 36 : 60;
+            treePanel->refresh();
+            return;
+        }
+        proc.previewNote = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f ? 36 : 60;   // hear the current sound
+    }
+    struct FocusGrabber : public MouseListener
+    {
+        MainPage* page = nullptr;
+        void mouseDown (const MouseEvent& e) override
+        {
+            if (page == nullptr || ! page->keysToPlugin() || dynamic_cast<TextEditor*> (e.eventComponent) != nullptr) return;
+            if (! page->hasKeyboardFocus (true)) page->grabKeyboardFocus();
+        }
+    } focusGrabber;
     std::unique_ptr<FileChooser> chooser;
 
     bool isFav = false, modified = false, modifiedNow = false, lastBass = false;
