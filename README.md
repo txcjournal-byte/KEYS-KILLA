@@ -17,9 +17,10 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
    (1 × 2, 3 × 4 → pak spolu) a BREED uprostřed dá 6 výsledků: režim **SOUND** = 6 nových zvuků, režim **LOOP** = 6 melodických
    smyček (každá s novým zvukem), 8 / 16 taktů, tónina AUTO / C–B. Smyčka hraje v tempu hosta, přetažení karty do FL = MIDI klip.
    Pravý klik: nová melodie, použít jako PARENT A / B, vložit zpět do SOUND 1–4, uložit preset.
-7. **Melodie** (Source/Loops.h + Source/LoopFragments.h) – skládají se z knihovny ručně psaných trapových frází
-   (tools/melody_fragments.py): 20 začátků × 16 odpovědí × 10 skoků × 7 zakončení × 5 basových postupů × 2 rytmy basu
-   × 3 polohy × 12 tónin. Kombinují se jen fráze, které sedí na akord a navazují na sebe; stavba jako vybrané smyčky 02 / 08.
+7. **Melodie** (Source/Loops.h) – každá se skládá nově ze semínek: paleta 4–6 tónů z molové tóniny s kotevním tónem,
+   rytmus na šestnáctinové mřížce s trapovými akcenty (2. takt = obměna 1.), tvar melodie (klesající běh, střídání s kotvou,
+   oblouk, prodleva + odpověď, cik-cak), akordový plán, hustota, bas, poloha. Doby 1 a 3 sedí na akordové tóny,
+   motiv A A' A A'' a zakončení vede zpět na začátek. Miliardy kombinací, každý BREED = nové melodie.
 8. **WILD** (SAFE → CRAZY): jak daleko BREED smí jít – geny přeskakují, přepínače se mění, víc HYBRID dětí (zvuk druhého rodiče jako vrstva B) a FUTURE.
 9. **FUTURE**, **ALIVE**, **TIME**, 8 maker DARK · SPACE · MOVEMENT · WIDTH · TEXTURE · PUNCH · DIRT · MIX.
 10. Záložky BROWSER · SOUND · MOD · MOVEMENT · FX · **ARP** (16 kroků jako noty: posun ±12 půltónů, délka přes více kroků, pauzy, trapové stupnice Scale Up/Down, Chord, triolové rychlosti) · KILLA; každý panel má **RESET** (vrátí zvuk, jak byl nahraný).

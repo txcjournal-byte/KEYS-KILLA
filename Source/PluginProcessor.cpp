@@ -1389,14 +1389,6 @@ int KeysKillaProcessor::treeBreed()
         std::vector<kk::LoopGenes> from;
         for (auto& a : an) from.push_back (a.loop);
         r.g.loop = kk::mixLoops (from, sk ^ 0x5bd1e995u, wild);
-        for (int tries = 0; tries < 12; ++tries)   // six different openings per BREED
-        {
-            bool dup = false;
-            for (auto& prev : treeResults) dup |= prev.g.loop.g[kk::loopOpener] == r.g.loop.g[kk::loopOpener];
-            if (! dup) break;
-            r.g.loop.g[kk::loopOpener] = kk::hash32 (sk + (uint32_t) tries * 131u) % kk::loopdata::size[kk::loopOpener];
-            kk::fixLoop (r.g.loop);
-        }
         r.g.name = names.joinIntoString (" + ") + " #" + juce::String (k + 1);
         treeResults.push_back (std::move (r));
     }

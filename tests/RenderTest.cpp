@@ -154,14 +154,13 @@ static int unitTests()
         check (ok, "loops in range and inside their bars");
         check (inKey, "melody notes stay in the scale");
         check (seen.size() >= 1900, "2000 seeds give (almost) 2000 different melodies");
-        bool fitOk = true;
+        bool fitOk = true;   // beat 1 of bar 1 is a tone of the root chord
         for (uint32_t sd = 1; sd <= 500; ++sd)
         {
             const auto x = kk::loopFromSeed (sd);
-            fitOk &= kk::loopdata::answerOk ((int) x.g[kk::loopOpener], (int) x.g[kk::loopAnswer], (int) x.g[kk::loopBass])
-                  && kk::loopdata::turnOk ((int) x.g[kk::loopTurn], (int) x.g[kk::loopBass]);
+            for (auto& n : kk::buildLoop (x, 0, 8, false, true)) if (n.start == 0.0f) fitOk &= kk::loopdata::chordTone (n.note, 0);
         }
-        check (fitOk, "phrases always fit the chords and each other");
+        check (fitOk, "melodies start on a chord tone");
         const auto l = kk::loopFromSeed (99);
         bool lowOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, true, false)) lowOnly &= n.low;
         bool riffOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, false, true)) riffOnly &= ! n.low;
@@ -181,8 +180,9 @@ static int unitTests()
         for (auto& r : p.treeKids()) mel.insert (sig (r.g));
         p.treeBreed(); for (auto& r : p.treeKids()) mel.insert (sig (r.g));
         check (mel.size() >= 10, "every BREED gives new melodies");
-        std::set<uint32_t> openers; for (auto& r : p.treeKids()) openers.insert (r.g.loop.g[kk::loopOpener]);
-        check (openers.size() == 6, "six different openings in one BREED");
+        std::set<std::vector<int>> firstBars;
+        for (auto& r : p.treeKids()) { std::vector<int> v; for (auto& n : kk::buildLoop (r.g.loop, 0, 8, false, true)) if (n.start < 4.0f) v.push_back (n.note * 100 + (int) (n.start * 4)); firstBars.insert (v); }
+        check (firstBars.size() == 6, "six different first bars in one BREED");
         bool valid = true; for (auto& r : p.treeKids()) valid &= r.g.valid() && r.g.loop.valid && r.g.name.contains ("+");
         check (valid, "results are full sounds named after their family");
         p.clearAncestor (2); p.clearAncestor (3);
