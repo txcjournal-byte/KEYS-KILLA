@@ -39,7 +39,7 @@ public:
         const float dampHz = type == 1 ? 9000.0f : type == 2 ? 3200.0f : 5200.0f;
         const float modDepth = (type == 2 ? 0.012f : 0.004f) * sr * 0.05f;
         const float preSamples = (type == 1 ? 0.004f : 0.012f + size * 0.025f) * sr;
-        const float dampA = std::exp (-twoPi * dampHz / sr), hcutA = std::exp (-twoPi * 11000.0f / sr);
+        const float dampA = std::exp (-twoPi * std::min (dampHz, sr * 0.4f) / sr), hcutA = std::exp (-twoPi * std::min (11000.0f, sr * 0.4f) / sr);
         std::array<float, N> len {}, gain {};
         for (int i = 0; i < N; ++i)
         {
@@ -113,7 +113,7 @@ public:
         atk = 1.0f - std::exp (-1.0f / (0.012f * sr));
         rel = 1.0f - std::exp (-1.0f / (0.16f * sr));
         limRel = 1.0f - std::exp (-1.0f / (0.09f * sr));
-        for (auto& a : air) a.shelf (true, 10000.0f, 1.8f, sr);
+        for (auto& a : air) a.shelf (true, std::min (10000.0f, sr * 0.4f), 1.8f, sr);   // stays below Nyquist at low rates
         for (auto& b : body) b.shelf (false, 110.0f, 1.2f, sr);
         for (auto& s : sideLp) s.setHz (140.0f, sr);
         widHp.setHz (200.0f, sr);

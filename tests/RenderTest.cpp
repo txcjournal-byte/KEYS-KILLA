@@ -130,6 +130,19 @@ static int unitTests()
         std::printf ("BREED: %d thumbnails in %.1f ms, children peak %.3f, e.g. %s\n", n, juce::Time::getMillisecondCounterHiRes() - t0, worst,
                      p.kids()[0].g.name.toRawUTF8());
     }
+    // low sample rates (thumbnails render at 16 kHz): the whole chain stays finite and alive
+    {
+        KeysKillaProcessor p; p.prepareToPlay (16000, 400);
+        juce::AudioBuffer<float> b (2, 400); bool finite = true; float late = 0;
+        for (int k = 0; k < 30; ++k)
+        {
+            juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            p.processBlock (b, m);
+            for (int ch = 0; ch < 2; ++ch) for (int n = 0; n < 400; ++n) finite &= std::isfinite (b.getSample (ch, n));
+            if (k > 10) late = std::max (late, b.getMagnitude (0, 400));
+        }
+        check (finite && late > 1.0e-3f, "16 kHz render stays finite and keeps sounding");
+    }
     // BREED LOOPS: a new melody every time, always in key and in range
     {
         std::set<std::vector<int>> seen; bool ok = true, inKey = true;
