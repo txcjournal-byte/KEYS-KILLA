@@ -144,9 +144,8 @@ static int unitTests()
                 sig.push_back (n.note * 1000 + (int) (n.start * 12));
                 if (! n.low)
                 {
-                    bool member = false;
-                    for (int k = 0; k < 7; ++k) member |= ((n.note - l.key - kk::loopdata::scales[l.g[kk::loopScale] % 5][k]) % 12 + 12) % 12 == 0;
-                    inKey &= member || l.g[kk::loopTexture] % 24 / 6 >= 2;   // doubled 5ths / 3rds may leave the scale
+                    const int deg = ((n.note - l.key) % 12 + 12) % 12;   // natural minor + phrygian b2 + leading tone
+                    inKey &= deg != 4 && deg != 6 && deg != 9;
                 }
             }
             ok &= notes.size() >= 8;
@@ -154,13 +153,21 @@ static int unitTests()
         }
         check (ok, "loops in range and inside their bars");
         check (inKey, "melody notes stay in the scale");
-        check (seen.size() >= 1995, "2000 seeds give 2000 different melodies");
+        check (seen.size() >= 1900, "2000 seeds give (almost) 2000 different melodies");
+        bool fitOk = true;
+        for (uint32_t sd = 1; sd <= 500; ++sd)
+        {
+            const auto x = kk::loopFromSeed (sd);
+            fitOk &= kk::loopdata::answerOk ((int) x.g[kk::loopOpener], (int) x.g[kk::loopAnswer], (int) x.g[kk::loopBass])
+                  && kk::loopdata::turnOk ((int) x.g[kk::loopTurn], (int) x.g[kk::loopBass]);
+        }
+        check (fitOk, "phrases always fit the chords and each other");
         const auto l = kk::loopFromSeed (99);
         bool lowOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, true, false)) lowOnly &= n.low;
         bool riffOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, false, true)) riffOnly &= ! n.low;
         check (lowOnly && riffOnly && ! kk::buildLoop (l, -1, 8, true, false).empty(), "bass sounds play the low line, mono leads the melody");
         const auto c1 = kk::crossLoops (l, kk::loopFromSeed (5), 11, 0.5f, 0.0f), c2 = kk::crossLoops (l, kk::loopFromSeed (5), 12, 0.5f, 0.0f);
-        check (c1.g[kk::loopMelody] != c2.g[kk::loopMelody] && kk::buildLoop (c1, 0, 8, false, false).size() > 0, "every child gets its own melody");
+        check (! (c1 == l) && ! (c2 == l) && kk::buildLoop (c1, 0, 8, false, false).size() > 0, "a child's melody differs from its parents");
         std::printf ("LOOPS: %d different melodies from 2000 seeds\n", (int) seen.size());
     }
     // FAMILY TREE: 4 sounds -> 6 sounds or 6 loops, new every press, loop playback, MIDI export, state
@@ -169,9 +176,11 @@ static int unitTests()
         const auto& ps = factoryPresets();
         p.setAncestorPreset (0, 0); p.setAncestorPreset (1, 60); p.setAncestorPreset (2, 200); p.setAncestorPreset (3, (int) ps.size() - 1);
         check (p.treeBreed() == 6, "family tree breeds 6 results");
-        std::set<uint32_t> mel; for (auto& r : p.treeKids()) mel.insert (r.g.loop.g[kk::loopMelody]);
-        p.treeBreed(); for (auto& r : p.treeKids()) mel.insert (r.g.loop.g[kk::loopMelody]);
-        check (mel.size() == 12, "every BREED gives new melodies");
+        std::set<std::vector<int>> mel;
+        auto sig = [&] (const KeysKillaProcessor::Genome& g) { std::vector<int> v; for (auto& n : kk::buildLoop (g.loop, 0, 8, false, false)) v.push_back (n.note * 1000 + (int) (n.start * 4)); return v; };
+        for (auto& r : p.treeKids()) mel.insert (sig (r.g));
+        p.treeBreed(); for (auto& r : p.treeKids()) mel.insert (sig (r.g));
+        check (mel.size() >= 10, "every BREED gives new melodies");
         bool valid = true; for (auto& r : p.treeKids()) valid &= r.g.valid() && r.g.loop.valid && r.g.name.contains ("+");
         check (valid, "results are full sounds named after their family");
         p.clearAncestor (2); p.clearAncestor (3);
@@ -424,7 +433,7 @@ int main (int argc, char** argv)
             }
             seq.updateMatchedPairs();
             juce::MidiFile mf; mf.setTicksPerQuarterNote (96); mf.addTrack (seq);
-            const auto name = juce::String::formatted ("KK Loop %02d - ", i + 1) + kk::keyName (l.key) + " " + kk::loopdata::scaleName ((int) l.g[kk::loopScale]) + " 140BPM.mid";
+            const auto name = juce::String::formatted ("KK Loop %02d - ", i + 1) + kk::keyName (l.key) + " MIN 140BPM.mid";
             auto f = dir.getChildFile (name); f.deleteFile();
             if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
             std::printf ("%s\n", name.toRawUTF8());

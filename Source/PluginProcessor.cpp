@@ -1385,19 +1385,10 @@ int KeysKillaProcessor::treeBreed()
         }
         TreeResult r;
         r.g = makeChildOf (x, y, k, sk, nullptr, false).g;
-        // melody: each gene from one of the chosen sounds, always a new melody seed
-        kk::Rng rr; rr.seed (sk ^ 0x5bd1e995u);
-        kk::LoopGenes lg = an[(size_t) (rr.next() % an.size())].loop;
-        if (! lg.valid) lg = kk::loopFromSeed (sk);
-        for (int g = 0; g < kk::numLoopGenes; ++g)
-        {
-            const auto& from = an[(size_t) (rr.next() % an.size())].loop;
-            if (from.valid) lg.g[(size_t) g] = from.g[(size_t) g];
-            if (rr.uni() < 0.25f + wild * 0.5f) lg.g[(size_t) g] = kk::randomGene (g, rr);
-        }
-        lg.g[kk::loopMelody] = kk::hash32 (sk ^ 0xc2b2ae35u) | 1u;
-        lg.valid = true;
-        r.g.loop = lg;
+        // melody: phrases mixed from the chosen sounds' loops, always a new combination
+        std::vector<kk::LoopGenes> from;
+        for (auto& a : an) from.push_back (a.loop);
+        r.g.loop = kk::mixLoops (from, sk ^ 0x5bd1e995u, wild);
         r.g.name = names.joinIntoString (" + ") + " #" + juce::String (k + 1);
         treeResults.push_back (std::move (r));
     }

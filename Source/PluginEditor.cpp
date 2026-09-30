@@ -1083,7 +1083,7 @@ public:
         // name + stars
         g.setColour (Colour (0xffc9c0c0)); g.setFont (serif (13.0f, false, 0.02f));
         auto info = t.g.name;
-        if (loopMode) info = String (kk::keyName (proc.effectiveLoopKey (t.g.loop))) + " " + kk::loopdata::scaleName ((int) t.g.loop.g[kk::loopScale]) + "  .  " + info;
+        if (loopMode) info = String (kk::keyName (proc.effectiveLoopKey (t.g.loop))) + " MIN  .  " + info;
         g.drawFittedText (info, Rectangle<int> (14, (int) r.getBottom() - 42, (int) r.getWidth() - 20, 18), Justification::centredLeft, 1, 0.7f);
         for (int st = 0; st < 5; ++st)
         {
