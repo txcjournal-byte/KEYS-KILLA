@@ -104,6 +104,7 @@ inline String paramTooltip (const String& id)
         { "punchFx", "Punch: transient shaper, up to +12 dB on the attack of stabs and plucks." },
         { "era", "ERA: move this sound through the production eras 2010 -> 2013 -> 2016 -> 2019 -> 2022 -> 2025 -> FUTURE (right-click the timeline too)." },
         { "future", "FUTURE: turns the sound into a new hybrid - ORIGINAL -> HYBRID -> UNKNOWN. Same SEED = same result." },
+        { "master", "MASTER: glue compression, warmth, air, mono lows and a clean limiter - the sound comes out finished. 0 = raw." },
         { "halftime", "Half-Time: replays the sound at half speed in 2-beat windows synced to the host tempo." } };
     if (id.startsWith ("mmSrc")) return "Mod matrix source.";
     if (id.startsWith ("mmDst")) return "Mod matrix destination.";

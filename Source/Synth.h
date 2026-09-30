@@ -284,7 +284,8 @@ private:
         effReso = clamp01 (p.reso + m[dstReso]);
 
         float oct = p.fenv * env2.v * 6.0f + p.lfoFilter * 4.0f * (0.5f * l1 - 0.5f)
-                  + p.keyTrack * (curSemi - 60.0f) / 12.0f + p.punch * env2.v * 2.0f + m[dstCutoff] * 6.0f + aliveCut;
+                  + p.keyTrack * (curSemi - 60.0f) / 12.0f + p.punch * env2.v * 2.0f + m[dstCutoff] * 6.0f + aliveCut
+                  + (vel - 0.78f) * 1.4f * p.velSens;   // harder = brighter (played, not just louder)
         if (p.wobTarget == 0) oct += p.wobble * 4.0f * (0.5f * l1 - 0.5f);
         const float cut = std::clamp (p.cutoff * std::exp2 (oct), 20.0f, sr * 0.45f);
         if (p.filterType == 1) ladG = std::min (0.95f, 1.0f - std::exp (-twoPi * cut / sr));

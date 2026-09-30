@@ -3,7 +3,7 @@
 Runs `KeysKillaTests -cal` (renders every preset) and writes Source/PresetGains.h with the output gain
 that brings each preset to the target short-term loudness. Run twice after big preset changes."""
 import subprocess, sys
-exe, target = sys.argv[1], -15.0
+exe, target = sys.argv[1], -14.0
 out = subprocess.run([exe, "-cal"], capture_output=True, text=True).stdout
 rows = []
 for line in out.strip().splitlines():

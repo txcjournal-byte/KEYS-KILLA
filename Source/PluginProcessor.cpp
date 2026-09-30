@@ -21,7 +21,7 @@ constexpr int kChunk = 512;
     X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) X(m7) X(m8) \
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
-    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps)
+    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps) X(master)
 
 // performance controls that never morph or get reset by presets
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
@@ -82,7 +82,7 @@ KeysKillaProcessor::KeysKillaProcessor()
         const auto id = prm->getParameterID();
         auto any = [&] (std::initializer_list<const char*> ids) { for (auto* x : ids) if (id == x) return true; return false; };
         int gene = geneBody;
-        if (keepOnPresetLoad.contains (id) || ID::isArpPattern (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange })) gene = -1;
+        if (keepOnPresetLoad.contains (id) || ID::isArpPattern (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange, ID::master })) gene = -1;
         else if (any ({ ID::attack, ID::decay, ID::sustain, ID::release, ID::velSens, ID::fattack, ID::fdecay, ID::fsustain, ID::frelease,
                         ID::fenv, ID::punch, ID::bend, ID::bendMode, ID::bendSemis })) gene = geneAttack;
         else if (any ({ ID::crush, ID::wow, ID::drive, ID::driveType, ID::tape, ID::circuit, ID::circRate, ID::body, ID::bodyMix,
@@ -284,6 +284,7 @@ void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
     v.punch = punch;
     v.alive = juce::jlimit (0.0f, 5.0f, P (I.alive) + eraAlive); v.drift = c01 (P (I.drift) + eraDrift);
     f.punch = c01 (P (I.punch) + eraPunch + m7 * 0.9f); f.halftime = c01 (P (I.halftime) + futHalf);
+    f.master = c01 (P (I.master));
     for (auto& L : v.layer) { L.wave = c01 (L.wave + futWave); L.fmAmt = c01 (L.fmAmt + futFm); }
     v.pitchWheel = juce::jlimit (-1.0f, 1.0f, midiPitch + guiPitch.load());
     v.modWheel = std::max (midiMod, guiMod.load());

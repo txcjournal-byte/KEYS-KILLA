@@ -1,5 +1,6 @@
 #pragma once
 #include "DspUtil.h"
+#include "Studio.h"
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 
@@ -35,6 +36,7 @@ struct FxParams
     uint32_t seed = 1234;
     std::array<int, numFxSlots> order = defaultFxOrder();
     float punch = 0, halftime = 0;
+    float master = 0.7f;
 };
 
 struct Biquad
@@ -75,7 +77,7 @@ public:
         atkSlow = 1.0f - std::exp (-1.0f / (0.025f * sr)); relSlow = 1.0f - std::exp (-1.0f / (0.25f * sr));
         ghostRing.prepare ((int) (1.5f * sr));
         ghostDly.prepare ((int) (4.5f * sr));
-        rev.setSampleRate (sampleRate); rev.reset();
+        fdn.prepare (sampleRate); mastering.prepare (sampleRate);
         ghostRev.setSampleRate (sampleRate); ghostRev.reset();
         for (auto& f : splitA) f.setHz (140.0f, sr);
         for (auto& f : splitB) f.setHz (140.0f, sr);
@@ -136,9 +138,9 @@ public:
             if (p.monoLows) s -= sideLp[0].lp (s);
             float l = dc[0].tick ((m + s) * p.outGain), r = dc[1].tick ((m - s) * p.outGain);
             if (p.monoLows) { l = subsonic[0].tick (l); r = subsonic[1].tick (r); }
-            peakPre = std::max (peakPre, std::max (std::abs (l), std::abs (r)));
-            L[i] = softLimit (l); R[i] = softLimit (r);
+            L[i] = l; R[i] = r;
         }
+        peakPre = std::max (peakPre, mastering.process (L, R, n, p.master));   // MASTER stage + limiter
     }
 
     float peakPre = 0;   // pre-limiter peak (for overload warning), reset by owner
@@ -386,20 +388,7 @@ private:
 
     void reverb (float* L, float* R, int n, const FxParams& p)
     {
-        juce::Reverb::Parameters rp;
-        switch (p.revType)
-        {
-            case 1:  rp.roomSize = 0.3f + p.revSize * 0.5f; rp.damping = 0.15f; break;    // plate
-            case 2:  rp.roomSize = 0.8f + p.revSize * 0.19f; rp.damping = 0.7f; break;    // cloud
-            default: rp.roomSize = 0.45f + p.revSize * 0.53f; rp.damping = 0.45f; break;  // hall
-        }
-        const float mix = p.freeze ? std::max (p.revMix, 0.5f) : p.revMix;
-        rp.wetLevel = mix * (p.revType == 2 ? 0.7f : 0.55f);
-        rp.dryLevel = 1.0f - mix * 0.45f;
-        rp.width = 1.0f;
-        rp.freezeMode = p.freeze ? 1.0f : 0.0f;
-        rev.setParameters (rp);
-        rev.processStereo (L, R, n);
+        fdn.process (L, R, n, p.revType, p.revSize, p.revMix, p.freeze);
     }
 
     void reverseStage (float* L, float* R, int n, const FxParams& p)
@@ -521,7 +510,9 @@ private:
     SvfState bodyS[2][5];
     DelayLine wowDl[2], chDl[2], flDl[2], dly[2], ring[2], revRing[2], htRing[2], ghostRing, ghostDly;
     float envFast = 0, envSlow = 0, smPunch = 0, smHalf = 0, atkFast = 0.5f, relFast = 0.01f, atkSlow = 0.01f, relSlow = 0.001f;
-    juce::Reverb rev, ghostRev;
+    juce::Reverb ghostRev;
+    FdnReverb fdn;
+    MasterStage mastering;
     Biquad eq[4], subsonic[2];
     float lastEqLow = 999, lastEqHigh = 999;
     float apState[2][4] {}, apFb[2] {};

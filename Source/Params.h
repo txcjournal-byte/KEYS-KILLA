@@ -140,6 +140,7 @@ namespace ID
     inline constexpr const char* timeM    = "timeMacro";  // TIGHT - NATURAL - DREAM - FROZEN
     inline constexpr const char* punch    = "punchFx";    // transient shaper
     inline constexpr const char* halftime = "halftime";   // half-speed buffer mix
+    inline constexpr const char* master   = "master";     // MASTER stage: glue, air, saturation, limiter (v0.13)
     // v0.5
     inline constexpr const char* era      = "era";        // ERA morph 0..6 (2010-12 ... FUTURE)
     inline constexpr const char* eraHome  = "eraHome";    // the era the preset was designed in
@@ -413,5 +414,6 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         c (ID::mmDst (s), "Mod " + String (s + 1) + " Dest", Choices::modDests, 1);
         f (ID::mmAmt (s), "Mod " + String (s + 1) + " Amount", -1, 1, 0);
     }
+    f (ID::master, "Master", 0, 1, 0.7f);
     return l;
 }
