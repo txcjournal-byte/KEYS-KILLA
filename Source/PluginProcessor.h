@@ -81,8 +81,7 @@ public:
     {
         juce::String name; int cat = -1, era = 0, gen = 0, preset = -1;
         std::vector<float> v;              // normalised parameter values
-        kk::LoopGenes loop;                // its melody loop (BREED LOOPS)
-        int node = -1;                     // FAMILY TREE node, -1 = not in the tree yet
+        kk::LoopGenes loop;                // its melody style (BREED LOOPS)
         bool valid() const { return ! v.empty(); }
     };
     struct Child
@@ -91,10 +90,11 @@ public:
         std::array<float, 64> wave {}; bool waveReady = false; bool hybrid = false;
     };
     struct Generation { Genome parents[2]; std::vector<Child> kids; };
-    struct TreeNode { int id = 0, pa = -1, pb = -1; Genome g; bool hybrid = false; int rating = 0; };
+    struct TreeResult { Genome g; std::array<float, 64> wave {}; bool waveReady = false; int rating = 0; };
     void setParentPreset (int slot, int presetIndex);
     void setParentCurrent (int slot);
     void setParentChild (int slot, int childIndex);
+    void setParentGenome (int slot, const Genome& g) { if (g.valid()) { parents[(size_t) juce::jlimit (0, 1, slot)] = g; ++labVer; } }
     void randomParent (int slot);
     void stepParent (int slot, int dir);
     int  breed();                                       // 6 children from the two parents
@@ -118,11 +118,26 @@ public:
     float breedWild = 0.25f;                          // WILD rail: 0 safe ... 1 crazy
     void resetParams (const juce::StringArray& ids);  // back to the sound as it was loaded
 
-    // ---------------- FAMILY TREE ----------------
-    const TreeNode* findNode (int id) const;
-    void auditionNode (int id);                       // load a family member (sound + loop) and play it
-    void setParentNode (int slot, int id);            // any ancestor can become a parent again
-    int  currentNode() const { return curNode; }
+    // ---------------- FAMILY TREE: up to 4 sounds -> BREED -> 6 new sounds or 6 melody loops ----------------
+    static constexpr int numAncestors = 4;
+    enum { treeSound = 0, treeLoop = 1 };
+    void setAncestorPreset (int slot, int presetIndex);
+    void setAncestorCurrent (int slot);
+    void setAncestorGenome (int slot, const Genome& g);
+    void clearAncestor (int slot);
+    void randomAncestor (int slot);
+    void stepAncestor (int slot, int dir);
+    const Genome& ancestor (int slot) const { return ancestors[(size_t) juce::jlimit (0, numAncestors - 1, slot)]; }
+    int  treeBreed();                                 // always new: 6 sounds (SOUND) or 6 sounds with new melodies (LOOP)
+    void setTreeMode (int m) { treeMode = m == treeLoop ? treeLoop : treeSound; ++labVer; }
+    int  getTreeMode() const { return treeMode; }
+    const std::vector<TreeResult>& treeKids() const { return treeResults; }
+    int  treeSelected() const { return treeSel; }
+    void selectTreeResult (int i);                    // load it (LOOP mode: with its melody)
+    void playTreeResult (int i);                      // SOUND: short note, LOOP: start / stop its loop
+    void rateTreeResult (int i, int stars);
+    void newMelody (int i);                           // LOOP: a new melody for this result, same sound
+    bool loopIsTree (int i) const { return loopOn.load() && treeSel == i && loopOwner == 1; }
 
     // ---------------- BREED LOOPS ----------------
     void toggleLoop();                                // play the current sound's loop (host tempo, bar synced)
@@ -133,8 +148,6 @@ public:
     void setLoopKey (int key);                        // -1 = AUTO (the loop's own key, or KEY when Key Lock is on)
     int  loopKey() const { return loopKeyN; }
     int  effectiveLoopKey (const kk::LoopGenes& l) const;
-    void toggleLoopLock();                            // new children keep the selected child's loop
-    bool loopLocked() const { return loopLockOn; }
     const kk::LoopGenes& currentLoop() const { return curLoop; }
     std::vector<kk::LoopNote> loopNotes (const Genome& g) const;
     juce::File exportLoopMidi (const Genome& g) const; // temp .mid for drag & drop into the host
@@ -235,14 +248,15 @@ private:
     std::vector<Generation> history;
     std::vector<int> geneOfParam;                       // per parameter, -1 = not inherited
     std::unique_ptr<KeysKillaProcessor> thumbRenderer;  // offline copy for the children's waveforms
-    std::vector<TreeNode> tree;
-    int nextNodeId = 1, curNode = -1;
-    int ensureNode (Genome& g);
-    void pruneTree();
-    void setCurrentLoop (const kk::LoopGenes& l, int node);
+    std::array<Genome, numAncestors> ancestors;
+    std::vector<TreeResult> treeResults;
+    int treeSel = -1, treeMode = treeSound, loopOwner = 0;   // loopOwner 1 = a FAMILY TREE result
+    uint32_t treeCount = 0;
+    Child makeChildOf (const Genome& pa, const Genome& pb, int k, uint32_t seed, const std::array<int, numGenes>* forced, bool useLocks) const;
+    void renderWave (const Genome& g, std::array<float, 64>& wave);
+    void setCurrentLoop (const kk::LoopGenes& l);
     // loop player (notes swapped under a spin lock, the audio thread only try-locks)
-    kk::LoopGenes curLoop, lockedLoop;
-    bool loopLockOn = false;
+    kk::LoopGenes curLoop;
     int loopBarsN = 8, loopKeyN = -1;
     std::atomic<bool> loopOn { false }, loopDirty { false };
     juce::SpinLock loopLock;

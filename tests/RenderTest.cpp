@@ -130,71 +130,77 @@ static int unitTests()
         std::printf ("BREED: %d thumbnails in %.1f ms, children peak %.3f, e.g. %s\n", n, juce::Time::getMillisecondCounterHiRes() - t0, worst,
                      p.kids()[0].g.name.toRawUTF8());
     }
-    // BREED LOOPS + FAMILY TREE
+    // BREED LOOPS: a new melody every time, always in key and in range
     {
-        const auto l = kk::loopFromSeed (1234);
-        check (kk::buildLoop (l, -1, 8, false, false).size() == 68, "8-bar loop has the recipe's 68 notes");
-        check (kk::buildLoop (l, -1, 16, false, false).size() == 136, "16-bar loop doubles it");
+        std::set<std::vector<int>> seen; bool ok = true, inKey = true;
+        for (uint32_t sd = 1; sd <= 2000; ++sd)
+        {
+            const auto l = kk::loopFromSeed (sd * 7919u);
+            const auto notes = kk::buildLoop (l, -1, sd % 2 ? 8 : 16, false, false);
+            std::vector<int> sig;
+            for (auto& n : notes)
+            {
+                ok &= n.note >= 20 && n.note <= 100 && n.start >= 0 && n.len > 0 && n.start + n.len <= (sd % 2 ? 32.05f : 64.05f);
+                sig.push_back (n.note * 1000 + (int) (n.start * 12));
+                if (! n.low)
+                {
+                    bool member = false;
+                    for (int k = 0; k < 7; ++k) member |= ((n.note - l.key - kk::loopdata::scales[l.g[kk::loopScale] % 5][k]) % 12 + 12) % 12 == 0;
+                    inKey &= member || l.g[kk::loopTexture] % 24 / 6 >= 2;   // doubled 5ths / 3rds may leave the scale
+                }
+            }
+            ok &= notes.size() >= 8;
+            seen.insert (sig);
+        }
+        check (ok, "loops in range and inside their bars");
+        check (inKey, "melody notes stay in the scale");
+        check (seen.size() >= 1995, "2000 seeds give 2000 different melodies");
+        const auto l = kk::loopFromSeed (99);
         bool lowOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, true, false)) lowOnly &= n.low;
         bool riffOnly = true; for (auto& n : kk::buildLoop (l, -1, 8, false, true)) riffOnly &= ! n.low;
-        check (lowOnly && riffOnly, "bass sounds play the low line, mono leads the riff");
-        bool inRange = true; for (auto& n : kk::buildLoop (l, 3, 16, false, false)) inRange &= n.note >= 20 && n.note <= 100 && n.start >= 0 && n.start + n.len <= 64.0f;
-        check (inRange, "loop notes in range and inside 16 bars");
-
+        check (lowOnly && riffOnly && ! kk::buildLoop (l, -1, 8, true, false).empty(), "bass sounds play the low line, mono leads the melody");
+        const auto c1 = kk::crossLoops (l, kk::loopFromSeed (5), 11, 0.5f, 0.0f), c2 = kk::crossLoops (l, kk::loopFromSeed (5), 12, 0.5f, 0.0f);
+        check (c1.g[kk::loopMelody] != c2.g[kk::loopMelody] && kk::buildLoop (c1, 0, 8, false, false).size() > 0, "every child gets its own melody");
+        std::printf ("LOOPS: %d different melodies from 2000 seeds\n", (int) seen.size());
+    }
+    // FAMILY TREE: 4 sounds -> 6 sounds or 6 loops, new every press, loop playback, MIDI export, state
+    {
         KeysKillaProcessor p; p.prepareToPlay (48000, 256);
-        p.breedWild = 0.0f;
-        p.setParentPreset (0, 3); p.setParentPreset (1, 40);
-        p.breed();
-        const auto pa = p.parent (0), pb = p.parent (1);
-        bool linked = true, inherited = true; int same = 0, total = 0;
-        for (auto& c : p.kids())
-        {
-            auto* n = p.findNode (c.g.node);
-            linked &= n != nullptr && n->pa == pa.node && n->pb == pb.node && pa.node >= 0 && pb.node >= 0;
-            inherited &= c.g.loop.valid;
-            for (int g = 0; g < kk::numLoopGenes; ++g) { ++total; same += (c.g.loop.g[(size_t) g] == pa.loop.g[(size_t) g] || c.g.loop.g[(size_t) g] == pb.loop.g[(size_t) g]) ? 1 : 0; }
-        }
-        check (linked, "children are linked to both parents in the tree");
-        check (inherited && same >= total * 8 / 10, "child loops are inherited from the parents");
-        // next generation: a child becomes a parent -> grandparents appear
-        p.setParentChild (0, 2); p.setParentChild (1, 4);
-        p.breed();
-        auto* par = p.findNode (p.parent (0).node);
-        check (par != nullptr && par->pa == pa.node, "a bred parent keeps its own parents (grandparents)");
-        // loop lock
-        p.selectChild (1);
-        const auto keep = p.kids()[1].g.loop;
-        p.toggleLoopLock(); p.breed();
-        bool locked = true; for (auto& c : p.kids()) locked &= c.g.loop == keep;
-        check (locked, "LOCK LOOP keeps the loop for every new child");
-        p.toggleLoopLock();
-        // audition an ancestor
-        p.auditionNode (pa.node);
-        check (p.currentNode() == pa.node && p.currentLoop() == pa.loop, "family tree audition loads sound + loop");
-        // loop playback makes sound without any MIDI input, and stops cleanly
-        p.selectChild (0);
-        p.toggleLoop();
+        const auto& ps = factoryPresets();
+        p.setAncestorPreset (0, 0); p.setAncestorPreset (1, 60); p.setAncestorPreset (2, 200); p.setAncestorPreset (3, (int) ps.size() - 1);
+        check (p.treeBreed() == 6, "family tree breeds 6 results");
+        std::set<uint32_t> mel; for (auto& r : p.treeKids()) mel.insert (r.g.loop.g[kk::loopMelody]);
+        p.treeBreed(); for (auto& r : p.treeKids()) mel.insert (r.g.loop.g[kk::loopMelody]);
+        check (mel.size() == 12, "every BREED gives new melodies");
+        bool valid = true; for (auto& r : p.treeKids()) valid &= r.g.valid() && r.g.loop.valid && r.g.name.contains ("+");
+        check (valid, "results are full sounds named after their family");
+        p.clearAncestor (2); p.clearAncestor (3);
+        check (p.treeBreed() == 6, "family tree works with 2 sounds");
+        p.setTreeMode (KeysKillaProcessor::treeLoop);
+        p.treeBreed();
+        p.playTreeResult (1);
+        check (p.loopIsTree (1) && p.treeSelected() == 1, "LOOP result plays its loop");
         juce::AudioBuffer<float> b (2, 256); float peakOn = 0, peakOff = 0;
-        for (int k = 0; k < 375; ++k) { juce::MidiBuffer m; p.processBlock (b, m); peakOn = std::max (peakOn, b.getMagnitude (0, 256)); }
-        p.toggleLoop();
+        bool finite = true;
+        for (int k = 0; k < 375; ++k) { juce::MidiBuffer m; p.processBlock (b, m); peakOn = std::max (peakOn, b.getMagnitude (0, 256)); finite &= std::isfinite (b.getSample (0, 0)); }
+        p.newMelody (1);
+        for (int k = 0; k < 200; ++k) { juce::MidiBuffer m; p.processBlock (b, m); finite &= std::isfinite (b.getSample (0, 0)); }
+        p.playTreeResult (1);
+        check (! p.loopPlaying(), "second press stops the loop");
         for (int k = 0; k < 1500; ++k) { juce::MidiBuffer m; p.processBlock (b, m); if (k > 1100) peakOff = std::max (peakOff, b.getMagnitude (0, 256)); }
-        check (peakOn > 0.01f && peakOff < 1.0e-3f, "loop plays and stops");
-        // MIDI export for drag & drop
-        const auto f = p.exportLoopMidi (p.kids()[0].g);
+        check (finite && peakOn > 0.01f && peakOff < 1.0e-3f, "loop plays and stops");
+        const auto f = p.exportLoopMidi (p.treeKids()[1].g);
         juce::MidiFile mf; int notes = 0;
         if (juce::FileInputStream in { f }; in.openedOk() && mf.readFrom (in))
             for (int t = 0; t < mf.getNumTracks(); ++t) for (auto* e : *mf.getTrack (t)) notes += e->message.isNoteOn() ? 1 : 0;
-        const auto expect = (int) p.loopNotes (p.kids()[0].g).size();
-        check (f.existsAsFile() && notes == expect && notes > 0, "loop exports as a MIDI file");
-        // state round trip keeps loops, tree links and loop settings
+        check (f.existsAsFile() && notes == (int) p.loopNotes (p.treeKids()[1].g).size() && notes > 0, "loop exports as a MIDI file");
         p.setLoopBars (16); p.setLoopKey (5);
         juce::MemoryBlock mb; p.getStateInformation (mb);
         KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
-        bool same2 = q.kids().size() == p.kids().size();
-        for (size_t c = 0; same2 && c < p.kids().size(); ++c) same2 &= q.kids()[c].g.loop == p.kids()[c].g.loop && q.kids()[c].g.node == p.kids()[c].g.node;
-        auto* qp = q.findNode (q.parent (0).node);
-        check (same2 && qp != nullptr && qp->pa == pa.node && q.loopBars() == 16 && q.loopKey() == 5, "loops + family tree survive save / load");
-        std::printf ("LOOPS: %s, %d notes exported, tree ok\n", f.getFileName().toRawUTF8(), notes);
+        bool same = q.treeKids().size() == p.treeKids().size() && q.ancestor (0).name == p.ancestor (0).name && ! q.ancestor (2).valid();
+        for (size_t i = 0; same && i < p.treeKids().size(); ++i) same &= q.treeKids()[i].g.loop == p.treeKids()[i].g.loop;
+        check (same && q.getTreeMode() == KeysKillaProcessor::treeLoop && q.loopBars() == 16 && q.loopKey() == 5, "family tree survives save / load");
+        std::printf ("FAMILY TREE: %s, %d notes exported\n", f.getFileName().toRawUTF8(), notes);
     }
     // ERA / FUTURE / BREED extremes stay finite and bounded on every category
     {
@@ -400,6 +406,31 @@ int main (int argc, char** argv)
         std::printf ("%s: %.1f s\n", argv[3], (double) mixL.size() / rate);
         return 0;
     }
+    if (argc > 3 && juce::String (argv[1]) == "-loopdemo")   // -loopdemo <dir> <count> [firstSeed]: melody loops as MIDI (8 bars, 140 BPM)
+    {
+        const juce::File dir { juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]) };
+        dir.createDirectory();
+        const int count = juce::String (argv[3]).getIntValue();
+        const uint32_t first = argc > 4 ? (uint32_t) juce::String (argv[4]).getLargeIntValue() : 1u;
+        for (int i = 0; i < count; ++i)
+        {
+            const auto l = kk::loopFromSeed (kk::hash32 (first + (uint32_t) i * 7919u));
+            juce::MidiMessageSequence seq;
+            auto tempo = juce::MidiMessage::tempoMetaEvent (60000000 / 140); tempo.setTimeStamp (0); seq.addEvent (tempo);
+            for (auto& n : kk::buildLoop (l, -1, 8, false, false))
+            {
+                seq.addEvent (juce::MidiMessage::noteOn (1, n.note, (juce::uint8) 100), std::round (n.start * 96));
+                seq.addEvent (juce::MidiMessage::noteOff (1, n.note), std::round ((n.start + n.len) * 96));
+            }
+            seq.updateMatchedPairs();
+            juce::MidiFile mf; mf.setTicksPerQuarterNote (96); mf.addTrack (seq);
+            const auto name = juce::String::formatted ("KK Loop %02d - ", i + 1) + kk::keyName (l.key) + " " + kk::loopdata::scaleName ((int) l.g[kk::loopScale]) + " 140BPM.mid";
+            auto f = dir.getChildFile (name); f.deleteFile();
+            if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
+            std::printf ("%s\n", name.toRawUTF8());
+        }
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "-longuse")   // host-like long session, then measure shutdown
     {
         const int seconds = argc > 2 ? juce::String (argv[2]).getIntValue() : 20;
@@ -438,8 +469,8 @@ int main (int argc, char** argv)
                 case 7: { juce::MemoryBlock mb; proc->getStateInformation (mb); } break;
                 case 8: proc->rollDice (0); break;
                 case 9: ed.reset(); ed.reset (proc->createEditor()); ke = dynamic_cast<KeysKillaEditor*> (ed.get()); break;
-                case 10: proc->toggleLoop(); proc->auditionNode (proc->parent (0).node); break;
-                case 11: ke->showView (13); break;
+                case 10: proc->setTreeMode (action % 2); proc->treeBreed(); proc->playTreeResult (action % 6); break;
+                case 11: ke->showView (13 + action % 2); break;
                 default: break;
             }
         }
