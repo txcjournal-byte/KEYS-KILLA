@@ -6,6 +6,8 @@
 #include "Fx.h"
 #include "Presets.h"
 #include "Loops.h"
+#include "modules/voodoo/Engine.h"
+#include "modules/voodoo/PresetLibrary.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -179,6 +181,9 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
     std::atomic<float> meterL { 0 }, meterR { 0 };
+    // HALF module (Voodoo Killa engine on the whole output)
+    const vk::PresetLibrary& halfLibrary() const { return *halfLib; }
+    juce::String halfPresetName (int idx) const;
     std::atomic<bool>  overload { false };
     std::atomic<float> guiPitch { 0 }, guiMod { 0 };   // from on-screen wheels
     std::array<std::atomic<bool>, 128> playing {};
@@ -209,6 +214,12 @@ private:
 
     kk::SynthEngine synth;
     std::unique_ptr<kk::FxRack> fxPtr { std::make_unique<kk::FxRack>() };
+    std::unique_ptr<vk::PresetLibrary> halfLib { std::make_unique<vk::PresetLibrary>() };
+    std::unique_ptr<vk::Engine> half { std::make_unique<vk::Engine>() };
+    int halfLoaded = -1;
+    float halfFade = 0;                       // crossfade dry <-> HALF when switched on / off
+    std::vector<float> halfDryL, halfDryR;
+    void processHalf (juce::AudioBuffer<float>& buffer, int n, double bpm, double ppq, bool hostPlaying);
     kk::VoiceParams vp;
     kk::FxParams fp;
 

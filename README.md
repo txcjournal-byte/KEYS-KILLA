@@ -5,6 +5,16 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
+## 10 v 1 (verze 0.14)
+
+KEYS KILLA obsahuje ostatní KILLA pluginy jako moduly - spodní lišta: **808 | SNARE | CLAP | ROLLS | HALF | EFFECTOR | DIGGA**.
+
+- **HALF** = Voodoo Killa (12 kategorií x 8 efektů: halftime, tape stop, glitch, backmask...) na všem, co KEYS KILLA hraje. Klik na kartu = zapnuto.
+- Ostatní moduly se stěhují postupně (zatím zástupná stránka).
+- Vlevo: **BREED LAB / FAMILY TREE / PARAMS** (PARAMS = všechny parametry zvuku).
+- Vpravo: **SOUNDS** - pořád otevřený seznam zvuků (jako FLEX), šipky / klik na název = kategorie.
+- ARP a WILD jsou pryč (melodie dělají loopy FAMILY TREE).
+
 ## BREED LAB (verze 0.12)
 
 1. **PARENT A + PARENT B** – dva zvuky z knihovny (šipky = další zvuk kategorie, kostka = náhodný, klik = výběr / prohlížeč).

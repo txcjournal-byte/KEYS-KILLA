@@ -141,6 +141,13 @@ namespace ID
     inline constexpr const char* punch    = "punchFx";    // transient shaper
     inline constexpr const char* halftime = "halftime";   // half-speed buffer mix
     inline constexpr const char* master   = "master";     // MASTER stage: glue, air, saturation, limiter (v0.13)
+    // v0.14 HALF module (Voodoo Killa engine): time FX on the whole output
+    inline constexpr const char* halfOn     = "halfOn";
+    inline constexpr const char* halfPreset = "halfPreset";   // 12 categories x 8 presets
+    inline constexpr const char* halfAmount = "halfAmount";
+    inline constexpr const char* halfSpeed  = "halfSpeed";
+    inline constexpr const char* halfTrig   = "halfTrig";
+    inline constexpr const char* halfMix    = "halfMix";
     // v0.5
     inline constexpr const char* era      = "era";        // ERA morph 0..6 (2010-12 ... FUTURE)
     inline constexpr const char* eraHome  = "eraHome";    // the era the preset was designed in
@@ -162,6 +169,8 @@ inline constexpr int numModSlots = 8;
 
 namespace Choices
 {
+    inline const juce::StringArray halfSpeeds { "1/4x", "1/2x", "1x", "2x", "4x" };
+    inline const juce::StringArray halfTrigs  { "Always", "Every 4 bars", "Every 8 bars", "Last beat" };
     inline const juce::StringArray engines   { "VA", "FM", "Pluck", "Vox", "Organ", "Flute", "Sub 808", "Wavetable", "Orchestral", "Modal" };
     inline const juce::StringArray fmAlgos   { "2-Op", "4-Stack", "2x2 Pairs", "3 > 1", "Bell", "E-Piano" };
     inline const juce::StringArray warps     { "Bend", "Sync", "Mirror", "Quantize", "FM" };
@@ -415,5 +424,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         f (ID::mmAmt (s), "Mod " + String (s + 1) + " Amount", -1, 1, 0);
     }
     f (ID::master, "Master", 0, 1, 0.7f);
+    b (ID::halfOn, "Half On", false);
+    i (ID::halfPreset, "Half Preset", 0, 95, 0);
+    f (ID::halfAmount, "Half Amount", 0, 1, 1.0f);
+    c (ID::halfSpeed, "Half Speed", Choices::halfSpeeds, 2);
+    c (ID::halfTrig, "Half Trigger", Choices::halfTrigs, 0);
+    f (ID::halfMix, "Half Mix", 0, 1, 1.0f);
     return l;
 }

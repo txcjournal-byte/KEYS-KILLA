@@ -68,7 +68,7 @@ static int unitTests()
         for (int i = 0; i < 64; ++i) { const float ph = (float) i / 64.0f; err = std::max (err, std::abs (wt.read (ph, 0.0f, 0.001f) - std::sin (kk::twoPi * ph))); }
         check (err < 0.02f, "wavetable sine frame");
     }
-    // step arp: rests are silent, steps play; RESET restores the loaded sound
+    // the old ARP switch is ignored (loops replace it); RESET restores the loaded sound
     {
         auto run = [&] (float stepValue)
         {
@@ -83,9 +83,8 @@ static int unitTests()
             }
             return std::make_pair (peak, p.arpCurStep.load());
         };
-        const auto rest = run (0.0f), play = run (1.0f);
-        check (rest.first < 1.0e-4f, "arp rests are silent");
-        check (play.first > 0.01f && play.second >= 0 && play.second < 4, "arp steps play within the step length");
+        const auto rest = run (0.0f);
+        check (rest.first > 0.01f, "ARP removed (v0.14): an old arp setting never silences a note");
         KeysKillaProcessor p; p.setCurrentProgram (3);
         const float before = p.apvts.getParameter (ID::cutoff)->getValue();
         set (p, ID::cutoff, 200.0f);
@@ -142,6 +141,46 @@ static int unitTests()
             if (k > 10) late = std::max (late, b.getMagnitude (0, 400));
         }
         check (finite && late > 1.0e-3f, "16 kHz render stays finite and keeps sounding");
+    }
+    // HALF module (Voodoo engine): 96 presets load, every one stays finite, it changes the sound, presets keep it
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        check (p.halfLibrary().getFactory().size() == 96 && p.halfLibrary().getCategories().size() == 12, "HALF: 12 x 8 factory presets");
+        auto render = [&] (int blocks, float& peak, double& diffTo, const std::vector<float>* ref, std::vector<float>* out)
+        {
+            juce::AudioBuffer<float> b (2, 512); bool finite = true; peak = 0; diffTo = 0;
+            for (int k = 0; k < blocks; ++k)
+            {
+                juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                p.processBlock (b, m);
+                for (int n = 0; n < 512; ++n)
+                {
+                    const float v = b.getSample (0, n); finite &= std::isfinite (v) && std::isfinite (b.getSample (1, n));
+                    peak = std::max (peak, std::abs (v));
+                    if (ref) diffTo += std::abs (v - (*ref)[(size_t) (k * 512 + n)]);
+                    if (out) out->push_back (v);
+                }
+            }
+            juce::MidiBuffer off; off.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+            for (int k = 0; k < 60; ++k) { juce::MidiBuffer e = k == 0 ? off : juce::MidiBuffer(); p.processBlock (b, e); }
+            return finite;
+        };
+        float pk; double d; std::vector<float> dry;
+        render (300, pk, d, nullptr, &dry);
+        set (p, ID::halfOn, 1.0f);
+        bool allFinite = true, loud = true; int changed = 0;
+        for (int i = 0; i < 96; ++i)
+        {
+            set (p, ID::halfPreset, (float) i);
+            allFinite &= render (300, pk, d, &dry, nullptr);
+            loud &= pk < 1.0f;
+            if (d > 1.0) ++changed;
+        }
+        check (allFinite && loud, "HALF: all 96 presets stay finite and below 0 dBFS");
+        check (changed >= 90, "HALF: the presets really change the sound");
+        p.loadPreset (5);
+        check (p.apvts.getParameter (ID::halfOn)->getValue() > 0.5f, "HALF stays on when a preset is loaded");
+        std::printf ("HALF: %d of 96 presets audibly change the sound\n", changed);
     }
     // BREED LOOPS: a new melody every time, always in key and in range
     {
@@ -290,15 +329,6 @@ static int unitTests()
     run (noteOn (61), 2); check (! p.playing[61].load() && (p.playing[60].load() || p.playing[62].load()), "key lock snaps C# to scale");
     run (noteOff (61), 2); check (countNotes (p) == 0, "key lock note-off follows mapping");
     set (p, ID::keyLock, 0); run ({}, 1);
-    // arp produces a changing note from a held chord
-    set (p, ID::arp, 1); run ({}, 1);
-    { juce::MidiBuffer m; for (int n : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); run (m, 1); }
-    std::set<int> seen;
-    for (int k = 0; k < 200; ++k) { run ({}, 1); for (int n : { 60, 63, 67 }) if (p.playing[(size_t) n].load()) seen.insert (n); }
-    check (seen.size() >= 2, "arp cycles through held notes");
-    { juce::MidiBuffer m; for (int n : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOff (1, n), 0); run (m, 40); }
-    check (countNotes (p) == 0, "arp stops after release");
-    set (p, ID::arp, 0); run ({}, 1);
     // all notes off: nothing hangs
     { juce::MidiBuffer m; for (int n = 40; n < 80; n += 3) m.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0); run (m, 2); }
     { juce::MidiBuffer m; m.addEvent (juce::MidiMessage::allNotesOff (1), 0); run (m, 2); }

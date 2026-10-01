@@ -78,6 +78,10 @@ unlight(box(1330, 712, 1600, 765), 0.7)
 # v0.7: the ERA column becomes the WILD rail (drawn by the plugin), the 808 tab becomes ARP
 inpaint(1466, 120, 1608, 392)
 inpaint(1196, 626, 1290, 650)
+# v0.14: the bottom row becomes the module bar (808 SNARE CLAP ROLLS HALF EFFECTOR DIGGA, drawn by the plugin)
+for x0, x1 in ((55, 252), (262, 472), (480, 690), (700, 907), (916, 1127)):
+    cx = (x0 + x1) // 2
+    inpaint(cx - 72, 626, cx + 72, 651)
 # knob value arcs
 knobs = [((x, 715), 30, 58) for x in (132, 284, 435, 587, 742, 895, 1047, 1202)] + [((1532, 447), 34, 66), ((1490, 552), 21, 40), ((1575, 552), 21, 40)]
 ring = np.zeros((H, W), bool)

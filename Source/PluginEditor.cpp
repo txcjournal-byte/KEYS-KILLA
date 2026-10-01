@@ -287,7 +287,7 @@ private:
 class HotButton : public Button
 {
 public:
-    HotButton (KKLookAndFeel& l, String label = {}) : Button (label), lnf (l), text (std::move (label)) {}
+    HotButton (KKLookAndFeel& l, String label = {}) : Button (label), lnf (l) {}
     std::function<void (Graphics&, Rectangle<float>, const Skin&)> glyph;
     bool selected = false, round = false;
     std::function<void()> onRightClick;
@@ -299,7 +299,7 @@ public:
         const float corner = round ? r.getHeight() * 0.5f : 5.0f;
         if (selected) { drawGlowFrame (g, r, s.accent, corner); g.setColour (s.accent.withAlpha (0.12f)); g.fillRoundedRectangle (r, corner); }
         if (over && ! selected) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, corner); }
-        if (text.isNotEmpty())
+        if (const auto text = getButtonText(); text.isNotEmpty())
         {
             g.setColour (selected ? Colour (0xffffe9e9) : Colour (0xffd9d3d3));
             g.setFont (serif (r.getHeight() * 0.5f, false, 0.12f));
@@ -314,7 +314,6 @@ public:
     }
 private:
     KKLookAndFeel& lnf;
-    String text;
 };
 
 //==============================================================================
@@ -492,174 +491,7 @@ protected:
     TextButton close, reset;
 };
 
-// MOVEMENT: chord, key, glide and the performance controls
-static const StringArray movementIds { ID::chord, ID::chordType, ID::strum, ID::keyLock, ID::key, ID::scale, ID::mono, ID::legato, ID::glide, ID::bendRange,
-                                       ID::timeM, ID::alive, ID::drift, ID::punch, ID::halftime, ID::lfoRate, ID::lfoPitch, ID::lfoSync, ID::lfoDiv, ID::future };
-class PlayPanel : public TabPanel
-{
-public:
-    PlayPanel (KeysKillaProcessor& p, KKLookAndFeel& l) : TabPanel (p, l, "MOVEMENT", movementIds), grid (p, movementIds, 10) { addAndMakeVisible (grid); }
-    void layout (Rectangle<int> r) override { grid.setBounds (r.withHeight (jmin (r.getHeight(), 250))); }
-private:
-    ParamGrid grid;
-};
-
-// ARP: step arpeggiator like the classic workstation arps - every step is a note brick you move up / down
-// in semitones (number under the step), drag its right edge to make it longer, double-click to delete.
-class NoteGrid : public Component, public SettableTooltipClient, private Timer
-{
-public:
-    NoteGrid (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
-    {
-        setTooltip ("Click an empty step: new note.  Drag a note up / down: pitch (semitones).  Drag its right edge: longer / shorter.  Double-click or right-click: delete.");
-        startTimerHz (20);
-    }
-    static constexpr int range = 12;   // -12 ... +12 semitones
-    void paint (Graphics& g) override
-    {
-        const auto& s = *lnf.skin;
-        const int steps = stepsNow();
-        auto area = gridArea();
-        g.setColour (Colour (0xff0e0b0b)); g.fillRoundedRectangle (area, 4);
-        for (int r = -range; r <= range; ++r)   // semitone rows, octave and root lines stronger
-        {
-            const float y = rowY (r);
-            g.setColour (r == 0 ? Colour (0xff4a3a3a) : (r % 12 == 0 ? Colour (0xff332828) : Colour (0xff1c1717)));
-            g.drawHorizontalLine ((int) y, area.getX(), area.getRight());
-        }
-        for (int i = 0; i <= 16; ++i)
-        {
-            const float x = colX (i);
-            g.setColour (i % 4 == 0 ? Colour (0xff3a3030) : Colour (0xff221c1c));
-            g.drawVerticalLine ((int) x, area.getY(), area.getBottom());
-        }
-        if (steps < 16) { g.setColour (Colour (0xaa000000)); g.fillRect (Rectangle<float> (colX (steps), area.getY(), area.getRight() - colX (steps), area.getHeight())); }
-        const int cur = proc.arpCurStep.load();
-        if (cur >= 0 && proc.apvts.getRawParameterValue (ID::arp)->load() > 0.5f)
-        {
-            g.setColour (s.accent.withAlpha (0.12f));
-            g.fillRect (Rectangle<float> (colX (cur), area.getY(), colX (cur + 1) - colX (cur), area.getHeight()));
-        }
-        for (int i = 0; i < 16; ++i)
-        {
-            if (! on (i)) continue;
-            auto b = brick (i).reduced (1.5f, 0.5f);
-            const bool inside = i < steps;
-            g.setColour (s.accent.withAlpha (inside ? 0.35f : 0.12f)); g.fillRoundedRectangle (b.expanded (2), 4);
-            g.setGradientFill (ColourGradient (s.accent.brighter (0.25f).withAlpha (inside ? 1.0f : 0.35f), 0, b.getY(),
-                                               s.accent.darker (0.35f).withAlpha (inside ? 1.0f : 0.35f), 0, b.getBottom(), false));
-            g.fillRoundedRectangle (b, 3);
-            g.setColour (Colours::white.withAlpha (inside ? 0.5f : 0.2f)); g.fillRect (b.withLeft (b.getRight() - 3).reduced (0, 2));   // length handle
-        }
-        g.setFont (serif (15.0f, false, 0.02f));
-        for (int i = 0; i < 16; ++i)
-        {
-            const int t = note (i);
-            auto cell = Rectangle<float> (colX (i), area.getBottom() + 4, colX (i + 1) - colX (i), 20);
-            if (on (i) && t != 0)
-            {
-                g.setColour (Colour (0xff2a2020)); g.fillRoundedRectangle (cell.reduced (4, 1), 3);
-                g.setColour (Colour (0xffece6e6)); g.drawText ((t > 0 ? "+" : "") + String (t), cell, Justification::centred);
-            }
-            g.setColour (Colour (0x66d9d3d3)); g.setFont (serif (11.0f));
-            g.drawText (String (i + 1), Rectangle<float> (colX (i), area.getY() - 16, colX (i + 1) - colX (i), 14), Justification::centred);
-            g.setFont (serif (15.0f, false, 0.02f));
-        }
-    }
-    void mouseDown (const MouseEvent& e) override
-    {
-        dragStep = -1; resize = false;
-        for (int i = 15; i >= 0; --i)
-            if (on (i) && brick (i).expanded (0, 3).contains (e.position))
-            {
-                if (e.mods.isPopupMenu()) { setOn (i, false); repaint(); return; }
-                dragStep = i;
-                resize = e.position.x > brick (i).getRight() - 9;
-                startNote = note (i); startLen = len (i);
-                return;
-            }
-        const int col = colAt (e.position.x);
-        if (col < 0 || e.mods.isPopupMenu()) return;
-        for (int i = 0; i < col; ++i)   // shorten a note that runs over this step
-            if (on (i) && i + len (i) > col) setParam (ID::arpLen (i), (float) (col - i));
-        setOn (col, true); setParam (ID::arpLen (col), 1.0f); setParam (ID::arpNote (col), (float) rowAt (e.position.y));
-        dragStep = col; resize = false; startNote = note (col); startLen = 1;
-        repaint();
-    }
-    void mouseDrag (const MouseEvent& e) override
-    {
-        if (dragStep < 0) return;
-        if (resize)
-        {
-            const int end = jlimit (dragStep + 1, 16, colAt (e.position.x) + 1);
-            const int newLen = jlimit (1, 16 - dragStep, end - dragStep);
-            for (int j = dragStep + 1; j < dragStep + newLen; ++j) setOn (j, false);   // swallowed steps become part of the note
-            setParam (ID::arpLen (dragStep), (float) newLen);
-        }
-        else setParam (ID::arpNote (dragStep), (float) rowAt (e.position.y));
-        repaint();
-    }
-    void mouseDoubleClick (const MouseEvent& e) override
-    {
-        for (int i = 15; i >= 0; --i) if (on (i) && brick (i).contains (e.position)) { setOn (i, false); repaint(); return; }
-    }
-private:
-    Rectangle<float> gridArea() const { return getLocalBounds().toFloat().withTrimmedTop (18).withTrimmedBottom (28); }
-    float colX (int i) const { auto a = gridArea(); return a.getX() + a.getWidth() * (float) i / 16.0f; }
-    float rowH() const { return gridArea().getHeight() / (float) (2 * range + 1); }
-    float rowY (int semis) const { return gridArea().getY() + ((float) (range - semis) + 0.5f) * rowH(); }
-    int colAt (float x) const { auto a = gridArea(); return (x < a.getX() || x >= a.getRight()) ? -1 : jlimit (0, 15, (int) ((x - a.getX()) / a.getWidth() * 16.0f)); }
-    int rowAt (float y) const { return jlimit (-range, range, range - (int) std::floor ((y - gridArea().getY()) / rowH())); }
-    Rectangle<float> brick (int i) const
-    {
-        const float h = std::max (13.0f, rowH() * 1.4f);
-        return { colX (i), rowY (note (i)) - h * 0.5f, colX (jmin (16, i + len (i))) - colX (i), h };
-    }
-    bool on (int i) const { return proc.apvts.getRawParameterValue (ID::arpStep (i))->load() > 0.5f; }
-    int note (int i) const { return (int) proc.apvts.getRawParameterValue (ID::arpNote (i))->load(); }
-    int len (int i) const { return (int) proc.apvts.getRawParameterValue (ID::arpLen (i))->load(); }
-    int stepsNow() const { return (int) proc.apvts.getRawParameterValue (ID::arpSteps)->load(); }
-    void setOn (int i, bool v) { setParam (ID::arpStep (i), v ? 1.0f : 0.0f); }
-    void setParam (const String& id, float v)
-    {
-        auto* prm = proc.apvts.getParameter (id);
-        const float n = prm->convertTo0to1 (v);
-        if (std::abs (prm->getValue() - n) < 1.0e-6f) return;
-        prm->beginChangeGesture(); prm->setValueNotifyingHost (n); prm->endChangeGesture();
-    }
-    void timerCallback() override { const int c = proc.arpCurStep.load(); if (c != lastCur) { lastCur = c; repaint(); } }
-    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    int dragStep = -1, startNote = 0, startLen = 1, lastCur = -2; bool resize = false;
-};
-
-static StringArray arpIds()
-{
-    StringArray ids { ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::arpSteps, ID::keyLock, ID::key, ID::scale };
-    for (int i = 0; i < 16; ++i) { ids.add (ID::arpStep (i)); ids.add (ID::arpNote (i)); ids.add (ID::arpLen (i)); }
-    return ids;
-}
-
-class ArpPanel : public TabPanel
-{
-public:
-    ArpPanel (KeysKillaProcessor& p, KKLookAndFeel& l)
-        : TabPanel (p, l, "ARP", arpIds()),
-          grid (p, { ID::arp, ID::arpRate, ID::arpMode, ID::arpOct, ID::arpGate, ID::arpSwing, ID::arpSteps, ID::keyLock, ID::key, ID::scale }, 10,
-                { "ARP", "SPEED", "MODE", "OCTAVES", "GATE", "SHUFFLE", "LENGTH", "KEY LOCK", "KEY", "SCALE" }),
-          notes (p, l)
-    {
-        addAndMakeVisible (grid); addAndMakeVisible (notes);
-    }
-    void layout (Rectangle<int> r) override
-    {
-        grid.setBounds (r.removeFromTop (118));
-        r.removeFromTop (8);
-        notes.setBounds (r);
-    }
-private:
-    ParamGrid grid;
-    NoteGrid notes;
-};
+// (v0.14: the ARP and MOVEMENT panels are gone - the FAMILY TREE loops replace the arp, PLAY lives under PARAMS)
 
 //==============================================================================
 // BREED LOOPS helpers
@@ -892,6 +724,111 @@ private:
     Rectangle<float> half (int k) const { return { 4.0f + (float) k * 37.0f, 3.0f, 37.0f, 27.0f }; }
     Rectangle<float> lockRect() const { return { 84.0f, 5.0f, 22.0f, 22.0f }; }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf; int gene;
+};
+
+//==============================================================================
+// SOUNDS: always-open sound list on the right (like FL Studio FLEX) - pick a category, click a sound, play
+class SoundList : public Component, public SettableTooltipClient, private ListBoxModel, private Timer
+{
+public:
+    SoundList (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        setTooltip ("SOUNDS: click a sound to load it.  Arrows / click the name: category.");
+        list.setModel (this);
+        list.setRowHeight (23);
+        list.setColour (ListBox::backgroundColourId, Colours::transparentBlack);
+        list.setOutlineThickness (0);
+        list.getVerticalScrollBar().setColour (ScrollBar::thumbColourId, Colour (0x88d01818));
+        list.setWantsKeyboardFocus (false);
+        addAndMakeVisible (list);
+        for (int c = 0; c < numCategories; ++c) if (c != c808) cats.push_back (c);   // 808 sounds live in BASS
+        const auto& ps = factoryPresets();
+        const int cur = proc.getCurrentProgram();
+        catPos = 0;
+        if (cur >= 0 && cur < (int) ps.size())
+            for (int i = 0; i < (int) cats.size(); ++i) if (cats[(size_t) i] == (ps[(size_t) cur].cat == c808 ? cBass : ps[(size_t) cur].cat)) catPos = i;
+        rebuild();
+        startTimerHz (8);
+    }
+    std::function<void()> onLoaded;
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        g.setColour (Colour (0xe00a0707)); g.fillRoundedRectangle (getLocalBounds().toFloat(), 6);
+        g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 6, 1.0f);
+        auto h = header();
+        g.setColour (Colours::white); g.setFont (serif (14.0f, false, 0.18f));
+        g.drawFittedText (categoryNames()[cats[(size_t) catPos]].toUpperCase(), h.reduced (22, 0), Justification::centred, 1);
+        g.setColour (s.accent);
+        auto arrow = [&] (Rectangle<int> r, bool left)
+        {
+            Path p; const auto c = r.getCentre().toFloat();
+            p.addTriangle (c.x + (left ? 3.0f : -3.0f), c.y - 5.0f, c.x + (left ? 3.0f : -3.0f), c.y + 5.0f, c.x + (left ? -4.0f : 4.0f), c.y);
+            g.fillPath (p);
+        };
+        arrow (h.withWidth (22), true); arrow (h.withTrimmedLeft (h.getWidth() - 22), false);
+        g.setColour (s.panelEdge); g.drawHorizontalLine (h.getBottom(), 6.0f, (float) getWidth() - 6.0f);
+    }
+    void resized() override { list.setBounds (getLocalBounds().withTrimmedTop (header().getBottom() + 2).reduced (2, 2)); }
+    void mouseUp (const MouseEvent& e) override
+    {
+        const auto h = header();
+        if (! h.contains (e.getPosition())) return;
+        const int n = (int) cats.size();
+        if (e.x < 24) { catPos = (catPos + n - 1) % n; rebuild(); return; }
+        if (e.x > h.getWidth() - 24) { catPos = (catPos + 1) % n; rebuild(); return; }
+        PopupMenu m;   // click the name: every category at once
+        for (int i = 0; i < n; ++i) m.addItem (i + 1, categoryNames()[cats[(size_t) i]], true, i == catPos);
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (this), [safe = Component::SafePointer<SoundList> (this)] (int r)
+        {
+            if (safe != nullptr && r > 0) { safe->catPos = r - 1; safe->rebuild(); }
+        });
+    }
+private:
+    Rectangle<int> header() const { return { 0, 0, getWidth(), 28 }; }
+    void rebuild()
+    {
+        rows.clear();
+        const auto& ps = factoryPresets();
+        const int c = cats[(size_t) catPos];
+        for (int i = 0; i < (int) ps.size(); ++i)
+            if (ps[(size_t) i].cat == c || (c == cBass && ps[(size_t) i].cat == c808)) rows.push_back (i);
+        list.updateContent(); list.setVerticalPosition (0); repaint();
+        lastCur = -2;
+        timerCallback();
+    }
+    int getNumRows() override { return (int) rows.size(); }
+    void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
+    {
+        if (row < 0 || row >= (int) rows.size()) return;
+        const bool cur = rows[(size_t) row] == proc.getCurrentProgram();
+        if (cur) { g.setColour (lnf.skin->accent.withAlpha (0.28f)); g.fillRoundedRectangle (2.0f, 1.0f, (float) w - 4.0f, (float) h - 2.0f, 4.0f); }
+        g.setColour (cur ? Colours::white : Colour (0xffc9c0bd)); g.setFont (Font (FontOptions (14.5f)));
+        g.drawFittedText (factoryPresets()[(size_t) rows[(size_t) row]].name, 7, 0, w - 10, h, Justification::centredLeft, 1, 0.8f);
+    }
+    void listBoxItemClicked (int row, const MouseEvent&) override
+    {
+        if (row < 0 || row >= (int) rows.size()) return;
+        proc.loadPreset (rows[(size_t) row]);
+        list.repaint();
+        if (onLoaded) onLoaded();
+    }
+    String getTooltipForRow (int row) override
+    {
+        return row >= 0 && row < (int) rows.size() ? factoryPresets()[(size_t) rows[(size_t) row]].info() : String();
+    }
+    void timerCallback() override
+    {
+        const int cur = proc.getCurrentProgram();
+        if (cur == lastCur) return;
+        lastCur = cur;
+        for (int r = 0; r < (int) rows.size(); ++r) if (rows[(size_t) r] == cur) { list.scrollToEnsureRowIsOnscreen (r); break; }
+        list.repaint();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    ListBox list;
+    std::vector<int> cats, rows;
+    int catPos = 0, lastCur = -2;
 };
 
 //==============================================================================
@@ -1228,34 +1165,208 @@ private:
     int lastLab = -1;
 };
 
-// left switch: BREED LAB <-> FAMILY TREE
-class LabSwitch : public Component, public SettableTooltipClient
+// ---------------- modules ("10 in 1"): each tab of the bottom row opens one KILLA plugin inside KEYS KILLA ----------------
+static void setParamFromUi (KeysKillaProcessor& p, const char* id, float plain)
+{
+    if (auto* q = p.apvts.getParameter (id))
+    {
+        const float v = q->convertTo0to1 (plain);
+        if (std::abs (q->getValue() - v) < 1.0e-6f) return;
+        q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture();
+    }
+}
+
+// HALF = Voodoo Killa: 12 categories x 8 time effects on everything KEYS KILLA plays
+class HalfPanel : public Component, private Timer
 {
 public:
-    explicit LabSwitch (KKLookAndFeel& l) : lnf (l) { setTooltip ("Switch between BREED LAB (2 parents -> 6 sounds) and FAMILY TREE (up to 4 sounds -> new sounds or melody loops)."); }
-    std::function<void (bool)> onSwitch;
-    bool tree = false;
+    HalfPanel (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        viewCat = current() / vk::kPresetsPerCategory;
+        onBtn.setClickingTogglesState (false);
+        onBtn.onClick = [this] { setParamFromUi (proc, ID::halfOn, isOn() ? 0.0f : 1.0f); refresh(); };
+        onBtn.setTooltip ("HALF on / off. It works on everything KEYS KILLA plays - your notes and the FAMILY TREE loops.");
+        addAndMakeVisible (onBtn);
+        const auto& cats = proc.halfLibrary().getCategories();
+        for (int c = 0; c < (int) cats.size(); ++c)
+        {
+            auto b = std::make_unique<HotButton> (lnf, cats[(size_t) c].name);
+            b->setTooltip (cats[(size_t) c].desc);
+            b->onClick = [this, c] { viewCat = c; refresh(); };
+            addAndMakeVisible (*b); catBtns.push_back (std::move (b));
+        }
+        const char* knobIds[] { ID::halfAmount, ID::halfMix };
+        const char* knobTips[] { "AMOUNT: how hard the effect hits", "MIX: dry <-> HALF" };
+        for (int k = 0; k < 2; ++k)
+        {
+            auto& kn = knobs[(size_t) k];
+            kn.setSliderStyle (Slider::RotaryHorizontalVerticalDrag); kn.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+            kn.setPopupDisplayEnabled (true, true, nullptr); kn.setTooltip (knobTips[k]);
+            auto* prm = proc.apvts.getParameter (knobIds[k]);
+            kn.setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
+            atts.push_back (std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, knobIds[k], kn));
+            addAndMakeVisible (kn);
+        }
+        for (int i = 0; i < Choices::halfSpeeds.size(); ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, Choices::halfSpeeds[i]);
+            b->setTooltip ("SPEED: how fast the effect runs (1x = as designed, 1/2x = twice as long)");
+            b->onClick = [this, i] { setParamFromUi (proc, ID::halfSpeed, (float) i); refresh(); };
+            addAndMakeVisible (*b); speedBtns.push_back (std::move (b));
+        }
+        static const char* trigNames[] { "ALWAYS", "EVERY 4", "EVERY 8", "LAST BEAT" };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, trigNames[i]);
+            b->setTooltip ("WHEN: always, once every 4 or 8 bars (like a producer's fill), or on the last beat of each bar");
+            b->onClick = [this, i] { setParamFromUi (proc, ID::halfTrig, (float) i); refresh(); };
+            addAndMakeVisible (*b); trigBtns.push_back (std::move (b));
+        }
+        refresh();
+        startTimerHz (10);
+    }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        for (int k = 0; k < 2; ++k)
+        g.fillAll (Colour (0xff0a0707));
+        g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
+        g.setColour (Colours::white); g.setFont (serif (38.0f, true, 0.3f));
+        g.drawText ("HALF", 24, 10, 160, 48, Justification::centredLeft);
+        g.setColour (Colour (0xff9c9494)); g.setFont (serif (14.0f, false, 0.2f));
+        g.drawText ("VOODOO KILLA ENGINE  -  HALFTIME, TAPE STOP, GLITCH, BACKMASK ... ON EVERYTHING KEYS KILLA PLAYS", 200, 22, 900, 24, Justification::centredLeft);
+        const auto& f = proc.halfLibrary().getFactory();
+        for (int c = 0; c < vk::kPresetsPerCategory; ++c)
         {
-            auto r = half (k);
-            const bool on = (k == 1) == tree;
+            const int idx = viewCat * vk::kPresetsPerCategory + c;
+            if (idx >= (int) f.size()) break;
+            const auto r = card (c).toFloat();
+            const bool sel = idx == current();
+            g.setColour (Colour (sel ? 0xff2a0d0d : 0xff141010)); g.fillRoundedRectangle (r, 8);
+            if (sel) drawGlowFrame (g, r, isOn() ? s.accent : s.accent.withAlpha (0.45f), 8);
+            else { g.setColour (Colour (0xff3a2e2e)); g.drawRoundedRectangle (r, 8, 1.2f); }
+            g.setColour (sel ? Colours::white : Colour (0xffe0d8d6)); g.setFont (serif (21.0f, false, 0.12f));
+            g.drawText (f[(size_t) idx].name, r.reduced (16, 10).withHeight (30), Justification::centredLeft);
+            g.setColour (Colour (0xff9c9494)); g.setFont (serif (13.5f, false, 0.05f));
+            g.drawFittedText (f[(size_t) idx].desc, r.reduced (16, 10).withTrimmedTop (34).toNearestInt(), Justification::topLeft, 3);
+        }
+        g.setColour (Colour (0xffb9b0ac)); g.setFont (serif (14.0f, false, 0.25f));
+        const int by = getHeight() - 118;
+        g.drawText ("AMOUNT", knobs[0].getBounds().withY (by + 92).withHeight (18), Justification::centred);
+        g.drawText ("MIX", knobs[1].getBounds().withY (by + 92).withHeight (18), Justification::centred);
+        g.drawText ("SPEED", speedBtns.front()->getX(), by + 4, 200, 18, Justification::centredLeft);
+        g.drawText ("WHEN", trigBtns.front()->getX(), by + 4, 200, 18, Justification::centredLeft);
+        g.setColour (Colour (0xff9c9494)); g.setFont (serif (13.0f, false, 0.25f));
+        g.drawText ("CLICK A CARD = HALF ON.  SYNCED TO THE FL STUDIO TEMPO, FREE-RUNNING WHEN FL IS STOPPED.",
+                    Rectangle<int> (20, getHeight() - 24, getWidth() - 40, 18), Justification::centredRight);
+    }
+    void resized() override
+    {
+        const int w = getWidth(), h = getHeight();
+        onBtn.setBounds (w - 170, 14, 146, 42);
+        const int n = (int) catBtns.size(), perRow = (n + 1) / 2, cw = perRow > 0 ? (w - 40 - (perRow - 1) * 6) / perRow : 0;
+        for (int c = 0; c < n; ++c) catBtns[(size_t) c]->setBounds (20 + (c % perRow) * (cw + 6), 64 + (c / perRow) * 36, cw, 34);
+        const int by = h - 118;
+        knobs[0].setBounds (30, by + 4, 90, 88); knobs[1].setBounds (140, by + 4, 90, 88);
+        for (int i = 0; i < (int) speedBtns.size(); ++i) speedBtns[(size_t) i]->setBounds (290 + i * 82, by + 28, 78, 40);
+        for (int i = 0; i < (int) trigBtns.size(); ++i) trigBtns[(size_t) i]->setBounds (740 + i * 124, by + 28, 120, 40);
+    }
+    void refresh()
+    {
+        viewCat = jlimit (0, std::max (0, (int) catBtns.size() - 1), viewCat);
+        onBtn.setButtonText (isOn() ? "HALF  ON" : "HALF  OFF");
+        onBtn.selected = isOn();
+        for (int c = 0; c < (int) catBtns.size(); ++c) { catBtns[(size_t) c]->selected = c == viewCat; catBtns[(size_t) c]->repaint(); }
+        const int sp = (int) proc.apvts.getRawParameterValue (ID::halfSpeed)->load(), tr = (int) proc.apvts.getRawParameterValue (ID::halfTrig)->load();
+        for (int i = 0; i < (int) speedBtns.size(); ++i) { speedBtns[(size_t) i]->selected = i == sp; speedBtns[(size_t) i]->repaint(); }
+        for (int i = 0; i < (int) trigBtns.size(); ++i) { trigBtns[(size_t) i]->selected = i == tr; trigBtns[(size_t) i]->repaint(); }
+        lastState = state();
+        repaint();
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        for (int c = 0; c < vk::kPresetsPerCategory; ++c)
+            if (card (c).contains (e.getPosition()))
+            {
+                const int idx = viewCat * vk::kPresetsPerCategory + c;
+                if (idx == current() && isOn()) setParamFromUi (proc, ID::halfOn, 0.0f);   // click the lit card again = off
+                else { setParamFromUi (proc, ID::halfPreset, (float) idx); setParamFromUi (proc, ID::halfOn, 1.0f); }
+                refresh(); return;
+            }
+    }
+private:
+    Rectangle<int> card (int c) const
+    {
+        const int w = getWidth(), cw = (w - 40 - 3 * 14) / 4, chh = (getHeight() - 118 - 148 - 14) / 2;
+        return { 20 + (c % 4) * (cw + 14), 148 + (c / 4) * (chh + 12), cw, chh };
+    }
+    int current() const { return (int) proc.apvts.getRawParameterValue (ID::halfPreset)->load(); }
+    bool isOn() const { return proc.apvts.getRawParameterValue (ID::halfOn)->load() > 0.5f; }
+    int state() const { return current() * 1000 + (isOn() ? 500 : 0) + (int) proc.apvts.getRawParameterValue (ID::halfSpeed)->load() * 10
+                               + (int) proc.apvts.getRawParameterValue (ID::halfTrig)->load(); }
+    void timerCallback() override { if (isVisible() && state() != lastState) refresh(); }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton onBtn { lnf, "HALF" };
+    std::vector<std::unique_ptr<HotButton>> catBtns, speedBtns, trigBtns;
+    std::array<Slider, 2> knobs;
+    std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> atts;
+    int viewCat = 0, lastState = -1;
+};
+
+// the modules that are still being moved in from the other KILLA plugins
+class ModulePlaceholder : public Component
+{
+public:
+    ModulePlaceholder (KKLookAndFeel& l, String t, String d) : lnf (l), title (std::move (t)), desc (std::move (d)) {}
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        g.fillAll (Colour (0xff0a0707));
+        g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
+        auto r = getLocalBounds().reduced (40);
+        g.setColour (Colours::white); g.setFont (serif (54.0f, true, 0.3f));
+        g.drawText (title, r.removeFromTop (getHeight() / 2 - 40).withTrimmedTop (60), Justification::centredBottom);
+        g.setColour (Colour (0xffb9b0ac)); g.setFont (serif (18.0f, false, 0.12f));
+        g.drawFittedText (desc, r.removeFromTop (70), Justification::centred, 3);
+        g.setColour (s.accent); g.setFont (serif (16.0f, false, 0.3f));
+        g.drawText ("COMING IN THE NEXT TEST VERSION", r.removeFromTop (40), Justification::centred);
+    }
+private:
+    KKLookAndFeel& lnf;
+    String title, desc;
+};
+
+// left switch: BREED LAB / FAMILY TREE / PARAMS (-1 = a module of the bottom row is open)
+class LabSwitch : public Component, public SettableTooltipClient
+{
+public:
+    explicit LabSwitch (KKLookAndFeel& l) : lnf (l)
+    {
+        setTooltip ("BREED LAB: 2 parents -> 6 sounds.  FAMILY TREE: up to 4 sounds -> new sounds or melody loops.  PARAMS: every parameter of the sound.");
+    }
+    std::function<void (int)> onSwitch;
+    int sel = 0;
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PARAMS" };
+        for (int k = 0; k < 3; ++k)
+        {
+            auto r = part (k);
+            const bool on = k == sel;
             g.setColour (Colour (on ? 0xee2a0d0d : 0xcc0e0a0a)); g.fillRoundedRectangle (r, 6);
             if (on) drawGlowFrame (g, r, s.accent, 6);
             else { g.setColour (Colour (0xff4a3c3c)); g.drawRoundedRectangle (r, 6, 1.2f); }
             g.setColour (on ? Colours::white : Colour (0xffb9b0ac)); g.setFont (serif (15.0f, false, 0.2f));
-            g.drawFittedText (k == 0 ? "BREED\nLAB" : "FAMILY\nTREE", r.toNearestInt(), Justification::centred, 2);
+            g.drawFittedText (names[k], r.toNearestInt(), Justification::centred, 2);
         }
     }
     void mouseUp (const MouseEvent& e) override
     {
-        const bool t = half (1).contains (e.position);
-        if (onSwitch) onSwitch (t);
+        for (int k = 0; k < 3; ++k)
+            if (part (k).contains (e.position) && onSwitch) { onSwitch (k); return; }
     }
 private:
-    Rectangle<float> half (int k) const { const float h = ((float) getHeight() - 10.0f) * 0.5f; return { 3.0f, 3.0f + (float) k * (h + 4.0f), (float) getWidth() - 6.0f, h }; }
+    Rectangle<float> part (int k) const { const float h = ((float) getHeight() - 14.0f) / 3.0f; return { 3.0f, 3.0f + (float) k * (h + 4.0f), (float) getWidth() - 6.0f, h }; }
     KKLookAndFeel& lnf;
 };
 
@@ -1264,7 +1375,7 @@ class MainPage : public Component, private Timer
 {
 public:
     explicit MainPage (KeysKillaProcessor& p)
-        : proc (p), parentA (p, lnf, 0), parentB (p, lnf, 1), breedBtn (lnf), wildRail (p, lnf),
+        : proc (p), parentA (p, lnf, 0), parentB (p, lnf, 1), breedBtn (lnf), wildRail (p, lnf), soundList (p, lnf),
           pitchWheel (lnf), modWheel (lnf), meter (lnf), keyboard (p, lnf)
     {
         settings = openSettings();
@@ -1343,13 +1454,19 @@ public:
             mutateBtns.push_back (std::move (b));
         }
         treeBtn.onClick = [this] { openTab (tabTree); }; treeBtn.setTooltip ("FAMILY TREE: breed up to 4 sounds into new sounds or melody loops");
-        labSwitch.onSwitch = [this] (bool tree) { if (tree != (openTabIndex == tabTree && isPanelVisible())) openTab (tabTree); };
+        labSwitch.onSwitch = [this] (int k)
+        {
+            if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); }
+            else { const int t = k == 1 ? tabTree : tabParams; if (! (openTabIndex == t && isPanelVisible())) openTab (t); }
+        };
         addAndMakeVisible (labSwitch);
         undoBtn.onClick = [this] { proc.undo(); refreshState(); }; undoBtn.setTooltip ("UNDO the last change of the sound");
         addAndMakeVisible (treeBtn); addAndMakeVisible (undoBtn);
 
         // ---- WILD rail + FUTURE / ALIVE / TIME
-        addAndMakeVisible (wildRail);
+        addChildComponent (wildRail);   // v0.14: the WILD rail is gone from the main page (BREED keeps its last setting)
+        soundList.onLoaded = [this] { refreshState(); };
+        addAndMakeVisible (soundList);
         const char* sideIds[] { ID::future, ID::alive, ID::timeM };
         const char* sideTips[] { "FUTURE: ORIGINAL -> HYBRID -> UNKNOWN. Turns the sound into a new hybrid (same seed = same result).",
                                  "ALIVE 0-5: every note a little different, like a real player.",
@@ -1365,13 +1482,14 @@ public:
             sideKnobs.push_back (std::move (k));
         }
 
-        // ---- tabs
-        static const char* tabNames[] { "", "", "", "", "", "ARP", "KILLA" };
-        static const char* tabTips[] { "BROWSER: all sounds by category, subcategory, era, mood and more",
-                                       "SOUND: engines A + B, filter and envelopes", "MOD: LFOs, modulation matrix, envelope 3",
-                                       "MOVEMENT: chord, arp, glide, perform controls", "FX: effect rack (drag to reorder)",
-                                       "ARP: 16-step arpeggiator - move the notes up / down, make them longer, trap scale runs",
-                                       "KILLA: ghost, bend, circuit, body swap, tape, future" };
+        // ---- module row: every tab opens one KILLA plugin inside KEYS KILLA ("10 in 1")
+        static const char* tabNames[] { "808", "SNARE", "CLAP", "ROLLS", "HALF", "EFFECTOR", "DIGGA" };
+        static const char* tabTips[] { "808: 808 Killa - slides, distortion, the trap 808 (coming)",
+                                       "SNARE: breed trap snares (coming)", "CLAP: breed trap claps (coming)",
+                                       "ROLLS: hi-hat rolls generator - triplets, 1/32, 1/64 (coming)",
+                                       "HALF: Voodoo Killa - halftime, tape stop, glitch, backmask on everything KEYS KILLA plays",
+                                       "EFFECTOR: Effector Killa - 14 effects in 8 slots (coming)",
+                                       "DIGGA: Digga Killa - sampling and chopping (coming)" };
         for (int i = 0; i < numTabs; ++i)
         {
             auto b = std::make_unique<HotButton> (lnf, tabNames[i]);
@@ -1452,8 +1570,9 @@ public:
     {
         if (v >= 1 && v <= 8) { ensureAdvanced(); advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
         if (v == 9) openTab (tabBrowser);
-        if (v == 10) openTab (tabMovement);
-        if (v == 11) openTab (tabArp);
+        if (v == 10) openTab (tabParams);
+        if (v == 11) openTab (tabHalf);
+        if (v == 15) openTab (tab808);
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 13 || v == 14)   // FAMILY TREE with 4 sounds: 13 = SOUND results, 14 = LOOP results
         {
@@ -1491,6 +1610,7 @@ public:
         treeBtn.setBounds (R (1300, 528, 1374, 604)); undoBtn.setBounds (R (1379, 528, 1442, 604));
 
         wildRail.setBounds (R (1466, 118, 1608, 392));
+        soundList.setBounds (R (1458, 104, 1614, 398));
         sideKnobs[0]->place ({ 1532, 447 }, 33, 43);
         sideKnobs[1]->place ({ 1490, 552 }, 20, 28);
         sideKnobs[2]->place ({ 1575, 552 }, 20, 28);
@@ -1511,16 +1631,39 @@ public:
         keyboard.setKeyWidth (1440.0f / 40.0f);
 
         const auto panelArea = R (10, 8, 1662, 612);
-        if (advanced) advanced->setBounds (panelArea);
+        if (advanced) advanced->setBounds (R (150, 8, 1662, 612));   // the left switch stays visible
         if (browser) browser->setBounds (panelArea);
-        if (playPanel) playPanel->setBounds (panelArea);
-        if (arpPanel) arpPanel->setBounds (panelArea);
         if (treePanel) treePanel->setBounds (R (150, 96, 1662, 612));
-        labSwitch.setBounds (R (16, 110, 138, 290));
+        for (auto& m : modules) if (m) m->setBounds (R (150, 96, 1662, 612));
+        labSwitch.setBounds (R (16, 108, 138, 372));
     }
 
 private:
-    enum { tabBrowser, tabSound, tabMod, tabMovement, tabFx, tabArp, tabKilla, numTabs, tabSettings = 100, tabTree = 101 };
+    enum { tab808, tabSnare, tabClap, tabRolls, tabHalf, tabEffector, tabDigga, numTabs, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102 };
+    Component* module (int t)
+    {
+        auto& m = modules[(size_t) t];
+        if (! m)
+        {
+            static const char* titles[] { "808", "SNARE", "CLAP", "ROLLS", "HALF", "EFFECTOR", "DIGGA" };
+            static const char* descs[] { "808 Killa moves in here: tuned 808s, slides, distortion and the punch of the 808 Killa plugin.",
+                                         "Trap snares you can BREED: crack, body, room, pitch - two parents, six new snares.",
+                                         "Trap claps you can BREED: layers, spread, room - two parents, six new claps.",
+                                         "Hi-hat rolls in one click: triplets, 1/32 and 1/64 rolls, pitch ramps - dragged into FL as MIDI.",
+                                         "", "Effector Killa moves in here: 14 effects in 8 slots.",
+                                         "Digga Killa moves in here: sample, chop and flip right inside KEYS KILLA." };
+            if (t == tabHalf) m = std::make_unique<HalfPanel> (proc, lnf);
+            else m = std::make_unique<ModulePlaceholder> (lnf, titles[t], descs[t]);
+            addChildComponent (*m); noFocus (*m); resized();
+        }
+        return m.get();
+    }
+    std::vector<Component*> panels() const
+    {
+        std::vector<Component*> v { advanced.get(), browser.get(), treePanel.get() };
+        for (auto& m : modules) v.push_back (m.get());
+        return v;
+    }
 
     // ---------------- tab panels (created on first use -> fast editor open/close) ----------------
     void ensureAdvanced()
@@ -1546,8 +1689,7 @@ private:
     }
     void hidePanels()
     {
-        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get(), (Component*) treePanel.get() })
-            if (c != nullptr) c->setVisible (false);
+        for (auto* c : panels()) if (c != nullptr) c->setVisible (false);
     }
     void openTab (int t)
     {
@@ -1560,17 +1702,8 @@ private:
             switch (t)
             {
                 case tabBrowser: ensureBrowser(); browser->open (proc.uiCat, proc.uiEra, false); break;
-                case tabSound:  ensureAdvanced(); advanced->showTab (0); advanced->setVisible (true); break;
-                case tabMod:    ensureAdvanced(); advanced->showTab (3); advanced->setVisible (true); break;
-                case tabFx:     ensureAdvanced(); advanced->showTab (4); advanced->setVisible (true); break;
-                case tabKilla:  ensureAdvanced(); advanced->showTab (5); advanced->setVisible (true); break;
+                case tabParams: ensureAdvanced(); advanced->showTab (0); advanced->setVisible (true); break;
                 case tabSettings: ensureAdvanced(); advanced->showTab (7); advanced->setVisible (true); break;
-                case tabMovement:
-                    if (! playPanel) { playPanel = std::make_unique<PlayPanel> (proc, lnf); addChildComponent (*playPanel); noFocus (*playPanel); resized(); }
-                    playPanel->setVisible (true); break;
-                case tabArp:
-                    if (! arpPanel) { arpPanel = std::make_unique<ArpPanel> (proc, lnf); addChildComponent (*arpPanel); noFocus (*arpPanel); resized(); }
-                    arpPanel->setVisible (true); break;
                 case tabTree:
                     if (! treePanel)
                     {
@@ -1581,24 +1714,26 @@ private:
                         addChildComponent (*treePanel); noFocus (*treePanel); resized();
                     }
                     treePanel->refresh(); treePanel->setVisible (true); break;
-                default: break;
+                default:
+                    if (t >= 0 && t < numTabs) module (t)->setVisible (true);
+                    break;
             }
-            for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get(), (Component*) treePanel.get() })
-                if (c != nullptr && c->isVisible()) c->toFront (false);
+            for (auto* c : panels()) if (c != nullptr && c->isVisible()) c->toFront (false);
+            labSwitch.toFront (false);
         }
         updateTabs();
     }
     bool isPanelVisible() const
     {
-        for (Component* c : { (Component*) advanced.get(), (Component*) browser.get(), (Component*) playPanel.get(), (Component*) arpPanel.get(), (Component*) treePanel.get() })
-            if (c != nullptr && c->isVisible()) return true;
+        for (auto* c : panels()) if (c != nullptr && c->isVisible()) return true;
         return false;
     }
     void updateTabs()
     {
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
-        if (labSwitch.tree != treeOn) { labSwitch.tree = treeOn; labSwitch.repaint(); }
+        const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabParams ? 2 : -1;
+        if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
         if (! treeOn && proc.loopPlaying()) proc.stopLoop();   // loops belong to the FAMILY TREE
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }
     }
@@ -1954,6 +2089,7 @@ private:
     std::vector<std::unique_ptr<HotButton>> mutateBtns, tabs;
     HotButton treeBtn { lnf }, undoBtn { lnf };
     WildRail wildRail;
+    SoundList soundList;
     std::vector<std::unique_ptr<ImageKnob>> macros, sideKnobs;
     std::vector<std::unique_ptr<MacroCaption>> captions;
     WheelSlider pitchWheel, modWheel;
@@ -1961,8 +2097,7 @@ private:
     KKKeyboard keyboard;
     std::unique_ptr<AdvancedPage> advanced;
     std::unique_ptr<PresetBrowser> browser;
-    std::unique_ptr<PlayPanel> playPanel;
-    std::unique_ptr<ArpPanel> arpPanel;
+    std::array<std::unique_ptr<Component>, 7> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
 

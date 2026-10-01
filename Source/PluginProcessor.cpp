@@ -21,15 +21,18 @@ constexpr int kChunk = 512;
     X(m1) X(m2) X(m3) X(m4) X(m5) X(m6) X(m7) X(m8) \
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
-    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps) X(master)
+    X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps) X(master) \
+    X(halfOn) X(halfPreset) X(halfAmount) X(halfSpeed) X(halfTrig) X(halfMix)
 
 // performance controls that never morph or get reset by presets
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
                                          ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos,
                                          ID::morphX, ID::morphY, ID::bendRange,
+                                         ID::halfOn, ID::halfPreset, ID::halfAmount, ID::halfSpeed, ID::halfTrig, ID::halfMix,
                                          ID::m1, ID::m2, ID::m3, ID::m4, ID::m5, ID::m6, ID::m7, ID::m8 };
 const juce::StringArray keepOnPresetLoad { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
-                                           ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos, ID::bendRange };
+                                           ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos, ID::bendRange,
+                                           ID::halfOn, ID::halfPreset, ID::halfAmount, ID::halfSpeed, ID::halfTrig, ID::halfMix };
 
 // chord shapes (semitones); -1 terminates. Type 8 (scale triad) is built from the scale.
 // trap voicings first: open minor (root, 5th, minor 10th), dark minor with octave, add9, sus, power, octaves, phrygian b2
@@ -128,7 +131,7 @@ bool KeysKillaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
         && layouts.getMainInputChannelSet().isDisabled();
 }
 
-void KeysKillaProcessor::prepareToPlay (double sampleRate, int)
+void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
     synth.prepare ((float) sampleRate);
@@ -142,6 +145,9 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int)
     midiPitch = midiMod = midiAT = 0;
     lfoPhase = lfo2Phase = sh1 = sh2 = lastPh1 = lastPh2 = 0; freeBeat = 0;
     kk::WavetableBank::get();
+    half->prepare (sampleRate, std::max (8192, samplesPerBlock));
+    halfLoaded = -1; halfFade = 0;
+    halfDryL.assign ((size_t) std::max (8192, samplesPerBlock), 0.0f); halfDryR = halfDryL;
 }
 
 float KeysKillaProcessor::value (int i) const
@@ -351,7 +357,7 @@ void KeysKillaProcessor::processMidi (const juce::MidiBuffer& in, juce::MidiBuff
 {
     const auto& I = *ix;
     const bool chord = raw[(size_t) I.chord]->load() > 0.5f;
-    const bool arp   = raw[(size_t) I.arp]->load() > 0.5f;
+    const bool arp   = false;   // v0.14: ARP removed - the FAMILY TREE loops replace it
     const bool lock  = raw[(size_t) I.keyLock]->load() > 0.5f;
     const int  ctype = (int) raw[(size_t) I.chordType]->load();
     const float strumSec = raw[(size_t) I.strum]->load();
@@ -573,7 +579,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const double beatPos = hostPlaying ? ppq : freeBeat;
     freeBeat = beatPos + bps * n;
 
-    const bool chord = raw[(size_t) I.chord]->load() > 0.5f, arp = raw[(size_t) I.arp]->load() > 0.5f;
+    const bool chord = raw[(size_t) I.chord]->load() > 0.5f, arp = false;   // ARP removed (v0.14)
     const bool lock = raw[(size_t) I.keyLock]->load() > 0.5f;
     if (chord != lastChord || arp != lastArp || lock != lastKeyLock)
     {
@@ -661,11 +667,70 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     while (midiIt != processedMidi.cend()) { handleMidi ((*midiIt).getMessage()); ++midiIt; }
     sampleClock += n;
 
+    if (raw[(size_t) I.halfOn]->load() > 0.5f || halfFade > 0.0f)
+    {
+        processHalf (buffer, n, bpm, ppq, hostPlaying);
+        peakL = buffer.getMagnitude (0, 0, n);
+        peakR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : peakL;
+    }
+
     meterL = std::max (peakL, meterL.load()); meterR = std::max (peakR, meterR.load());
     if (fxPtr->peakPre > 1.0f) overload = true;
 
     std::array<bool, 128> act; synth.activeNotes (act);
     for (size_t i = 0; i < 128; ++i) playing[i].store (act[i], std::memory_order_relaxed);
+}
+
+//==============================================================================
+// HALF: the Voodoo Killa time engine (halftime, tape stop, glitch, backmask ...) on KEYS KILLA's output.
+// Synced to the host while it plays, free-running clock when it is stopped (so it works while jamming).
+void KeysKillaProcessor::processHalf (juce::AudioBuffer<float>& buffer, int n, double bpm, double ppq, bool hostPlaying)
+{
+    const auto& I = *ix;
+    const bool on = raw[(size_t) I.halfOn]->load() > 0.5f;
+    const int idx = juce::jlimit (0, (int) halfLib->getFactory().size() - 1, (int) raw[(size_t) I.halfPreset]->load());
+    if (halfLib->getFactory().empty()) { halfFade = 0; return; }
+    if (idx != halfLoaded) { half->setSlotA (halfLib->getFactory()[(size_t) idx].data); halfLoaded = idx; }
+    if (halfDryL.size() < (size_t) n) return;   // host broke its maximum block size promise
+
+    vk::TransportInfo t;
+    t.bpm = bpm;
+    t.playing = hostPlaying; t.hasPpq = hostPlaying; t.ppq = ppq;
+    t.hostTransport = false;                 // stopped host = free clock, never a silent pass-through
+    vk::EngineControls c;
+    static constexpr float speeds[5] { 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+    static constexpr vk::TriggerMode trigs[4] { vk::TriggerMode::always, vk::TriggerMode::every4, vk::TriggerMode::every8, vk::TriggerMode::lastBeat };
+    c.amount = raw[(size_t) I.halfAmount]->load();
+    c.speed = speeds[juce::jlimit (0, 4, (int) raw[(size_t) I.halfSpeed]->load())];
+    c.mix = raw[(size_t) I.halfMix]->load();
+    c.trigger = trigs[juce::jlimit (0, 3, (int) raw[(size_t) I.halfTrig]->load())];
+    c.steps.fill (true);
+
+    const int chans = std::min (2, buffer.getNumChannels());
+    std::copy (buffer.getReadPointer (0), buffer.getReadPointer (0) + n, halfDryL.begin());
+    std::copy (buffer.getReadPointer (chans - 1), buffer.getReadPointer (chans - 1) + n, halfDryR.begin());
+    float* chs[2] { buffer.getWritePointer (0), buffer.getWritePointer (chans - 1) };
+    juce::AudioBuffer<float> io (chs, chans, n);
+    half->beginBlock (t, n);
+    half->processRange (io, 0, n, nullptr, c);
+
+    const float step = 1.0f / (0.02f * (float) sr);
+    for (int s = 0; s < n; ++s)
+    {
+        halfFade = on ? std::min (1.0f, halfFade + step) : std::max (0.0f, halfFade - step);
+        for (int ch = 0; ch < chans; ++ch)
+        {
+            const float dry = ch == 0 ? halfDryL[(size_t) s] : halfDryR[(size_t) s];
+            chs[ch][s] = std::clamp (dry + (chs[ch][s] - dry) * halfFade, -1.0f, 1.0f);
+        }
+    }
+    if (halfFade <= 0.0f) { half->reset(); halfLoaded = -1; }
+}
+
+juce::String KeysKillaProcessor::halfPresetName (int idx) const
+{
+    const auto& f = halfLib->getFactory();
+    return idx >= 0 && idx < (int) f.size() ? f[(size_t) idx].name : juce::String();
 }
 
 //==============================================================================

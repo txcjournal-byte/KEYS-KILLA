@@ -440,8 +440,7 @@ public:
               { new FxOrderList (proc, lnf) }, 2);
         page ("KILLA", { ghost, ghostOct, ghostRev, ghostBlur, bend, bendMode, bendSemis, tape, circuit, circRate, body, bodyMix,
                          future, alive, drift, seed }, {}, 0);
-        page ("PLAY", { mono, legato, glide, bendRange, bassMode, keyLock, key, scale, chord, chordType, strum,
-                        arp, arpRate, arpMode, arpOct, arpSwing, arpGate }, {}, 0);
+        page ("PLAY", { mono, legato, glide, bendRange, bassMode, keyLock, key, scale, chord, chordType, strum }, {}, 0);
         auto* settings = new SettingsView (proc, skinIndex);
         settings->onSkin = [this] (int s) { if (onSkin) onSkin (s); };
         settings->onSize = [this] (int s) { if (onSize) onSize (s); };
