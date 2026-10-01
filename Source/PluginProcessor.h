@@ -9,6 +9,7 @@
 #include "World.h"
 #include "Rolls.h"
 #include "DrumBoost.h"
+#include "PairLab.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -154,7 +155,9 @@ public:
     const kk::LoopGenes& currentLoop() const { return curLoop; }
     std::vector<kk::LoopNote> loopNotes (const Genome& g) const;
     juce::File exportLoopMidi (const Genome& g) const; // temp .mid for drag & drop into the host
-    juce::File exportSoundWav (int note = 60);          // DRAG TO DAW: the current sound as a one-shot WAV
+    juce::File exportSoundWav (int note = 60);
+    juce::AudioBuffer<float> renderSound (int note, int presetIndex);   // offline, 44.1 kHz
+    juce::String pairDice (int slot);          // DRAG TO DAW: the current sound as a one-shot WAV
     Genome currentGenome() const { return genomeFromCurrent(); }
     std::atomic<float> loopBeat { -1.0f };            // playhead in beats (UI), -1 = stopped
     std::atomic<double> lastBpm { 140.0 };
@@ -188,7 +191,20 @@ public:
     // DIGGA = Digga Killa (sampler). Drums never go through them.
     enum Module { modHalf, modEffector, modDigga, numModules };
     juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
-    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat };
+    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair };
+    // PAIR YOUR OWN: your sounds (WAV / Digga one-shots) -> BREED -> 6 children -> keys + loops
+    bool loadPairParent (int slot, const juce::File& f);
+    void clearPairParent (int slot);
+    int  pairFromDigga();                                       // Digga's one-shots fill the empty slots; returns how many
+    void pairBreed();
+    void selectPairKid (int i, bool audition);                  // the kid plays on the keys / in the loop
+    void togglePairLoop (int i);                                // a new melody loop with this kid (host tempo)
+    juce::File exportPairKid (int i) const;
+    juce::File exportPairLoop() const;
+    std::array<kk::PairPtr, kk::PairLab::maxParents> pairParents;
+    std::vector<kk::PairPtr> pairKids;
+    int pairSel = -1, pairFlavor = 0, pairLoopKid = -1;
+    std::atomic<int> pairVer { 0 };
     // DRUM BOOST (808 / SNARE-CLAP / HI-HAT): your drum WAV in, boosted WAV out
     bool loadDrum (int d, const juce::File& f);
     void clearDrum (int d);
@@ -242,6 +258,9 @@ private:
     void processModules (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& keysMidi, int n);
     void runModule (int m, juce::AudioBuffer<float>& buffer, int n, juce::MidiBuffer& midi);
     kk::WorldStage worldStage;
+    kk::PairLab pairPlayer;
+    std::array<juce::String, kk::PairLab::maxParents> pairFiles;
+    uint32_t pairSeed = 1;
     std::array<kk::DrumBoost, 3> drums;
     std::array<std::atomic<int>, 3> drumPad {};
     std::array<int, 3> drumSig { -1, -1, -1 }, drumPadOff { 0, 0, 0 }, drumPadNote { -1, -1, -1 };

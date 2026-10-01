@@ -269,6 +269,57 @@ static int unitTests()
         }
         f.deleteFile();
     }
+    // PAIR YOUR OWN: two of your sounds -> 6 children that play on the keys and in loops
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory);
+        auto make = [&] (const char* name, float hz, bool saw)
+        {
+            auto f = tmp.getChildFile (name);
+            juce::AudioBuffer<float> b (1, 44100 * 2);
+            float ph = 0;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                ph += hz / 44100.0f; ph -= std::floor (ph);
+                const float v = saw ? 2.0f * ph - 1.0f : std::sin (kk::twoPi * ph) + 0.3f * std::sin (kk::twoPi * ph * 3.0f);
+                b.setSample (0, i, 0.6f * v * std::exp (-(float) i / 30000.0f));
+            }
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 1, 24, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+            return f;
+        };
+        const auto fa = make ("kk_pair_a.wav", 261.63f, false), fb = make ("kk_pair_b.wav", 220.0f, true);
+        check (p.loadPairParent (0, fa) && p.loadPairParent (1, fb), "PAIR loads your WAVs");
+        check (p.pairParents[0]->pitched && p.pairParents[0]->rootNote == 60 && p.pairParents[1]->rootNote == 57, "PAIR detects their pitch (C5, A4)");
+        int ok = 0;
+        for (int fl = 0; fl < kk::numFlavors; ++fl)
+        {
+            p.pairFlavor = fl;
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            p.pairBreed();
+            const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
+            bool good = p.pairKids.size() == 6;
+            for (auto& k : p.pairKids)
+            {
+                float pk = 0; bool fin = true;
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < k->audio.getNumSamples(); ++i) { const float v = k->audio.getSample (c, i); fin &= std::isfinite (v); pk = std::max (pk, std::abs (v)); }
+                good &= fin && pk > 0.3f && pk < 0.95f && k->audio.getNumSamples() > 2000;
+            }
+            if (good) ++ok;
+            std::printf ("PAIR flavor %d: 6 children in %.0f ms, e.g. %s\n", fl, ms, p.pairKids.empty() ? "-" : p.pairKids[0]->method.toRawUTF8());
+        }
+        check (ok == kk::numFlavors, "PAIR breeds 6 finite, loud children in every flavour");
+        p.selectPairKid (0, false);
+        p.togglePairLoop (0);
+        juce::AudioBuffer<float> b (2, 512); float peak = 0;
+        for (int k = 0; k < 300; ++k) { juce::MidiBuffer m; p.processBlock (b, m); peak = std::max (peak, b.getMagnitude (0, 512)); }
+        check (peak > 0.05f && p.loopPlaying(), "PAIR loop plays the child");
+        const auto wav = p.exportPairKid (0), mid = p.exportPairLoop();
+        check (wav.existsAsFile() && mid.existsAsFile(), "PAIR drags out WAV and MIDI");
+        fa.deleteFile(); fb.deleteFile();
+    }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
     {
         KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);

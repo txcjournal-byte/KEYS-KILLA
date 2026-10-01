@@ -6,3 +6,7 @@
 juce::AudioProcessor* kkCreateVoodooKilla();     // HALF
 juce::AudioProcessor* kkCreateEffectorKilla();   // EFFECTOR
 juce::AudioProcessor* kkCreateDiggaKilla();      // DIGGA
+#include <memory>
+#include <vector>
+// PAIR YOUR OWN <- DIGGA: the one-shots (and KILL variations) Digga Killa cut from the sample
+std::vector<std::pair<juce::String, std::shared_ptr<const juce::AudioBuffer<float>>>> kkDiggaShots (juce::AudioProcessor* digga, double& rate, bool loopsToo);
