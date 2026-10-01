@@ -210,6 +210,7 @@ public:
     bool loadDiggaFile (const juce::File& f);
     std::shared_ptr<const kk::Digga::Sample> diggaSample() const { return digga.current(); }
     float diggaPlayhead() const { return digga.playhead(); }
+    int last808Note() const { return drums.last808Note.load(); }
     // drum sounds: factory kits (values for the module's parameters)
     struct DrumKit { juce::String name; std::vector<std::pair<juce::String, float>> values; };
     static const std::vector<DrumKit>& drumKits (int mode);

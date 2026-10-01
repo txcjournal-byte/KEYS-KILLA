@@ -153,6 +153,7 @@ namespace ID
     inline constexpr const char* b8Tune = "b8Tune";  inline constexpr const char* b8Decay = "b8Decay"; inline constexpr const char* b8Punch = "b8Punch";
     inline constexpr const char* b8Glide = "b8Glide"; inline constexpr const char* b8Tone = "b8Tone";  inline constexpr const char* b8Drive = "b8Drive";
     inline constexpr const char* b8Sat = "b8Sat";    inline constexpr const char* b8Clip = "b8Clip";  inline constexpr const char* b8Level = "b8Level";
+    inline constexpr const char* b8Click = "b8Click"; inline constexpr const char* b8Width = "b8Width";
     inline constexpr const char* snTune = "snTune";  inline constexpr const char* snBody = "snBody";  inline constexpr const char* snSnap = "snSnap";
     inline constexpr const char* snDecay = "snDecay"; inline constexpr const char* snTone = "snTone"; inline constexpr const char* snLevel = "snLevel";
     inline constexpr const char* clTune = "clTune";  inline constexpr const char* clSpread = "clSpread"; inline constexpr const char* clDecay = "clDecay";
@@ -169,7 +170,7 @@ namespace ID
     inline bool isModuleParam (const juce::String& id)
     {
         static const juce::StringArray ids { halfOn, halfPreset, halfAmount, halfSpeed, halfTrig, halfMix, playMode,
-            b8Tune, b8Decay, b8Punch, b8Glide, b8Tone, b8Drive, b8Sat, b8Clip, b8Level,
+            b8Tune, b8Decay, b8Punch, b8Glide, b8Tone, b8Drive, b8Sat, b8Clip, b8Level, b8Click, b8Width,
             snTune, snBody, snSnap, snDecay, snTone, snLevel, clTune, clSpread, clDecay, clTone, clWidth, clLevel,
             htTune, htDecay, htTone, htLevel, rlOn, rlStyle, rlSeed, rlBars, rlDensity, efxOn, efxPreset, efxBlend,
             "efxM1", "efxM2", "efxM3", "efxM4", "efxM5", dgMode, dgSlices, dgChop, dgPitch, dgRev, dgLevel };
@@ -469,6 +470,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     f (ID::b8Tune, "808 Tune", -12, 12, 0); f (ID::b8Decay, "808 Decay", 0.1f, 4.0f, 1.6f, 1.0f); f (ID::b8Punch, "808 Punch", 0, 1, 0.4f);
     f (ID::b8Glide, "808 Glide", 0, 0.5f, 0.08f); f (ID::b8Tone, "808 Tone", 0, 1, 0.25f); f (ID::b8Drive, "808 Drive", 0, 100, 30);
     c (ID::b8Sat, "808 Saturation", Choices::satModes, 1); f (ID::b8Clip, "808 Clip", 0, 12, 3); f (ID::b8Level, "808 Level", -24, 6, 0);
+    f (ID::b8Click, "808 Click", 0, 1, 0.3f); f (ID::b8Width, "808 Width", 0, 1, 0.3f);
     f (ID::snTune, "Snare Tune", -12, 12, 0); f (ID::snBody, "Snare Body", 0, 1, 0.5f); f (ID::snSnap, "Snare Snap", 0, 1, 0.6f);
     f (ID::snDecay, "Snare Decay", 0, 1, 0.4f); f (ID::snTone, "Snare Tone", 0, 1, 0.5f); f (ID::snLevel, "Snare Level", -24, 6, 0);
     f (ID::clTune, "Clap Tune", -12, 12, 0); f (ID::clSpread, "Clap Spread", 0, 1, 0.5f); f (ID::clDecay, "Clap Decay", 0, 1, 0.4f);

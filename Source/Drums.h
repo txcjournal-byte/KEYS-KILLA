@@ -15,7 +15,7 @@ enum DrumTarget { drum808, drumSnare, drumClap, drumHat, numDrums };
 
 struct DrumParams
 {
-    float b8Tune = 0, b8Decay = 1.6f, b8Punch = 0.4f, b8Glide = 0.08f, b8Tone = 0.25f, b8Drive = 30, b8Clip = 3, b8Level = 0;
+    float b8Tune = 0, b8Decay = 1.6f, b8Punch = 0.4f, b8Glide = 0.08f, b8Tone = 0.25f, b8Drive = 30, b8Clip = 3, b8Level = 0, b8Click = 0.3f, b8Width = 0.3f;
     int b8Sat = 1;
     float snTune = 0, snBody = 0.5f, snSnap = 0.6f, snDecay = 0.4f, snTone = 0.5f, snLevel = 0;
     float clTune = 0, clSpread = 0.5f, clDecay = 0.4f, clTone = 0.5f, clWidth = 0.5f, clLevel = 0;
@@ -35,13 +35,15 @@ public:
         k808.prepare (sampleRate, std::max (32, maxBlock));
         b8Buf.setSize (2, std::max (32, maxBlock));
         peFast = std::exp (-1.0f / (0.012f * sr));
+        widDelay.prepare ((int) (0.02f * sr) + 8);
+        widHp.setHz (300.0f, sr);
         held.reserve (128);
         reset();
     }
     void reset()
     {
         bass = {}; for (auto& v : snares) v = {}; for (auto& v : claps) v = {}; for (auto& v : hats) v = {};
-        held.clear(); k808.reset(); nEvents = 0;
+        held.clear(); k808.reset(); nEvents = 0; widDelay.clear(); widHp.reset();
     }
     int latency808() const { return k808.getLatencySamples(); }
 
@@ -86,13 +88,22 @@ public:
             kp.outputDb = p.b8Level; kp.focusDb = 2.0f + p.b8Drive * 0.03f;
             k808.process (b8Buf, 2, nullptr, kp);
             const float* ol = b8Buf.getReadPointer (0); const float* orr = b8Buf.getReadPointer (1);
-            for (int i = 0; i < n; ++i) { L[i] += ol[i]; R[i] += orr[i]; }
+            // WIDTH: only the grit above 300 Hz gets wide (a delayed copy as side - cancels in mono), the sub stays mono
+            const float wd = 0.009f * sr, wg = p.b8Width * 0.9f;
+            for (int i = 0; i < n; ++i)
+            {
+                const float m = 0.5f * (ol[i] + orr[i]);
+                widDelay.push (m - widHp.lp (m));
+                const float side = wg > 0.001f ? widDelay.read (wd) * wg : 0.0f;
+                L[i] += (ol[i] + side) * 0.85f; R[i] += (orr[i] - side) * 0.85f;   // headroom for the width
+            }
+            last808Note = bass.active ? bass.note : -1;
             b8Tail = any808 ? (int) (sr * 0.3f) : std::max (0, b8Tail - n);   // let the 808 DSP ring out, then sleep
         }
     }
 
 private:
-    struct Bass { bool active = false, release = false; float phase = 0, logF = 0, logTarget = 0, amp = 0, gain = 0, pe = 0, vel = 1; int note = -1, attack = 0; };
+    struct Bass { bool active = false, release = false; float phase = 0, logF = 0, logTarget = 0, amp = 0, gain = 0, pe = 0, vel = 1, click = 0, knock = 0, drift = 0; int note = -1, attack = 0; SvfState clickHp; };
     struct Snare { bool active = false; float p1 = 0, p2 = 0, pe = 0, body = 0, noise = 0, snap = 0, vel = 1, semi = 0; SvfState hp[2], lp[2]; };
     struct Clap { bool active = false; int t = 0; float vel = 1, semi = 0, tail = 0; SvfState bp[2]; };
     struct Hat { bool active = false; float env = 0, vel = 1, semi = 0; std::array<float, 6> ph {}; SvfState bp, hp; };
@@ -128,6 +139,7 @@ private:
         if (! bass.active) bass.phase = 0;
         bass.logF = target; bass.active = true; bass.release = false;
         bass.vel = 0.35f + 0.65f * vel; bass.pe = 1; bass.attack = (int) (sr * 0.0015f);
+        bass.click = 1; bass.knock = 0;                      // transient layer starts on the same sample as the sub (phase-locked)
         bass.gain = bass.amp;                                // retrigger from the current level: no click
         bass.amp = 1;
     }
@@ -143,8 +155,12 @@ private:
         curTune = p.b8Tune;
         const float glideT = std::max (0.004f, p.b8Glide);
         bass.logF += (bass.logTarget - bass.logF) * (1.0f - std::exp (-1.0f / (glideT * 0.35f * sr)));
-        bass.pe *= std::exp (-1.0f / (0.035f * sr));
-        const float f = std::exp2 (bass.logF) * (1.0f + p.b8Punch * 2.2f * bass.pe);
+        // punch: pitch envelope 2-35 ms (harder punch = faster, bigger drop - the "knock")
+        bass.pe *= std::exp (-1.0f / ((0.035f - 0.025f * p.b8Punch) * sr));
+        // analog drift: a slow +-3 cent wander so long 808s breathe
+        driftPh += 0.27f / sr; if (driftPh >= 1) driftPh -= 1;
+        const float drift = 1.0f + 0.0017f * std::sin (twoPi * driftPh) * std::sin (twoPi * driftPh * 0.37f + 1.3f);
+        const float f = std::exp2 (bass.logF) * (1.0f + p.b8Punch * 3.0f * bass.pe) * drift;
         bass.phase += f / sr; if (bass.phase >= 1) bass.phase -= 1;
         const float decay = std::max (0.08f, p.b8Decay);
         bass.amp *= std::exp (std::log (0.001f) / ((bass.release ? 0.045f : decay) * sr));
@@ -153,8 +169,18 @@ private:
         const float drv = 1.0f + p.b8Tone * 5.0f;
         float s = std::sin (twoPi * bass.phase);
         s = std::tanh (s * drv) / std::tanh (drv);
+        // CLICK: a short high-passed noise tick + a 1 kHz knock, on the very first sample of the note
+        float click = 0;
+        if (bass.click > 1.0e-4f && p.b8Click > 0.001f)
+        {
+            SvfCoef hc; hc.set (2500.0f, 1.0f, sr);
+            bass.clickHp.tick (hc, noise.bi());
+            bass.knock += 1000.0f / sr; if (bass.knock >= 1) bass.knock -= 1;
+            click = (bass.clickHp.hp * 0.9f + std::sin (twoPi * bass.knock) * 0.6f) * bass.click * p.b8Click;
+            bass.click *= std::exp (-1.0f / (0.004f * sr));
+        }
         if (bass.amp < 1.0e-4f) { bass.active = false; bass.amp = 0; }
-        return s * env * bass.vel * 0.7f;
+        return s * env * bass.vel * 0.7f + click * bass.vel * 0.5f;
     }
 
     // ---------------- snare ----------------
@@ -226,7 +252,12 @@ private:
     }
 
     float sr = 44100, curTune = 0;
-    float peFast = 0.9981f;
+    float peFast = 0.9981f, driftPh = 0;
+    DelayLine widDelay;
+    OnePole widHp;
+public:
+    std::atomic<int> last808Note { -1 };
+private:
     Bass bass;
     std::vector<int> held;
     std::array<Snare, 4> snares;

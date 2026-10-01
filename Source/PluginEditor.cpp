@@ -1438,7 +1438,9 @@ public:
             addKnob (ID::b8Tune, "TUNE", "Tune in semitones"); addKnob (ID::b8Decay, "DECAY", "How long the 808 rings");
             addKnob (ID::b8Punch, "PUNCH", "Pitch drop at the start: the knock"); addKnob (ID::b8Glide, "GLIDE", "Slide time: overlap two notes in FL and the 808 slides");
             addKnob (ID::b8Tone, "TONE", "Harmonics: clean sub -> gritty 808 that cuts through phone speakers");
-            addKnob (ID::b8Drive, "DRIVE", "808 Killa drive"); addKnob (ID::b8Clip, "CLIP", "808 Killa clipper"); addKnob (ID::b8Level, "LEVEL", "Output level");
+            addKnob (ID::b8Click, "CLICK", "Transient layer: a click on the first sample of the note (phase-locked with the sub)");
+            addKnob (ID::b8Drive, "DRIVE", "808 Killa drive - only on the mids / highs, the sub stays clean and mono"); addKnob (ID::b8Clip, "CLIP", "808 Killa soft clipper");
+            addKnob (ID::b8Width, "WIDTH", "Stereo only above 300 Hz - the sub stays mono"); addKnob (ID::b8Level, "LEVEL", "Output level");
             addChips (ID::b8Sat, "SATURATION", Choices::satModes, "808 Killa saturation: Tape (warm), Tube (punchy), Foldback (aggressive)");
         }
         else if (mode == KeysKillaProcessor::playSnare)
@@ -1486,14 +1488,22 @@ protected:
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (13.0f, false, 0.25f));
         g.drawText ("BREED = SIX NEW SOUNDS.  CLICK A CHILD TO LOAD IT.", 200, getHeight() - 36, getWidth() - 220, 18, Justification::centredLeft);
         if (mode == KeysKillaProcessor::play808)
+        {
             g.drawText ("SLIDES: OVERLAP TWO NOTES IN THE FL PIANO ROLL", getWidth() - 640, 312, 616, 18, Justification::centredRight);
+            const int nt = proc.last808Note();
+            const float tune = proc.apvts.getRawParameterValue (ID::b8Tune)->load();
+            g.setColour (Colours::white); g.setFont (serif (22.0f, false, 0.2f));
+            const String txt = nt >= 0 ? "NOTE  " + MidiMessage::getMidiNoteName (nt, true, true, 5) + (std::abs (tune) > 0.05f ? "  (" + String (tune, 1) + " st)" : String())
+                                       : String ("NOTE  -");
+            g.drawText (txt, getWidth() - 640, 280, 616, 26, Justification::centredRight);
+        }
     }
     void refreshPage() override
     {
         refreshKeysButton (keysBtn, mode, title);
         for (int i = 0; i < 6; ++i) { kidBtns[(size_t) i]->setEnabled (i < (int) kids.size()); kidBtns[(size_t) i]->selected = i == selKid; kidBtns[(size_t) i]->repaint(); }
     }
-    int extraSignature() override { return param (ID::playMode); }
+    int extraSignature() override { return param (ID::playMode) + (mode == KeysKillaProcessor::play808 ? (proc.last808Note() + 2) * 10 : 0); }
 private:
     static String titleOf (int m) { return m == KeysKillaProcessor::play808 ? "808" : m == KeysKillaProcessor::playSnare ? "SNARE" : "CLAP"; }
     static String subOf (int m)

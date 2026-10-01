@@ -24,7 +24,7 @@ constexpr int kChunk = 512;
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
     X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps) X(master) \
     X(halfOn) X(halfPreset) X(halfAmount) X(halfSpeed) X(halfTrig) X(halfMix) \
-    X(playMode) X(b8Tune) X(b8Decay) X(b8Punch) X(b8Glide) X(b8Tone) X(b8Drive) X(b8Sat) X(b8Clip) X(b8Level) \
+    X(playMode) X(b8Tune) X(b8Decay) X(b8Punch) X(b8Glide) X(b8Tone) X(b8Drive) X(b8Sat) X(b8Clip) X(b8Level) X(b8Click) X(b8Width) \
     X(snTune) X(snBody) X(snSnap) X(snDecay) X(snTone) X(snLevel) X(clTune) X(clSpread) X(clDecay) X(clTone) X(clWidth) X(clLevel) \
     X(htTune) X(htDecay) X(htTone) X(htLevel) X(rlOn) X(rlStyle) X(rlSeed) X(rlBars) X(rlDensity) X(efxOn) X(efxPreset) X(efxBlend) \
     X(dgMode) X(dgSlices) X(dgChop) X(dgPitch) X(dgRev) X(dgLevel)
@@ -829,7 +829,7 @@ void KeysKillaProcessor::processModules (juce::MidiBuffer&, juce::AudioBuffer<fl
 
     kk::DrumParams dp;
     dp.b8Tune = P (I.b8Tune); dp.b8Decay = P (I.b8Decay); dp.b8Punch = P (I.b8Punch); dp.b8Glide = P (I.b8Glide); dp.b8Tone = P (I.b8Tone);
-    dp.b8Drive = P (I.b8Drive); dp.b8Sat = (int) P (I.b8Sat); dp.b8Clip = P (I.b8Clip); dp.b8Level = P (I.b8Level);
+    dp.b8Drive = P (I.b8Drive); dp.b8Sat = (int) P (I.b8Sat); dp.b8Clip = P (I.b8Clip); dp.b8Level = P (I.b8Level); dp.b8Click = P (I.b8Click); dp.b8Width = P (I.b8Width);
     dp.snTune = P (I.snTune); dp.snBody = P (I.snBody); dp.snSnap = P (I.snSnap); dp.snDecay = P (I.snDecay); dp.snTone = P (I.snTone); dp.snLevel = P (I.snLevel);
     dp.clTune = P (I.clTune); dp.clSpread = P (I.clSpread); dp.clDecay = P (I.clDecay); dp.clTone = P (I.clTone); dp.clWidth = P (I.clWidth); dp.clLevel = P (I.clLevel);
     dp.htTune = P (I.htTune); dp.htDecay = P (I.htDecay); dp.htTone = P (I.htTone); dp.htLevel = P (I.htLevel);
@@ -1016,16 +1016,21 @@ void KeysKillaProcessor::applyDrumKit (const std::vector<std::pair<juce::String,
 const std::vector<KeysKillaProcessor::DrumKit>& KeysKillaProcessor::drumKits (int mode)
 {
     using V = std::vector<std::pair<juce::String, float>>;
-    auto b8 = [] (const char* n, float tune, float dec, float punch, float glide, float tone, float drive, float sat, float clip)
+    auto b8 = [] (const char* n, float tune, float dec, float punch, float glide, float tone, float drive, float sat, float clip, float click = 0.3f, float width = 0.3f)
     { return DrumKit { n, V { { ID::b8Tune, tune }, { ID::b8Decay, dec }, { ID::b8Punch, punch }, { ID::b8Glide, glide }, { ID::b8Tone, tone },
-                                { ID::b8Drive, drive }, { ID::b8Sat, sat }, { ID::b8Clip, clip } } }; };
+                                { ID::b8Drive, drive }, { ID::b8Sat, sat }, { ID::b8Clip, clip }, { ID::b8Click, click }, { ID::b8Width, width } } }; };
     auto sn = [] (const char* n, float tune, float body, float snap, float dec, float tone)
     { return DrumKit { n, V { { ID::snTune, tune }, { ID::snBody, body }, { ID::snSnap, snap }, { ID::snDecay, dec }, { ID::snTone, tone } } }; };
     auto cl = [] (const char* n, float tune, float spread, float dec, float tone, float width)
     { return DrumKit { n, V { { ID::clTune, tune }, { ID::clSpread, spread }, { ID::clDecay, dec }, { ID::clTone, tone }, { ID::clWidth, width } } }; };
     auto ht = [] (const char* n, float tune, float dec, float tone)
     { return DrumKit { n, V { { ID::htTune, tune }, { ID::htDecay, dec }, { ID::htTone, tone } } }; };
-    static const std::vector<DrumKit> k808 { b8 ("Classic Long", 0, 2.4f, 0.35f, 0.08f, 0.15f, 20, 0, 2), b8 ("Hard Punch", 0, 1.2f, 0.8f, 0.06f, 0.35f, 45, 1, 5),
+    static const std::vector<DrumKit> k808 {
+        // the five reference trap / drill 808s (punch = pitch drop, click = transient layer, width only above 300 Hz)
+        b8 ("Clean Drill Slide", 0, 2.6f, 0.35f, 0.28f, 0.2f, 25, 0, 3, 0.25f, 0.2f), b8 ("Rage Distorted 808", 0, 1.6f, 0.75f, 0.08f, 0.85f, 95, 2, 10, 0.5f, 0.6f),
+        b8 ("Plugg Short Punch", 0, 0.45f, 0.85f, 0.05f, 0.35f, 40, 1, 5, 0.6f, 0.25f), b8 ("Classic Atlanta Sub", 0, 2.2f, 0.4f, 0.1f, 0.12f, 18, 0, 2, 0.2f, 0.1f),
+        b8 ("Heavy Memphis Overdrive", -1, 1.9f, 0.55f, 0.12f, 0.6f, 70, 1, 7, 0.45f, 0.45f),
+        b8 ("Classic Long", 0, 2.4f, 0.35f, 0.08f, 0.15f, 20, 0, 2), b8 ("Hard Punch", 0, 1.2f, 0.8f, 0.06f, 0.35f, 45, 1, 5),
         b8 ("Distorted", 0, 1.8f, 0.5f, 0.1f, 0.6f, 80, 1, 8), b8 ("Fold Monster", 0, 1.5f, 0.45f, 0.08f, 0.5f, 70, 2, 6),
         b8 ("Smooth Sub", 0, 3.0f, 0.15f, 0.12f, 0.05f, 10, 0, 1), b8 ("Drill Slide", 0, 2.0f, 0.4f, 0.22f, 0.3f, 40, 1, 4),
         b8 ("Short Bounce", 0, 0.5f, 0.6f, 0.05f, 0.3f, 35, 1, 4), b8 ("Long Glide", -2, 3.5f, 0.3f, 0.35f, 0.2f, 25, 0, 3),
