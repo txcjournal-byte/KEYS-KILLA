@@ -1738,16 +1738,16 @@ public:
             b->onClick = [this, i] { proc.pairFlavor = i; repaint(); for (auto& x : flavorBtns) x->repaint(); };
             addAndMakeVisible (*b); flavorBtns.push_back (std::move (b));
         }
-        diceAll.setButtonText ("ROLL ALL"); diceAll.framed = true;
-        diceAll.setTooltip ("Dice: four random sounds fly into the slots - then BREED");
+        diceAll.setButtonText ("ROLL ALL 4"); diceAll.framed = true;
+        diceAll.setTooltip ("Dice: four random sounds from your HARVEST bank fly into the slots - then BREED");
         diceAll.onClick = [this] { for (int k = 0; k < kk::PairLab::maxParents; ++k) proc.pairDice (k); repaint(); };
         addAndMakeVisible (diceAll);
-        diggaBtn.setButtonText ("FROM DIGGA"); diggaBtn.framed = true;
-        diggaBtn.setTooltip ("Fill the empty slots with the one-shots DIGGA KILLA cut from your sample");
+        diggaBtn.setButtonText ("HARVEST DIGGA"); diggaBtn.framed = true;
+        diggaBtn.setTooltip ("Collect sounds from everything DIGGA KILLA cut (loops + one-shots)");
         diggaBtn.onClick = [this]
         {
-            const int n = proc.pairFromDigga();
-            if (n == 0) AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "PAIR YOUR OWN", "No free slot or no DIGGA one-shots yet.\nOpen DIGGA KILLA, drop a sample, then come back.");
+            if (proc.harvestFromDigga() == 0)
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "HARVEST", "DIGGA has nothing yet.\nOpen DIGGA KILLA, drop a sample or a song, then come back.");
             repaint();
         };
         addAndMakeVisible (diggaBtn);
@@ -1757,12 +1757,18 @@ public:
     ~PairPage() override { stopTimer(); }
 
     bool isInterestedInFileDrag (const StringArray& files) override { for (auto& f : files) if (isAudio (f)) return true; return false; }
-    void fileDragMove (const StringArray&, int x, int y) override { hoverSlot = slotAt ({ x, y }); repaint(); }
-    void fileDragExit (const StringArray&) override { hoverSlot = -1; repaint(); }
+    void fileDragMove (const StringArray&, int x, int y) override { hoverSlot = slotAt ({ x, y }); dropHover = hoverSlot < 0; repaint(); }
+    void fileDragExit (const StringArray&) override { hoverSlot = -1; dropHover = false; repaint(); }
     void filesDropped (const StringArray& files, int x, int y) override
     {
         int slot = slotAt ({ x, y });
         hoverSlot = -1;
+        if (slot < 0)   // anywhere else: HARVEST the file into the bank
+        {
+            for (auto& f : files) if (isAudio (f)) proc.harvestFile (File (f));
+            repaint();
+            return;
+        }
         for (auto& f : files)
         {
             if (! isAudio (f)) continue;
@@ -1779,6 +1785,44 @@ public:
         const auto& s = *lnf.skin;
         g.fillAll (Colour (0xff0a0707));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
+        // ---- HARVEST: drop zone + bank by character
+        {
+            const auto dz = dropZone().toFloat();
+            g.setColour (Colour (dropHover ? 0xff2a0d0d : 0xff120d0d)); g.fillRoundedRectangle (dz, 10);
+            Path d; d.addRoundedRectangle (dz.reduced (1), 10);
+            const float pat[] { 7.0f, 5.0f };
+            PathStrokeType (1.6f).createDashedStroke (d, d, pat, 2);
+            g.setColour (s.accent.withAlpha (dropHover ? 1.0f : 0.6f)); g.fillPath (d);
+            g.setColour (Colours::white); g.setFont (serif (20.0f, true, 0.2f));
+            g.drawText ("HARVEST", dz.withHeight (40).translated (0, 8).toNearestInt(), Justification::centred);
+            g.setColour (Colour (0xffc9c0bd)); g.setFont (serif (12.5f, false, 0.08f));
+            g.drawFittedText (proc.harvesting() ? "listening ..." : "drop a song, a sample,\na vinyl rip - KEYS KILLA\npulls the sounds out", dz.reduced (10).withTrimmedTop (42).withHeight (60).toNearestInt(), Justification::centred, 3);
+            for (int c = 0; c < kk::numCats; ++c)
+            {
+                const auto col = bankCol (c).toFloat();
+                g.setColour (Colour (0xff100c0c)); g.fillRoundedRectangle (col, 6);
+                g.setColour (Colour (0xff2e2424)); g.drawRoundedRectangle (col, 6, 1.0f);
+                g.setColour (s.accent); g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.08f));
+                g.drawText (kk::harvestCatShort (c), col.withHeight (20).toNearestInt(), Justification::centred);
+            }
+            int row[kk::numCats] {};
+            for (int i = 0; i < (int) proc.bank.size(); ++i)
+            {
+                const auto& it = proc.bank[(size_t) i];
+                if (row[it.cat] >= kk::Harvest::perCategory) continue;
+                const auto r = chip (it.cat, row[it.cat]++).toFloat();
+                g.setColour (i == armed ? s.accent.withAlpha (0.6f) : Colour (0xff221a1a)); g.fillRoundedRectangle (r, 4);
+                drawPeaks (g, r.reduced (3, 2).withWidth (r.getWidth() * 0.45f), it.sound->peaks, s.accent.withAlpha (0.8f));
+                g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (10.5f)));
+                g.drawText (it.sound->pitched && it.cat != kk::catDrum && it.cat != kk::catFx ? MidiMessage::getMidiNoteName (it.sound->rootNote, true, true, 5) : String (i + 1),
+                            r.withTrimmedLeft (r.getWidth() * 0.5f).toNearestInt(), Justification::centred);
+            }
+            if (proc.bank.empty())
+            {
+                g.setColour (Colour (0xff6a5c5c)); g.setFont (serif (13.0f, false, 0.1f));
+                g.drawFittedText ("your sound bank is empty - drop a song on HARVEST", bankArea().withTrimmedTop (60), Justification::centredTop, 2);
+            }
+        }
         // parents
         for (int k = 0; k < kk::PairLab::maxParents; ++k)
         {
@@ -1809,7 +1853,7 @@ public:
                 g.drawFittedText ("drop a WAV here\nor roll the dice", r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
-            drawPeaks (g, r.reduced (12, 26).withTrimmedBottom (8), p->peaks, s.accent.withAlpha (0.8f));
+            drawPeaks (g, r.reduced (12, 22).withTrimmedBottom (4).withTrimmedRight (30), p->peaks, s.accent.withAlpha (0.8f));
             g.setColour (Colours::white); g.setFont (serif (13.5f, false, 0.05f));
             g.drawText (p->name, r.reduced (12, 6).removeFromBottom (18).toNearestInt(), Justification::centredLeft);
             g.setColour (s.accent); g.setFont (serif (12.0f, false, 0.1f));
@@ -1819,16 +1863,16 @@ public:
         // the family line
         g.setColour (s.accent.withAlpha (0.45f));
         const auto bc = breedBtn.getBounds().toFloat();
-        const float joinY = (float) slot (0).getBottom() + 14.0f;
+        const float joinY = (float) slot (0).getBottom() + 4.0f;
         g.drawLine ((float) slot (0).getCentreX(), joinY, (float) slot (3).getCentreX(), joinY, 1.5f);
         for (int k = 0; k < 4; ++k) g.drawLine ((float) slot (k).getCentreX(), (float) slot (k).getBottom(), (float) slot (k).getCentreX(), joinY, 1.5f);
         g.drawLine (bc.getCentreX(), joinY, bc.getCentreX(), bc.getY() + 6, 1.5f);
-        const float busY = (float) kid (0).getY() - 12.0f;
+        const float busY = (float) kid (0).getY() - 2.0f;
         g.drawLine (bc.getCentreX(), bc.getBottom() - 6, bc.getCentreX(), busY, 1.5f);
         g.drawLine ((float) kid (0).getCentreX(), busY, (float) kid (5).getCentreX(), busY, 1.5f);
         for (int k = 0; k < 6; ++k) g.drawLine ((float) kid (k).getCentreX(), busY, (float) kid (k).getCentreX(), (float) kid (k).getY(), 1.5f);
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
-        g.drawText ("CHILDREN", flavorBtns.front()->getX(), flavorBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
+        g.drawText ("CHILDREN", flavorBtns.front()->getX(), flavorBtns.front()->getY() - 16, 200, 14, Justification::centredLeft);
         for (int i = 0; i < (int) flavorBtns.size(); ++i) { flavorBtns[(size_t) i]->selected = i == proc.pairFlavor; }
         // children
         for (int k = 0; k < 6; ++k)
@@ -1862,15 +1906,15 @@ public:
             g.drawText (looping ? "drag: MIDI" : "drag: WAV", r.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredRight);
         }
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
-        g.drawText ("CLICK A CHILD = PLAY IT ON THE KEYS.  LOOP = A NEW TRAP MELODY WITH IT.  DRAG A CHILD INTO FL = WAV (MIDI WHILE ITS LOOP PLAYS).",
+        g.drawText ("BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centred);
     }
     void resized() override
     {
-        breedBtn.setBounds (getWidth() / 2 - 62, 158, 124, 124);
-        for (int i = 0; i < (int) flavorBtns.size(); ++i) flavorBtns[(size_t) i]->setBounds (24 + i * 92, 210, 86, 32);
-        diggaBtn.setBounds (getWidth() - 220, 206, 196, 40);
-        diceAll.setBounds (getWidth() - 420, 206, 186, 40);
+        breedBtn.setBounds (getWidth() / 2 - 34, 282, 68, 68);
+        for (int i = 0; i < (int) flavorBtns.size(); ++i) flavorBtns[(size_t) i]->setBounds (14 + i * 84, 306, 80, 28);
+        diggaBtn.setBounds (24, 136, 210, 34);
+        diceAll.setBounds (getWidth() - 214, 304, 200, 32);
     }
     void mouseDown (const MouseEvent& e) override { downKid = kidAt (e.getPosition()); dragDone = false; }
     void mouseDrag (const MouseEvent& e) override
@@ -1881,12 +1925,30 @@ public:
         const auto f = looping ? proc.exportPairLoop() : proc.exportPairKid (downKid);
         if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
     }
+    int bankAt (Point<int> p) const
+    {
+        int row[kk::numCats] {};
+        for (int i = 0; i < (int) proc.bank.size(); ++i)
+        {
+            const int c = proc.bank[(size_t) i].cat;
+            if (row[c] >= kk::Harvest::perCategory) continue;
+            if (chip (c, row[c]++).contains (p)) return i;
+        }
+        return -1;
+    }
+    void mouseDoubleClick (const MouseEvent& e) override
+    {
+        if (const int b = bankAt (e.getPosition()); b >= 0) { proc.bankToPair (b); armed = -1; repaint(); }
+    }
     void mouseUp (const MouseEvent& e) override
     {
         if (dragDone) return;
         const auto pos = e.getPosition();
+        if (const int b = bankAt (pos); b >= 0) { armed = b; proc.auditionBank (b); repaint(); return; }
+        if (dropZone().contains (pos) && ! diggaBtn.getBounds().contains (pos)) { browseHarvest(); return; }
         for (int k = 0; k < kk::PairLab::maxParents; ++k)
         {
+            if (armed >= 0 && slot (k).contains (pos)) { proc.bankToPair (armed, k); armed = -1; repaint(); return; }
             if (proc.pairParents[(size_t) k] != nullptr && closeBox (k).contains (pos)) { proc.clearPairParent (k); repaint(); return; }
             if (diceBox (k).contains (pos)) { proc.pairDice (k); repaint(); return; }
             if (slot (k).contains (pos)) { browse (k); return; }
@@ -1899,10 +1961,15 @@ public:
     }
 private:
     static bool isAudio (const String& f) { return File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
-    Rectangle<int> slot (int k) const { const int w = (getWidth() - 40 - 3 * 14) / 4; return { 20 + k * (w + 14), 14, w, 128 }; }
+    // HARVEST bank on top, the pairing below
+    Rectangle<int> dropZone() const { return { 14, 10, 230, 168 }; }
+    Rectangle<int> bankArea() const { return { 258, 10, getWidth() - 272, 168 }; }
+    Rectangle<int> bankCol (int c) const { const auto b = bankArea(); const int w = (b.getWidth() - 7 * 6) / kk::numCats; return { b.getX() + c * (w + 6), b.getY(), w, b.getHeight() }; }
+    Rectangle<int> chip (int c, int row) const { const auto col = bankCol (c); return { col.getX() + 4, col.getY() + 22 + row * 18, col.getWidth() - 8, 16 }; }
+    Rectangle<int> slot (int k) const { const int w = (getWidth() - 28 - 3 * 12) / 4; return { 14 + k * (w + 12), 190, w, 88 }; }
     Rectangle<int> closeBox (int k) const { const auto r = slot (k); return { r.getRight() - 26, r.getY() + 4, 22, 18 }; }
-    Rectangle<int> diceBox (int k) const { const auto r = slot (k); return { r.getRight() - 40, r.getBottom() - 34, 30, 28 }; }
-    Rectangle<int> kid (int k) const { const int w = (getWidth() - 40 - 5 * 12) / 6; return { 20 + k * (w + 12), 304, w, getHeight() - 304 - 30 }; }
+    Rectangle<int> diceBox (int k) const { const auto r = slot (k); return { r.getRight() - 34, r.getBottom() - 30, 26, 24 }; }
+    Rectangle<int> kid (int k) const { const int w = (getWidth() - 28 - 5 * 10) / 6; return { 14 + k * (w + 10), 352, w, getHeight() - 352 - 24 }; }
     Rectangle<int> loopBox (int k) const { const auto r = kid (k); return { r.getX() + 10, r.getBottom() - 40, r.getWidth() - 20, 22 }; }
     int slotAt (Point<int> p) const { for (int k = 0; k < kk::PairLab::maxParents; ++k) if (slot (k).contains (p)) return k; return -1; }
     int kidAt (Point<int> p) const { for (int k = 0; k < 6; ++k) if (kid (k).contains (p) && ! loopBox (k).contains (p)) return k < (int) proc.pairKids.size() ? k : -1; return -1; }
@@ -1914,11 +1981,19 @@ private:
                               [safe = Component::SafePointer<PairPage> (this), k] (const FileChooser& fc)
                               { if (safe != nullptr && fc.getResult().existsAsFile()) { safe->proc.loadPairParent (k, fc.getResult()); safe->repaint(); } });
     }
+    void browseHarvest()
+    {
+        chooser = std::make_unique<FileChooser> ("HARVEST: a song or sample", File::getSpecialLocation (File::userMusicDirectory), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectMultipleItems,
+                              [safe = Component::SafePointer<PairPage> (this)] (const FileChooser& fc)
+                              { if (safe != nullptr) { for (auto& f : fc.getResults()) safe->proc.harvestFile (f); safe->repaint(); } });
+    }
     void timerCallback() override
     {
         if (! isVisible()) return;
+        if (proc.harvesting()) repaint (dropZone());
         if (breedBtn.flash > 0) { breedBtn.flash = std::max (0.0f, breedBtn.flash - 0.08f); breedBtn.repaint(); }
-        const int v = proc.pairVer.load() * 3 + (proc.loopPlaying() ? 1 : 0);
+        const int v = proc.pairVer.load() * 3 + (proc.loopPlaying() ? 1 : 0) + (int) proc.bank.size() * 7919;
         if (v != lastVer) { lastVer = v; repaint(); }
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
@@ -1926,7 +2001,8 @@ private:
     HotButton diggaBtn { lnf }, diceAll { lnf };
     std::vector<std::unique_ptr<HotButton>> flavorBtns;
     std::unique_ptr<FileChooser> chooser;
-    int hoverSlot = -1, downKid = -1, lastVer = -1;
+    int hoverSlot = -1, downKid = -1, lastVer = -1, armed = -1;
+    bool dropHover = false;
     bool dragDone = false;
 };
 
@@ -2003,7 +2079,7 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "VOODOO\nKILLA", "EFFECTOR\nKILLA", "DIGGA\nKILLA" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "HARVEST\n& PAIR", "VOODOO\nKILLA", "EFFECTOR\nKILLA", "DIGGA\nKILLA" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -2255,7 +2331,12 @@ public:
         if (v == 18) openTab (tabDigga);
         if (v == 19) openTab (tabSnare);
         if (v == 20) openTab (tabHalf);
-        if (v == 21) { proc.pairDice (0); proc.pairDice (1); proc.pairDice (2); proc.pairBreed(); proc.selectPairKid (1, false); openTab (tabPair); }
+        if (v == 21)
+        {
+            if (auto f = File::getSpecialLocation (File::tempDirectory).getChildFile ("kk_harvest_demo.wav"); f.existsAsFile())
+            { proc.harvestFile (f); while (proc.harvesting()) Thread::sleep (20); proc.moduleHousekeeping(); }
+            proc.pairDice (0); proc.pairDice (1); proc.pairDice (2); proc.pairBreed(); proc.selectPairKid (1, false); openTab (tabPair);
+        }
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 13 || v == 14)   // FAMILY TREE with 4 sounds: 13 = SOUND results, 14 = LOOP results
         {

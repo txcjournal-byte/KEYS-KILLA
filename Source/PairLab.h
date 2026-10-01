@@ -45,6 +45,21 @@ public:
         if (r->numChannels == 1) in.copyFrom (1, 0, in, 0, 0, len);
         return fromBuffer (in, r->sampleRate, rate, f.getFileNameWithoutExtension());
     }
+    // resample to the plugin rate (stereo), at most maxSec seconds
+    static juce::AudioBuffer<float> fromBufferRaw (const juce::AudioBuffer<float>& in, double srcRate, double rate, double maxSec)
+    {
+        juce::AudioBuffer<float> out;
+        if (in.getNumSamples() <= 0 || in.getNumChannels() <= 0) return out;
+        const double ratio = srcRate / rate;
+        const int len = std::min ((int) (rate * maxSec), std::max (1, (int) std::floor (in.getNumSamples() / ratio)));
+        out.setSize (2, len);
+        for (int c = 0; c < 2; ++c)
+        {
+            juce::LagrangeInterpolator li;
+            li.process (ratio, in.getReadPointer (std::min (c, in.getNumChannels() - 1)), out.getWritePointer (c), len, in.getNumSamples(), 0);
+        }
+        return out;
+    }
     static PairPtr fromBuffer (const juce::AudioBuffer<float>& in, double srcRate, double rate, const juce::String& name)
     {
         if (in.getNumSamples() <= 0 || in.getNumChannels() <= 0) return nullptr;

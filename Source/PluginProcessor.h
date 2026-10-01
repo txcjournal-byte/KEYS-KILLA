@@ -10,6 +10,7 @@
 #include "Rolls.h"
 #include "DrumBoost.h"
 #include "PairLab.h"
+#include "Harvest.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -205,6 +206,14 @@ public:
     std::vector<kk::PairPtr> pairKids;
     int pairSel = -1, pairFlavor = 0, pairLoopKid = -1;
     std::atomic<int> pairVer { 0 };
+    // HARVEST: sounds collected from your songs / samples (bank by character)
+    void harvestFile (const juce::File& f);                    // runs in the background
+    int  harvestFromDigga();                                    // DIGGA's loops + one-shots; returns how many sources
+    bool harvesting() const { return harvestJobs.load() > 0; }
+    void bankToPair (int bankIndex, int slot = -1);             // -1 = first free slot
+    void auditionBank (int bankIndex);
+    std::vector<kk::HarvestItem> bank;
+    juce::StringArray harvestedFrom;
     // DRUM BOOST (808 / SNARE-CLAP / HI-HAT): your drum WAV in, boosted WAV out
     bool loadDrum (int d, const juce::File& f);
     void clearDrum (int d);
@@ -259,6 +268,10 @@ private:
     void runModule (int m, juce::AudioBuffer<float>& buffer, int n, juce::MidiBuffer& midi);
     kk::WorldStage worldStage;
     kk::PairLab pairPlayer;
+    juce::ThreadPool harvestPool { 1 };
+    std::atomic<int> harvestJobs { 0 };
+    juce::SpinLock harvestLock;
+    std::vector<std::vector<kk::HarvestItem>> harvestDone;   // finished jobs, merged on the message thread
     std::array<juce::String, kk::PairLab::maxParents> pairFiles;
     uint32_t pairSeed = 1;
     std::array<kk::DrumBoost, 3> drums;

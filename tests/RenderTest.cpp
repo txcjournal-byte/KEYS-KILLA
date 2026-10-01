@@ -320,6 +320,58 @@ static int unitTests()
         check (wav.existsAsFile() && mid.existsAsFile(), "PAIR drags out WAV and MIDI");
         fa.deleteFile(); fb.deleteFile();
     }
+    // HARVEST: a "song" with bass, keys, pad, lead and drums -> sounds sorted into the bank
+    {
+        const double R = 44100.0;
+        juce::AudioBuffer<float> song (2, (int) (R * 16)); song.clear();
+        juce::Random rnd (5);
+        auto addTone = [&] (double t0, double dur, float hz, float amp, float attack, float decayT, bool saw, float vib)
+        {
+            const int a = (int) (t0 * R), n = (int) (dur * R);
+            float ph = 0;
+            for (int i = 0; i < n && a + i < song.getNumSamples(); ++i)
+            {
+                const float t = (float) i / (float) R;
+                const float f = hz * (1.0f + vib * std::sin (kk::twoPi * 5.5f * t));
+                ph += f / (float) R; ph -= std::floor (ph);
+                const float env = std::min (1.0f, t / attack) * std::exp (-t / decayT) * std::min (1.0f, (float) (n - i) / (0.01f * (float) R));
+                const float v = saw ? (2.0f * ph - 1.0f) * 0.6f : std::sin (kk::twoPi * ph) + 0.25f * std::sin (kk::twoPi * ph * 2.0f);
+                for (int c = 0; c < 2; ++c) song.addSample (c, a + i, v * env * amp);
+            }
+        };
+        auto addHit = [&] (double t0, float amp, float decay)
+        {
+            const int a = (int) (t0 * R);
+            for (int i = 0; i < (int) (R * 0.3); ++i) for (int c = 0; c < 2; ++c) song.addSample (c, a + i, (rnd.nextFloat() * 2 - 1) * amp * std::exp (-(float) i / (decay * (float) R)));
+        };
+        for (int k = 0; k < 4; ++k) addTone (0.0 + k * 1.0, 0.9, 55.0f * (k % 2 ? 1.5f : 1.0f), 0.6f, 0.005f, 2.0f, false, 0);   // bass
+        for (int k = 0; k < 4; ++k) addTone (4.0 + k * 0.75, 0.7, 523.25f * (k % 2 ? 1.2f : 1.0f), 0.4f, 0.003f, 0.25f, false, 0);   // keys
+        for (int k = 0; k < 2; ++k) addTone (7.2 + k * 2.0, 1.9, 330.0f, 0.35f, 0.25f, 30.0f, true, 0);   // pad
+        for (int k = 0; k < 2; ++k) addTone (11.3 + k * 1.2, 1.1, 660.0f, 0.35f, 0.02f, 30.0f, true, 0.03f);   // lead (vibrato)
+        for (int k = 0; k < 6; ++k) addHit (13.8 + k * 0.35, 0.5f, 0.03f);   // drums
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_harvest_demo.wav");
+        f.deleteFile();
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), R, 2, 24, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (song, 0, song.getNumSamples());
+        }
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        p.harvestFile (f);
+        while (p.harvesting()) juce::Thread::sleep (10);
+        p.moduleHousekeeping();
+        int per[kk::numCats] {};
+        for (auto& it : p.bank) ++per[it.cat];
+        std::printf ("HARVEST: %d sounds in %.0f ms -", (int) p.bank.size(), juce::Time::getMillisecondCounterHiRes() - t0);
+        for (int c = 0; c < kk::numCats; ++c) std::printf (" %s %d", kk::harvestCatShort (c), per[c]);
+        std::printf ("\n");
+        check (p.bank.size() >= 6, "HARVEST pulls sounds out of a song");
+        check (per[kk::catBass] > 0 && per[kk::catDrum] > 0 && (per[kk::catKeys] + per[kk::catPluck]) > 0 && (per[kk::catPad] + per[kk::catLead] + per[kk::catVocal]) > 0,
+               "HARVEST sorts bass / keys / pad-lead / drums");
+        p.pairDice (0); p.pairDice (1); p.pairBreed();
+        check (p.pairKids.size() == 6, "HARVEST bank breeds");
+    }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
     {
         KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);

@@ -120,6 +120,7 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 
 KeysKillaProcessor::~KeysKillaProcessor()
 {
+    harvestPool.removeAllJobs (true, 60000);   // a running harvest finishes before the plugin goes
     cancelPendingUpdate();
     thumbRenderer.reset();   // the offline waveform renderer goes first
     history.clear(); children.clear();
@@ -916,6 +917,69 @@ juce::File KeysKillaProcessor::exportPairLoop() const
     return exportLoopMidi (g);
 }
 
+// ---------------- HARVEST ----------------
+void KeysKillaProcessor::harvestFile (const juce::File& f)
+{
+    const double rate = sr > 0 ? sr : 44100.0;
+    ++harvestJobs; ++pairVer;
+    harvestPool.addJob ([this, f, rate]
+    {
+        std::vector<kk::HarvestItem> got;
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (f) })
+        {
+            const int len = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (r->sampleRate * 600.0));
+            juce::AudioBuffer<float> in ((int) std::max (1u, r->numChannels), std::max (1, len));
+            r->read (&in, 0, len, 0, true, true);
+            got = kk::Harvest::run (in, r->sampleRate, rate, f.getFileNameWithoutExtension().substring (0, 18));
+        }
+        { const juce::SpinLock::ScopedLockType l (harvestLock); harvestDone.push_back (std::move (got)); }
+        --harvestJobs;
+    });
+    harvestedFrom.addIfNotAlreadyThere (f.getFileNameWithoutExtension());
+}
+
+int KeysKillaProcessor::harvestFromDigga()
+{
+    double rate = 44100.0;
+    auto shots = kkDiggaShots (modules[modDigga].get(), rate, true);
+    if (shots.empty()) return 0;
+    const double target = sr > 0 ? sr : 44100.0;
+    ++harvestJobs; ++pairVer;
+    harvestPool.addJob ([this, shots, rate, target]
+    {
+        std::vector<kk::HarvestItem> all;
+        for (auto& [name, audio] : shots)
+            for (auto& it : kk::Harvest::run (*audio, rate, target, "DIGGA " + name.substring (0, 12)))
+                all.push_back (std::move (it));
+        { const juce::SpinLock::ScopedLockType l (harvestLock); harvestDone.push_back (std::move (all)); }
+        --harvestJobs;
+    });
+    harvestedFrom.addIfNotAlreadyThere ("DIGGA");
+    return (int) shots.size();
+}
+
+void KeysKillaProcessor::bankToPair (int bankIndex, int slot)
+{
+    if (bankIndex < 0 || bankIndex >= (int) bank.size()) return;
+    if (slot < 0) for (int k = 0; k < kk::PairLab::maxParents; ++k) if (pairParents[(size_t) k] == nullptr) { slot = k; break; }
+    if (slot < 0) slot = kk::PairLab::maxParents - 1;
+    pairParents[(size_t) slot] = bank[(size_t) bankIndex].sound; pairFiles[(size_t) slot].clear();
+    ++pairVer;
+}
+
+void KeysKillaProcessor::auditionBank (int bankIndex)
+{
+    if (bankIndex < 0 || bankIndex >= (int) bank.size()) return;
+    pairPlayer.setSound (bank[(size_t) bankIndex].sound);
+    if (auto* q = apvts.getParameter (ID::playMode))
+    {
+        const float v = q->convertTo0to1 ((float) playPair);
+        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
+    }
+    previewNote = bank[(size_t) bankIndex].sound->rootNote;
+}
+
 // ---------------- DRUM BOOST ----------------
 kk::BoostParams KeysKillaProcessor::boostParams (int d) const
 {
@@ -964,6 +1028,11 @@ void KeysKillaProcessor::hitDrum (int d, int note)
 
 void KeysKillaProcessor::moduleHousekeeping()
 {
+    {
+        std::vector<std::vector<kk::HarvestItem>> done;
+        { const juce::SpinLock::ScopedLockType l (harvestLock); done.swap (harvestDone); }
+        for (auto& d : done) { kk::Harvest::merge (bank, std::move (d)); ++pairVer; }
+    }
     // drums re-render a moment after a knob stops moving (keeps the knobs smooth)
     const double now = juce::Time::getMillisecondCounterHiRes();
     for (int d = 0; d < 3 && ix != nullptr; ++d)
@@ -1658,6 +1727,12 @@ juce::AudioBuffer<float> KeysKillaProcessor::renderSound (int note, int presetIn
 juce::String KeysKillaProcessor::pairDice (int slot)
 {
     if (slot < 0 || slot >= kk::PairLab::maxParents) return {};
+    if (! bank.empty())   // the bank first: sounds harvested from your songs
+    {
+        const int b = juce::Random::getSystemRandom().nextInt ((int) bank.size());
+        bankToPair (b, slot);
+        return bank[(size_t) b].sound->name;
+    }
     const int idx = juce::Random::getSystemRandom().nextInt ((int) factoryPresets().size());
     auto buf = renderSound (60, idx);
     const juce::String name = factoryPresets()[(size_t) idx].name;
