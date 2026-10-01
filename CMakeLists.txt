@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.16.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.17.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,18 +50,36 @@ juce_add_plugin(KeysKilla
 
 # Skin bitmaps cut from the design mockups (tools/make_skin_assets.py)
 juce_add_binary_data(KeysKillaAssets SOURCES
-    assets/lab_bg.jpg assets/lab_white.png assets/lab_black.png assets/lab_icons.png
-    assets/voodoo_factory.json assets/effector_factory.json)
+    assets/lab_bg.jpg assets/lab_white.png assets/lab_black.png assets/lab_icons.png)
 
-# Modules taken from the other KILLA plugins (each keeps its own namespace)
-set(KK_MODULE_SOURCES
-    Source/modules/voodoo/Engine.cpp Source/modules/voodoo/Morph.cpp Source/modules/voodoo/Preset.cpp
-    Source/modules/voodoo/PresetLibrary.cpp Source/modules/voodoo/TimeBuffer.cpp Source/modules/voodoo/Trigger.cpp
-    Source/modules/voodoo/Modules/Drive.cpp Source/modules/voodoo/Modules/Filter.cpp Source/modules/voodoo/Modules/Gate.cpp
-    Source/modules/voodoo/Modules/LoFi.cpp Source/modules/voodoo/Modules/Pitch.cpp Source/modules/voodoo/Modules/Space.cpp
-    Source/modules/k808/Engine.cpp)
-file(GLOB_RECURSE KK_EFFECTOR_SOURCES CONFIGURE_DEPENDS Source/modules/effector/*.cpp)
-list(APPEND KK_MODULE_SOURCES ${KK_EFFECTOR_SOURCES})
+# --- The other KILLA plugins, embedded with their own design and functions (v0.17) ---------
+# HALF = Voodoo Killa, EFFECTOR = Effector Killa, DIGGA = Digga Killa. Every plugin keeps its
+# sources untouched apart from renamed resource namespaces; each file gets its own include root.
+file(GLOB KK_VK_RES CONFIGURE_DEPENDS
+    assets/plugins/voodoo/Presets/*.json assets/plugins/voodoo/Photos/*.jpg assets/plugins/voodoo/Photos/*.png
+    assets/plugins/voodoo/Textures/*.png assets/plugins/voodoo/Textures/*.jpg assets/plugins/voodoo/Fonts/*.ttf
+    assets/plugins/voodoo/Fonts/*.otf assets/plugins/voodoo/Logo/*.png)
+juce_add_binary_data(KKVoodooData HEADER_NAME VKData.h NAMESPACE VKData SOURCES ${KK_VK_RES})
+juce_add_binary_data(KKEffectorData HEADER_NAME EKBinaryData.h NAMESPACE EKData SOURCES
+    assets/plugins/effector/Presets/factory.json assets/plugins/effector/Design/reference.png)
+juce_add_binary_data(KKDiggaData HEADER_NAME DGData.h NAMESPACE DGData SOURCES
+    assets/plugins/digga/fonts/ArchivoBlack-Regular.ttf assets/plugins/digga/fonts/BarlowCondensed-SemiBold.ttf
+    assets/plugins/digga/fonts/BarlowCondensed-Bold.ttf assets/plugins/digga/fonts/CourierPrime-Regular.ttf
+    assets/plugins/digga/fonts/CourierPrime-Bold.ttf assets/plugins/digga/skin/background.png
+    assets/plugins/digga/skin/drop_sample.png assets/plugins/digga/skin/kill_stamp.png
+    assets/plugins/digga/models/basic_pitch.bin)
+file(GLOB_RECURSE KK_VK_SRC CONFIGURE_DEPENDS Source/plugins/voodoo/*.cpp)
+file(GLOB_RECURSE KK_EK_SRC CONFIGURE_DEPENDS Source/plugins/effector/*.cpp)
+file(GLOB_RECURSE KK_DG_SRC CONFIGURE_DEPENDS Source/plugins/digga/*.cpp)
+set_source_files_properties(${KK_VK_SRC} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/voodoo"
+                                                    COMPILE_DEFINITIONS "KK_EMBEDDED=1")
+set_source_files_properties(${KK_EK_SRC} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/effector"
+                                                    COMPILE_DEFINITIONS "KK_EMBEDDED=1")
+set_source_files_properties(${KK_DG_SRC} PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga;${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga_third_party/signalsmith-stretch/include;${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga_third_party/signalsmith-linear/include"
+    COMPILE_DEFINITIONS "KK_EMBEDDED=1")
+set(KK_MODULE_SOURCES ${KK_VK_SRC} ${KK_EK_SRC} ${KK_DG_SRC})
+set(KK_MODULE_DATA KKVoodooData KKEffectorData KKDiggaData)
 
 target_sources(KeysKilla PRIVATE
     Source/PluginProcessor.cpp
@@ -74,14 +92,16 @@ target_compile_definitions(KeysKilla PUBLIC
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_USE_MP3AUDIOFORMAT=1
+    JUCE_USE_FLAC=1
     JUCE_DISPLAY_SPLASH_SCREEN=0
     KK_VERSION_STRING="${PROJECT_VERSION}")
 
 target_link_libraries(KeysKilla
     PRIVATE
-        KeysKillaAssets
+        KeysKillaAssets ${KK_MODULE_DATA}
         juce::juce_audio_utils
         juce::juce_dsp
+        juce::juce_opengl
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -98,10 +118,10 @@ if(KK_BUILD_TESTS)
         Source/Presets.cpp
         ${KK_MODULE_SOURCES})
     target_compile_definitions(KeysKillaTests PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 KK_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1
-        JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1)
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_USE_FLAC=1 KK_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1
+        JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1 JucePlugin_VersionString="${PROJECT_VERSION}")
     target_link_libraries(KeysKillaTests PRIVATE
-        KeysKillaAssets
-        juce::juce_audio_utils juce::juce_dsp
+        KeysKillaAssets ${KK_MODULE_DATA}
+        juce::juce_audio_utils juce::juce_dsp juce::juce_opengl
         juce::juce_recommended_config_flags)
 endif()

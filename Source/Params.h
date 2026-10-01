@@ -141,44 +141,22 @@ namespace ID
     inline constexpr const char* punch    = "punchFx";    // transient shaper
     inline constexpr const char* halftime = "halftime";   // half-speed buffer mix
     inline constexpr const char* master   = "master";     // MASTER stage: glue, air, saturation, limiter (v0.13)
-    // v0.14 HALF module (Voodoo Killa engine): time FX on the whole output
-    inline constexpr const char* halfOn     = "halfOn";
-    inline constexpr const char* halfPreset = "halfPreset";   // 12 categories x 8 presets
-    inline constexpr const char* halfAmount = "halfAmount";
-    inline constexpr const char* halfSpeed  = "halfSpeed";
-    inline constexpr const char* halfTrig   = "halfTrig";
-    inline constexpr const char* halfMix    = "halfMix";
-    // v0.15 modules: drums (808 / SNARE / CLAP / hats), ROLLS, EFFECTOR, DIGGA
-    inline constexpr const char* playMode = "playMode";   // what the keys / MIDI play: KEYS, 808, SNARE, CLAP, HATS, DIGGA
-    inline constexpr const char* b8Tune = "b8Tune";  inline constexpr const char* b8Decay = "b8Decay"; inline constexpr const char* b8Punch = "b8Punch";
-    inline constexpr const char* b8Glide = "b8Glide"; inline constexpr const char* b8Tone = "b8Tone";  inline constexpr const char* b8Drive = "b8Drive";
-    inline constexpr const char* b8Sat = "b8Sat";    inline constexpr const char* b8Clip = "b8Clip";  inline constexpr const char* b8Level = "b8Level";
-    inline constexpr const char* b8Click = "b8Click"; inline constexpr const char* b8Width = "b8Width"; inline constexpr const char* b8Sub = "b8Sub";
-    inline constexpr const char* htPan = "htPan";
+    // v0.17 modules: HALF = Voodoo Killa, EFFECTOR = Effector Killa (melodies only), DIGGA = Digga Killa
+    inline constexpr const char* halfOn   = "halfOn";     // Voodoo Killa on the melody bus
+    inline constexpr const char* efxOn    = "efxOn";      // Effector Killa on the melody bus
+    inline constexpr const char* playMode = "playMode";   // the keys play: KEYS KILLA sound / DIGGA
     // v0.16 SOUND WORLD, TRANCE GATE, master CLIPPER
     inline constexpr const char* world = "world";     inline constexpr const char* worldAmt = "worldAmt";
     inline constexpr const char* gate = "gate";       inline constexpr const char* gateDepth = "gateDepth";
     inline constexpr const char* clipMode = "clipMode"; inline constexpr const char* clipDrive = "clipDrive";
-    inline constexpr const char* snTune = "snTune";  inline constexpr const char* snBody = "snBody";  inline constexpr const char* snSnap = "snSnap";
-    inline constexpr const char* snDecay = "snDecay"; inline constexpr const char* snTone = "snTone"; inline constexpr const char* snLevel = "snLevel";
-    inline constexpr const char* clTune = "clTune";  inline constexpr const char* clSpread = "clSpread"; inline constexpr const char* clDecay = "clDecay";
-    inline constexpr const char* clTone = "clTone";  inline constexpr const char* clWidth = "clWidth"; inline constexpr const char* clLevel = "clLevel";
-    inline constexpr const char* htTune = "htTune";  inline constexpr const char* htDecay = "htDecay"; inline constexpr const char* htTone = "htTone";
-    inline constexpr const char* htLevel = "htLevel";
-    inline constexpr const char* rlOn = "rlOn";      inline constexpr const char* rlStyle = "rlStyle"; inline constexpr const char* rlSeed = "rlSeed";
+    // ROLLS: hi-hat roll MIDI generator
+    inline constexpr const char* rlStyle = "rlStyle"; inline constexpr const char* rlSeed = "rlSeed";
     inline constexpr const char* rlBars = "rlBars";  inline constexpr const char* rlDensity = "rlDensity";
-    inline constexpr const char* efxOn = "efxOn";    inline constexpr const char* efxPreset = "efxPreset"; inline constexpr const char* efxBlend = "efxBlend";
-    inline juce::String efxMacro (int i) { return "efxM" + juce::String (i + 1); }
-    inline constexpr const char* dgMode = "dgMode";  inline constexpr const char* dgSlices = "dgSlices"; inline constexpr const char* dgChop = "dgChop";
-    inline constexpr const char* dgPitch = "dgPitch"; inline constexpr const char* dgRev = "dgRev";   inline constexpr const char* dgLevel = "dgLevel";
     // module parameters belong to the modules: presets, BREED, morph and dice never touch them
     inline bool isModuleParam (const juce::String& id)
     {
-        static const juce::StringArray ids { halfOn, halfPreset, halfAmount, halfSpeed, halfTrig, halfMix, playMode,
-            b8Tune, b8Decay, b8Punch, b8Glide, b8Tone, b8Drive, b8Sat, b8Clip, b8Level, b8Click, b8Width, b8Sub, htPan, world, worldAmt, gate, gateDepth, clipMode, clipDrive,
-            snTune, snBody, snSnap, snDecay, snTone, snLevel, clTune, clSpread, clDecay, clTone, clWidth, clLevel,
-            htTune, htDecay, htTone, htLevel, rlOn, rlStyle, rlSeed, rlBars, rlDensity, efxOn, efxPreset, efxBlend,
-            "efxM1", "efxM2", "efxM3", "efxM4", "efxM5", dgMode, dgSlices, dgChop, dgPitch, dgRev, dgLevel };
+        static const juce::StringArray ids { halfOn, efxOn, playMode, world, worldAmt, gate, gateDepth, clipMode, clipDrive,
+                                             rlStyle, rlSeed, rlBars, rlDensity };
         return ids.contains (id);
     }
     // v0.5
@@ -202,18 +180,12 @@ inline constexpr int numModSlots = 8;
 
 namespace Choices
 {
-    inline const juce::StringArray halfSpeeds { "1/4x", "1/2x", "1x", "2x", "4x" };
-    inline const juce::StringArray halfTrigs  { "Always", "Every 4 bars", "Every 8 bars", "Last beat" };
+    inline const juce::StringArray playModes  { "Keys", "Digga" };
     inline const juce::StringArray worlds     { "Off", "XV", "Moog", "Serum", "Zenology", "Omni", "Kontakt", "Diva", "Nexus" };
     inline const juce::StringArray gates      { "Off", "1/8", "1/16", "1/8 Triplet", "Stutter A", "Stutter B" };
     inline const juce::StringArray clipModes  { "Off", "Soft", "Hard", "Modern" };
-    inline const juce::StringArray playModes  { "Keys", "808", "Snare", "Clap", "Hats", "Digga" };
-    inline const juce::StringArray satModes   { "Tape", "Tube", "Foldback" };
     inline const juce::StringArray rollStyles { "Classic", "Triplet", "Drill", "Crazy" };
     inline const juce::StringArray rollBars   { "1 bar", "2 bars", "4 bars" };
-    inline const juce::StringArray diggaModes { "Chop", "Keys" };
-    inline const juce::StringArray diggaSlices { "8", "16" };
-    inline const juce::StringArray diggaChops { "Transients", "Even" };
     inline const juce::StringArray engines   { "VA", "FM", "Pluck", "Vox", "Organ", "Flute", "Sub 808", "Wavetable", "Orchestral", "Modal" };
     inline const juce::StringArray fmAlgos   { "2-Op", "4-Stack", "2x2 Pairs", "3 > 1", "Bell", "E-Piano" };
     inline const juce::StringArray warps     { "Bend", "Sync", "Mirror", "Quantize", "FM" };
@@ -467,34 +439,14 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         f (ID::mmAmt (s), "Mod " + String (s + 1) + " Amount", -1, 1, 0);
     }
     f (ID::master, "Master", 0, 1, 0.7f);
-    b (ID::halfOn, "Half On", false);
-    i (ID::halfPreset, "Half Preset", 0, 95, 0);
-    f (ID::halfAmount, "Half Amount", 0, 1, 1.0f);
-    c (ID::halfSpeed, "Half Speed", Choices::halfSpeeds, 2);
-    c (ID::halfTrig, "Half Trigger", Choices::halfTrigs, 0);
-    f (ID::halfMix, "Half Mix", 0, 1, 1.0f);
-    // v0.15 modules
+    // v0.17 modules
+    b (ID::halfOn, "HALF On", false);
+    b (ID::efxOn, "EFFECTOR On", false);
     c (ID::playMode, "Keys Play", Choices::playModes, 0);
-    f (ID::b8Tune, "808 Tune", -12, 12, 0); f (ID::b8Decay, "808 Decay", 0.1f, 4.0f, 1.6f, 1.0f); f (ID::b8Punch, "808 Punch", 0, 1, 0.4f);
-    f (ID::b8Glide, "808 Glide", 0, 0.5f, 0.08f); f (ID::b8Tone, "808 Tone", 0, 1, 0.25f); f (ID::b8Drive, "808 Drive", 0, 100, 30);
-    c (ID::b8Sat, "808 Saturation", Choices::satModes, 1); f (ID::b8Clip, "808 Clip", 0, 12, 3); f (ID::b8Level, "808 Level", -24, 6, 0);
-    f (ID::b8Click, "808 Click", 0, 1, 0.3f); f (ID::b8Width, "808 Width", 0, 1, 0.3f); f (ID::b8Sub, "808 Sub Octave", 0, 1, 0);
-    f (ID::htPan, "Hat Auto-Pan", 0, 1, 0.3f);
     c (ID::world, "Sound World", Choices::worlds, 0); f (ID::worldAmt, "World Amount", 0, 1, 1.0f);
     c (ID::gate, "Trance Gate", Choices::gates, 0); f (ID::gateDepth, "Gate Depth", 0, 1, 1.0f);
     c (ID::clipMode, "Clipper", Choices::clipModes, 0); f (ID::clipDrive, "Clip Drive", 0, 12, 3);
-    f (ID::snTune, "Snare Tune", -12, 12, 0); f (ID::snBody, "Snare Body", 0, 1, 0.5f); f (ID::snSnap, "Snare Snap", 0, 1, 0.6f);
-    f (ID::snDecay, "Snare Decay", 0, 1, 0.4f); f (ID::snTone, "Snare Tone", 0, 1, 0.5f); f (ID::snLevel, "Snare Level", -24, 6, 0);
-    f (ID::clTune, "Clap Tune", -12, 12, 0); f (ID::clSpread, "Clap Spread", 0, 1, 0.5f); f (ID::clDecay, "Clap Decay", 0, 1, 0.4f);
-    f (ID::clTone, "Clap Tone", 0, 1, 0.5f); f (ID::clWidth, "Clap Width", 0, 1, 0.5f); f (ID::clLevel, "Clap Level", -24, 6, 0);
-    f (ID::htTune, "Hat Tune", -12, 12, 0); f (ID::htDecay, "Hat Decay", 0.01f, 0.6f, 0.07f, 0.12f); f (ID::htTone, "Hat Tone", 0, 1, 0.5f);
-    f (ID::htLevel, "Hat Level", -24, 6, -3);
-    b (ID::rlOn, "Rolls On", false); c (ID::rlStyle, "Rolls Style", Choices::rollStyles, 0); i (ID::rlSeed, "Rolls Pattern", 0, 99999, 1);
+    c (ID::rlStyle, "Rolls Style", Choices::rollStyles, 0); i (ID::rlSeed, "Rolls Pattern", 0, 99999, 1);
     c (ID::rlBars, "Rolls Length", Choices::rollBars, 1); f (ID::rlDensity, "Rolls Density", 0, 1, 0.5f);
-    b (ID::efxOn, "Effector On", false); i (ID::efxPreset, "Effector Preset", 0, 299, 0); f (ID::efxBlend, "Effector Blend", 0, 1, 1.0f);
-    for (int m = 0; m < 5; ++m) f (ID::efxMacro (m), "Effector Macro " + String (m + 1), 0, 1, 0.5f);
-    c (ID::dgMode, "Digga Mode", Choices::diggaModes, 0); c (ID::dgSlices, "Digga Slices", Choices::diggaSlices, 1);
-    c (ID::dgChop, "Digga Chop", Choices::diggaChops, 0); f (ID::dgPitch, "Digga Pitch", -24, 24, 0); b (ID::dgRev, "Digga Reverse", false);
-    f (ID::dgLevel, "Digga Level", -24, 6, 0);
     return l;
 }

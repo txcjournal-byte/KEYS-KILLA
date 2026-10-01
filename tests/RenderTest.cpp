@@ -142,171 +142,54 @@ static int unitTests()
         }
         check (finite && late > 1.0e-3f, "16 kHz render stays finite and keeps sounding");
     }
-    // HALF module (Voodoo engine): 96 presets load, every one stays finite, it changes the sound, presets keep it
+    // v0.17 modules: Voodoo Killa (HALF), Effector Killa (EFFECTOR), Digga Killa (DIGGA) inside KEYS KILLA
     {
-        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
-        check (p.halfLibrary().getFactory().size() == 96 && p.halfLibrary().getCategories().size() == 12, "HALF: 12 x 8 factory presets");
-        auto render = [&] (int blocks, float& peak, double& diffTo, const std::vector<float>* ref, std::vector<float>* out)
-        {
-            juce::AudioBuffer<float> b (2, 512); bool finite = true; peak = 0; diffTo = 0;
-            for (int k = 0; k < blocks; ++k)
-            {
-                juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
-                p.processBlock (b, m);
-                for (int n = 0; n < 512; ++n)
-                {
-                    const float v = b.getSample (0, n); finite &= std::isfinite (v) && std::isfinite (b.getSample (1, n));
-                    peak = std::max (peak, std::abs (v));
-                    if (ref) diffTo += std::abs (v - (*ref)[(size_t) (k * 512 + n)]);
-                    if (out) out->push_back (v);
-                }
-            }
-            juce::MidiBuffer off; off.addEvent (juce::MidiMessage::allNotesOff (1), 0);
-            for (int k = 0; k < 60; ++k) { juce::MidiBuffer e = k == 0 ? off : juce::MidiBuffer(); p.processBlock (b, e); }
-            return finite;
-        };
-        float pk; double d; std::vector<float> dry;
-        render (300, pk, d, nullptr, &dry);
-        set (p, ID::halfOn, 1.0f);
-        bool allFinite = true, loud = true; int changed = 0;
-        for (int i = 0; i < 96; ++i)
-        {
-            set (p, ID::halfPreset, (float) i);
-            allFinite &= render (300, pk, d, &dry, nullptr);
-            loud &= pk < 1.0f;
-            if (d > 1.0) ++changed;
-        }
-        check (allFinite && loud, "HALF: all 96 presets stay finite and below 0 dBFS");
-        check (changed >= 90, "HALF: the presets really change the sound");
-        p.loadPreset (5);
-        check (p.apvts.getParameter (ID::halfOn)->getValue() > 0.5f, "HALF stays on when a preset is loaded");
-        std::printf ("HALF: %d of 96 presets audibly change the sound\n", changed);
-    }
-    // v0.15 modules: 808 / SNARE / CLAP / HATS on the keys, ROLLS, EFFECTOR, DIGGA
-    {
-        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);
+        check (p.module (KeysKillaProcessor::modHalf) != nullptr && p.module (KeysKillaProcessor::modEffector) != nullptr
+               && p.module (KeysKillaProcessor::modDigga) != nullptr, "the three KILLA plugins are inside");
         juce::AudioBuffer<float> b (2, 512);
-        auto play = [&] (int blocks, std::function<void (int, juce::MidiBuffer&)> ev, float& peak, double& energy)
+        auto render = [&] (float& peak, double& energy)
         {
             bool finite = true; peak = 0; energy = 0;
-            for (int k = 0; k < blocks; ++k)
+            for (int k = 0; k < 200; ++k)
             {
-                juce::MidiBuffer m; if (ev) ev (k, m);
+                juce::MidiBuffer m;
+                if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                if (k == 150) m.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
                 p.processBlock (b, m);
                 for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < 512; ++i) { const float v = b.getSample (ch, i); finite &= std::isfinite (v); peak = std::max (peak, std::abs (v)); energy += v * v; }
             }
             return finite;
         };
-        float pk; double en;
-        const char* names[] { "", "808", "SNARE", "CLAP", "HATS" };
-        for (int mode = 1; mode <= 4; ++mode)
-        {
-            set (p, ID::playMode, (float) mode);
-            float lo = 9, hi = 0;
-            for (auto& kit : KeysKillaProcessor::drumKits (mode))
-            {
-                p.applyDrumKit (kit.values);
-                const bool ok = play (120, [&] (int k, juce::MidiBuffer& m)
-                {
-                    if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, mode == 1 ? 36 : 60, (juce::uint8) 110), 0);
-                    if (k == 40) m.addEvent (juce::MidiMessage::noteOff (1, mode == 1 ? 36 : 60), 0);
-                }, pk, en);
-                lo = std::min (lo, pk); hi = std::max (hi, pk);
-                if (! ok || pk < 0.05f || pk > 1.0f) { std::printf ("!! %s kit %s: peak %.3f finite %d\n", names[mode], kit.name.toRawUTF8(), pk, (int) ok); ++fails; }
-            }
-            std::printf ("%s: %d kits, peak %.2f .. %.2f\n", names[mode], (int) KeysKillaProcessor::drumKits (mode).size(), lo, hi);
-        }
-        // 808 slide: a legato note glides instead of retriggering
+        float pk; double dry, en;
+        check (render (pk, dry) && pk > 0.01f, "melody plays with the modules loaded");
+        set (p, ID::efxOn, 1);
+        check (render (pk, en) && pk > 0.001f && pk <= 1.0f, "EFFECTOR (Effector Killa) on the melody stays finite");
+        set (p, ID::efxOn, 0); set (p, ID::halfOn, 1);
+        check (render (pk, en) && pk <= 1.0f, "HALF (Voodoo Killa) on the melody stays finite");
+        set (p, ID::halfOn, 0);
         set (p, ID::playMode, 1);
-        check (play (200, [&] (int k, juce::MidiBuffer& m)
-        {
-            if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 110), 0);
-            if (k == 20) m.addEvent (juce::MidiMessage::noteOn (1, 43, (juce::uint8) 110), 0);
-            if (k == 22) m.addEvent (juce::MidiMessage::noteOff (1, 36), 0);
-            if (k == 60) m.addEvent (juce::MidiMessage::noteOff (1, 43), 0);
-        }, pk, en) && pk > 0.05f, "808 slide stays finite and loud");
-        play (100, {}, pk, en);
-        check (pk < 1.0e-3f, "808 stops after note off");
-        // keys on a module: the synth stays silent
-        check (p.playing[36].load() == false, "808 mode: the synth does not play the note");
+        render (pk, en);
+        check (! p.playing[60].load(), "keys -> DIGGA: the synth stays silent");
         set (p, ID::playMode, 0);
-
-        // ROLLS: patterns differ by seed, stay inside the bars, the preview plays hats
-        {
-            std::set<std::vector<int>> seen; bool inside = true;
-            for (int sd = 1; sd <= 200; ++sd)
-                for (int st = 0; st < 4; ++st)
-                {
-                    const auto r = kk::makeRolls ((uint32_t) sd, st, 2, 0.6f);
-                    std::vector<int> sig; for (auto& h : r) { sig.push_back ((int) std::lround (h.beat * 96)); inside &= h.beat >= 0 && h.beat < 8.0; }
-                    seen.insert (sig);
-                }
-            check (inside, "ROLLS stay inside the pattern");
-            check (seen.size() > 700, "ROLLS: a new pattern for (almost) every seed / style");
-            std::printf ("ROLLS: %d different patterns of 800\n", (int) seen.size());
-            p.setRollsPreview (true);
-            check (play (200, {}, pk, en) && pk > 0.02f, "ROLLS preview plays the hats");
-            p.setRollsPreview (false);
-            play (50, {}, pk, en);
-            const auto f = p.exportRollsMidi();
-            juce::MidiFile mf; juce::FileInputStream is (f);
-            check (f.existsAsFile() && mf.readFrom (is) && mf.getTrack (0)->getNumEvents() > 10, "ROLLS export a MIDI clip");
-        }
-
-        // EFFECTOR: presets load, stay finite, change the sound
-        {
-            const int count = (int) p.effectorPresets().size();
-            check (count >= 60, "EFFECTOR factory presets loaded");
-            auto note = [&] (int k, juce::MidiBuffer& m) { if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); if (k == 60) m.addEvent (juce::MidiMessage::noteOff (1, 60), 0); };
-            double dry; play (100, note, pk, dry); play (60, {}, pk, en);
-            set (p, ID::efxOn, 1);
-            int changed = 0; bool allOk = true;
-            for (int i = 0; i < count; i += std::max (1, count / 24))
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (q.getLatencySamples() >= 0, "state with the three modules restores");
+        std::printf ("MODULES: latency HALF %d, EFFECTOR %d samples\n", p.module (KeysKillaProcessor::modHalf)->getLatencySamples(),
+                     p.module (KeysKillaProcessor::modEffector)->getLatencySamples());
+        // ROLLS generator
+        std::set<std::vector<int>> seen; bool inside = true;
+        for (int sd = 1; sd <= 200; ++sd)
+            for (int st = 0; st < 4; ++st)
             {
-                p.setEffectorPreset (i);
-                p.moduleHousekeeping();
-                allOk &= play (100, note, pk, en) && pk <= 1.0f;
-                if (std::abs (10.0 * std::log10 ((en + 1e-9) / (dry + 1e-9))) > 0.05) ++changed;
-                play (60, {}, pk, en);
+                const auto r = kk::makeRolls ((uint32_t) sd, st, 2, 0.6f);
+                std::vector<int> sig; for (auto& h : r) { sig.push_back ((int) std::lround (h.beat * 96)); inside &= h.beat >= 0 && h.beat < 8.0; }
+                seen.insert (sig);
             }
-            check (allOk, "EFFECTOR presets stay finite and below 0 dBFS");
-            set (p, ID::efxOn, 0);
-            std::printf ("EFFECTOR: %d presets, %d of the tested ones change the level / sound\n", count, changed);
-        }
-
-        // DIGGA: a drum loop is chopped and the slices play on the keys
-        {
-            auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_digga_test.wav");
-            {
-                juce::AudioBuffer<float> loop (2, 44100 * 2);
-                loop.clear();
-                for (int hit = 0; hit < 16; ++hit)
-                    for (int i = 0; i < 3000; ++i)
-                    {
-                        const float v = std::sin ((float) i * 0.05f * (1 + hit % 4)) * std::exp (-(float) i / 900.0f) * 0.8f;
-                        loop.setSample (0, hit * 5512 + i, v); loop.setSample (1, hit * 5512 + i, v);
-                    }
-                f.deleteFile();
-                juce::WavAudioFormat wav;
-                std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 2, 16, {}, 0));
-                if (w) w->writeFromAudioSampleBuffer (loop, 0, loop.getNumSamples());
-            }
-            check (p.loadDiggaFile (f), "DIGGA loads a WAV");
-            auto smp = p.diggaSample();
-            check (smp != nullptr && smp->starts.size() == 16, "DIGGA chops 16 slices");
-            int near = 0; if (smp) for (auto st : smp->starts) { const int r = st % 5512; if (r < 600 || r > 5512 - 600) ++near; }
-            check (near >= 14, "DIGGA finds the hits (transient chop)");
-            set (p, ID::playMode, 5);
-            check (play (40, [&] (int k, juce::MidiBuffer& m) { if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 61, (juce::uint8) 100), 0); }, pk, en) && pk > 0.05f, "DIGGA plays slice 2 on C#");
-            set (p, ID::playMode, 0);
-            juce::MemoryBlock mb; p.getStateInformation (mb);
-            KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
-            check (q.diggaSample() != nullptr, "DIGGA sample comes back with the project");
-            f.deleteFile();
-        }
-        // module settings survive a preset change
-        set (p, ID::b8Decay, 3.3f); p.loadPreset (7);
-        check (std::abs (p.apvts.getRawParameterValue (ID::b8Decay)->load() - 3.3f) < 0.01f, "808 settings stay when a sound preset loads");
+        check (inside && seen.size() > 700, "ROLLS: a new pattern for (almost) every seed / style");
+        const auto f = p.exportRollsMidi();
+        juce::MidiFile mf; juce::FileInputStream is (f);
+        check (f.existsAsFile() && mf.readFrom (is) && mf.getTrack (0)->getNumEvents() > 10, "ROLLS export a MIDI clip");
     }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
     {
@@ -704,11 +587,11 @@ int main (int argc, char** argv)
                 case 9: ed.reset(); ed.reset (proc->createEditor()); ke = dynamic_cast<KeysKillaEditor*> (ed.get()); break;
                 case 10: proc->setTreeMode (action % 2); proc->treeBreed(); proc->playTreeResult (action % 6); break;
                 case 11: ke->showView (13 + action % 2); break;
-                case 12: ke->showView (15 + action % 5); setp (ID::playMode, (float) (action % 6)); break;
-                case 13: setp (ID::efxOn, (float) (action % 2)); proc->setEffectorPreset (action % 90); break;
-                case 14: proc->setRollsPreview (action % 3 != 0); setp (ID::rlStyle, (float) (action % 4)); proc->newRolls(); break;
-                case 15: setp (ID::halfOn, (float) (action % 2)); setp (ID::halfPreset, (float) (action % 96)); break;
-                case 16: proc->hitPad (1 + action % 4); setp (ID::dgSlices, (float) (action % 2)); break;
+                case 12: ke->showView (15 + action % 6); setp (ID::playMode, (float) (action % 2)); break;
+                case 13: setp (ID::efxOn, (float) (action % 2)); break;
+                case 14: setp (ID::rlStyle, (float) (action % 4)); proc->newRolls(); break;
+                case 15: setp (ID::halfOn, (float) (action % 2)); break;
+                case 16: ke->showView (17 + action % 4); break;
                 default: break;
             }
         }

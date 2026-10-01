@@ -5,6 +5,15 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
+## Originální KILLA pluginy uvnitř (verze 0.17)
+
+- **HALF** = celý **Voodoo Killa** (jeho design i všechny funkce) - jen na melodie (KEYS KILLA + DIGGA). Funguje, když hraje FL.
+- **EFFECTOR** = celý **Effector Killa** (kazety, TV) - jen na melodie.
+- **DIGGA** = celý **Digga Killa** - samplování; tlačítko PLAY DIGGA ON KEYS pošle klávesy do Diggy.
+- **HI-HAT** = generátor rollů (MIDI na tvůj hi-hat ve FL).
+- **808** a **SNARE / CLAP** = úprava tvých bicích z FL (další verze), žádné vlastní zvuky.
+- Bicí nikdy nejdou přes HALF ani EFFECTOR.
+
 ## SOUND WORLD (verze 0.16)
 
 Tlačítko **WORLD** v hlavičce: jedním klikem obarví celý zvuk jako XV (90s PCM), MOOG, SERUM (OTT), ZENOLOGY, OMNI, KONTAKT, DIVA nebo NEXUS - hlasitost zůstává stejná.

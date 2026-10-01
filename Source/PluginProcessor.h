@@ -6,23 +6,18 @@
 #include "Fx.h"
 #include "Presets.h"
 #include "Loops.h"
-#include "modules/voodoo/Engine.h"
-#include "modules/voodoo/PresetLibrary.h"
-#include "modules/effector/Engine.h"
-#include "modules/effector/Preset.h"
-#include "Drums.h"
-#include "Digga.h"
 #include "World.h"
+#include "Rolls.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
-    KeysKillaProcessor();
+    explicit KeysKillaProcessor (bool withModules = true);   // false: the light offline thumbnail renderer
     ~KeysKillaProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override { for (auto& m : modules) if (m) m->releaseResources(); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -186,36 +181,18 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
     std::atomic<float> meterL { 0 }, meterR { 0 };
-    // HALF module (Voodoo Killa engine on the whole output)
-    const vk::PresetLibrary& halfLibrary() const { return *halfLib; }
-    juce::String halfPresetName (int idx) const;
-
-    // ---- v0.15 modules: 808 / SNARE / CLAP / ROLLS (drums), EFFECTOR, DIGGA ----
-    enum PlayMode { playKeys, play808, playSnare, playClap, playHats, playDigga, numPlayModes };
-    void hitPad (int mode, int note = -1, float vel = 0.85f);   // UI audition (any thread)
+    // ---- v0.17 modules: the other KILLA plugins inside KEYS KILLA, with their own design ----
+    // HALF = Voodoo Killa and EFFECTOR = Effector Killa process only the melodies (KEYS KILLA + DIGGA),
+    // DIGGA = Digga Killa (sampler). Drums never go through them.
+    enum Module { modHalf, modEffector, modDigga, numModules };
+    juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
+    enum PlayMode { playKeys, playDigga };
     void moduleHousekeeping();                                  // message thread, ~30 Hz from the editor
-    // ROLLS
-    std::vector<kk::RollHit> rollPattern() const;              // message thread copy for the UI
-    void newRolls();                                            // GENERATE: a new pattern seed
-    void setRollsPreview (bool on) { rollPreview = on; }
-    bool rollsPreviewing() const { return rollPreview.load(); }
-    float rollsBeat() const { return rollBeat.load(); }         // play position (beats) or -1
+    // ROLLS (hi-hat roll MIDI generator)
+    std::vector<kk::RollHit> rollPattern() const;
+    void newRolls();
     juce::File exportRollsMidi() const;
-    // EFFECTOR
-    struct EfxEntry { int channel, index; juce::String name, desc, channelName; };
-    const std::vector<EfxEntry>& effectorPresets() const { return efxList; }
-    const std::vector<ek::ChannelInfo>& effectorChannels() const { return efxBank->getChannels(); }
-    void setEffectorPreset (int flatIndex);
-    juce::StringArray effectorMacroNames() const;
-    // DIGGA
-    bool loadDiggaFile (const juce::File& f);
-    std::shared_ptr<const kk::Digga::Sample> diggaSample() const { return digga.current(); }
-    float diggaPlayhead() const { return digga.playhead(); }
-    int last808Note() const { return drums.last808Note.load(); }
-    // drum sounds: factory kits (values for the module's parameters)
-    struct DrumKit { juce::String name; std::vector<std::pair<juce::String, float>> values; };
-    static const std::vector<DrumKit>& drumKits (int mode);
-    void applyDrumKit (const std::vector<std::pair<juce::String, float>>& values);
+    void rebuildRolls();
     std::atomic<bool>  overload { false };
     std::atomic<float> guiPitch { 0 }, guiMod { 0 };   // from on-screen wheels
     std::array<std::atomic<bool>, 128> playing {};
@@ -246,42 +223,19 @@ private:
 
     kk::SynthEngine synth;
     std::unique_ptr<kk::FxRack> fxPtr { std::make_unique<kk::FxRack>() };
-    std::unique_ptr<vk::PresetLibrary> halfLib { std::make_unique<vk::PresetLibrary>() };
-    std::unique_ptr<vk::Engine> half { std::make_unique<vk::Engine>() };
-    int halfLoaded = -1;
-    float halfFade = 0;                       // crossfade dry <-> HALF when switched on / off
-    std::vector<float> halfDryL, halfDryR;
-    void processHalf (juce::AudioBuffer<float>& buffer, int n, double bpm, double ppq, bool hostPlaying);
     // modules
-    void processModules (juce::MidiBuffer& hostMidi, juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps, double bpm, double ppq, bool hostPlaying);
-    void processEffector (juce::AudioBuffer<float>& buffer, int n, double bpm, double ppq, bool hostPlaying);
-    kk::Drums drums;
+    std::array<std::unique_ptr<juce::AudioProcessor>, 3> modules;
+    juce::AudioBuffer<float> modBuf;                            // scratch: DIGGA output
+    juce::MidiBuffer modMidi, noMidi, keysForModules;
+    std::array<float, 2> modFade { 0, 0 };                      // HALF / EFFECTOR on-off crossfades
+    juce::AudioBuffer<float> modDry;
+    int modBlock = 0, lastPlayMode = 0, reportedLatency = 0;
+    void processModules (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& keysMidi, int n);
+    void runModule (int m, juce::AudioBuffer<float>& buffer, int n, juce::MidiBuffer& midi);
     kk::WorldStage worldStage;
     std::array<std::array<float, 2>, 2> clipDc {};
-    kk::Digga digga;
-    std::array<std::atomic<int>, 8> padQueue {};               // UI pad hits: (mode << 8 | note) + 1, 0 = empty
-    std::atomic<bool> rollPreview { false };
-    std::atomic<float> rollBeat { -1.0f };
     mutable juce::SpinLock rollLock;
-    std::vector<kk::RollHit> rolls;                             // current pattern (audio thread reads with try-lock)
-    double rollLenBeats = 8, rollOrigin = 0, rollLastBeat = -1;
-    bool rollRunning = false, rollHostWas = false;
-    std::atomic<int> rollKey { -1 };                            // seed/style/bars/density the pattern was built from
-    std::atomic<int> rollKeyWanted { 0 };
-    kk::Rng rollRng;
-    int lastPlayMode = 0;
-    std::unique_ptr<ek::PresetBank> efxBank;
-    std::unique_ptr<ek::Engine> efx;
-    std::vector<EfxEntry> efxList;
-    ek::SnapshotExchange<ek::RackParams> efxSlots;
-    std::atomic<int> efxApplied { -1 };
-    float efxFade = 0;
-    std::vector<float> efxDryL, efxDryR;
-    juce::String diggaPath;
-    int diggaChopKey = -1;
-    int pad808Off = 0, pad808Note = -1;
-    std::map<int, float> efxTrims;
-    void rebuildRolls();
+    std::vector<kk::RollHit> rolls;
     kk::VoiceParams vp;
     kk::FxParams fp;
 
