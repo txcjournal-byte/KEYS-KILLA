@@ -2,6 +2,7 @@
 #include <set>
 #include <functional>
 #include "PluginEditor.h"
+#include "BinaryData.h"
 
 namespace
 {
@@ -22,17 +23,20 @@ constexpr int kChunk = 512;
     X(ghost) X(ghostOct) X(ghostRev) X(ghostBlur) X(bend) X(bendMode) X(bendSemis) X(tape) X(circuit) X(circRate) \
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
     X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps) X(master) \
-    X(halfOn) X(halfPreset) X(halfAmount) X(halfSpeed) X(halfTrig) X(halfMix)
+    X(halfOn) X(halfPreset) X(halfAmount) X(halfSpeed) X(halfTrig) X(halfMix) \
+    X(playMode) X(b8Tune) X(b8Decay) X(b8Punch) X(b8Glide) X(b8Tone) X(b8Drive) X(b8Sat) X(b8Clip) X(b8Level) \
+    X(snTune) X(snBody) X(snSnap) X(snDecay) X(snTone) X(snLevel) X(clTune) X(clSpread) X(clDecay) X(clTone) X(clWidth) X(clLevel) \
+    X(htTune) X(htDecay) X(htTone) X(htLevel) X(rlOn) X(rlStyle) X(rlSeed) X(rlBars) X(rlDensity) X(efxOn) X(efxPreset) X(efxBlend) \
+    X(dgMode) X(dgSlices) X(dgChop) X(dgPitch) X(dgRev) X(dgLevel)
 
 // performance controls that never morph or get reset by presets
 const juce::StringArray performanceIds { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
                                          ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos,
                                          ID::morphX, ID::morphY, ID::bendRange,
-                                         ID::halfOn, ID::halfPreset, ID::halfAmount, ID::halfSpeed, ID::halfTrig, ID::halfMix,
                                          ID::m1, ID::m2, ID::m3, ID::m4, ID::m5, ID::m6, ID::m7, ID::m8 };
 const juce::StringArray keepOnPresetLoad { ID::chord, ID::chordType, ID::strum, ID::arp, ID::arpRate, ID::arpMode, ID::arpOct,
-                                           ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos, ID::bendRange,
-                                           ID::halfOn, ID::halfPreset, ID::halfAmount, ID::halfSpeed, ID::halfTrig, ID::halfMix };
+                                           ID::arpSwing, ID::arpGate, ID::keyLock, ID::key, ID::scale, ID::chaos, ID::bendRange };
+bool keeps (const juce::String& id) { return keepOnPresetLoad.contains (id) || ID::isModuleParam (id); }
 
 // chord shapes (semitones); -1 terminates. Type 8 (scale triad) is built from the scale.
 // trap voicings first: open minor (root, 5th, minor 10th), dark minor with octave, add9, sus, power, octaves, phrygian b2
@@ -47,6 +51,7 @@ struct KeysKillaProcessor::Idx
    #undef KK_DECL
     int mmSrc[numModSlots] {}, mmDst[numModSlots] {}, mmAmt[numModSlots] {};
     int arpStep[16] {}, arpNote[16] {}, arpLen[16] {};
+    int efxM[5] {};
 };
 
 KeysKillaProcessor::KeysKillaProcessor()
@@ -62,13 +67,13 @@ KeysKillaProcessor::KeysKillaProcessor()
             params.push_back (rp);
             raw.push_back (apvts.getRawParameterValue (rp->getParameterID()));
             const auto id = rp->getParameterID();
-            morphable.push_back (! performanceIds.contains (id) && ! ID::isArpPattern (id) && id != ID::seed);
+            morphable.push_back (! performanceIds.contains (id) && ! ID::isModuleParam (id) && ! ID::isArpPattern (id) && id != ID::seed);
             discrete.push_back (dynamic_cast<juce::AudioParameterChoice*> (rp) != nullptr || dynamic_cast<juce::AudioParameterBool*> (rp) != nullptr);
         }
     for (size_t i = 0; i < params.size(); ++i)
     {
         idIndex[params[i]->getParameterID()] = (int) i;
-        keepParam.push_back (keepOnPresetLoad.contains (params[i]->getParameterID()) || ID::isArpPattern (params[i]->getParameterID()));
+        keepParam.push_back (keeps (params[i]->getParameterID()) || ID::isArpPattern (params[i]->getParameterID()));
     }
     ix = std::make_unique<Idx>();
    #define KK_SET(n) ix->n = indexOf (ID::n);
@@ -78,6 +83,7 @@ KeysKillaProcessor::KeysKillaProcessor()
     {
         ix->mmSrc[s] = indexOf (ID::mmSrc (s)); ix->mmDst[s] = indexOf (ID::mmDst (s)); ix->mmAmt[s] = indexOf (ID::mmAmt (s));
     }
+    for (int m = 0; m < 5; ++m) ix->efxM[m] = indexOf (ID::efxMacro (m));
     for (int st = 0; st < 16; ++st) { ix->arpStep[st] = indexOf (ID::arpStep (st)); ix->arpNote[st] = indexOf (ID::arpNote (st)); ix->arpLen[st] = indexOf (ID::arpLen (st)); }
     for (auto& bank : cornerBank) for (auto& c : bank) c.assign (params.size(), 0.0f);
     for (auto* prm : params)
@@ -85,7 +91,7 @@ KeysKillaProcessor::KeysKillaProcessor()
         const auto id = prm->getParameterID();
         auto any = [&] (std::initializer_list<const char*> ids) { for (auto* x : ids) if (id == x) return true; return false; };
         int gene = geneBody;
-        if (keepOnPresetLoad.contains (id) || ID::isArpPattern (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange, ID::master })) gene = -1;
+        if (keeps (id) || ID::isArpPattern (id) || any ({ ID::gain, ID::chaos, ID::morphX, ID::morphY, ID::bendRange, ID::master })) gene = -1;
         else if (any ({ ID::attack, ID::decay, ID::sustain, ID::release, ID::velSens, ID::fattack, ID::fdecay, ID::fsustain, ID::frelease,
                         ID::fenv, ID::punch, ID::bend, ID::bendMode, ID::bendSemis })) gene = geneAttack;
         else if (any ({ ID::crush, ID::wow, ID::drive, ID::driveType, ID::tape, ID::circuit, ID::circRate, ID::body, ID::bodyMix,
@@ -105,6 +111,21 @@ KeysKillaProcessor::KeysKillaProcessor()
     undoStack.clear(); redoStack.clear(); lastSnap.clear();
     setParentPreset (0, 0);
     setParentPreset (1, juce::jmin ((int) factoryPresets().size() - 1, 250));
+
+    // v0.15 modules
+    efxBank = std::make_unique<ek::PresetBank>();
+    {
+        int size = 0;
+        if (const char* d = BinaryData::getNamedResource ("effector_factory_json", size)) efxBank->loadFactory (juce::String::fromUTF8 (d, size));
+        for (int c = 0; c < efxBank->getNumChannels(); ++c)
+        {
+            const auto& ps = efxBank->getChannelPresets (c);
+            for (int k = 0; k < (int) ps.size(); ++k)
+                efxList.push_back ({ c, k, ps[(size_t) k].name, ps[(size_t) k].description, efxBank->getChannels()[(size_t) c].name });
+        }
+    }
+    efx = std::make_unique<ek::Engine>();
+    moduleHousekeeping();
 }
 
 KeysKillaProcessor::~KeysKillaProcessor()
@@ -148,6 +169,11 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     half->prepare (sampleRate, std::max (8192, samplesPerBlock));
     halfLoaded = -1; halfFade = 0;
     halfDryL.assign ((size_t) std::max (8192, samplesPerBlock), 0.0f); halfDryR = halfDryL;
+    drums.prepare (sampleRate, std::max (8192, samplesPerBlock));
+    digga.prepare (sampleRate);
+    efx->prepare (sampleRate, std::max (8192, samplesPerBlock), 1);
+    efxDryL = halfDryL; efxDryR = halfDryL; efxFade = 0;
+    rollRunning = false; rollBeat = -1.0f;
 }
 
 float KeysKillaProcessor::value (int i) const
@@ -595,6 +621,29 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     buildVoiceParams (vp, fp);
     fp.bpm = bpm;
 
+    // v0.15: the keys play a module (808 / SNARE / CLAP / HATS / DIGGA) instead of the synth
+    {
+        const int pm = juce::jlimit (0, (int) numPlayModes - 1, (int) raw[(size_t) I.playMode]->load());
+        if (pm != lastPlayMode)
+        {
+            drums.allOff(); digga.allOff();
+            if (lastPlayMode == playKeys) synth.allOff (false);
+            lastPlayMode = pm;
+        }
+        if (pm != playKeys)
+        {
+            static constexpr int targets[] { -1, kk::drum808, kk::drumSnare, kk::drumClap, kk::drumHat, -1 };
+            for (const auto meta : midi)
+            {
+                const auto m = meta.getMessage();
+                if (! m.isNoteOnOrOff() && ! m.isAllNotesOff()) continue;
+                if (m.isAllNotesOff()) { drums.allOff(); digga.allOff(); continue; }
+                kk::DrumEvent e { juce::jlimit (0, n - 1, meta.samplePosition), targets[pm], m.getNoteNumber(), m.getFloatVelocity(), m.isNoteOn() };
+                if (pm == playDigga) digga.add (e); else drums.add (e);
+            }
+            midi.clear();
+        }
+    }
     processedMidi.clear();
     processMidi (midi, processedMidi, n, beatPos, bpm);
     lastBpm = bpm;
@@ -667,12 +716,16 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     while (midiIt != processedMidi.cend()) { handleMidi ((*midiIt).getMessage()); ++midiIt; }
     sampleClock += n;
 
-    if (raw[(size_t) I.halfOn]->load() > 0.5f || halfFade > 0.0f)
+    processModules (midi, buffer, n, beatPos, bps, bpm, ppq, hostPlaying);
+    if (raw[(size_t) I.efxOn]->load() > 0.5f || efxFade > 0.0f) processEffector (buffer, n, bpm, ppq, hostPlaying);
+    if (raw[(size_t) I.halfOn]->load() > 0.5f || halfFade > 0.0f) processHalf (buffer, n, bpm, ppq, hostPlaying);
+    for (int ch = 0; ch < std::min (2, buffer.getNumChannels()); ++ch)
     {
-        processHalf (buffer, n, bpm, ppq, hostPlaying);
-        peakL = buffer.getMagnitude (0, 0, n);
-        peakR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : peakL;
+        auto* d = buffer.getWritePointer (ch);
+        for (int i = 0; i < n; ++i) d[i] = std::clamp (d[i], -1.0f, 1.0f);   // modules never push the output past 0 dBFS
     }
+    peakL = buffer.getMagnitude (0, 0, n);
+    peakR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : peakL;
 
     meterL = std::max (peakL, meterL.load()); meterR = std::max (peakR, meterR.load());
     if (fxPtr->peakPre > 1.0f) overload = true;
@@ -727,6 +780,275 @@ void KeysKillaProcessor::processHalf (juce::AudioBuffer<float>& buffer, int n, d
     if (halfFade <= 0.0f) { half->reset(); halfLoaded = -1; }
 }
 
+
+//==============================================================================
+// v0.15 modules: drums (808 / SNARE / CLAP / hats + ROLLS), DIGGA, EFFECTOR
+void KeysKillaProcessor::processModules (juce::MidiBuffer&, juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps,
+                                         double, double, bool hostPlaying)
+{
+    const auto& I = *ix;
+    auto P = [this] (int i) { return raw[(size_t) i]->load(); };
+    // pad hits from the UI
+    for (auto& q : padQueue)
+        if (const int v = q.exchange (0); v > 0)
+        {
+            const int mode = (v - 1) >> 8, note = (v - 1) & 0xff;
+            static constexpr int targets[] { -1, kk::drum808, kk::drumSnare, kk::drumClap, kk::drumHat, -1 };
+            kk::DrumEvent on { 0, mode < numPlayModes ? targets[mode] : -1, note, 0.85f, true };
+            if (mode == playDigga) digga.add (on);
+            else if (on.target >= 0)
+            {
+                drums.add (on);
+                if (mode == play808) { kk::DrumEvent off = on; off.on = false; off.pos = n - 1; drums.add (off); pad808Off = (int) (sr * 0.7); pad808Note = note; }
+            }
+        }
+    if (pad808Note >= 0) { pad808Off -= n; if (pad808Off <= 0) { drums.add ({ 0, kk::drum808, pad808Note, 0, false }); pad808Note = -1; } }
+
+    // ROLLS: hats in the host tempo (bar-synced while the host plays), or the preview
+    const int bars = (int) P (I.rlBars) == 0 ? 1 : (int) P (I.rlBars) == 1 ? 2 : 4;
+    const int key = (int) kk::hash32 ((uint32_t) P (I.rlSeed) * 31u + (uint32_t) P (I.rlStyle) * 7u + (uint32_t) bars * 131u + (uint32_t) std::lround (P (I.rlDensity) * 100.0f)) & 0x7fffffff;
+    if (key != rollKey.load()) { if (rollKeyWanted.exchange (key) != key) triggerAsyncUpdate(); }
+    const bool want = (P (I.rlOn) > 0.5f && hostPlaying) || rollPreview.load();
+    if (! want) { if (rollRunning) { rollRunning = false; rollBeat = -1.0f; } }
+    else if (const juce::SpinLock::ScopedTryLockType tl (rollLock); tl.isLocked() && ! rolls.empty())
+    {
+        if (! rollRunning || hostPlaying != rollHostWas)
+        {
+            rollOrigin = hostPlaying ? 0.0 : beatPos;
+            rollRunning = true; rollHostWas = hostPlaying;
+        }
+        const double len = rollLenBeats, start = beatPos - rollOrigin, end = start + bps * n;
+        for (const auto& h : rolls)
+        {
+            const double m = std::ceil ((start - h.beat) / len);
+            for (double t = h.beat + m * len; t < end; t += len)
+                if (t >= start) drums.add ({ juce::jlimit (0, n - 1, (int) ((t - start) / bps)), kk::drumHat, 60 + h.semi, h.vel, true });
+        }
+        rollBeat = (float) std::fmod (std::max (0.0, start), len);
+    }
+
+    kk::DrumParams dp;
+    dp.b8Tune = P (I.b8Tune); dp.b8Decay = P (I.b8Decay); dp.b8Punch = P (I.b8Punch); dp.b8Glide = P (I.b8Glide); dp.b8Tone = P (I.b8Tone);
+    dp.b8Drive = P (I.b8Drive); dp.b8Sat = (int) P (I.b8Sat); dp.b8Clip = P (I.b8Clip); dp.b8Level = P (I.b8Level);
+    dp.snTune = P (I.snTune); dp.snBody = P (I.snBody); dp.snSnap = P (I.snSnap); dp.snDecay = P (I.snDecay); dp.snTone = P (I.snTone); dp.snLevel = P (I.snLevel);
+    dp.clTune = P (I.clTune); dp.clSpread = P (I.clSpread); dp.clDecay = P (I.clDecay); dp.clTone = P (I.clTone); dp.clWidth = P (I.clWidth); dp.clLevel = P (I.clLevel);
+    dp.htTune = P (I.htTune); dp.htDecay = P (I.htDecay); dp.htTone = P (I.htTone); dp.htLevel = P (I.htLevel);
+    kk::DiggaParams gp;
+    gp.mode = (int) P (I.dgMode); gp.pitch = P (I.dgPitch); gp.reverse = P (I.dgRev) > 0.5f; gp.level = P (I.dgLevel);
+
+    float* L = buffer.getWritePointer (0);
+    float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+    if (R == nullptr)   // mono host bus: render stereo into scratch, fold down
+    {
+        if (efxDryR.size() < (size_t) n) return;
+        std::fill_n (efxDryR.begin(), n, 0.0f);
+        std::fill_n (efxDryL.begin(), n, 0.0f);
+        drums.process (efxDryL.data(), efxDryR.data(), n, dp); digga.process (efxDryL.data(), efxDryR.data(), n, gp);
+        for (int i = 0; i < n; ++i) L[i] += 0.5f * (efxDryL[(size_t) i] + efxDryR[(size_t) i]);
+        return;
+    }
+    drums.process (L, R, n, dp);
+    digga.process (L, R, n, gp);
+}
+
+void KeysKillaProcessor::processEffector (juce::AudioBuffer<float>& buffer, int n, double bpm, double ppq, bool hostPlaying)
+{
+    const auto& I = *ix;
+    const bool on = raw[(size_t) I.efxOn]->load() > 0.5f;
+    if ((int) raw[(size_t) I.efxPreset]->load() != efxApplied.load()) triggerAsyncUpdate();
+    const auto* slots = efxSlots.acquire();
+    if (slots == nullptr || efxDryL.size() < (size_t) n || buffer.getNumChannels() < 2) { efxFade = 0; return; }
+    std::copy (buffer.getReadPointer (0), buffer.getReadPointer (0) + n, efxDryL.begin());
+    std::copy (buffer.getReadPointer (1), buffer.getReadPointer (1) + n, efxDryR.begin());
+    ek::EngineInput in;
+    in.base = *slots;
+    for (int m = 0; m < 5; ++m) in.macros[(size_t) m] = raw[(size_t) I.efxM[m]]->load();
+    in.global.blend = raw[(size_t) I.efxBlend]->load();
+    ek::ProcessContext ctx;
+    ctx.sampleRate = sr; ctx.bpm = bpm; ctx.ppq = ppq; ctx.playing = hostPlaying; ctx.hostHasPosition = hostPlaying;
+    float* chs[2] { buffer.getWritePointer (0), buffer.getWritePointer (1) };
+    juce::AudioBuffer<float> io (chs, 2, n);
+    efx->process (io, in, ctx);
+    const float step = 1.0f / (0.02f * (float) sr);
+    for (int s = 0; s < n; ++s)
+    {
+        efxFade = on ? std::min (1.0f, efxFade + step) : std::max (0.0f, efxFade - step);
+        const float dl = efxDryL[(size_t) s], dr = efxDryR[(size_t) s];
+        float l = dl + (chs[0][s] - dl) * efxFade, r = dr + (chs[1][s] - dr) * efxFade;
+        if (! std::isfinite (l) || ! std::isfinite (r)) { l = dl; r = dr; }
+        chs[0][s] = l; chs[1][s] = r;
+    }
+}
+
+void KeysKillaProcessor::hitPad (int mode, int note, float)
+{
+    if (note < 0) note = mode == play808 ? 36 : 60;
+    const int v = ((mode & 0xff) << 8 | (note & 0xff)) + 1;
+    for (auto& q : padQueue) { int z = 0; if (q.compare_exchange_strong (z, v)) return; }
+}
+
+void KeysKillaProcessor::moduleHousekeeping()
+{
+    if (efx) { efx->collectGarbage(); efxSlots.collect(); }
+    // the effector chain is only built when EFFECTOR is on (keeps plugin start-up and the thumbnail renderer light)
+    if (efx && ix && raw[(size_t) ix->efxOn]->load() > 0.5f && (int) raw[(size_t) ix->efxPreset]->load() != efxApplied.load())
+        setEffectorPreset ((int) raw[(size_t) ix->efxPreset]->load());
+    if (ix && (rollKey.load() < 0 || rollKeyWanted.load() != rollKey.load())) rebuildRolls();
+    if (ix)
+    {
+        const int slices = (int) raw[(size_t) ix->dgSlices]->load() == 0 ? 8 : 16, chop = (int) raw[(size_t) ix->dgChop]->load();
+        if (chop * 100 + slices != diggaChopKey) { diggaChopKey = chop * 100 + slices; digga.rechop (chop, slices); }
+    }
+}
+
+void KeysKillaProcessor::rebuildRolls()
+{
+    const auto& I = *ix;
+    auto P = [this] (int i) { return raw[(size_t) i]->load(); };
+    const int bars = (int) P (I.rlBars) == 0 ? 1 : (int) P (I.rlBars) == 1 ? 2 : 4;
+    auto pat = kk::makeRolls ((uint32_t) P (I.rlSeed), (int) P (I.rlStyle), bars, P (I.rlDensity));
+    const int key = (int) kk::hash32 ((uint32_t) P (I.rlSeed) * 31u + (uint32_t) P (I.rlStyle) * 7u + (uint32_t) bars * 131u + (uint32_t) std::lround (P (I.rlDensity) * 100.0f)) & 0x7fffffff;
+    {
+        const juce::SpinLock::ScopedLockType l (rollLock);
+        rolls.swap (pat);
+        rollLenBeats = bars * 4.0;
+    }
+    rollKey = key; rollKeyWanted = key;
+}
+
+std::vector<kk::RollHit> KeysKillaProcessor::rollPattern() const
+{
+    const juce::SpinLock::ScopedLockType l (rollLock);
+    return rolls;
+}
+
+void KeysKillaProcessor::newRolls()
+{
+    auto* p = apvts.getParameter (ID::rlSeed);
+    const int next = (int) (juce::Random::getSystemRandom().nextInt (99999)) + 1;
+    p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 ((float) next)); p->endChangeGesture();
+    rebuildRolls();
+}
+
+juce::File KeysKillaProcessor::exportRollsMidi() const
+{
+    const auto pat = rollPattern();
+    const double bpm = lastBpm.load();
+    const int ppq = 960;
+    juce::MidiMessageSequence seq;
+    auto tempo = juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / bpm)); tempo.setTimeStamp (0); seq.addEvent (tempo);
+    for (auto& h : pat)
+    {
+        const int note = juce::jlimit (0, 127, 60 + h.semi);
+        seq.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) juce::jlimit (1, 127, (int) std::lround (h.vel * 127.0f))), std::round (h.beat * ppq));
+        seq.addEvent (juce::MidiMessage::noteOff (1, note), std::round ((h.beat + h.len) * ppq));
+    }
+    seq.updateMatchedPairs();
+    juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq); mf.addTrack (seq);
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("KEYS KILLA Loops");
+    dir.createDirectory();
+    static const char* styles[] { "Classic", "Triplet", "Drill", "Crazy" };
+    const int st = juce::jlimit (0, 3, (int) raw[(size_t) ix->rlStyle]->load());
+    auto f = dir.getChildFile ("KK Rolls - " + juce::String (styles[st]) + " " + juce::String ((int) raw[(size_t) ix->rlSeed]->load()) + " - " + juce::String (juce::roundToInt (bpm)) + "BPM.mid");
+    f.deleteFile();
+    if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
+    return f;
+}
+
+void KeysKillaProcessor::setEffectorPreset (int flat)
+{
+    if (efxList.empty()) return;
+    flat = juce::jlimit (0, (int) efxList.size() - 1, flat);
+    const auto& e = efxList[(size_t) flat];
+    const auto* p = efxBank->getFactory (e.channel, e.index);
+    if (p == nullptr) return;
+    auto prog = *p;
+    if (prog.source != ek::Source::Bus)
+    {
+        if (auto it = efxTrims.find (flat); it != efxTrims.end()) prog.trimDb = it->second;
+        else { prog.trimDb = juce::jlimit (-12.0f, 6.0f, ek::estimateProgramTrimDb (prog, 44100.0)); efxTrims[flat] = prog.trimDb; }
+    }
+    efx->setRackConfig (prog.rackConfig());
+    ek::ProgramExtras ex; ex.source = prog.source; ex.trimDb = prog.trimDb; ex.maps = prog.maps; ex.mod = prog.mod;
+    efx->setExtras (ex);
+    auto rp = std::make_unique<ek::RackParams>();
+    for (int sl = 0; sl < ek::kNumSlots; ++sl)
+    {
+        rp->slots[(size_t) sl].p = prog.slots[(size_t) sl].p;
+        rp->slots[(size_t) sl].mix = prog.slots[(size_t) sl].mix;
+        rp->slots[(size_t) sl].pause = prog.slots[(size_t) sl].pause;
+    }
+    efxSlots.publish (std::move (rp));
+    efxApplied = flat;
+    auto setP = [] (juce::RangedAudioParameter* q, float plain)
+    {
+        const float v = q->convertTo0to1 (plain);
+        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
+    };
+    setP (apvts.getParameter (ID::efxPreset), (float) flat);
+    for (int m = 0; m < 5; ++m) setP (apvts.getParameter (ID::efxMacro (m)), prog.macros[(size_t) m]);
+}
+
+juce::StringArray KeysKillaProcessor::effectorMacroNames() const
+{
+    juce::StringArray n; for (int m = 0; m < 5; ++m) n.add (ek::MacroEngine::macroName (m));
+    return n;
+}
+
+bool KeysKillaProcessor::loadDiggaFile (const juce::File& f)
+{
+    const int slices = (int) raw[(size_t) ix->dgSlices]->load() == 0 ? 8 : 16, chop = (int) raw[(size_t) ix->dgChop]->load();
+    if (! digga.load (f, chop, slices)) return false;
+    diggaPath = f.getFullPathName(); diggaChopKey = chop * 100 + slices;
+    return true;
+}
+
+void KeysKillaProcessor::applyDrumKit (const std::vector<std::pair<juce::String, float>>& values)
+{
+    for (auto& [id, v] : values)
+        if (auto* q = apvts.getParameter (id))
+        {
+            const float nv = q->convertTo0to1 (v);
+            if (std::abs (q->getValue() - nv) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (nv); q->endChangeGesture(); }
+        }
+}
+
+const std::vector<KeysKillaProcessor::DrumKit>& KeysKillaProcessor::drumKits (int mode)
+{
+    using V = std::vector<std::pair<juce::String, float>>;
+    auto b8 = [] (const char* n, float tune, float dec, float punch, float glide, float tone, float drive, float sat, float clip)
+    { return DrumKit { n, V { { ID::b8Tune, tune }, { ID::b8Decay, dec }, { ID::b8Punch, punch }, { ID::b8Glide, glide }, { ID::b8Tone, tone },
+                                { ID::b8Drive, drive }, { ID::b8Sat, sat }, { ID::b8Clip, clip } } }; };
+    auto sn = [] (const char* n, float tune, float body, float snap, float dec, float tone)
+    { return DrumKit { n, V { { ID::snTune, tune }, { ID::snBody, body }, { ID::snSnap, snap }, { ID::snDecay, dec }, { ID::snTone, tone } } }; };
+    auto cl = [] (const char* n, float tune, float spread, float dec, float tone, float width)
+    { return DrumKit { n, V { { ID::clTune, tune }, { ID::clSpread, spread }, { ID::clDecay, dec }, { ID::clTone, tone }, { ID::clWidth, width } } }; };
+    auto ht = [] (const char* n, float tune, float dec, float tone)
+    { return DrumKit { n, V { { ID::htTune, tune }, { ID::htDecay, dec }, { ID::htTone, tone } } }; };
+    static const std::vector<DrumKit> k808 { b8 ("Classic Long", 0, 2.4f, 0.35f, 0.08f, 0.15f, 20, 0, 2), b8 ("Hard Punch", 0, 1.2f, 0.8f, 0.06f, 0.35f, 45, 1, 5),
+        b8 ("Distorted", 0, 1.8f, 0.5f, 0.1f, 0.6f, 80, 1, 8), b8 ("Fold Monster", 0, 1.5f, 0.45f, 0.08f, 0.5f, 70, 2, 6),
+        b8 ("Smooth Sub", 0, 3.0f, 0.15f, 0.12f, 0.05f, 10, 0, 1), b8 ("Drill Slide", 0, 2.0f, 0.4f, 0.22f, 0.3f, 40, 1, 4),
+        b8 ("Short Bounce", 0, 0.5f, 0.6f, 0.05f, 0.3f, 35, 1, 4), b8 ("Long Glide", -2, 3.5f, 0.3f, 0.35f, 0.2f, 25, 0, 3),
+        b8 ("Rage Clipped", 0, 1.4f, 0.7f, 0.07f, 0.8f, 95, 1, 12), b8 ("Tape Warm", 0, 2.2f, 0.3f, 0.1f, 0.25f, 30, 0, 2) };
+    static const std::vector<DrumKit> kSn { sn ("Trap Crack", 2, 0.4f, 0.8f, 0.3f, 0.7f), sn ("Fat Body", -2, 0.9f, 0.5f, 0.45f, 0.45f),
+        sn ("Tight Rim", 5, 0.2f, 0.9f, 0.12f, 0.85f), sn ("Long Room", 0, 0.6f, 0.7f, 0.85f, 0.5f), sn ("Lo-Fi Dusty", -3, 0.7f, 0.4f, 0.35f, 0.2f),
+        sn ("Drill Snare", 3, 0.5f, 0.75f, 0.25f, 0.65f), sn ("808 Snare", 0, 0.55f, 0.55f, 0.4f, 0.55f), sn ("Pitched Down", -7, 0.8f, 0.6f, 0.5f, 0.4f) };
+    static const std::vector<DrumKit> kCl { cl ("Classic Clap", 0, 0.5f, 0.35f, 0.5f, 0.5f), cl ("Wide Stack", 0, 0.7f, 0.45f, 0.55f, 1.0f),
+        cl ("Tight Snap", 3, 0.2f, 0.15f, 0.75f, 0.3f), cl ("Big Room", -1, 0.6f, 0.85f, 0.45f, 0.8f), cl ("Dark Clap", -4, 0.5f, 0.4f, 0.2f, 0.5f),
+        cl ("Bright Crack", 4, 0.4f, 0.3f, 0.9f, 0.6f), cl ("Drill Clap", 2, 0.35f, 0.25f, 0.65f, 0.7f), cl ("Lo-Fi Clap", -2, 0.55f, 0.4f, 0.3f, 0.2f) };
+    static const std::vector<DrumKit> kHt { ht ("Closed Tight", 0, 0.05f, 0.6f), ht ("Crisp", 3, 0.07f, 0.85f), ht ("Dark", -4, 0.08f, 0.2f),
+        ht ("Open-ish", 0, 0.25f, 0.5f), ht ("Shaker", 6, 0.04f, 1.0f), ht ("Drill Hat", 2, 0.06f, 0.7f) };
+    static const std::vector<DrumKit> none;
+    switch (mode)
+    {
+        case play808: return k808;
+        case playSnare: return kSn;
+        case playClap: return kCl;
+        case playHats: return kHt;
+        default: return none;
+    }
+}
+
 juce::String KeysKillaProcessor::halfPresetName (int idx) const
 {
     const auto& f = halfLib->getFactory();
@@ -774,7 +1096,7 @@ bool KeysKillaProcessor::isModified() const
 {
     if (loadedSnapshot.size() != params.size()) return false;
     for (size_t i = 0; i < params.size(); ++i)
-        if (! keepOnPresetLoad.contains (params[i]->getParameterID()) && params[i]->getParameterID() != ID::morphX
+        if (! keeps (params[i]->getParameterID()) && params[i]->getParameterID() != ID::morphX
             && params[i]->getParameterID() != ID::morphY && std::abs (params[i]->getValue() - loadedSnapshot[i]) > 1.0e-4f)
             return true;
     return false;
@@ -1778,6 +2100,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("corners", juce::String (corners[0]) + "," + juce::String (corners[1]) + "," + juce::String (corners[2]) + "," + juce::String (corners[3]), nullptr);
     state.setProperty ("eco", eco.load(), nullptr);
     state.setProperty ("macroNames", macroLabels.joinIntoString ("|"), nullptr);
+    state.setProperty ("diggaFile", diggaPath, nullptr);
     saveLab (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
@@ -1806,6 +2129,10 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             snapshotForModified();
             if (! curLoop.valid) curLoop = kk::loopFromSeed ((uint32_t) presetName.hashCode());
             rebuildLoopSeq();   // bass / mono of the restored sound decide which lines the loop plays
+            efxApplied = -1;
+            const juce::File df (vt.getProperty ("diggaFile", "").toString());
+            if (df.existsAsFile() && df.getFullPathName() != diggaPath) loadDiggaFile (df);
+            moduleHousekeeping();
         }
 }
 
@@ -1865,7 +2192,7 @@ bool KeysKillaProcessor::loadUserPreset (const juce::File& f)
     std::vector<std::pair<juce::String, float>> vals;
     if (auto* obj = v["params"].getDynamicObject())
         for (auto& prop : obj->getProperties())
-            if (! keepOnPresetLoad.contains (prop.name.toString()))
+            if (! keeps (prop.name.toString()))
                 vals.push_back ({ prop.name.toString(), (float) (double) prop.value });
     applyValues (vals);
     setFxOrder (orderFromString (v["fxOrder"].toString()));

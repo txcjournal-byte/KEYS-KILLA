@@ -5,6 +5,15 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
+## Moduly (verze 0.15)
+
+- **808** - laděná 808 se slidy (překryj dvě noty v piano rollu), PUNCH, TONE, GLIDE + 808 Killa DRIVE / SATURATION / CLIP. 10 kitů, BREED = 6 nových 808.
+- **SNARE / CLAP** - syntetizované trap snary a clapy, kity, knoby, BREED.
+- **ROLLS** - generátor hi-hat rollů (CLASSIC / TRIPLET / DRILL / CRAZY, 1-4 takty), PLAY, WITH FL (hraje s FL v tempu), přetažení patternu do FL jako MIDI.
+- **EFFECTOR** - Effector Killa: 12 kanálů x 8 hotových řetězců efektů, 5 maker, BLEND.
+- **DIGGA** - přetáhni sample, rozseká se (podle úderů nebo rovně, 8 / 16), pady a klávesy hrají kousky (C5 = 1), REVERSE, PITCH.
+- Tlačítko **PLAY ... ON KEYS** přepne, co hrají klávesy / MIDI z FL (zvuk KEYS KILLA, 808, snare, clap, hi-haty nebo DIGGA). Tip: pro každý nástroj jedna instance KEYS KILLA.
+
 ## 10 v 1 (verze 0.14)
 
 KEYS KILLA obsahuje ostatní KILLA pluginy jako moduly - spodní lišta: **808 | SNARE | CLAP | ROLLS | HALF | EFFECTOR | DIGGA**.
