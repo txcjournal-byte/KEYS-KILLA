@@ -4,6 +4,7 @@
 // Offline render of every factory preset: checks for NaN/Inf, silence, DC and loudness spread.
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
+#include "../Source/plugins/digga/PluginProcessor.h"
 #include <cstdio>
 #include <set>
 
@@ -225,6 +226,47 @@ static int unitTests()
         juce::MemoryBlock mb; p.getStateInformation (mb);
         KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
         check (q.drum (0).hasSample(), "the 808 comes back with the project");
+        f.deleteFile();
+    }
+    // DIGGA KILLA inside KEYS KILLA: a dropped sample is analysed and cut into loops / one-shots
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto* dg = dynamic_cast<digga::DiggaKillaProcessor*> (p.module (KeysKillaProcessor::modDigga));
+        check (dg != nullptr, "DIGGA module is Digga Killa");
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_digga_loop.wav");
+        {
+            juce::AudioBuffer<float> b (2, 44100 * 8);
+            juce::Random rnd (3);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const int beat = i % 22050;
+                const float kick = beat < 4000 ? std::sin ((float) beat * 0.012f) * std::exp (-(float) beat / 1500.0f) : 0.0f;
+                const float pad = 0.25f * std::sin ((float) i * 0.031f) + 0.15f * std::sin ((float) i * 0.047f);
+                const float hat = (i % 5512) < 600 ? (rnd.nextFloat() - 0.5f) * 0.3f * std::exp (-(float) (i % 5512) / 200.0f) : 0.0f;
+                b.setSample (0, i, kick + pad + hat); b.setSample (1, i, kick + pad * 0.9f + hat);
+            }
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 2, 16, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        if (dg != nullptr)
+        {
+            dg->getSampleStore().loadFile (f);
+            juce::AudioBuffer<float> b (2, 512);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            while (juce::Time::getMillisecondCounterHiRes() - t0 < 60000.0)
+            {
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+                juce::MidiBuffer m; p.processBlock (b, m);
+                if (dg->getSampleStore().getStatus() == digga::SampleStore::Status::ready && ! dg->getEngine().getTree().isEmpty()) break;
+            }
+            const auto st = dg->getSampleStore().getStatus();
+            std::printf ("DIGGA: status %d, results %s after %.1f s\n", (int) st, dg->getEngine().getTree().isEmpty() ? "none" : "ready",
+                         (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+            check (st == digga::SampleStore::Status::ready, "DIGGA loads a dropped sample");
+            check (! dg->getEngine().getTree().isEmpty(), "DIGGA makes loops / one-shots from it");
+        }
         f.deleteFile();
     }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER

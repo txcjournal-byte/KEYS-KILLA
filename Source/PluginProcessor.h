@@ -154,6 +154,7 @@ public:
     const kk::LoopGenes& currentLoop() const { return curLoop; }
     std::vector<kk::LoopNote> loopNotes (const Genome& g) const;
     juce::File exportLoopMidi (const Genome& g) const; // temp .mid for drag & drop into the host
+    juce::File exportSoundWav (int note = 60);          // DRAG TO DAW: the current sound as a one-shot WAV
     Genome currentGenome() const { return genomeFromCurrent(); }
     std::atomic<float> loopBeat { -1.0f };            // playhead in beats (UI), -1 = stopped
     std::atomic<double> lastBpm { 140.0 };

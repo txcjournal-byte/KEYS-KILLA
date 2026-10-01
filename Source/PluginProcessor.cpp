@@ -798,7 +798,8 @@ void KeysKillaProcessor::processModules (juce::AudioBuffer<float>& buffer, juce:
         for (int k = 0; k < 2; ++k)
         {
             const int m = k == 0 ? modHalf : modEffector;
-            if (! on[k] && modFade[(size_t) k] <= 0.0f) continue;
+            // the plugins always run (their screens, meters and modulation live on the audio thread);
+            // switched off they are faded out to the dry melody
             for (int c = 0; c < 2; ++c) modDry.copyFrom (c, 0, bus, c, 0, len);
             noMidi.clear();
             runModule (m, bus, len, noMidi);
@@ -1525,6 +1526,45 @@ void KeysKillaProcessor::renderLoop (juce::MidiBuffer& out, int n, double beatPo
     }
     const double pos = std::fmod (b1, len);
     loopBeat = (float) (pos < 0 ? pos + len : pos);
+}
+
+// DRAG TO DAW: render the current sound (one note, until it dies out) offline into a 24-bit WAV
+juce::File KeysKillaProcessor::exportSoundWav (int note)
+{
+    juce::MemoryBlock mb; getStateInformation (mb);
+    KeysKillaProcessor r (false);
+    r.setStateInformation (mb.getData(), (int) mb.getSize());
+    const double rate = 44100.0; const int block = 512;
+    r.prepareToPlay (rate, block);
+    juce::AudioBuffer<float> out (2, (int) (rate * 8.0)), b (2, block);
+    out.clear();
+    int pos = 0, quiet = 0;
+    const int holdEnd = (int) (rate * 1.6);
+    while (pos + block <= out.getNumSamples())
+    {
+        juce::MidiBuffer m;
+        if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 110), 0);
+        if (pos <= holdEnd && pos + block > holdEnd) m.addEvent (juce::MidiMessage::noteOff (1, note), holdEnd - pos);
+        r.processBlock (b, m);
+        for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, b, c, 0, block);
+        pos += block;
+        if (pos > holdEnd) { quiet = b.getMagnitude (0, block) < 1.0e-4f ? quiet + block : 0; if (quiet > (int) (rate * 0.15)) break; }
+    }
+    out.setSize (2, std::max (block, pos - quiet), true);
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("KEYS KILLA Sounds");
+    dir.createDirectory();
+    auto f = dir.getChildFile (juce::File::createLegalFileName ("KK " + getProgramName (getCurrentProgram()).replace (juce::String::fromUTF8 ("\xc3\x97"), "x").replace (juce::String::fromUTF8 ("\xc2\xb7"), "-")).substring (0, 100)
+                               + " " + juce::MidiMessage::getMidiNoteName (note, true, true, 4) + ".wav");
+    f.deleteFile();
+    juce::WavAudioFormat wav;
+    auto os = std::make_unique<juce::FileOutputStream> (f);
+    if (os->openedOk())
+        if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (os.get(), rate, 2, 24, {}, 0)))
+        {
+            os.release();
+            w->writeFromAudioSampleBuffer (out, 0, out.getNumSamples());
+        }
+    return f;
 }
 
 juce::File KeysKillaProcessor::exportLoopMidi (const Genome& g) const

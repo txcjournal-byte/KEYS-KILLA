@@ -308,7 +308,7 @@ public:
         {
             g.setColour (selected ? Colour (0xffffe9e9) : Colour (0xffd9d3d3));
             g.setFont (serif (framed ? std::min (r.getHeight() * 0.5f, 20.0f) : r.getHeight() * 0.5f, false, 0.12f));
-            g.drawFittedText (text, r.reduced (4, 0).toNearestInt(), Justification::centred, 1, 0.7f);
+            g.drawFittedText (text, r.reduced (4, 0).toNearestInt(), Justification::centred, text.containsChar ('\n') ? 2 : 1, 0.7f);
         }
         if (glyph) glyph (g, r, s);
     }
@@ -1255,6 +1255,7 @@ private:
 class EmbeddedPage : public Component, private Timer
 {
 public:
+    static constexpr int kRail = 148;   // the left tiles stay visible
     EmbeddedPage (KeysKillaProcessor& p, KKLookAndFeel& l, int moduleIndex, String t, String sub, const char* onParamId)
         : proc (p), lnf (l), mod (moduleIndex), title (std::move (t)), subtitle (std::move (sub)), onId (onParamId)
     {
@@ -1263,7 +1264,6 @@ public:
             onBtn.framed = true;
             onBtn.setTooltip (title + " on / off - it works on the melodies only (KEYS KILLA + DIGGA), never on drums");
             onBtn.onClick = [this] { setParamFromUi (proc, onId, isOn() ? 0.0f : 1.0f); refresh(); };
-            addAndMakeVisible (onBtn);
         }
         if (mod == KeysKillaProcessor::modDigga)
         {
@@ -1272,44 +1272,63 @@ public:
             keysBtn.onClick = [this] { setParamFromUi (proc, ID::playMode, keysToDigga() ? 0.0f : 1.0f); refresh(); };
             addAndMakeVisible (keysBtn);
         }
-        if (auto* m = proc.module (mod))
-        {
-            editor.reset (m->createEditorIfNeeded());
-            if (editor != nullptr) { addAndMakeVisible (*editor); native = editor->getBounds(); }
-        }
+        tryCreateEditor();
         setOpaque (true);
         refresh();
         startTimerHz (5);
     }
     ~EmbeddedPage() override { stopTimer(); editor.reset(); }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (onId != nullptr && power.expanded (6).contains (e.getPosition())) { setParamFromUi (proc, onId, isOn() ? 0.0f : 1.0f); refresh(); repaint(); }
+    }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff0a0707));
-        g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1), 8, 1.2f);
-        g.setColour (Colours::white); g.setFont (serif (24.0f, true, 0.3f));
-        g.drawText (title, 16, 4, 220, 36, Justification::centredLeft);
-        g.setColour (Colour (0xff9c9494)); g.setFont (serif (13.0f, false, 0.2f));
-        g.drawText (subtitle, 200, 4, getWidth() - 560, 36, Justification::centredLeft);
+        g.fillAll (Colour (0xff070505));
+        // left rail behind the BREED LAB / FAMILY TREE / KILLA tiles
+        g.setColour (Colour (0xff0d0909)); g.fillRect (0, 0, kRail, getHeight());
+        g.setColour (s.panelEdge.withAlpha (0.6f)); g.drawVerticalLine (kRail - 1, 0.0f, (float) getHeight());
+        g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
+        g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
+        if (onId != nullptr)   // big power switch under the tiles
+        {
+            const auto pr = power.toFloat();
+            const bool on = isOn();
+            const Colour c = on ? Colour (0xff36ff6a) : Colour (0xffff3030);
+            g.setColour (c.withAlpha (on ? 0.25f : 0.12f)); g.fillEllipse (pr.expanded (10));
+            g.setGradientFill (ColourGradient (Colour (0xff2c2626), pr.getCentreX(), pr.getY(), Colour (0xff0a0808), pr.getCentreX(), pr.getBottom(), false));
+            g.fillEllipse (pr);
+            g.setColour (c); g.drawEllipse (pr.reduced (2), 3.0f);
+            const auto cc = pr.getCentre(); const float rr = pr.getWidth() * 0.22f;
+            Path arc; arc.addCentredArc (cc.x, cc.y, rr, rr, 0, 0.6f, MathConstants<float>::twoPi - 0.6f, true);
+            g.strokePath (arc, PathStrokeType (3.5f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.drawLine (cc.x, cc.y - rr * 1.25f, cc.x, cc.y - rr * 0.2f, 3.5f);
+            g.setFont (Font (FontOptions (18.0f, Font::bold)).withExtraKerningFactor (0.15f));
+            g.drawText (on ? "ON" : "OFF", Rectangle<float> (0, pr.getBottom() + 8, (float) kRail, 24).toNearestInt(), Justification::centred);
+            g.setColour (Colour (0xff9c9494)); g.setFont (Font (FontOptions (11.0f)));
+            g.drawFittedText (title + "\non the melodies", Rectangle<float> (4, pr.getBottom() + 32, (float) kRail - 8, 30).toNearestInt(), Justification::centred, 2);
+        }
         if (editor == nullptr)
         {
             g.setColour (Colour (0xffb9b0ac)); g.setFont (serif (18.0f, false, 0.2f));
-            g.drawText (title + " is not available here", getLocalBounds(), Justification::centred);
+            g.drawText ("opening " + title + " ...", getLocalBounds(), Justification::centred);
         }
     }
     void resized() override
     {
         const int w = getWidth();
-        onBtn.setBounds (w - 170, 6, 156, 32);
-        keysBtn.setBounds (w - 360, 6, 340, 32);
+        juce::ignoreUnused (w);
+        power = { kRail / 2 - 44, getHeight() - 260, 88, 88 };
+        keysBtn.setBounds (8, getHeight() - 250, kRail - 16, 80);
         if (editor != nullptr)
         {
-            // the plugin keeps its own size and look; it is scaled to fit under the strip
-            auto area = getLocalBounds().reduced (6).withTrimmedTop (40);
+            // the plugin keeps its own look and lays itself out for the bigger size (no transform: crisp, OpenGL-safe)
+            auto area = getLocalBounds().withTrimmedLeft (kRail).reduced (8);
             const float sc = std::min ((float) area.getWidth() / (float) native.getWidth(), (float) area.getHeight() / (float) native.getHeight());
-            editor->setTopLeftPosition (0, 0);
-            const float x = (float) area.getX() + ((float) area.getWidth() - native.getWidth() * sc) * 0.5f;
-            editor->setTransform (AffineTransform::scale (sc).translated (x, (float) area.getY()));
+            const int ew = roundToInt (native.getWidth() * sc), eh = roundToInt (native.getHeight() * sc);
+            placed = { area.getX() + (area.getWidth() - ew) / 2, area.getY(), ew, eh };
+            editor->setBounds (placed);
         }
     }
 private:
@@ -1318,12 +1337,23 @@ private:
     void refresh()
     {
         onBtn.setButtonText (isOn() ? title + "  ON" : title + "  OFF"); onBtn.selected = isOn(); onBtn.repaint();
-        keysBtn.setButtonText (keysToDigga() ? "KEYS PLAY DIGGA" : "PLAY DIGGA ON KEYS"); keysBtn.selected = keysToDigga(); keysBtn.repaint();
+        keysBtn.setButtonText (keysToDigga() ? "KEYS\nPLAY DIGGA" : "PLAY DIGGA\nON KEYS"); keysBtn.selected = keysToDigga(); keysBtn.repaint();
+        repaint (power.expanded (20).withWidth (kRail).withX (0).withHeight (160));
         lastSig = (isOn() ? 1 : 0) + (keysToDigga() ? 2 : 0);
+    }
+    // the host can open a second KEYS KILLA window before closing the old one: wait until the plugin's
+    // previous editor is gone, then create ours (never two editors for one plugin)
+    void tryCreateEditor()
+    {
+        auto* m = proc.module (mod);
+        if (m == nullptr || editor != nullptr || m->getActiveEditor() != nullptr) return;
+        editor.reset (m->createEditorIfNeeded());
+        if (editor != nullptr) { addAndMakeVisible (*editor); native = editor->getBounds().withPosition (0, 0); resized(); repaint(); }
     }
     void timerCallback() override
     {
-        if (editor != nullptr && editor->getBounds().getWidth() != native.getWidth()) { native = editor->getBounds().withPosition (0, 0); resized(); }
+        if (editor == nullptr) tryCreateEditor();
+        if (editor != nullptr && editor->getBounds() != placed) resized();   // the plugin changed its own size: fit it again
         if ((isOn() ? 1 : 0) + (keysToDigga() ? 2 : 0) != lastSig) refresh();
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
@@ -1331,7 +1361,7 @@ private:
     String title, subtitle;
     const char* onId;
     std::unique_ptr<AudioProcessorEditor> editor;
-    Rectangle<int> native;
+    Rectangle<int> native, placed, power;
     HotButton onBtn { lnf }, keysBtn { lnf };
     int lastSig = -1;
 };
@@ -1427,7 +1457,7 @@ public:
         btn (clearBtn, "CLEAR", "Remove the sample", [this] { proc.clearDrum (d); refresh(); });
         if (d == kk::drumHat)
         {
-            btn (rollsBtn, "ROLLS", "Hi-hat roll generator: drag the rolls into FL as MIDI for your hi-hat", [this] { showRolls (! rollsOn); });
+            btn (rollsBtn, "GENERATE ROLLS", "Hi-hat ROLL GENERATOR: triplets, 1/32, 1/64, drill, crazy - drag the rolls into FL as MIDI for your hi-hat", [this] { showRolls (! rollsOn); });
             rolls = std::make_unique<RollsPanel> (proc, lnf);
             addChildComponent (*rolls);
         }
@@ -1490,7 +1520,7 @@ public:
             const int bw = b == &keysBtn ? 230 : b == &dragBtn ? 220 : 120;
             b->setBounds (x, 314, bw, 40); x += bw + 10;
         }
-        if (rolls) { rollsBtn.setBounds (w - 150, 18, 124, 40); rolls->setBounds (getLocalBounds().withTrimmedTop (84)); }
+        if (rolls) { rollsBtn.setBounds (w - 300, 16, 276, 48); rolls->setBounds (getLocalBounds().withTrimmedTop (84)); }
         for (int i = 0; i < 3; ++i) satBtns[(size_t) i]->setBounds (w - 360 + i * 112, 330, 106, 30);
         const int n = (int) knobs.size(), kw = std::min (130, (w - 60) / n);
         for (int i = 0; i < n; ++i) knobs[(size_t) i]->setBounds (30 + i * ((w - 60) / n) + ((w - 60) / n - kw) / 2, h - 210, kw, kw + 22);
@@ -1524,7 +1554,7 @@ private:
     {
         rollsOn = on;
         rolls->setVisible (on);
-        rollsBtn.selected = on; rollsBtn.setButtonText (on ? "BOOST" : "ROLLS");
+        rollsBtn.selected = on; rollsBtn.setButtonText (on ? "BACK TO BOOST" : "GENERATE ROLLS");
         for (auto& k : knobs) k->setVisible (! on);
         for (auto& b : satBtns) b->setVisible (! on);
         for (auto* b : { &loadBtn, &hitBtn, &keysBtn, &dragBtn, &clearBtn }) b->setVisible (! on);
@@ -1673,6 +1703,64 @@ private:
     int lastSig = -1;
 };
 
+// DRAG TO DAW: grab the current sound and drop it into FL as a WAV (the empty right column put to work)
+class DragToDaw : public Component, public SettableTooltipClient
+{
+public:
+    DragToDaw (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        setTooltip ("DRAG TO DAW: drag this into FL Studio - you get the current sound as a WAV (one note, C5). Click: hear it.");
+        setMouseCursor (MouseCursor::DraggingHandCursor);
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat().reduced (6);
+        g.setColour (Colour (0xcc0b0808)); g.fillRoundedRectangle (r, 10);
+        Path dash; dash.addRoundedRectangle (r.reduced (3), 9);
+        const float pat[] { 7.0f, 5.0f };
+        PathStrokeType (1.6f).createDashedStroke (dash, dash, pat, 2);
+        g.setColour (s.accent.withAlpha (hover ? 0.95f : 0.55f)); g.fillPath (dash);
+        // a little waveform that "walks" out of the box
+        auto w = r.reduced (18).removeFromTop (r.getHeight() * 0.42f);
+        Path wave;
+        for (int i = 0; i <= 40; ++i)
+        {
+            const float x = w.getX() + w.getWidth() * (float) i / 40.0f;
+            const float env = std::exp (-(float) i / 14.0f);
+            const float y = w.getCentreY() - std::sin ((float) i * 0.9f) * env * w.getHeight() * 0.45f;
+            if (i == 0) wave.startNewSubPath (x, y); else wave.lineTo (x, y);
+        }
+        g.setColour (Colours::white.withAlpha (0.9f)); g.strokePath (wave, PathStrokeType (2.2f, PathStrokeType::curved, PathStrokeType::rounded));
+        // arrow
+        const float ax = r.getCentreX(), ay = w.getBottom() + 14 + (hover ? 4.0f : 0.0f);
+        Path arrow; arrow.addArrow ({ ax, ay, ax, ay + 30 }, 4.0f, 16.0f, 12.0f);
+        g.setColour (s.accent); g.fillPath (arrow);
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (19.0f, Font::bold)).withExtraKerningFactor (0.12f));
+        g.drawFittedText ("DRAG\nTO DAW", Rectangle<float> (r.getX(), ay + 40, r.getWidth(), 46).toNearestInt(), Justification::centred, 2);
+        g.setColour (Colour (0xff9c9494)); g.setFont (Font (FontOptions (11.5f, Font::italic)));
+        g.drawFittedText (busy ? "printing..." : "it's yours now", Rectangle<float> (r.getX(), r.getBottom() - 26, r.getWidth(), 18).toNearestInt(), Justification::centred, 1);
+    }
+    void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
+    void mouseExit (const MouseEvent&) override { hover = false; repaint(); }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || e.getDistanceFromDragStart() < 5) return;
+        dragged = true; busy = true; repaint();
+        const auto f = proc.exportSoundWav (72);
+        busy = false; repaint();
+        if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (! dragged && e.getDistanceFromDragStart() < 5) proc.previewNote = 72;
+        dragged = false;
+    }
+private:
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    bool hover = false, dragged = false, busy = false;
+};
+
 // left column: BREED LAB / FAMILY TREE, then the melody extras VOODOO KILLA / EFFECTOR KILLA / DIGGA KILLA
 // (-1 = a drum page of the bottom row is open)
 class LabSwitch : public Component, public SettableTooltipClient
@@ -1699,13 +1787,15 @@ public:
             if (k == 2)
             {
                 g.setColour (Colour (0xff9c9494)); g.setFont (serif (10.0f, false, 0.25f));
-                g.drawText ("MELODY FX", r.withY (r.getY() - 15).withHeight (13).toNearestInt(), Justification::centred);
+                g.drawText ("MELODY  FX", r.withY (r.getY() - 15).withHeight (13).toNearestInt(), Justification::centred);
             }
-            g.setColour (k < 2 ? Colour (on ? 0xee2a0d0d : 0xcc0e0a0a) : face[k].withAlpha (on ? 1.0f : 0.82f)); g.fillRoundedRectangle (r, 6);
+            juce::ignoreUnused (face);
+            g.setColour (Colour (on ? 0xee2a0d0d : 0xcc0e0a0a)); g.fillRoundedRectangle (r, 6);
             if (on) drawGlowFrame (g, r, s.accent, 6);
             else { g.setColour (Colour (0xff4a3c3c)); g.drawRoundedRectangle (r, 6, 1.2f); }
-            g.setColour (k < 2 ? (on ? Colours::white : ink[k]) : ink[k]);
-            g.setFont (k < 2 ? serif (15.0f, false, 0.2f) : Font (FontOptions (15.0f, Font::bold)).withExtraKerningFactor (0.05f));
+            juce::ignoreUnused (ink);
+            g.setColour (on ? Colours::white : Colour (0xffb9b0ac));
+            g.setFont (serif (15.0f, false, 0.2f));
             g.drawFittedText (names[k], r.toNearestInt(), Justification::centred, 2);
             if ((k == 2 || k == 3) && isOn && isOn (k))
             {
@@ -1733,7 +1823,7 @@ class MainPage : public Component, private Timer
 {
 public:
     explicit MainPage (KeysKillaProcessor& p)
-        : proc (p), parentA (p, lnf, 0), parentB (p, lnf, 1), breedBtn (lnf), wildRail (p, lnf),
+        : proc (p), parentA (p, lnf, 0), parentB (p, lnf, 1), breedBtn (lnf), wildRail (p, lnf), dragDaw (p, lnf),
           pitchWheel (lnf), modWheel (lnf), meter (lnf), keyboard (p, lnf)
     {
         settings = openSettings();
@@ -1828,6 +1918,7 @@ public:
 
         // ---- WILD rail + FUTURE / ALIVE / TIME
         addChildComponent (wildRail);   // v0.14: the WILD rail is gone from the main page (BREED keeps its last setting)
+        addAndMakeVisible (dragDaw);
         const char* sideIds[] { ID::future, ID::alive, ID::timeM };
         const char* sideTips[] { "FUTURE: ORIGINAL -> HYBRID -> UNKNOWN. Turns the sound into a new hybrid (same seed = same result).",
                                  "ALIVE 0-5: every note a little different, like a real player.",
@@ -1904,7 +1995,7 @@ public:
         setLookAndFeel (nullptr);
     }
 
-    int preferredScale() const { return jlimit (50, 100, settings->getIntValue ("labScale", 70)); }
+    int preferredScale() const { return jlimit (50, 100, settings->getIntValue ("labScale18", 85)); }
 
     // ---------------- SPACE = play / stop in the plugin (while the plugin window has focus), other keys go to the host ----------------
     bool keysToPlugin() const { return settings->getBoolValue ("keysToPlugin", true); }
@@ -1979,6 +2070,7 @@ public:
         treeBtn.setBounds (R (1300, 528, 1374, 604)); undoBtn.setBounds (R (1379, 528, 1442, 604));
 
         wildRail.setBounds (R (1466, 118, 1608, 392));
+        dragDaw.setBounds (R (1462, 110, 1612, 398));
         sideKnobs[0]->place ({ 1532, 447 }, 33, 43);
         sideKnobs[1]->place ({ 1490, 552 }, 20, 28);
         sideKnobs[2]->place ({ 1575, 552 }, 20, 28);
@@ -2002,7 +2094,8 @@ public:
         if (advanced) advanced->setBounds (R (150, 8, 1662, 612));   // the left switch stays visible
         if (browser) browser->setBounds (panelArea);
         if (treePanel) treePanel->setBounds (R (150, 96, 1662, 612));
-        for (auto& m : modules) if (m) m->setBounds (R (150, 8, 1662, 612));
+        for (int i = 0; i < numPages; ++i)
+            if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i >= tabHalf ? R (0, 0, 1672, 941) : R (150, 8, 1662, 612));   // the KILLA plugins get the whole window
         labSwitch.setBounds (R (16, 100, 138, 600));
     }
 
@@ -2107,7 +2200,7 @@ private:
     }
     void setScale (int pct)
     {
-        settings->setValue ("labScale", pct);
+        settings->setValue ("labScale18", pct);
         if (auto* ed = findParentComponentOfClass<AudioProcessorEditor>())
             ed->setSize (KeysKillaEditor::designW * pct / 100, KeysKillaEditor::designH * pct / 100);
     }
@@ -2496,6 +2589,7 @@ private:
     std::vector<std::unique_ptr<HotButton>> mutateBtns, tabs;
     HotButton treeBtn { lnf }, undoBtn { lnf };
     WildRail wildRail;
+    DragToDaw dragDaw;
     std::vector<std::unique_ptr<ImageKnob>> macros, sideKnobs;
     std::vector<std::unique_ptr<MacroCaption>> captions;
     WheelSlider pitchWheel, modWheel;
@@ -2503,7 +2597,7 @@ private:
     KKKeyboard keyboard;
     std::unique_ptr<AdvancedPage> advanced;
     std::unique_ptr<PresetBrowser> browser;
-    std::array<std::unique_ptr<Component>, 6> modules;   // numPages
+    std::array<std::unique_ptr<Component>, numPages> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
 
