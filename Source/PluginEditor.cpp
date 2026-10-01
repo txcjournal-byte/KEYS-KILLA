@@ -1440,6 +1440,7 @@ public:
             addKnob (ID::b8Tone, "TONE", "Harmonics: clean sub -> gritty 808 that cuts through phone speakers");
             addKnob (ID::b8Click, "CLICK", "Transient layer: a click on the first sample of the note (phase-locked with the sub)");
             addKnob (ID::b8Drive, "DRIVE", "808 Killa drive - only on the mids / highs, the sub stays clean and mono"); addKnob (ID::b8Clip, "CLIP", "808 Killa soft clipper");
+            addKnob (ID::b8Sub, "SUB", "Sub-harmonic: a clean sine one octave below, phase-locked - makes thin 808s huge");
             addKnob (ID::b8Width, "WIDTH", "Stereo only above 300 Hz - the sub stays mono"); addKnob (ID::b8Level, "LEVEL", "Output level");
             addChips (ID::b8Sat, "SATURATION", Choices::satModes, "808 Killa saturation: Tape (warm), Tube (punchy), Foldback (aggressive)");
         }
@@ -1551,7 +1552,8 @@ public:
         addChips (ID::rlBars, "LENGTH", { "1 BAR", "2 BARS", "4 BARS" }, "Pattern length");
         addKnob (ID::rlDensity, "ROLLS", "How many rolls");
         addKnob (ID::htTune, "HAT TUNE", "Hat pitch"); addKnob (ID::htDecay, "HAT DECAY", "Closed -> open");
-        addKnob (ID::htTone, "HAT TONE", "Dark -> bright"); addKnob (ID::htLevel, "HAT LEVEL", "Hat level");
+        addKnob (ID::htTone, "HAT TONE", "Dark -> bright"); addKnob (ID::htPan, "AUTO-PAN", "The rolls sweep left / right once per bar (in the song tempo)");
+        addKnob (ID::htLevel, "HAT LEVEL", "Hat level");
         gen.setButtonText ("GENERATE"); gen.setTooltip ("A new roll pattern"); gen.onClick = [this] { proc.newRolls(); refresh(); }; gen.framed = true; addAndMakeVisible (gen);
         playBtn.setTooltip ("Hear the pattern now (also with FL stopped)");
         playBtn.onClick = [this] { proc.setRollsPreview (! proc.rollsPreviewing()); refresh(); }; playBtn.framed = true; addAndMakeVisible (playBtn);
@@ -1578,7 +1580,7 @@ public:
         layoutChips (0, { 30, 244, 0, 36 }, 104);
         layoutChips (1, { 490, 244, 0, 36 }, 96);
         gen.setBounds (w - 470, 232, 200, 52); playBtn.setBounds (w - 262, 232, 116, 52); withFl.setBounds (w - 140, 232, 116, 52);
-        layoutKnobs ({ 20, 312, 760, 90 }, 80);
+        layoutKnobs ({ 20, 312, 770, 90 }, 76);
         const int n = (int) kitBtns.size();
         for (int i = 0; i < n; ++i) kitBtns[(size_t) i]->setBounds (800 + (i % 3) * 228, 316 + (i / 3) * 42, 222, 38);
     }
@@ -1901,6 +1903,9 @@ public:
         menuBtn.onClick = [this] { showMenu(); };  menuBtn.setTooltip ("Presets, A/B, undo, ADVANCED, size.");
         nameBtn.onClick = [this] { openTab (tabBrowser); }; nameBtn.setTooltip ("Click to browse and search all presets.");
         heartBtn.onClick = [this] { toggleFavourite(); }; heartBtn.setTooltip ("Add to favourites");
+        worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
+        worldBtn.setTooltip ("SOUND WORLD: colour the whole sound like XV / Moog / Serum / Zenology / Omnisphere / Kontakt / Diva / Nexus.  TRANCE GATE and CLIPPER are here too.");
+        addAndMakeVisible (worldBtn);
         moonBtn.onClick = [this] { openTab (tabSettings); }; moonBtn.setTooltip ("Settings: eco mode, window size");
         heartBtn.glyph = [this] (Graphics& g, Rectangle<float> hb, const Skin& s)
         {
@@ -2111,6 +2116,7 @@ public:
         prevBtn.setBounds (R (642, 44, 684, 86)); nameBtn.setBounds (R (688, 46, 1044, 84)); nextBtn.setBounds (R (1044, 44, 1082, 86));
         heartBtn.setBounds (R (1086, 44, 1128, 86)); saveBtn.setBounds (R (1245, 42, 1346, 85)); menuBtn.setBounds (R (1365, 42, 1466, 85));
         moonBtn.setBounds (R (1483, 40, 1544, 87));
+        worldBtn.setBounds (R (1132, 46, 1240, 84));
 
         parentA.setBounds (R (268, 150, 545, 372)); parentB.setBounds (R (1128, 150, 1372, 372));
         prevA.setBounds (R (228, 228, 266, 274)); nextA.setBounds (R (545, 228, 583, 274)); diceA.setBounds (R (580, 144, 623, 186));
@@ -2557,9 +2563,46 @@ private:
         updateTabs();
     }
 
+    void worldMenu()
+    {
+        auto val = [this] (const char* id) { return (int) proc.apvts.getRawParameterValue (id)->load(); };
+        PopupMenu m;
+        m.addSectionHeader ("SOUND WORLD  (the whole sound, one click)");
+        static const char* tips[] { "Off", "XV  -  90s Roland PCM: dry, hard mids, pizzicato / bells / rap piano", "MOOG  -  fat analog, driven ladder warmth, drift",
+                                    "SERUM  -  wavetable + OTT: squashed, glassy, aggressive", "ZENOLOGY  -  modern hi-fi shine + Juno chorus",
+                                    "OMNI  -  organic, breath / foley layer, wide shimmer", "KONTAKT  -  felt when soft, open and saturated when hard",
+                                    "DIVA  -  component analog: drive + per-side pitch drift", "NEXUS  -  mix-ready: glued, bright, finished" };
+        for (int w = 0; w < 9; ++w) m.addItem (1 + w, tips[w], true, val (ID::world) == w);
+        m.addSectionHeader ("TRANCE GATE  (in the song tempo)");
+        for (int g = 0; g < Choices::gates.size(); ++g) m.addItem (20 + g, Choices::gates[g], true, val (ID::gate) == g);
+        m.addSectionHeader ("CLIPPER  (whole output)");
+        for (int c = 0; c < Choices::clipModes.size(); ++c) m.addItem (40 + c, Choices::clipModes[c] + String (c == 3 ? "  (warm even harmonics)" : ""), true, val (ID::clipMode) == c);
+        m.addSeparator();
+        m.addItem (60, "World amount, gate depth, clip drive...  (PARAMS > FX)");
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&worldBtn), [safe = Component::SafePointer<MainPage> (this)] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            if (r >= 1 && r <= 9) setParamFromUi (safe->proc, ID::world, (float) (r - 1));
+            else if (r >= 20 && r < 40) setParamFromUi (safe->proc, ID::gate, (float) (r - 20));
+            else if (r >= 40 && r < 60) setParamFromUi (safe->proc, ID::clipMode, (float) (r - 40));
+            else if (r == 60) { safe->openTab (tabParams); safe->advanced->showTab (4); }
+            safe->lastWorldSig = -1;
+        });
+    }
+
     void timerCallback() override
     {
         proc.moduleHousekeeping();
+        {
+            const int w = (int) proc.apvts.getRawParameterValue (ID::world)->load(), gt = (int) proc.apvts.getRawParameterValue (ID::gate)->load();
+            const int sig = w * 10 + gt;
+            if (sig != lastWorldSig)
+            {
+                lastWorldSig = sig;
+                worldBtn.setButtonText (w == 0 ? String ("WORLD") : String (kk::WorldStage::name (w)));
+                worldBtn.selected = w != 0 || gt != 0; worldBtn.repaint();
+            }
+        }
         const float l = proc.meterL.exchange (0.0f), r = proc.meterR.exchange (0.0f);
         const float nl = std::max (l, meter.l * 0.8f), nr = std::max (r, meter.r * 0.8f);
         if (proc.overload.exchange (false)) warnHold = 45;
@@ -2598,7 +2641,8 @@ private:
     KKLookAndFeel lnf;
     std::unique_ptr<PropertiesFile> settings;
 
-    HotButton prevBtn { lnf }, nextBtn { lnf }, saveBtn { lnf }, menuBtn { lnf }, nameBtn { lnf }, heartBtn { lnf }, moonBtn { lnf };
+    HotButton prevBtn { lnf }, nextBtn { lnf }, saveBtn { lnf }, menuBtn { lnf }, nameBtn { lnf }, heartBtn { lnf }, moonBtn { lnf }, worldBtn { lnf };
+    int lastWorldSig = -1;
     ParentCard parentA, parentB;
     HotButton prevA { lnf }, nextA { lnf }, diceA { lnf }, prevB { lnf }, nextB { lnf }, diceB { lnf };
     BreedButton breedBtn;

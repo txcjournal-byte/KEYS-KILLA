@@ -308,6 +308,58 @@ static int unitTests()
         set (p, ID::b8Decay, 3.3f); p.loadPreset (7);
         check (std::abs (p.apvts.getRawParameterValue (ID::b8Decay)->load() - 3.3f) < 0.01f, "808 settings stay when a sound preset loads");
     }
+    // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
+    {
+        KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);
+        juce::AudioBuffer<float> b (2, 512);
+        auto render = [&] (double& rms, float& peak, std::vector<float>* out)
+        {
+            double e = 0; peak = 0; bool finite = true;
+            for (int k = 0; k < 160; ++k)
+            {
+                juce::MidiBuffer m;
+                if (k == 0) for (int nn : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOn (1, nn, (juce::uint8) 100), 0);
+                if (k == 120) m.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+                p.processBlock (b, m);
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float v = b.getSample (0, i); finite &= std::isfinite (v) && std::isfinite (b.getSample (1, i));
+                    if (k < 120) e += v * v; peak = std::max (peak, std::abs (v)); if (out) out->push_back (v);
+                }
+            }
+            juce::MidiBuffer none; for (int k = 0; k < 80; ++k) p.processBlock (b, none);
+            rms = 10.0 * std::log10 (e / (120.0 * 512.0) + 1e-12);
+            return finite;
+        };
+        double r0; float pk; std::vector<float> dry;
+        render (r0, pk, &dry);
+        bool ok = true; int changed = 0;
+        for (int w = 1; w < kk::numWorlds; ++w)
+        {
+            set (p, ID::world, (float) w);
+            double r; std::vector<float> wet;
+            ok &= render (r, pk, &wet);
+            double diff = 0; for (size_t i = 0; i < std::min (dry.size(), wet.size()); ++i) diff += std::abs (wet[i] - dry[i]);
+            if (diff > 5.0) ++changed;
+            if (std::abs (r - r0) > 4.0) { std::printf ("!! world %s level %.1f dB vs %.1f dB\n", kk::WorldStage::name (w), r, r0); ++fails; }
+        }
+        check (ok, "SOUND WORLDS stay finite");
+        check (changed == kk::numWorlds - 1, "every SOUND WORLD changes the sound");
+        set (p, ID::world, 0);
+        render (r0, pk, nullptr);   // fresh dry reference
+        set (p, ID::gate, 2);
+        double rg; render (rg, pk, nullptr);
+        std::printf ("GATE: %.1f dB vs dry %.1f dB\n", rg, r0);
+        check (rg < r0 - 1.5, "TRANCE GATE chops the sound");
+        set (p, ID::gate, 0);
+        for (int c = 1; c <= 3; ++c)
+        {
+            set (p, ID::clipMode, (float) c); set (p, ID::clipDrive, 12.0f);
+            double rc; check (render (rc, pk, nullptr) && pk <= 0.97f, "CLIPPER keeps the ceiling");
+        }
+        set (p, ID::clipMode, 0);
+        std::printf ("WORLDS: %d of %d change the sound, all within 4 dB of the dry level\n", changed, kk::numWorlds - 1);
+    }
     // BREED LOOPS: a new melody every time, always in key and in range
     {
         std::set<std::vector<int>> seen; bool ok = true, inKey = true;

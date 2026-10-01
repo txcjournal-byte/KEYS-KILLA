@@ -12,6 +12,7 @@
 #include "modules/effector/Preset.h"
 #include "Drums.h"
 #include "Digga.h"
+#include "World.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -255,6 +256,8 @@ private:
     void processModules (juce::MidiBuffer& hostMidi, juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps, double bpm, double ppq, bool hostPlaying);
     void processEffector (juce::AudioBuffer<float>& buffer, int n, double bpm, double ppq, bool hostPlaying);
     kk::Drums drums;
+    kk::WorldStage worldStage;
+    std::array<std::array<float, 2>, 2> clipDc {};
     kk::Digga digga;
     std::array<std::atomic<int>, 8> padQueue {};               // UI pad hits: (mode << 8 | note) + 1, 0 = empty
     std::atomic<bool> rollPreview { false };
@@ -265,6 +268,7 @@ private:
     bool rollRunning = false, rollHostWas = false;
     std::atomic<int> rollKey { -1 };                            // seed/style/bars/density the pattern was built from
     std::atomic<int> rollKeyWanted { 0 };
+    kk::Rng rollRng;
     int lastPlayMode = 0;
     std::unique_ptr<ek::PresetBank> efxBank;
     std::unique_ptr<ek::Engine> efx;

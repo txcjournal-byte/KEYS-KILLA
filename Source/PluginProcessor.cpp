@@ -24,7 +24,7 @@ constexpr int kChunk = 512;
     X(chaos) X(morphX) X(morphY) X(body) X(bodyMix) X(seed) \
     X(alive) X(drift) X(timeM) X(punch) X(halftime) X(era) X(eraHome) X(future) X(arpSteps) X(master) \
     X(halfOn) X(halfPreset) X(halfAmount) X(halfSpeed) X(halfTrig) X(halfMix) \
-    X(playMode) X(b8Tune) X(b8Decay) X(b8Punch) X(b8Glide) X(b8Tone) X(b8Drive) X(b8Sat) X(b8Clip) X(b8Level) X(b8Click) X(b8Width) \
+    X(playMode) X(b8Tune) X(b8Decay) X(b8Punch) X(b8Glide) X(b8Tone) X(b8Drive) X(b8Sat) X(b8Clip) X(b8Level) X(b8Click) X(b8Width) X(b8Sub) X(htPan) X(world) X(worldAmt) X(gate) X(gateDepth) X(clipMode) X(clipDrive) \
     X(snTune) X(snBody) X(snSnap) X(snDecay) X(snTone) X(snLevel) X(clTune) X(clSpread) X(clDecay) X(clTone) X(clWidth) X(clLevel) \
     X(htTune) X(htDecay) X(htTone) X(htLevel) X(rlOn) X(rlStyle) X(rlSeed) X(rlBars) X(rlDensity) X(efxOn) X(efxPreset) X(efxBlend) \
     X(dgMode) X(dgSlices) X(dgChop) X(dgPitch) X(dgRev) X(dgLevel)
@@ -173,6 +173,8 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     digga.prepare (sampleRate);
     efx->prepare (sampleRate, std::max (8192, samplesPerBlock), 1);
     efxDryL = halfDryL; efxDryR = halfDryL; efxFade = 0;
+    worldStage.prepare (sampleRate);
+    for (auto& d : clipDc) d = { 0, 0 };
     rollRunning = false; rollBeat = -1.0f;
 }
 
@@ -699,6 +701,8 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
 
         fp.beatPos = beatPos + bps * c0;
+        worldStage.process (bufL.data(), bufR.data(), len, (int) raw[(size_t) I.world]->load(), raw[(size_t) I.worldAmt]->load(),
+                            (int) raw[(size_t) I.gate]->load(), raw[(size_t) I.gateDepth]->load(), beatPos + bps * c0, bps);
         fxPtr->process (bufL.data(), bufR.data(), bufG.data(), len, fp);
 
         for (int i = 0; i < len; ++i)
@@ -719,10 +723,27 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     processModules (midi, buffer, n, beatPos, bps, bpm, ppq, hostPlaying);
     if (raw[(size_t) I.efxOn]->load() > 0.5f || efxFade > 0.0f) processEffector (buffer, n, bpm, ppq, hostPlaying);
     if (raw[(size_t) I.halfOn]->load() > 0.5f || halfFade > 0.0f) processHalf (buffer, n, bpm, ppq, hostPlaying);
+    // CLIPPER (v0.16): Soft (cubic knee), Hard (brickwall), Modern (asymmetric x - 0.2x^2 + 0.05x^3, warm even harmonics)
+    const int clip = (int) raw[(size_t) I.clipMode]->load();
+    const float drive = juce::Decibels::decibelsToGain (raw[(size_t) I.clipDrive]->load());
     for (int ch = 0; ch < std::min (2, buffer.getNumChannels()); ++ch)
     {
         auto* d = buffer.getWritePointer (ch);
-        for (int i = 0; i < n; ++i) d[i] = std::clamp (d[i], -1.0f, 1.0f);   // modules never push the output past 0 dBFS
+        auto& dc = clipDc[(size_t) ch];
+        for (int i = 0; i < n; ++i)
+        {
+            float x = d[i];
+            if (clip == 1) { const float u = std::clamp (x * drive, -1.5f, 1.5f); x = (u - (4.0f / 27.0f) * u * u * u) * 0.966f; }
+            else if (clip == 2) x = std::clamp (x * drive, -0.966f, 0.966f);
+            else if (clip == 3)
+            {
+                float u = std::clamp (x * drive, -1.6f, 1.6f);
+                u = u - 0.2f * u * u + 0.05f * u * u * u;
+                const float o = u - dc[0] + 0.9995f * dc[1]; dc[0] = u; dc[1] = o;   // the asymmetry adds DC
+                x = std::clamp (o, -0.966f, 0.966f);
+            }
+            d[i] = std::clamp (x, -1.0f, 1.0f);   // modules never push the output past 0 dBFS
+        }
     }
     peakL = buffer.getMagnitude (0, 0, n);
     peakR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : peakL;
@@ -822,14 +843,20 @@ void KeysKillaProcessor::processModules (juce::MidiBuffer&, juce::AudioBuffer<fl
         {
             const double m = std::ceil ((start - h.beat) / len);
             for (double t = h.beat + m * len; t < end; t += len)
-                if (t >= start) drums.add ({ juce::jlimit (0, n - 1, (int) ((t - start) / bps)), kk::drumHat, 60 + h.semi, h.vel, true });
+                if (t >= start)
+                {
+                    // humanize +-1.5 dB, auto-pan: one sweep per bar in the song tempo
+                    const float hv = std::clamp (h.vel * juce::Decibels::decibelsToGain (rollRng.bi() * 1.5f), 0.05f, 1.0f);
+                    const float pan = std::sin (kk::twoPi * (float) std::fmod (t / 4.0, 1.0));
+                    drums.add ({ juce::jlimit (0, n - 1, (int) ((t - start) / bps)), kk::drumHat, 60 + h.semi, hv, true, pan });
+                }
         }
         rollBeat = (float) std::fmod (std::max (0.0, start), len);
     }
 
     kk::DrumParams dp;
     dp.b8Tune = P (I.b8Tune); dp.b8Decay = P (I.b8Decay); dp.b8Punch = P (I.b8Punch); dp.b8Glide = P (I.b8Glide); dp.b8Tone = P (I.b8Tone);
-    dp.b8Drive = P (I.b8Drive); dp.b8Sat = (int) P (I.b8Sat); dp.b8Clip = P (I.b8Clip); dp.b8Level = P (I.b8Level); dp.b8Click = P (I.b8Click); dp.b8Width = P (I.b8Width);
+    dp.b8Drive = P (I.b8Drive); dp.b8Sat = (int) P (I.b8Sat); dp.b8Clip = P (I.b8Clip); dp.b8Level = P (I.b8Level); dp.b8Click = P (I.b8Click); dp.b8Width = P (I.b8Width); dp.b8Sub = P (I.b8Sub); dp.htPan = P (I.htPan);
     dp.snTune = P (I.snTune); dp.snBody = P (I.snBody); dp.snSnap = P (I.snSnap); dp.snDecay = P (I.snDecay); dp.snTone = P (I.snTone); dp.snLevel = P (I.snLevel);
     dp.clTune = P (I.clTune); dp.clSpread = P (I.clSpread); dp.clDecay = P (I.clDecay); dp.clTone = P (I.clTone); dp.clWidth = P (I.clWidth); dp.clLevel = P (I.clLevel);
     dp.htTune = P (I.htTune); dp.htDecay = P (I.htDecay); dp.htTone = P (I.htTone); dp.htLevel = P (I.htLevel);

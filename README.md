@@ -5,6 +5,12 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
+## SOUND WORLD (verze 0.16)
+
+Tlačítko **WORLD** v hlavičce: jedním klikem obarví celý zvuk jako XV (90s PCM), MOOG, SERUM (OTT), ZENOLOGY, OMNI, KONTAKT, DIVA nebo NEXUS - hlasitost zůstává stejná.
+Ve stejném menu **TRANCE GATE** (1/8, 1/16, triplety, stutter) a **CLIPPER** (Soft / Hard / Modern) na celý výstup.
+808: **SUB** (suboktáva fázově zamčená). ROLLS: humanizace ±1.5 dB, **AUTO-PAN** v tempu, de-resonátor 4 kHz.
+
 ## Moduly (verze 0.15)
 
 - **808** - laděná 808 se slidy (překryj dvě noty v piano rollu), PUNCH, TONE, GLIDE + 808 Killa DRIVE / SATURATION / CLIP. 10 kitů, BREED = 6 nových 808.

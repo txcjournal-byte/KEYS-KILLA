@@ -436,7 +436,7 @@ public:
               { new ModMatrixView (proc), new LfoView (proc, lnf, "LFO 1", lfoShape), new LfoView (proc, lnf, "LFO 2", lfo2Shape),
                 new EnvView (proc, lnf, "MOD ENVELOPE (ENV 3)", e3attack, e3decay, e3sustain, e3release) }, 1);
         page ("FX", { punch, halftime, timeM, drive, driveType, crush, wow, chorus, phaser, flanger, eqLow, eqHigh, reverse, delayMix, delayTime, delayFb, delayMode,
-                      revMix, revSize, revType, freeze, width, gain, master },
+                      revMix, revSize, revType, freeze, width, gain, master, world, worldAmt, gate, gateDepth, clipMode, clipDrive },
               { new FxOrderList (proc, lnf) }, 2);
         page ("KILLA", { ghost, ghostOct, ghostRev, ghostBlur, bend, bendMode, bendSemis, tape, circuit, circRate, body, bodyMix,
                          future, alive, drift, seed }, {}, 0);

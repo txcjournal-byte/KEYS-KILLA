@@ -15,14 +15,14 @@ enum DrumTarget { drum808, drumSnare, drumClap, drumHat, numDrums };
 
 struct DrumParams
 {
-    float b8Tune = 0, b8Decay = 1.6f, b8Punch = 0.4f, b8Glide = 0.08f, b8Tone = 0.25f, b8Drive = 30, b8Clip = 3, b8Level = 0, b8Click = 0.3f, b8Width = 0.3f;
+    float b8Tune = 0, b8Decay = 1.6f, b8Punch = 0.4f, b8Glide = 0.08f, b8Tone = 0.25f, b8Drive = 30, b8Clip = 3, b8Level = 0, b8Click = 0.3f, b8Width = 0.3f, b8Sub = 0;
     int b8Sat = 1;
     float snTune = 0, snBody = 0.5f, snSnap = 0.6f, snDecay = 0.4f, snTone = 0.5f, snLevel = 0;
     float clTune = 0, clSpread = 0.5f, clDecay = 0.4f, clTone = 0.5f, clWidth = 0.5f, clLevel = 0;
-    float htTune = 0, htDecay = 0.08f, htTone = 0.5f, htLevel = 0;
+    float htTune = 0, htDecay = 0.08f, htTone = 0.5f, htLevel = 0, htPan = 0.3f;
 };
 
-struct DrumEvent { int pos = 0; int target = 0; int note = 60; float vel = 0.8f; bool on = true; };
+struct DrumEvent { int pos = 0; int target = 0; int note = 60; float vel = 0.8f; bool on = true; float pan = 0; };
 
 class Drums
 {
@@ -103,10 +103,10 @@ public:
     }
 
 private:
-    struct Bass { bool active = false, release = false; float phase = 0, logF = 0, logTarget = 0, amp = 0, gain = 0, pe = 0, vel = 1, click = 0, knock = 0, drift = 0; int note = -1, attack = 0; SvfState clickHp; };
+    struct Bass { bool active = false, release = false; float subPhase = 0, phase = 0, logF = 0, logTarget = 0, amp = 0, gain = 0, pe = 0, vel = 1, click = 0, knock = 0, drift = 0; int note = -1, attack = 0; SvfState clickHp; };
     struct Snare { bool active = false; float p1 = 0, p2 = 0, pe = 0, body = 0, noise = 0, snap = 0, vel = 1, semi = 0; SvfState hp[2], lp[2]; };
     struct Clap { bool active = false; int t = 0; float vel = 1, semi = 0, tail = 0; SvfState bp[2]; };
-    struct Hat { bool active = false; float env = 0, vel = 1, semi = 0; std::array<float, 6> ph {}; SvfState bp, hp; };
+    struct Hat { bool active = false; float env = 0, vel = 1, semi = 0, pan = 0; std::array<float, 6> ph {}; SvfState bp, hp, notch; };
 
     void handle (const DrumEvent& e, const DrumParams& p)
     {
@@ -117,7 +117,7 @@ private:
                 break;
             case drumSnare: if (e.on) { auto& v = pick (snares); v = {}; v.active = true; v.vel = e.vel; v.semi = (float) (e.note - 60); v.body = 1; v.noise = 1; v.snap = 1; v.pe = 1; } break;
             case drumClap:  if (e.on) { auto& v = pick (claps); v = {}; v.active = true; v.vel = e.vel; v.semi = (float) (e.note - 60); } break;
-            case drumHat:   if (e.on) { auto& v = pick (hats); const auto keep = v.ph; v = {}; v.ph = keep; v.active = true; v.vel = e.vel; v.semi = (float) (e.note - 60); v.env = 1; } break;
+            case drumHat:   if (e.on) { auto& v = pick (hats); const auto keep = v.ph; v = {}; v.ph = keep; v.active = true; v.vel = e.vel; v.semi = (float) (e.note - 60); v.env = 1; v.pan = e.pan; } break;
             default: break;
         }
     }
@@ -136,7 +136,7 @@ private:
         const float target = std::log2 (semisToHz ((float) note + p.b8Tune));
         bass.logTarget = target; bass.note = note;
         if (slide) return;                                   // legato: glide, no retrigger
-        if (! bass.active) bass.phase = 0;
+        if (! bass.active) bass.phase = bass.subPhase = 0;
         bass.logF = target; bass.active = true; bass.release = false;
         bass.vel = 0.35f + 0.65f * vel; bass.pe = 1; bass.attack = (int) (sr * 0.0015f);
         bass.click = 1; bass.knock = 0;                      // transient layer starts on the same sample as the sub (phase-locked)
@@ -162,6 +162,7 @@ private:
         const float drift = 1.0f + 0.0017f * std::sin (twoPi * driftPh) * std::sin (twoPi * driftPh * 0.37f + 1.3f);
         const float f = std::exp2 (bass.logF) * (1.0f + p.b8Punch * 3.0f * bass.pe) * drift;
         bass.phase += f / sr; if (bass.phase >= 1) bass.phase -= 1;
+        bass.subPhase += 0.5f * f / sr; if (bass.subPhase >= 1) bass.subPhase -= 1;   // SUB: an octave below, phase-locked to the 808
         const float decay = std::max (0.08f, p.b8Decay);
         bass.amp *= std::exp (std::log (0.001f) / ((bass.release ? 0.045f : decay) * sr));
         float env = bass.amp;
@@ -169,6 +170,7 @@ private:
         const float drv = 1.0f + p.b8Tone * 5.0f;
         float s = std::sin (twoPi * bass.phase);
         s = std::tanh (s * drv) / std::tanh (drv);
+        s += std::sin (twoPi * bass.subPhase) * p.b8Sub * 0.6f;
         // CLICK: a short high-passed noise tick + a 1 kHz knock, on the very first sample of the note
         float click = 0;
         if (bass.click > 1.0e-4f && p.b8Click > 0.001f)
@@ -245,9 +247,11 @@ private:
         s = s / 6.0f + noise.bi() * 0.35f;
         SvfCoef bc, hc; bc.set (std::min (sr * 0.42f, 10000.0f), 1.0f, sr); hc.set (5000.0f + p.htTone * 4000.0f, 1.2f, sr);
         v.bp.tick (bc, s); v.hp.tick (hc, v.bp.bp);
+        SvfCoef nc; nc.set (4200.0f, 0.25f, sr); v.notch.tick (nc, v.hp.hp);   // de-resonator: tame the 3.5-5 kHz pile-up of fast rolls
         v.env *= std::exp (-6.9f / (std::max (0.01f, p.htDecay) * sr));
-        const float o = v.hp.hp * v.env * v.vel * juce::Decibels::decibelsToGain (p.htLevel) * 2.4f;
-        l += o; r += o;
+        const float o = (v.hp.hp - 0.45f * v.notch.bp) * v.env * v.vel * juce::Decibels::decibelsToGain (p.htLevel) * 2.4f;
+        const float pn = std::clamp (v.pan * p.htPan, -1.0f, 1.0f);
+        l += o * std::sqrt (1.0f - pn); r += o * std::sqrt (1.0f + pn);
         if (v.env < 1.0e-4f) v.active = false;
     }
 
