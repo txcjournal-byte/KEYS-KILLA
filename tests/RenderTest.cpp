@@ -191,6 +191,42 @@ static int unitTests()
         juce::MidiFile mf; juce::FileInputStream is (f);
         check (f.existsAsFile() && mf.readFrom (is) && mf.getTrack (0)->getNumEvents() > 10, "ROLLS export a MIDI clip");
     }
+    // v0.18 DRUM BOOST: your 808 in, boosted 808 out (in tune on the keys)
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_808_test.wav");
+        {
+            juce::AudioBuffer<float> b808 (1, 44100);
+            for (int i = 0; i < 44100; ++i) b808.setSample (0, i, 0.7f * std::sin (kk::twoPi * 55.0f * (float) i / 44100.0f) * std::exp (-(float) i / 20000.0f));
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 1, 24, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (b808, 0, b808.getNumSamples());
+        }
+        check (p.loadDrum (0, f), "DRUM BOOST loads a WAV");
+        auto s = p.drum (0).current();
+        check (s != nullptr && std::abs (s->rootHz - 55.0f) < 2.0f && s->rootNote == 33, "808 note detected (A1, 55 Hz)");
+        for (int k : { 0, 2, 3, 5, 6, 7 }) set (p, ID::boost (0, k).toRawUTF8(), k == 0 ? 12.0f : k == 5 ? 18.0f : 1.0f);
+        p.renderDrum (0);
+        s = p.drum (0).current();
+        bool ok = s != nullptr; float pk = 0;
+        if (ok) for (int c = 0; c < 2; ++c) for (int i = 0; i < s->audio.getNumSamples(); ++i) { const float v = s->audio.getSample (c, i); ok &= std::isfinite (v); pk = std::max (pk, std::abs (v)); }
+        check (ok && pk <= 0.97f && pk > 0.5f, "808 boost: loud, finite, never over -0.3 dBFS");
+        const auto out = p.exportDrum (0);
+        check (out.existsAsFile() && out.getSize() > 10000, "808 boost exports a WAV for FL");
+        set (p, ID::playMode, (float) KeysKillaProcessor::play808);
+        juce::AudioBuffer<float> b (2, 512); float peak = 0;
+        for (int k = 0; k < 40; ++k)
+        {
+            juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 33, (juce::uint8) 110), 0);
+            p.processBlock (b, m); peak = std::max (peak, b.getMagnitude (0, 512));
+        }
+        check (peak > 0.2f && ! p.playing[33].load(), "the keys play the boosted 808, not the synth");
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (q.drum (0).hasSample(), "the 808 comes back with the project");
+        f.deleteFile();
+    }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
     {
         KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);
@@ -591,7 +627,7 @@ int main (int argc, char** argv)
                 case 13: setp (ID::efxOn, (float) (action % 2)); break;
                 case 14: setp (ID::rlStyle, (float) (action % 4)); proc->newRolls(); break;
                 case 15: setp (ID::halfOn, (float) (action % 2)); break;
-                case 16: ke->showView (17 + action % 4); break;
+                case 16: ke->showView (15 + action % 6); break;
                 default: break;
             }
         }

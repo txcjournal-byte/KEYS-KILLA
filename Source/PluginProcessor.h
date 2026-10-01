@@ -8,6 +8,7 @@
 #include "Loops.h"
 #include "World.h"
 #include "Rolls.h"
+#include "DrumBoost.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -186,7 +187,14 @@ public:
     // DIGGA = Digga Killa (sampler). Drums never go through them.
     enum Module { modHalf, modEffector, modDigga, numModules };
     juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
-    enum PlayMode { playKeys, playDigga };
+    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat };
+    // DRUM BOOST (808 / SNARE-CLAP / HI-HAT): your drum WAV in, boosted WAV out
+    bool loadDrum (int d, const juce::File& f);
+    void clearDrum (int d);
+    const kk::DrumBoost& drum (int d) const { return drums[(size_t) juce::jlimit (0, 2, d)]; }
+    juce::File exportDrum (int d) const;
+    void hitDrum (int d, int note = -1);                        // UI pad (any thread)
+    void renderDrum (int d);                                    // message thread
     void moduleHousekeeping();                                  // message thread, ~30 Hz from the editor
     // ROLLS (hi-hat roll MIDI generator)
     std::vector<kk::RollHit> rollPattern() const;
@@ -233,6 +241,12 @@ private:
     void processModules (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& keysMidi, int n);
     void runModule (int m, juce::AudioBuffer<float>& buffer, int n, juce::MidiBuffer& midi);
     kk::WorldStage worldStage;
+    std::array<kk::DrumBoost, 3> drums;
+    std::array<std::atomic<int>, 3> drumPad {};
+    std::array<int, 3> drumSig { -1, -1, -1 }, drumPadOff { 0, 0, 0 }, drumPadNote { -1, -1, -1 };
+    std::array<double, 3> drumDirtyAt { 0, 0, 0 };
+    int drumSignature (int d) const;
+    kk::BoostParams boostParams (int d) const;
     std::array<std::array<float, 2>, 2> clipDc {};
     mutable juce::SpinLock rollLock;
     std::vector<kk::RollHit> rolls;

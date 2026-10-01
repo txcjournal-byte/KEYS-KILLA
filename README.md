@@ -5,6 +5,15 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ![BREED LAB](docs/screenshot_lab.png)
 
+## Verze 0.18
+
+- Vlevo: BREED LAB, FAMILY TREE a pod tím doplňky jen pro melodie: VOODOO KILLA, EFFECTOR KILLA, DIGGA KILLA (originální design a funkce).
+- Dole jen bicí: 808 | SNARE / CLAP | HI-HAT - každá záložka má vlastní barevný design.
+  Přetáhni svůj WAV (z FL), boostni ho (GAIN, PITCH, PUNCH, SUB/BODY/AIR, TONE/SNAP, DRIVE TAPE/TUBE/FOLD, CLIPPER, LENGTH, ROOM, WIDTH, DE-RES),
+  hraj ho na klávesách (808 je naladěná podle své noty) a hotový WAV přetáhni zpátky do channel racku.
+- HI-HAT má i generátor rollů (tlačítko ROLLS).
+- PARAMS jsou v MENU.
+
 ## Originální KILLA pluginy uvnitř (verze 0.17)
 
 - **HALF** = celý **Voodoo Killa** (jeho design i všechny funkce) - jen na melodie (KEYS KILLA + DIGGA). Funguje, když hraje FL.

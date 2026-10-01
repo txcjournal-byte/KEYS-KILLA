@@ -152,12 +152,15 @@ namespace ID
     // ROLLS: hi-hat roll MIDI generator
     inline constexpr const char* rlStyle = "rlStyle"; inline constexpr const char* rlSeed = "rlSeed";
     inline constexpr const char* rlBars = "rlBars";  inline constexpr const char* rlDensity = "rlDensity";
+    // v0.18 DRUM BOOST (808 / SNARE-CLAP / HI-HAT): "dk" + drum (0..2) + knob
+    inline const juce::StringArray boostKnobs { "Gain", "Pitch", "Punch", "Drive", "Sat", "Clip", "Low", "High", "Decay", "Room", "Width", "Deres" };
+    inline juce::String boost (int drum, int knob) { return "dk" + juce::String (drum) + boostKnobs[knob]; }
     // module parameters belong to the modules: presets, BREED, morph and dice never touch them
     inline bool isModuleParam (const juce::String& id)
     {
         static const juce::StringArray ids { halfOn, efxOn, playMode, world, worldAmt, gate, gateDepth, clipMode, clipDrive,
                                              rlStyle, rlSeed, rlBars, rlDensity };
-        return ids.contains (id);
+        return ids.contains (id) || (id.startsWith ("dk") && id.length() > 3);
     }
     // v0.5
     inline constexpr const char* era      = "era";        // ERA morph 0..6 (2010-12 ... FUTURE)
@@ -180,7 +183,8 @@ inline constexpr int numModSlots = 8;
 
 namespace Choices
 {
-    inline const juce::StringArray playModes  { "Keys", "Digga" };
+    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat" };
+    inline const juce::StringArray satModes   { "Tape", "Tube", "Fold" };
     inline const juce::StringArray worlds     { "Off", "XV", "Moog", "Serum", "Zenology", "Omni", "Kontakt", "Diva", "Nexus" };
     inline const juce::StringArray gates      { "Off", "1/8", "1/16", "1/8 Triplet", "Stutter A", "Stutter B" };
     inline const juce::StringArray clipModes  { "Off", "Soft", "Hard", "Modern" };
@@ -448,5 +452,17 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     c (ID::clipMode, "Clipper", Choices::clipModes, 0); f (ID::clipDrive, "Clip Drive", 0, 12, 3);
     c (ID::rlStyle, "Rolls Style", Choices::rollStyles, 0); i (ID::rlSeed, "Rolls Pattern", 0, 99999, 1);
     c (ID::rlBars, "Rolls Length", Choices::rollBars, 1); f (ID::rlDensity, "Rolls Density", 0, 1, 0.5f);
+    static const char* drumNames[] { "808", "Snare", "Hat" };
+    for (int d = 0; d < 3; ++d)
+    {
+        const String n (drumNames[d]);
+        f (ID::boost (d, 0), n + " Gain", -12, 12, 0);        f (ID::boost (d, 1), n + " Pitch", -12, 12, 0);
+        f (ID::boost (d, 2), n + " Punch", 0, 1, 0);          f (ID::boost (d, 3), n + " Drive", 0, 1, 0);
+        c (ID::boost (d, 4), n + " Saturation", Choices::satModes, 1);
+        f (ID::boost (d, 5), n + " Clipper", 0, 18, 0);       f (ID::boost (d, 6), n + (d == 0 ? " Sub" : d == 1 ? " Body" : " Low"), -1, 1, 0);
+        f (ID::boost (d, 7), n + (d == 0 ? " Tone" : d == 1 ? " Snap" : " Air"), -1, 1, 0);
+        f (ID::boost (d, 8), n + " Length", 0.05f, 1, 1);      f (ID::boost (d, 9), n + " Room", 0, 1, 0);
+        f (ID::boost (d, 10), n + " Width", 0, 1, 0);         f (ID::boost (d, 11), n + " De-Res", 0, 1, 0);
+    }
     return l;
 }

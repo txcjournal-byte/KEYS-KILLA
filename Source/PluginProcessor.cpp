@@ -158,6 +158,9 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     kk::WavetableBank::get();
     worldStage.prepare (sampleRate);
     for (auto& d : clipDc) d = { 0, 0 };
+    for (int d = 0; d < 3; ++d)   // drums are stored at the plugin rate: reload when the rate changes
+        if (drums[(size_t) d].hasSample() && std::abs (drums[(size_t) d].loadedRate() - sampleRate) > 0.5)
+            loadDrum (d, juce::File (drums[(size_t) d].filePath()));
     modBlock = std::max (64, samplesPerBlock);
     modBuf.setSize (2, modBlock); modDry.setSize (2, modBlock);
     modMidi.ensureSize (4096); keysForModules.ensureSize (4096); noMidi.ensureSize (64);
@@ -622,10 +625,23 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (pm != lastPlayMode)
         {
             if (lastPlayMode == playKeys) synth.allOff (false);
-            else keysForModules.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+            else if (lastPlayMode == playDigga) keysForModules.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+            else drums[(size_t) juce::jlimit (0, 2, lastPlayMode - play808)].allOff();
             lastPlayMode = pm;
         }
         if (pm == playDigga) { keysForModules.addEvents (midi, 0, n, 0); midi.clear(); }
+        else if (pm >= play808 && pm <= playHat)   // the keys play the boosted drum (808: in tune with its detected note)
+        {
+            auto& d = drums[(size_t) (pm - play808)];
+            for (const auto meta : midi)
+            {
+                const auto m = meta.getMessage();
+                if (m.isNoteOn()) d.noteOn (m.getNoteNumber(), m.getFloatVelocity(), juce::jlimit (0, n - 1, meta.samplePosition));
+                else if (m.isNoteOff()) d.noteOff (m.getNoteNumber());
+                else if (m.isAllNotesOff()) d.allOff();
+            }
+            midi.clear();
+        }
     }
     processedMidi.clear();
     processMidi (midi, processedMidi, n, beatPos, bpm);
@@ -702,6 +718,18 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     sampleClock += n;
 
     processModules (buffer, keysForModules, n);   // DIGGA + HALF + EFFECTOR: the melody bus
+    // DRUM BOOST: the drums play after the melody effects - HALF / EFFECTOR never touch them
+    if (buffer.getNumChannels() > 1)
+        for (int d = 0; d < 3; ++d)
+        {
+            if (const int v = drumPad[(size_t) d].exchange (0); v > 0)
+            {
+                drums[(size_t) d].noteOn (v - 1, 0.9f, 0);
+                drumPadNote[(size_t) d] = v - 1; drumPadOff[(size_t) d] = (int) (sr * 2.5);
+            }
+            if (drumPadNote[(size_t) d] >= 0 && (drumPadOff[(size_t) d] -= n) <= 0) { drums[(size_t) d].noteOff (drumPadNote[(size_t) d]); drumPadNote[(size_t) d] = -1; }
+            drums[(size_t) d].render (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
+        }
     // CLIPPER (v0.16): Soft (cubic knee), Hard (brickwall), Modern (asymmetric x - 0.2x^2 + 0.05x^3, warm even harmonics)
     const int clip = (int) raw[(size_t) I.clipMode]->load();
     const float drive = juce::Decibels::decibelsToGain (raw[(size_t) I.clipDrive]->load());
@@ -790,8 +818,62 @@ void KeysKillaProcessor::processModules (juce::AudioBuffer<float>& buffer, juce:
     }
 }
 
+// ---------------- DRUM BOOST ----------------
+kk::BoostParams KeysKillaProcessor::boostParams (int d) const
+{
+    auto P = [this, d] (int k) { return apvts.getRawParameterValue (ID::boost (d, k))->load(); };
+    kk::BoostParams b;
+    b.gain = P (0); b.pitch = P (1); b.punch = P (2); b.drive = P (3); b.sat = (int) P (4); b.clip = P (5);
+    b.low = P (6); b.high = P (7); b.decay = P (8); b.room = P (9); b.width = P (10); b.deres = P (11);
+    return b;
+}
+
+int KeysKillaProcessor::drumSignature (int d) const
+{
+    uint32_t h = 2166136261u;
+    for (int k = 0; k < ID::boostKnobs.size(); ++k)
+        h = (h ^ (uint32_t) std::lround (apvts.getRawParameterValue (ID::boost (d, k))->load() * 1000.0f)) * 16777619u;
+    h = (h ^ (uint32_t) drums[(size_t) d].filePath().hashCode()) * 16777619u;
+    return (int) (h & 0x7fffffff);
+}
+
+void KeysKillaProcessor::renderDrum (int d)
+{
+    drums[(size_t) d].render ((kk::DrumKind) d, boostParams (d));
+    drumSig[(size_t) d] = drumSignature (d);
+}
+
+bool KeysKillaProcessor::loadDrum (int d, const juce::File& f)
+{
+    if (! drums[(size_t) d].load (f, sr > 0 ? sr : 44100.0)) return false;
+    renderDrum (d);
+    return true;
+}
+
+void KeysKillaProcessor::clearDrum (int d) { drums[(size_t) d].clear(); drumSig[(size_t) d] = -1; }
+
+juce::File KeysKillaProcessor::exportDrum (int d) const
+{
+    static const char* tag[] { "808 BOOST", "SNARE BOOST", "HAT BOOST" };
+    return drums[(size_t) d].exportWav (tag[juce::jlimit (0, 2, d)]);
+}
+
+void KeysKillaProcessor::hitDrum (int d, int note)
+{
+    if (note < 0) { auto s = drums[(size_t) d].current(); note = s ? s->rootNote : 60; }
+    drumPad[(size_t) juce::jlimit (0, 2, d)] = note + 1;
+}
+
 void KeysKillaProcessor::moduleHousekeeping()
 {
+    // drums re-render a moment after a knob stops moving (keeps the knobs smooth)
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    for (int d = 0; d < 3 && ix != nullptr; ++d)
+        if (drums[(size_t) d].hasSample() && drumSignature (d) != drumSig[(size_t) d])
+        {
+            if (drumDirtyAt[(size_t) d] == 0) drumDirtyAt[(size_t) d] = now;
+            if (now - drumDirtyAt[(size_t) d] > 90.0) { renderDrum (d); drumDirtyAt[(size_t) d] = 0; }
+        }
     if (ix == nullptr || modules[modHalf] == nullptr) return;
     int lat = 0;
     if (raw[(size_t) ix->halfOn]->load() > 0.5f) lat += modules[modHalf]->getLatencySamples();
@@ -1893,6 +1975,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("corners", juce::String (corners[0]) + "," + juce::String (corners[1]) + "," + juce::String (corners[2]) + "," + juce::String (corners[3]), nullptr);
     state.setProperty ("eco", eco.load(), nullptr);
     state.setProperty ("macroNames", macroLabels.joinIntoString ("|"), nullptr);
+    for (int d = 0; d < 3; ++d) state.setProperty ("drum" + juce::String (d), drums[(size_t) d].filePath(), nullptr);
     for (int m = 0; m < numModules; ++m)
         if (modules[(size_t) m])
         {
@@ -1935,6 +2018,11 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                         modules[(size_t) m]->setStateInformation (mb.getData(), (int) mb.getSize());
                 }
             rebuildRolls();
+            for (int d = 0; d < 3; ++d)
+            {
+                const juce::File df (vt.getProperty ("drum" + juce::String (d), "").toString());
+                if (df.existsAsFile() && df.getFullPathName() != drums[(size_t) d].filePath()) loadDrum (d, df);
+            }
             moduleHousekeeping();
         }
 }
