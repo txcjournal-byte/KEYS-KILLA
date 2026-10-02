@@ -120,6 +120,11 @@ inline Image makeBackground()
     g.setGradientFill (ColourGradient (accent, 320, 30, Colour (0xffff6aa0), 480, 70, false));
     g.drawText ("KILLA", Rectangle<float> (314, 14, 260, 64), Justification::centredLeft);
     label (g, "DON'T BROWSE SOUNDS, BREED THEM.", { 140, 76, 440, 18 }, 11.5f, dim, Justification::centredLeft);
+    {   // maker tag
+        g.setColour (dim); g.setFont (font (11.0f, false, 0.1f)); g.drawText ("by", Rectangle<float> (404, 76, 20, 18), Justification::centredLeft);
+        g.setGradientFill (ColourGradient (orange, 420, 0, Colour (0xffff3fd2), 486, 0, false));
+        g.setFont (font (13.0f, true, 0.06f)); g.drawText ("TrapVST", Rectangle<float> (420, 75, 90, 20), Justification::centredLeft);
+    }
     plate (g, { 616, 30, 520, 52 }, 26.0f, false, edge.brighter (0.4f), edge.brighter (0.4f));
     chevron (g, { 626, 34, 42, 44 }, true); chevron (g, { 1044, 34, 40, 44 }, false);
     {   // heart

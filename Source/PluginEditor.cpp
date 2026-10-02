@@ -226,6 +226,18 @@ static void noFocus (Component& c)
         if (dynamic_cast<TextEditor*> (ch) == nullptr) noFocus (*ch);
 }
 
+// maker tag: "by TrapVST"
+static void drawMaker (Graphics& g, Rectangle<float> r, Justification j)
+{
+    const Font f1 (FontOptions (10.0f)), f2 (FontOptions (11.5f, Font::bold));
+    GlyphArrangement ga; ga.addLineOfText (f1, "by ", 0, 0); const float w1 = ga.getBoundingBox (0, -1, true).getWidth();
+    GlyphArrangement gb; gb.addLineOfText (f2.withExtraKerningFactor (0.06f), "TrapVST", 0, 0); const float w2 = gb.getBoundingBox (0, -1, true).getWidth();
+    const float tw = w1 + w2;
+    float x = j.testFlags (Justification::horizontallyCentred) ? r.getCentreX() - tw * 0.5f : j.testFlags (Justification::right) ? r.getRight() - tw : r.getX();
+    g.setColour (Colour (0xffaaa4cf)); g.setFont (f1); g.drawText ("by", Rectangle<float> (x, r.getY(), w1, r.getHeight()), Justification::centredLeft);
+    g.setGradientFill (ColourGradient (Colour (0xffff8a3d), x + w1, 0, Colour (0xffff3fd2), x + tw, 0, false));
+    g.setFont (f2.withExtraKerningFactor (0.06f)); g.drawText ("TrapVST", Rectangle<float> (x + w1, r.getY(), w2 + 4, r.getHeight()), Justification::centredLeft);
+}
 static void drawGlowFrame (Graphics& g, Rectangle<float> r, Colour accent, float corner = 5.0f)
 {
     g.setColour (accent.withAlpha (0.18f)); g.drawRoundedRectangle (r.expanded (3), corner + 3, 6.0f);
@@ -304,6 +316,7 @@ public:
     HotButton (KKLookAndFeel& l, String label = {}) : Button (label), lnf (l) {}
     std::function<void (Graphics&, Rectangle<float>, const Skin&)> glyph;
     bool selected = false, round = false, framed = false;   // framed: a visible button (module pages), not a hot-spot over the bitmap
+    Colour tint;   // optional own colour (drum tabs): a coloured underline, and its glow when selected
     std::function<void()> onRightClick;
 
     void paintButton (Graphics& g, bool over, bool down) override
@@ -316,11 +329,19 @@ public:
             g.setGradientFill (ColourGradient (Colour (0xff221f44), 0, r.getY(), Colour (0xff14132c), 0, r.getBottom(), false)); g.fillRoundedRectangle (r, corner);
             g.setColour (Colour (0xff3f3870)); g.drawRoundedRectangle (r, corner, 1.2f);
         }
+        const bool tinted = ! tint.isTransparent();
         if (selected)
         {
-            drawGlowFrame (g, r, s.accent, corner);
-            g.setGradientFill (ColourGradient (Colour (0x55ff2f6d), r.getX(), r.getY(), Colour (0x339b4dff), r.getRight(), r.getBottom(), false));
+            drawGlowFrame (g, r, tinted ? tint : s.accent, corner);
+            g.setGradientFill (tinted ? ColourGradient (tint.withAlpha (0.45f), r.getX(), r.getY(), tint.withAlpha (0.12f), r.getRight(), r.getBottom(), false)
+                                      : ColourGradient (Colour (0x55ff2f6d), r.getX(), r.getY(), Colour (0x339b4dff), r.getRight(), r.getBottom(), false));
             g.fillRoundedRectangle (r, corner);
+        }
+        else if (tinted && framed)
+        {
+            const auto bar = r.reduced (r.getWidth() * 0.18f, 0).withTop (r.getBottom() - 3.0f).translated (0, -2.0f);
+            g.setGradientFill (ColourGradient (tint.withAlpha (0.0f), bar.getX(), 0, tint, bar.getCentreX(), 0, false)); g.fillRect (bar.withWidth (bar.getWidth() * 0.5f));
+            g.setGradientFill (ColourGradient (tint, bar.getCentreX(), 0, tint.withAlpha (0.0f), bar.getRight(), 0, false)); g.fillRect (bar.withTrimmedLeft (bar.getWidth() * 0.5f));
         }
         if (over && ! selected) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, corner); }
         if (const auto text = getButtonText(); text.isNotEmpty())
@@ -1820,6 +1841,7 @@ public:
         g.setColour (s.panelEdge.withAlpha (0.6f)); g.drawVerticalLine (kRail - 1, 0.0f, (float) getHeight());
         g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
         g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
+        drawMaker (g, Rectangle<float> (0, 80, (float) kRail, 14), Justification::centred);
         if (onId != nullptr)   // big power switch under the tiles
         {
             const auto pr = power.toFloat();
@@ -2291,7 +2313,7 @@ public:
         for (int i = 0; i < kk::numDrumSlots; ++i)
         {
             auto b = std::make_unique<HotButton> (lnf, names[i]);
-            b->framed = true; b->selected = i == d;
+            b->framed = true; b->selected = i == d; b->tint = drumTheme (i).accent;
             b->onClick = [this, i] { if (i != d && onSwitch) onSwitch (i); };
             addAndMakeVisible (*b); switchBtns.push_back (std::move (b));
         }
@@ -2385,11 +2407,13 @@ public:
         for (int y = 0; y < (int) h; y += 3) { g.setColour (Colours::white.withAlpha (y % 6 == 0 ? 0.012f : 0.0f)); g.drawHorizontalLine (y, 0, w); }
         g.setGradientFill (ColourGradient (th.accent.withAlpha (0.10f), w * 0.6f, 0, Colours::transparentBlack, w * 0.6f, 340, false));
         g.fillRect (0.0f, 0.0f, w, 340.0f);
+        kk::modern::waves (g, { w * 0.30f, 74.0f }, { w, 8.0f }, 40.0f, th.accent, th.accent2, 6, 0.22f);
         // the rail behind the tiles
         g.setColour (Colour (0xff12112a)); g.fillRect (0, 0, kRail, getHeight());
         g.setColour (Colour (0xff3a3264)); g.drawVerticalLine (kRail - 1, 0.0f, h);
         g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
         g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
+        drawMaker (g, Rectangle<float> (0, 80, (float) kRail, 14), Justification::centred);
         // title
         g.setFont (Font (FontOptions (44.0f, Font::bold)).withExtraKerningFactor (0.08f));
         for (int k = 3; k >= 1; --k) { g.setColour (th.accent.withAlpha (0.12f)); g.drawText (th.title, kRail + 22 - k, 10 - k, 600, 56, Justification::centredLeft); }
@@ -3454,40 +3478,134 @@ private:
 
 // left column: BREED LAB / FAMILY TREE, then the melody extras VOODOO KILLA / EFFECTOR KILLA / DIGGA KILLA
 // (-1 = a drum page of the bottom row is open)
-// little neon icons for the left tiles
-static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, Colour c)
+// left tiles: each one a small colour badge (its own two colours) with a white symbol
+static Colour tileCol (int k, int which)
 {
-    g.setColour (c);
-    const auto cx = r.getCentreX(), cy = r.getCentreY(), w = r.getWidth();
-    PathStrokeType st (2.0f, PathStrokeType::curved, PathStrokeType::rounded);
+    static const uint32 c[8][2] { { 0xffff2f6d, 0xffff8a3d },   // BREED LAB    pink -> orange
+                                  { 0xffb04dff, 0xffff4fa8 },   // FAMILY TREE  violet -> pink
+                                  { 0xff22d3ee, 0xff4d7dff },   // PAIR OWN     cyan -> blue
+                                  { 0xff4d7dff, 0xff9b4dff },   // PAIR VST     blue -> violet
+                                  { 0xffffb020, 0xffff6a3d },   // MY SOUNDS    gold -> orange
+                                  { 0xff7c4dff, 0xff2b2f9e },   // VOODOO       violet -> night
+                                  { 0xffff3fd2, 0xff9b4dff },   // EFFECTOR     magenta -> violet
+                                  { 0xff2ee6a6, 0xff1a9dff } }; // DIGGA        mint -> blue
+    return Colour (c[jlimit (0, 7, k)][jlimit (0, 1, which)]);
+}
+static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
+{
+    // badge
+    const auto c1 = tileCol (k, 0), c2 = tileCol (k, 1);
+    if (lit) { g.setColour (c1.withAlpha (0.35f)); g.fillRoundedRectangle (r.expanded (3), 10); }
+    g.setGradientFill (ColourGradient (c1, r.getX(), r.getY(), c2, r.getRight(), r.getBottom(), false));
+    g.fillRoundedRectangle (r, 8);
+    g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.35f), 0, r.getY(), Colours::white.withAlpha (0.0f), 0, r.getCentreY(), false));
+    g.fillRoundedRectangle (r.reduced (1.5f).withHeight (r.getHeight() * 0.5f), 6);
+    g.setColour (Colours::white.withAlpha (0.25f)); g.drawRoundedRectangle (r.reduced (0.5f), 8, 1.0f);
+
+    // symbol
+    const auto q = r.reduced (r.getWidth() * 0.22f);
+    const float cx = q.getCentreX(), cy = q.getCentreY(), w = q.getWidth();
+    PathStrokeType st (1.8f, PathStrokeType::curved, PathStrokeType::rounded);
     Path p;
+    g.setColour (Colours::white);
     switch (k)
     {
-        case 0:   // BREED LAB: helix
-            for (int s = 0; s < 2; ++s) { p.startNewSubPath (cx - 6, r.getY()); for (int i = 0; i <= 16; ++i) { const float t = (float) i / 16.0f; p.lineTo (cx + std::sin (t * 6.283f + (float) s * 3.1416f) * 6.0f, r.getY() + t * w); } }
-            g.strokePath (p, st); break;
-        case 1:   // FAMILY TREE
-            g.fillEllipse (cx - 3, r.getY(), 6, 6); g.fillEllipse (r.getX() + 1, r.getBottom() - 6, 6, 6); g.fillEllipse (r.getRight() - 7, r.getBottom() - 6, 6, 6);
-            p.startNewSubPath (cx, r.getY() + 6); p.lineTo (cx, cy); p.startNewSubPath (r.getX() + 4, r.getBottom() - 6); p.lineTo (r.getX() + 4, cy); p.lineTo (r.getRight() - 4, cy); p.lineTo (r.getRight() - 4, r.getBottom() - 6);
-            g.strokePath (p, st); break;
-        case 2:   // PAIR YOUR OWN: two links
-            p.addRoundedRectangle (r.getX(), cy - 5, w * 0.6f, 10, 5); p.addRoundedRectangle (r.getX() + w * 0.4f, cy - 5, w * 0.6f, 10, 5);
-            g.strokePath (p, st); break;
-        case 3:   // PAIR FROM VST: four squares
-            for (int i = 0; i < 4; ++i) p.addRoundedRectangle (r.getX() + (float) (i % 2) * w * 0.55f, r.getY() + (float) (i / 2) * w * 0.55f, w * 0.42f, w * 0.42f, 2.5f);
-            g.strokePath (p, st); break;
-        case 4:   // MY SOUNDS: pulse
-            p.startNewSubPath (r.getX(), cy); p.lineTo (r.getX() + w * 0.25f, cy); p.lineTo (r.getX() + w * 0.38f, r.getY() + 2); p.lineTo (r.getX() + w * 0.55f, r.getBottom() - 2); p.lineTo (r.getX() + w * 0.68f, cy); p.lineTo (r.getRight(), cy);
-            g.strokePath (p, st); break;
-        case 5:   // VOODOO: crown
-            p.startNewSubPath (r.getX() + 2, r.getBottom() - 4); p.lineTo (r.getX() + 2, r.getY() + 6); p.lineTo (cx - 5, cy); p.lineTo (cx, r.getY() + 3); p.lineTo (cx + 5, cy); p.lineTo (r.getRight() - 2, r.getY() + 6); p.lineTo (r.getRight() - 2, r.getBottom() - 4); p.closeSubPath();
-            g.strokePath (p, st); break;
-        case 6:   // EFFECTOR: fx
-            g.setFont (Font (FontOptions (w * 0.9f, Font::bold | Font::italic))); g.drawText ("fx", r, Justification::centred); break;
-        default:  // DIGGA: diamond
-            p.startNewSubPath (r.getX() + 2, cy - 4); p.lineTo (r.getX() + w * 0.3f, r.getY() + 3); p.lineTo (r.getRight() - w * 0.3f, r.getY() + 3); p.lineTo (r.getRight() - 2, cy - 4); p.lineTo (cx, r.getBottom() - 2); p.closeSubPath();
-            p.startNewSubPath (r.getX() + 2, cy - 4); p.lineTo (r.getRight() - 2, cy - 4);
-            g.strokePath (p, st); break;
+        case 0:   // BREED LAB: two sounds melt into one, with a spark
+        {
+            const float rr = w * 0.30f;
+            p.addEllipse (cx - rr * 1.55f, cy - rr + 1, rr * 2, rr * 2); p.addEllipse (cx - rr * 0.45f, cy - rr + 1, rr * 2, rr * 2);
+            g.strokePath (p, st);
+            g.setColour (Colours::white.withAlpha (0.55f));
+            g.fillEllipse (cx - rr * 0.45f, cy - rr * 0.55f + 1, rr * 0.9f, rr * 1.1f);
+            g.setColour (Colours::white);
+            Path sp; const Point<float> sc (q.getRight() - 1, q.getY() + 1); const float sr = 4.0f;
+            sp.startNewSubPath (sc.x, sc.y - sr); sp.quadraticTo (sc, { sc.x + sr, sc.y }); sp.quadraticTo (sc, { sc.x, sc.y + sr }); sp.quadraticTo (sc, { sc.x - sr, sc.y }); sp.quadraticTo (sc, { sc.x, sc.y - sr });
+            g.fillPath (sp);
+            break;
+        }
+        case 1:   // FAMILY TREE: one sound, three children, soft branches
+        {
+            const Point<float> top (cx, q.getY() + 2);
+            const Point<float> kids[] { { q.getX() + 1, q.getBottom() - 2 }, { cx, q.getBottom() - 2 }, { q.getRight() - 1, q.getBottom() - 2 } };
+            for (auto& kd : kids) { p.startNewSubPath (top); p.cubicTo ({ top.x, cy + 1 }, { kd.x, cy - 1 }, { kd.x, kd.y - 3 }); }
+            g.strokePath (p, st);
+            g.fillEllipse (top.x - 3.5f, top.y - 3.5f, 7, 7);
+            for (auto& kd : kids) g.fillEllipse (kd.x - 2.6f, kd.y - 2.6f, 5.2f, 5.2f);
+            break;
+        }
+        case 2:   // PAIR YOUR OWN: two waves crossing
+        {
+            Path p2;
+            for (int i = 0; i <= 24; ++i)
+            {
+                const float t = (float) i / 24.0f, x = q.getX() + t * w;
+                const float y1 = cy + std::sin (t * 6.283f) * w * 0.32f, y2 = cy - std::sin (t * 6.283f) * w * 0.32f;
+                if (i == 0) { p.startNewSubPath (x, y1); p2.startNewSubPath (x, y2); } else { p.lineTo (x, y1); p2.lineTo (x, y2); }
+            }
+            g.strokePath (p, st);
+            g.setColour (Colours::white.withAlpha (0.55f)); g.strokePath (p2, st);
+            break;
+        }
+        case 3:   // PAIR FROM VST: a plug with its cable
+        {
+            const auto body = Rectangle<float> (cx - w * 0.30f, q.getY() + w * 0.22f, w * 0.60f, w * 0.40f);
+            g.fillRoundedRectangle (body, 3);
+            g.fillRoundedRectangle (body.getX() + w * 0.10f, q.getY() - 1, 2.6f, w * 0.26f, 1);
+            g.fillRoundedRectangle (body.getRight() - w * 0.10f - 2.6f, q.getY() - 1, 2.6f, w * 0.26f, 1);
+            p.startNewSubPath (cx, body.getBottom()); p.cubicTo ({ cx, q.getBottom() }, { q.getX(), q.getBottom() - 4 }, { q.getX() - 1, q.getBottom() + 1 });
+            g.strokePath (p, st);
+            break;
+        }
+        case 4:   // MY SOUNDS: folder with a waveform
+        {
+            p.startNewSubPath (q.getX(), q.getBottom()); p.lineTo (q.getX(), q.getY() + 2); p.lineTo (q.getX() + w * 0.35f, q.getY() + 2);
+            p.lineTo (q.getX() + w * 0.45f, q.getY() + w * 0.16f); p.lineTo (q.getRight(), q.getY() + w * 0.16f); p.lineTo (q.getRight(), q.getBottom()); p.closeSubPath();
+            g.strokePath (p, st);
+            const float h[] { 0.10f, 0.22f, 0.32f, 0.16f, 0.26f, 0.08f };
+            for (int i = 0; i < 6; ++i)
+            {
+                const float x = q.getX() + w * (0.18f + 0.13f * (float) i), my = cy + w * 0.16f;
+                g.fillRoundedRectangle (x - 0.9f, my - h[i] * w * 0.6f, 1.8f, h[i] * w * 1.2f, 0.9f);
+            }
+            break;
+        }
+        case 5:   // VOODOO KILLA (half time): crescent moon and stars
+        {
+            Path moon; moon.addEllipse (q.getX(), q.getY() + 1, w * 0.86f, w * 0.86f);
+            Path both (moon); both.addEllipse (q.getX() + w * 0.32f, q.getY() - w * 0.12f, w * 0.80f, w * 0.80f);
+            both.setUsingNonZeroWinding (false);
+            g.saveState(); g.reduceClipRegion (moon); g.fillPath (both); g.restoreState();
+            auto star = [&g] (float x, float y, float sr) { Path sp; sp.startNewSubPath (x, y - sr); sp.quadraticTo ({ x, y }, { x + sr, y }); sp.quadraticTo ({ x, y }, { x, y + sr }); sp.quadraticTo ({ x, y }, { x - sr, y }); sp.quadraticTo ({ x, y }, { x, y - sr }); g.fillPath (sp); };
+            star (q.getRight() - 1, q.getBottom() - 4, 3.4f); star (q.getRight() - 4, q.getY() + 3, 2.4f);
+            break;
+        }
+        case 6:   // EFFECTOR KILLA: a knob with its scale
+        {
+            const float rr = w * 0.36f;
+            g.drawEllipse (cx - rr, cy - rr + 1, rr * 2, rr * 2, 1.8f);
+            const float ang = -0.8f;
+            g.drawLine (cx, cy + 1, cx + std::sin (ang) * rr * 0.8f, cy + 1 - std::cos (ang) * rr * 0.8f, 2.0f);
+            for (int i = 0; i < 7; ++i)
+            {
+                const float a = -2.4f + 0.8f * (float) i, r1 = rr + 3.0f, r2 = rr + 5.0f;
+                g.setColour (Colours::white.withAlpha (i <= 2 ? 1.0f : 0.45f));
+                g.drawLine (cx + std::sin (a) * r1, cy + 1 - std::cos (a) * r1, cx + std::sin (a) * r2, cy + 1 - std::cos (a) * r2, 1.4f);
+            }
+            break;
+        }
+        default:  // DIGGA KILLA: a record from the crate
+        {
+            const float rr = w * 0.50f;
+            g.drawEllipse (cx - rr, cy - rr, rr * 2, rr * 2, 1.8f);
+            g.setColour (Colours::white.withAlpha (0.45f));
+            g.drawEllipse (cx - rr * 0.72f, cy - rr * 0.72f, rr * 1.44f, rr * 1.44f, 1.0f);
+            g.setColour (Colours::white); g.fillEllipse (cx - rr * 0.36f, cy - rr * 0.36f, rr * 0.72f, rr * 0.72f);
+            g.setColour (tileCol (k, 1)); g.fillEllipse (cx - 1.5f, cy - 1.5f, 3, 3);
+            g.setColour (Colours::white);
+            p.addCentredArc (cx, cy, rr * 0.86f, rr * 0.86f, 0.0f, -0.9f, -0.2f, true);
+            g.strokePath (p, PathStrokeType (1.2f, PathStrokeType::curved, PathStrokeType::rounded));
+            break;
+        }
     }
 }
 
@@ -3536,15 +3654,24 @@ public:
             }
             if (k == 5)
             {
-                g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (10.0f, false, 0.25f));
-                g.drawText ("MELODY  FX", r.withY (r.getY() - 15).withHeight (13).toNearestInt(), Justification::centred);
+                const auto lr = r.withY (r.getY() - 15).withHeight (13);
+                g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (10.0f, true, 0.3f));
+                g.drawText ("FX RACK", lr.toNearestInt(), Justification::centred);
+                g.setGradientFill (ColourGradient (Colour (0x00ff3fd2), lr.getX(), 0, Colour (0xccff3fd2), lr.getCentreX() - 30, 0, false));
+                g.fillRect (lr.getX() + 4, lr.getCentreY(), lr.getWidth() * 0.5f - 34, 1.2f);
+                g.setGradientFill (ColourGradient (Colour (0xcc9b4dff), lr.getCentreX() + 30, 0, Colour (0x009b4dff), lr.getRight(), 0, false));
+                g.fillRect (lr.getCentreX() + 30, lr.getCentreY(), lr.getWidth() * 0.5f - 34, 1.2f);
             }
             juce::ignoreUnused (face);
             if (on)
             {
-                drawGlowFrame (g, r, s.accent, 8);
-                g.setGradientFill (ColourGradient (Colour (0x66ff2f6d), r.getX(), r.getY(), Colour (0x339b4dff), r.getRight(), r.getBottom(), false));
+                const bool drop = k == 2 && (dropHover || flash > 0);
+                const auto c1 = drop ? s.accent : tileCol (k, 0), c2 = drop ? s.accent : tileCol (k, 1);
+                drawGlowFrame (g, r, c1, 8);
+                g.setGradientFill (ColourGradient (c1.withAlpha (0.42f), r.getX(), r.getY(), c2.withAlpha (0.16f), r.getRight(), r.getBottom(), false));
                 g.fillRoundedRectangle (r, 8);
+                g.setGradientFill (ColourGradient (c1, r.getX(), r.getY(), c2, r.getRight(), r.getBottom(), false));
+                g.drawRoundedRectangle (r, 8, 1.6f);
             }
             else
             {
@@ -3553,13 +3680,12 @@ public:
             }
             juce::ignoreUnused (ink);
             // icon + name (left aligned) - each tile its own neon colour
-            static const Colour iconCol[] { Colour (0xffff2f6d), Colour (0xff9b4dff), Colour (0xff4d9dff), Colour (0xff4d7dff), Colour (0xffff8a3d),
-                                            Colour (0xffffb020), Colour (0xffd04dff), Colour (0xffb06dff) };
-            const auto ic = Rectangle<float> (r.getX() + 8, r.getCentreY() - 13, 26, 26);
-            drawTileIcon (g, k, ic, iconCol[k]);
+            const float bs = jmin (30.0f, r.getHeight() - 12.0f);
+            const auto ic = Rectangle<float> (r.getX() + 7, r.getCentreY() - bs * 0.5f, bs, bs);
+            drawTileIcon (g, k, ic, on);
             g.setColour (on ? Colours::white : Colour (0xffe6e3ff));
-            g.setFont (serif (13.5f, true, 0.12f));
-            g.drawFittedText (String (names[k]), r.withTrimmedLeft (40).toNearestInt(), Justification::centredLeft, 2);
+            g.setFont (serif (13.0f, true, 0.12f));
+            g.drawFittedText (String (names[k]), r.withTrimmedLeft (bs + 14).toNearestInt(), Justification::centredLeft, 2);
             if ((k == 5 || k == 6) && isOn && isOn (k))
             {
                 g.setColour (Colour (0xff36ff6a)); g.fillEllipse (r.getRight() - 14, r.getY() + 6, 8, 8);
@@ -3729,7 +3855,7 @@ public:
             auto b = std::make_unique<HotButton> (lnf, tabNames[i]);
             b->setTooltip (tabTips[i]);
             b->onClick = [this, i] { openTab (i); };
-            b->framed = true;
+            b->framed = true; b->tint = drumTheme (i).accent;
             addAndMakeVisible (*b);
             tabs.push_back (std::move (b));
         }
