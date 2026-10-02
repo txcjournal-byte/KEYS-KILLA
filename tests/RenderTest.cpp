@@ -948,7 +948,7 @@ int main (int argc, char** argv)
                 case 1: proc->previewChild (action % 6); break;
                 case 2: proc->setCurrentProgram (action % proc->getNumPrograms()); break;
                 case 3: ke->showView (1 + action % 8); break;
-                case 4: ke->showView (9); break;
+                case 4: ke->showView (action % 2 ? 9 : 26); setp (ID::cutoff, 200.0f + 90.0f * (float) (action % 100)); break;   // browser or SOUND EDIT
                 case 5: ke->showView (11); break;
                 case 6: proc->setParentChild (0, 2); break;
                 case 7: { juce::MemoryBlock mb; proc->getStateInformation (mb); } break;

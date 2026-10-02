@@ -317,6 +317,7 @@ public:
     std::function<void (Graphics&, Rectangle<float>, const Skin&)> glyph;
     bool selected = false, round = false, framed = false;   // framed: a visible button (module pages), not a hot-spot over the bitmap
     Colour tint;   // optional own colour (drum tabs): a coloured underline, and its glow when selected
+    bool hero = false;   // a call-to-action button: always a glowing gradient (EDIT)
     std::function<void()> onRightClick;
 
     void paintButton (Graphics& g, bool over, bool down) override
@@ -330,14 +331,21 @@ public:
             g.setColour (Colour (0xff3f3870)); g.drawRoundedRectangle (r, corner, 1.2f);
         }
         const bool tinted = ! tint.isTransparent();
-        if (selected)
+        if (hero && ! selected)
+        {
+            g.setColour (Colour (0xffff2f6d).withAlpha (over ? 0.45f : 0.28f)); g.fillRoundedRectangle (r.expanded (3), corner + 3);
+            g.setGradientFill (ColourGradient (Colour (0xffff2f6d), r.getX(), r.getY(), Colour (0xff9b4dff), r.getRight(), r.getBottom(), false));
+            g.fillRoundedRectangle (r, corner);
+            g.setColour (Colours::white.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r.withHeight (r.getHeight() * 0.5f), corner);
+        }
+        else if (selected)
         {
             drawGlowFrame (g, r, tinted ? tint : s.accent, corner);
             g.setGradientFill (tinted ? ColourGradient (tint.withAlpha (0.45f), r.getX(), r.getY(), tint.withAlpha (0.12f), r.getRight(), r.getBottom(), false)
                                       : ColourGradient (Colour (0x55ff2f6d), r.getX(), r.getY(), Colour (0x339b4dff), r.getRight(), r.getBottom(), false));
             g.fillRoundedRectangle (r, corner);
         }
-        else if (tinted && framed)
+        else if (tinted && framed && ! hero)
         {
             const auto bar = r.reduced (r.getWidth() * 0.18f, 0).withTop (r.getBottom() - 3.0f).translated (0, -2.0f);
             g.setGradientFill (ColourGradient (tint.withAlpha (0.0f), bar.getX(), 0, tint, bar.getCentreX(), 0, false)); g.fillRect (bar.withWidth (bar.getWidth() * 0.5f));
@@ -346,7 +354,7 @@ public:
         if (over && ! selected) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, corner); }
         if (const auto text = getButtonText(); text.isNotEmpty())
         {
-            g.setColour (selected ? Colours::white : Colour (0xffe6e3ff));
+            g.setColour (selected || hero ? Colours::white : Colour (0xffe6e3ff));
             g.setFont (serif (framed ? std::min (r.getHeight() * 0.5f, 20.0f) : r.getHeight() * 0.5f, false, 0.12f));
             g.drawFittedText (text, r.reduced (4, 0).toNearestInt(), Justification::centred, text.containsChar ('\n') ? 2 : 1, 0.7f);
         }
@@ -499,6 +507,7 @@ private:
 };
 
 #include "AdvancedPage.h"
+#include "SoundEditor.h"
 #include "PresetBrowser.h"
 
 //==============================================================================
@@ -3730,6 +3739,10 @@ public:
         menuBtn.onClick = [this] { showMenu(); };  menuBtn.setTooltip ("Presets, A/B, undo, ADVANCED, size.");
         nameBtn.onClick = [this] { openTab (tabBrowser); }; nameBtn.setTooltip ("Click to browse and search all presets.");
         heartBtn.onClick = [this] { toggleFavourite(); }; heartBtn.setTooltip ("Add to favourites");
+        editBtn.framed = true; editBtn.hero = true; editBtn.setButtonText ("EDIT");
+        editBtn.setTooltip ("SOUND EDIT: the whole sound on one page - oscillator, LFO, pitch, filter, envelopes and effects, with graphs you can drag.");
+        editBtn.onClick = [this] { openTab (tabEdit); };
+        addAndMakeVisible (editBtn);
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
         worldBtn.setTooltip ("SOUND WORLD: one click colours the whole sound (rompler, analog, glassy, hi-fi, organic ...).  TRANCE GATE and CLIPPER are here too.");
         addAndMakeVisible (worldBtn);
@@ -3974,6 +3987,7 @@ public:
         if (v == 22) openTab (tabVst);
         if (v == 24) openTab (tabSounds);
         if (v == 25) openTab (tabKick);
+        if (v == 26) openTab (tabEdit);
         if (v == 23) { openTab (tabDigga); if (auto* pg = dynamic_cast<EmbeddedPage*> (module (tabDigga))) pg->openChop(); }
         if (v == 21)
         {
@@ -4048,13 +4062,15 @@ public:
         if (advanced) advanced->setBounds (R (150, 8, 1662, 612));   // the left switch stays visible
         if (browser) browser->setBounds (R (150, 8, 1662, 612));   // the left tiles never cover the preset names
         if (treePanel) treePanel->setBounds (R (150, 96, 1662, 612));
+        if (soundEdit) soundEdit->setBounds (R (10, 8, 1662, 806));   // SOUND EDIT: everything above the keyboard, the tiles stay
+        editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst || i == tabSounds ? R (150, 96, 1662, 612) : R (0, 0, 1672, 941));   // the KILLA plugins and the drum pages get the whole window
         labSwitch.setBounds (R (16, 100, 138, 600));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -4092,7 +4108,7 @@ private:
     }
     std::vector<Component*> panels() const
     {
-        std::vector<Component*> v { advanced.get(), browser.get(), treePanel.get() };
+        std::vector<Component*> v { advanced.get(), browser.get(), treePanel.get(), soundEdit.get() };
         for (auto& m : modules) v.push_back (m.get());
         return v;
     }
@@ -4136,6 +4152,16 @@ private:
             {
                 case tabBrowser: ensureBrowser(); browser->open (proc.uiCat, proc.uiEra, false); break;
                 case tabParams: ensureAdvanced(); advanced->showTab (0); advanced->setVisible (true); break;
+                case tabEdit:
+                    if (! soundEdit)
+                    {
+                        soundEdit = std::make_unique<kkedit::SoundEditPage> (proc, lnf);
+                        soundEdit->onClose = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr && safe->openTabIndex == tabEdit) safe->openTab (tabEdit); }); };
+                        soundEdit->onSave = [this] { savePreset(); };
+                        soundEdit->onMatrix = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr) { safe->openTab (tabParams); safe->advanced->showTab (3); } }); };
+                        addChildComponent (*soundEdit); noFocus (*soundEdit); resized();
+                    }
+                    soundEdit->setVisible (true); break;
                 case tabSettings: ensureAdvanced(); advanced->showTab (7); advanced->setVisible (true); break;
                 case tabTree:
                     if (! treePanel)
@@ -4171,7 +4197,8 @@ private:
         {
             const int owner = proc.loopOwnerId();
             const bool keep = (owner == 1 && treeOn) || (owner == 2 && (openTabIndex == tabPair || openTabIndex == tabVst))
-                           || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0);
+                           || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0)
+                           || openTabIndex == tabEdit;   // SOUND EDIT: keep the loop running while you tweak the sound
             if (! keep) proc.stopLoop();
         }
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }
@@ -4246,6 +4273,7 @@ private:
         for (int a = 0; a < KeysKillaProcessor::numAncestors; ++a) toTree.addItem (10 + a, "SOUND " + String (a + 1));
         m.addSubMenu ("Breed on: put it into", toTree);
         m.addItem (5, "Load and save as preset...");
+        m.addItem (6, "EDIT this sound  (SOUND EDIT)");
         m.showMenuAsync (PopupMenu::Options(), [this, k, safe = SafePointer<MainPage> (this)] (int r)
         {
             if (safe == nullptr || r == 0 || k >= (int) proc.treeKids().size()) return;
@@ -4255,6 +4283,7 @@ private:
             if (r == 3 || r == 4) proc.setParentGenome (r - 3, g);
             if (r >= 10) proc.setAncestorGenome (r - 10, g);
             if (r == 5) { proc.selectTreeResult (k); savePresetAs(); }
+            if (r == 6) { proc.selectTreeResult (k); openTab (tabEdit); }
             labChanged();
             if (treePanel) treePanel->refresh();
         });
@@ -4265,6 +4294,7 @@ private:
         m.addSectionHeader (proc.kids()[(size_t) idx].g.name);
         m.addItem (1, "Use as PARENT A  (next generation)");
         m.addItem (2, "Use as PARENT B  (next generation)");
+        m.addItem (5, "EDIT this sound  (SOUND EDIT)");
         m.addItem (3, "Load and save as preset...");
         m.addItem (4, "Play");
         PopupMenu toTree;
@@ -4276,6 +4306,7 @@ private:
             if (r == 1 || r == 2) proc.setParentChild (r - 1, idx);
             if (r == 3) { proc.selectChild (idx); savePresetAs(); }
             if (r == 4) proc.previewChild (idx);
+            if (r == 5) { proc.selectChild (idx); if (! (openTabIndex == tabEdit && isPanelVisible())) openTab (tabEdit); }
             if (r >= 10 && r < 10 + KeysKillaProcessor::numAncestors) { proc.setAncestorGenome (r - 10, proc.kids()[(size_t) idx].g); openTab (tabTree); }
             labChanged();
         });
@@ -4577,6 +4608,8 @@ private:
     MeterOverlay meter;
     KKKeyboard keyboard;
     std::unique_ptr<AdvancedPage> advanced;
+    std::unique_ptr<kkedit::SoundEditPage> soundEdit;
+    HotButton editBtn { lnf };
     std::unique_ptr<PresetBrowser> browser;
     std::array<std::unique_ptr<Component>, numPages> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
