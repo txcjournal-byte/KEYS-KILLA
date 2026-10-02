@@ -1072,6 +1072,26 @@ void KeysKillaProcessor::auditionBank (int bankIndex)
 }
 
 // ---------------- BANK on disk ----------------
+juce::File KeysKillaProcessor::saveToFolder (kk::PairPtr s, const juce::String& folder)
+{
+    if (s == nullptr) return {};
+    lastFolder = folder.trim().isEmpty() ? kk::Library::defaultFolder() : folder.trim();
+    return kk::Library::save (*s, sr > 0 ? sr : 44100.0, lastFolder);
+}
+
+void KeysKillaProcessor::auditionFile (const juce::File& f)
+{
+    auto s = kk::PairLab::fromFile (f, sr > 0 ? sr : 44100.0);
+    if (s == nullptr) return;
+    pairPlayer.setSound (s);
+    if (auto* q = apvts.getParameter (ID::playMode))
+    {
+        const float v = q->convertTo0to1 ((float) playPair);
+        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
+    }
+    previewNote = s->rootNote;
+}
+
 juce::File KeysKillaProcessor::bankFolder()
 {
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Bank");
@@ -2552,6 +2572,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("eco", eco.load(), nullptr);
     state.setProperty ("macroNames", macroLabels.joinIntoString ("|"), nullptr);
     for (int d = 0; d < 3; ++d) state.setProperty ("drum" + juce::String (d), drums[(size_t) d].filePath(), nullptr);
+    state.setProperty ("lastFolder", lastFolder, nullptr);
     for (int k = 0; k < kk::PairLab::maxParents; ++k) state.setProperty ("pair" + juce::String (k), pairFiles[(size_t) k], nullptr);
     for (int d = 0; d < 3; ++d)   // the edited patterns: "bars|beat:vel:semi:len;..."
     {
@@ -2612,6 +2633,7 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                     }
                     setPattern (d, std::move (pat), juce::jlimit (1, 8, t.upToFirstOccurrenceOf ("|", false, false).getIntValue()));
                 }
+            lastFolder = vt.getProperty ("lastFolder", kk::Library::defaultFolder()).toString();
             for (int k = 0; k < kk::PairLab::maxParents; ++k)
             {
                 const juce::File pf (vt.getProperty ("pair" + juce::String (k), "").toString());

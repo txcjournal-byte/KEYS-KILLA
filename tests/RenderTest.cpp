@@ -498,6 +498,22 @@ static int unitTests()
         std::set<juce::String> methods; for (auto& k : clean) methods.insert (k->method);
         check (methods.size() >= 5, "PAIR: the six children are six different characters");
     }
+    // MY SOUNDS: folders you create, sounds saved into them, rename, delete
+    {
+        KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
+        const juce::String f1 = "kk test folder", f2 = "kk test folder 2";
+        kk::Library::deleteFolder (f1); kk::Library::deleteFolder (f2);
+        check (kk::Library::folders().contains (kk::Library::defaultFolder()), "MY SOUNDS: the default folder exists");
+        check (kk::Library::createFolder (f1) && kk::Library::folders().contains (f1), "MY SOUNDS: create a folder");
+        juce::AudioBuffer<float> b (2, 22050);
+        for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.5f * std::sin ((float) i * 0.05f) * std::exp (-(float) i / 8000.0f); b.setSample (0, i, v); b.setSample (1, i, v); }
+        auto snd = kk::PairLab::fromBuffer (b, 44100.0, 44100.0, "kk test sound");
+        const auto saved = p.saveToFolder (snd, f1);
+        check (saved.existsAsFile() && kk::Library::sounds (f1).size() == 1 && p.lastFolder == f1, "MY SOUNDS: save a sound into a folder");
+        check (kk::Library::renameFolder (f1, f2) && kk::Library::sounds (f2).size() == 1, "MY SOUNDS: rename a folder (the sounds move with it)");
+        check (kk::Library::deleteSound (kk::Library::sounds (f2)[0]) && kk::Library::sounds (f2).isEmpty(), "MY SOUNDS: delete a sound");
+        check (kk::Library::deleteFolder (f2) && ! kk::Library::folders().contains (f2), "MY SOUNDS: delete a folder");
+    }
     // shelves: the preset name decides first
     check (kk::harvestCatFromName ("Surge XT Brass Stab C5") == kk::catBrass && kk::harvestCatFromName ("Lush Strings") == kk::catStrings
            && kk::harvestCatFromName ("Init Saw") < 0, "BANK: brass / strings found by the preset name");

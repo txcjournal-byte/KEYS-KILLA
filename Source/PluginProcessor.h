@@ -7,6 +7,7 @@
 #include "Presets.h"
 #include "Loops.h"
 #include "Chop.h"
+#include "Library.h"
 #include "World.h"
 #include "Rolls.h"
 #include "DrumBoost.h"
@@ -231,6 +232,10 @@ public:
     void auditionBank (int bankIndex);
     std::vector<kk::HarvestItem> bank;
     // the bank on disk: Documents/KEYS KILLA/Bank/<SHELF>/*.wav (VST captures are saved right away)
+    // MY SOUNDS: your own folders (apart from the factory sounds and the HARVEST bank)
+    juce::String lastFolder { kk::Library::defaultFolder() };
+    juce::File saveToFolder (kk::PairPtr s, const juce::String& folder);
+    void auditionFile (const juce::File& f);                   // hear a sound file on the keys (PAIR player)
     static juce::File bankFolder();
     void loadSavedBank();
     int  saveBank();                                            // saves the unsaved (harvested) sounds; returns how many

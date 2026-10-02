@@ -6,9 +6,10 @@
 
 using namespace juce;
 
+// v0.26: one clean sans font everywhere (the name stays for the old call sites)
 inline Font serif (float h, bool bold = false, float kern = 0.12f)
 {
-    return Font (FontOptions (Font::getDefaultSerifFontName(), h, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern);
+    return Font (FontOptions (Font::getDefaultSansSerifFontName(), h * 0.92f, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern * 0.6f);
 }
 
 inline std::unique_ptr<PropertiesFile> openSettings()

@@ -6,6 +6,8 @@ using namespace juce;
 
 #include "UiCommon.h"
 #include "BinaryData.h"
+#include "EmbeddedPlugins.h"
+#include "ModernSkin.h"
 
 //==============================================================================
 void KKLookAndFeel::setSkin (const Skin& s)
@@ -191,9 +193,11 @@ struct LabImageCache
     LabImageCache()
     {
         auto load = [] (const void* d, int n) { return ImageFileFormat::loadFrom (d, (size_t) n); };
-        imgs.bg = load (BinaryData::lab_bg_jpg, BinaryData::lab_bg_jpgSize);
-        imgs.white = load (BinaryData::lab_white_png, BinaryData::lab_white_pngSize);
-        imgs.black = load (BinaryData::lab_black_png, BinaryData::lab_black_pngSize);
+        // v0.26: the clean graphite look, drawn in code (the old horror bitmap is gone)
+        imgs.bg = kk::modern::makeBackground();
+        imgs.white = kk::modern::makeWhiteKey();
+        imgs.black = kk::modern::makeBlackKey();
+        ignoreUnused (load);
         imgs.icons = load (BinaryData::lab_icons_png, BinaryData::lab_icons_pngSize);
     }
 };
@@ -301,7 +305,7 @@ public:
         if (framed && ! selected)
         {
             g.setColour (Colour (0xff181111)); g.fillRoundedRectangle (r, corner);
-            g.setColour (Colour (0xff4a3a3a)); g.drawRoundedRectangle (r, corner, 1.2f);
+            g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r, corner, 1.2f);
         }
         if (selected) { drawGlowFrame (g, r, s.accent, corner); g.setColour (s.accent.withAlpha (0.12f)); g.fillRoundedRectangle (r, corner); }
         if (over && ! selected) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, corner); }
@@ -574,7 +578,7 @@ public:
             if (pg.preset >= 0) tags << "  .  " << factoryPresets()[(size_t) pg.preset].mood.toUpperCase();
             if (pg.gen > 0) tags << "  .  GEN " << pg.gen;
         }
-        g.setColour (Colour (0xffb9b0ac));
+        g.setColour (Colour (0xffb8bdc4));
         g.setFont (serif (15.0f, false, 0.2f));
         g.drawFittedText (tags, Rectangle<int> (0, 208, getWidth(), 20), Justification::centred, 1, 0.7f);
     }
@@ -1008,7 +1012,7 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff0a0707));
+        g.fillAll (Colour (0xff141518));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         // family lines: 1 + 2 and 3 + 4 join, both run into BREED, BREED feeds the results
         g.setColour (s.accent.withAlpha (0.5f));
@@ -1028,7 +1032,7 @@ public:
         g.drawLine (bc.getCentreX(), bc.getBottom() - 6, bc.getCentreX(), busY, 1.6f);
         g.drawLine ((float) results.front()->getBounds().getCentreX(), busY, (float) results.back()->getBounds().getCentreX(), busY, 1.6f);
         for (auto& r : results) g.drawLine ((float) r->getBounds().getCentreX(), busY, (float) r->getBounds().getCentreX(), (float) r->getY() + 3, 1.6f);
-        g.setColour (Colour (0xff9c9494)); g.setFont (serif (13.0f, false, 0.25f));
+        g.setColour (Colour (0xff8a9099)); g.setFont (serif (13.0f, false, 0.25f));
         g.drawText (proc.getTreeMode() == KeysKillaProcessor::treeLoop ? "DRAG A LOOP INTO FL STUDIO = MIDI CLIP" : "RIGHT-CLICK A RESULT: USE IT AS PARENT A / B, SAVE IT, BREED ON",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centredRight);
     }
@@ -1094,14 +1098,14 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff0a0707));
+        g.fillAll (Colour (0xff141518));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         g.setColour (Colours::white); g.setFont (serif (38.0f, true, 0.3f));
         const int tw = (int) std::ceil (GlyphArrangement::getStringWidth (g.getCurrentFont(), title)) + 30;
         g.drawText (title, 24, 10, tw, 48, Justification::centredLeft);
-        g.setColour (Colour (0xff9c9494)); g.setFont (serif (14.0f, false, 0.2f));
+        g.setColour (Colour (0xff8a9099)); g.setFont (serif (14.0f, false, 0.2f));
         g.drawText (subtitle, 24 + tw + 10, 22, 760, 24, Justification::centredLeft);
-        g.setColour (Colour (0xffb9b0ac)); g.setFont (serif (13.0f, false, 0.25f));
+        g.setColour (Colour (0xffb8bdc4)); g.setFont (serif (13.0f, false, 0.25f));
         for (auto& k : knobs) g.drawText (k.label, k.slider->getBounds().withY (k.slider->getBottom() - 2).withHeight (18).expanded (12, 0), Justification::centred);
         for (auto& c : chips) if (c.caption.isNotEmpty() && ! c.buttons.empty())
             g.drawText (c.caption, c.buttons.front()->getX() + 2, c.buttons.front()->getY() - 20, 300, 18, Justification::centredLeft);
@@ -1218,6 +1222,198 @@ private:
     bool hover = false, fired = false;
 };
 
+// ---------------- SAVE TO FOLDER: one menu everywhere a sound is made (pair children, VST A / B, chops, DIGGA) ----------------
+static void askNewFolder (std::function<void (String)> done)
+{
+    auto* w = new AlertWindow ("NEW FOLDER", "Name of the new folder for your sounds:", MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", "", "Folder");
+    w->addButton ("CREATE", 1, KeyPress (KeyPress::returnKey));
+    w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    w->enterModalState (true, ModalCallbackFunction::create ([w, done] (int r)
+    {
+        const auto name = w->getTextEditorContents ("name").trim();
+        if (r == 1 && name.isNotEmpty() && kk::Library::createFolder (name)) done (name);
+    }), true);
+}
+// sounds: one or more sounds to save; done gets a short message ("saved to MOJE ZVUKY")
+static void saveToFolderMenu (KeysKillaProcessor& proc, std::vector<kk::PairPtr> sounds, Component* target, std::function<void (String)> done)
+{
+    sounds.erase (std::remove (sounds.begin(), sounds.end(), nullptr), sounds.end());
+    if (sounds.empty()) { if (done) done ("nothing to save yet"); return; }
+    const auto folders = kk::Library::folders();
+    PopupMenu m;
+    m.addSectionHeader (sounds.size() > 1 ? "SAVE " + String ((int) sounds.size()) + " SOUNDS TO" : "SAVE TO");
+    m.addItem (1, "> " + proc.lastFolder + "   (last used)");
+    m.addSeparator();
+    for (int i = 0; i < folders.size(); ++i) m.addItem (10 + i, folders[i]);
+    m.addSeparator();
+    m.addItem (2, "+ new folder ...");
+    auto save = [&proc, sounds, done] (const String& folder)
+    {
+        int n = 0; for (auto& s : sounds) n += proc.saveToFolder (s, folder).existsAsFile() ? 1 : 0;
+        if (done) done (n > 0 ? "saved to " + folder + (n > 1 ? "  (" + String (n) + ")" : String()) : String ("could not save"));
+    };
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (target), [save, folders, &proc] (int r)
+    {
+        if (r == 1) save (proc.lastFolder);
+        else if (r == 2) askNewFolder ([save] (String name) { save (name); });
+        else if (r >= 10 && r - 10 < folders.size()) save (folders[r - 10]);
+    });
+}
+
+// ---------------- MY SOUNDS: your folders, your sounds (hear, into PAIR, drag into FL, delete) ----------------
+class MySoundsPage : public Component, public DragAndDropContainer, private Timer
+{
+public:
+    MySoundsPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        folderModel.page = this; soundModel.page = this;   // before the lists ask for rows
+        folderList.setModel (&folderModel); folderList.setRowHeight (30);
+        soundList.setModel (&soundModel); soundList.setRowHeight (26);
+        for (auto* lb : { &folderList, &soundList }) { lb->setColour (ListBox::backgroundColourId, Colour (0xff0d0e10)); addAndMakeVisible (*lb); }
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (newBtn, "+ NEW FOLDER", "Create a folder for your sounds", [this] { askNewFolder ([this] (String n) { current = n; reload(); }); });
+        btn (renameBtn, "RENAME", "Rename this folder", [this] { renameFolder(); });
+        btn (delFolderBtn, "DELETE FOLDER", "Delete this folder with its sounds (they go to the recycle bin)", [this] { deleteFolder(); });
+        btn (factoryBtn, "FACTORY SOUNDS", "The sounds that come with KEYS KILLA (kept apart from yours)", [this] { if (onFactory) onFactory(); });
+        btn (pairBtn, "INTO PAIR", "This sound into PAIR YOUR OWN (next free slot) - breed it with others", [this] { toPair(); });
+        btn (delBtn, "DELETE", "Delete this sound (Del) - it goes to the recycle bin", [this] { deleteSound(); });
+        btn (showBtn, "SHOW IN EXPLORER", "Open the folder on your computer", [this] { kk::Library::folder (current).revealToUser(); });
+        setWantsKeyboardFocus (true);
+        setOpaque (true);
+        reload();
+        startTimerHz (2);
+    }
+    std::function<void()> onFactory, onPair;
+    void visibilityChanged() override { if (isVisible()) reload(); }
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Colour (0xff141518));
+        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 8, 1.2f);
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (24.0f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.drawText ("MY SOUNDS", 20, 12, 300, 32, Justification::centredLeft);
+        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.drawText ("YOUR FOLDERS", folderList.getX(), folderList.getY() - 18, 200, 16, Justification::centredLeft);
+        g.drawText (current.toUpperCase() + "  -  " + String (files.size()) + " SOUNDS", soundList.getX(), soundList.getY() - 18, 500, 16, Justification::centredLeft);
+        g.drawText ("CLICK = HEAR (AND PLAY ON THE KEYS)    DOUBLE-CLICK = INTO PAIR    DRAG = INTO FL STUDIO    DEL = DELETE",
+                    soundList.getX(), soundList.getBottom() + 6, soundList.getWidth(), 16, Justification::centredLeft);
+        g.setColour (lnf.skin->accent); g.drawText (note, 330, 20, 700, 20, Justification::centredLeft);
+        if (files.isEmpty())
+        {
+            g.setColour (Colour (0xff6a7078)); g.setFont (Font (FontOptions (16.0f)));
+            g.drawFittedText ("This folder is empty.\nUse SAVE TO FOLDER under PAIR children, VST A / B, CHOP slices or DIGGA.", soundList.getBounds().reduced (20), Justification::centred, 3);
+        }
+    }
+    void resized() override
+    {
+        const int w = getWidth(), h = getHeight();
+        factoryBtn.setBounds (w - 200, 14, 184, 32);
+        folderList.setBounds (16, 74, 280, h - 74 - 60);
+        newBtn.setBounds (16, h - 50, 136, 34); renameBtn.setBounds (158, h - 50, 64, 34); delFolderBtn.setBounds (226, h - 50, 70, 34);
+        renameBtn.setButtonText ("REN."); delFolderBtn.setButtonText ("DEL.");
+        soundList.setBounds (312, 74, w - 312 - 16, h - 74 - 82);
+        pairBtn.setBounds (w - 16 - 3 * 150 - 12, h - 50, 150, 34); delBtn.setBounds (w - 16 - 2 * 150 - 6, h - 50, 150, 34); showBtn.setBounds (w - 16 - 150, h - 50, 150, 34);
+    }
+    bool keyPressed (const KeyPress& k) override
+    {
+        if (k == KeyPress::deleteKey || k == KeyPress::backspaceKey) { deleteSound(); return true; }
+        return false;
+    }
+    // drag a sound out = its WAV file into FL
+    bool shouldDropFilesWhenDraggedExternally (const DragAndDropTarget::SourceDetails& d, StringArray& out, bool& canMove) override
+    {
+        const int row = (int) d.description;
+        if (row < 0 || row >= files.size()) return false;
+        out.add (files[row].getFullPathName()); canMove = false;
+        return true;
+    }
+private:
+    struct FolderModel : public ListBoxModel
+    {
+        MySoundsPage* page = nullptr;
+        int getNumRows() override { return page->folders.size(); }
+        void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
+        {
+            const bool sel = page->folders[row] == page->current;
+            if (sel) { g.setColour (page->lnf.skin->accent.withAlpha (0.35f)); g.fillRoundedRectangle (2, 2, (float) w - 4, (float) h - 4, 4); }
+            g.setColour (sel ? Colours::white : Colour (0xffc9ced6)); g.setFont (Font (FontOptions (14.0f, Font::bold)));
+            g.drawText (page->folders[row], 12, 0, w - 24, h, Justification::centredLeft);
+        }
+        void listBoxItemClicked (int row, const MouseEvent&) override { page->current = page->folders[row]; page->proc.lastFolder = page->current; page->reload(); }
+    } folderModel;
+    struct SoundModel : public ListBoxModel
+    {
+        MySoundsPage* page = nullptr;
+        int getNumRows() override { return page->files.size(); }
+        void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
+        {
+            const bool sel = row == page->sel;
+            if (sel) { g.setColour (page->lnf.skin->accent.withAlpha (0.3f)); g.fillRect (0, 0, w, h); }
+            else if (row % 2) { g.setColour (Colour (0xff121316)); g.fillRect (0, 0, w, h); }
+            g.setColour (Colours::white.withAlpha (sel ? 1.0f : 0.85f)); g.setFont (Font (FontOptions (13.5f)));
+            g.drawText (page->files[row].getFileNameWithoutExtension(), 12, 0, w - 140, h, Justification::centredLeft);
+            g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f)));
+            g.drawText (page->files[row].getLastModificationTime().formatted ("%d.%m.%Y"), w - 120, 0, 110, h, Justification::centredRight);
+        }
+        void listBoxItemClicked (int row, const MouseEvent&) override { page->sel = row; page->proc.auditionFile (page->files[row]); page->soundList.repaint(); page->grabKeyboardFocus(); }
+        void listBoxItemDoubleClicked (int row, const MouseEvent&) override { page->sel = row; page->toPair(); }
+        var getDragSourceDescription (const SparseSet<int>& rows) override { return rows.isEmpty() ? var() : var (rows[0]); }
+    } soundModel;
+    void reload()
+    {
+        folders = kk::Library::folders();
+        if (! folders.contains (current)) current = folders.contains (proc.lastFolder) ? proc.lastFolder : folders[0];
+        files = kk::Library::sounds (current);
+        sel = jlimit (-1, files.size() - 1, sel);
+        folderList.updateContent(); soundList.updateContent();
+        folderList.repaint(); soundList.repaint();
+        sig = signature();
+        repaint();
+    }
+    int signature() const { return files.size() * 7919 + kk::Library::sounds (current).size() * 31 + kk::Library::folders().size(); }
+    void timerCallback() override { if (isVisible() && signature() != sig) reload(); }   // sounds saved from other pages show up
+    void toPair()
+    {
+        if (sel < 0 || sel >= files.size()) return;
+        int slot = 0; while (slot < kk::PairLab::maxParents && proc.pairParents[(size_t) slot] != nullptr) ++slot;
+        if (slot >= kk::PairLab::maxParents) slot = 0;
+        if (proc.loadPairParent (slot, files[sel])) { note = files[sel].getFileNameWithoutExtension() + " -> PAIR, SOUND " + String (slot + 1); if (onPair) onPair(); }
+        repaint();
+    }
+    void deleteSound()
+    {
+        if (sel < 0 || sel >= files.size()) return;
+        kk::Library::deleteSound (files[sel]);
+        reload();
+    }
+    void deleteFolder()
+    {
+        const auto name = current;
+        AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, "DELETE FOLDER", "Delete the folder \"" + name + "\" and its " + String (files.size()) + " sounds?\n(They go to the recycle bin.)",
+                                      "DELETE", "Cancel", this, ModalCallbackFunction::create ([safe = Component::SafePointer<MySoundsPage> (this), name] (int r)
+                                      { if (safe != nullptr && r == 1) { kk::Library::deleteFolder (name); safe->current = {}; safe->reload(); } }));
+    }
+    void renameFolder()
+    {
+        auto* w = new AlertWindow ("RENAME FOLDER", "New name:", MessageBoxIconType::NoIcon);
+        w->addTextEditor ("name", current, "Folder");
+        w->addButton ("RENAME", 1, KeyPress (KeyPress::returnKey));
+        w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+        w->enterModalState (true, ModalCallbackFunction::create ([w, safe = Component::SafePointer<MySoundsPage> (this), from = current] (int r)
+        {
+            const auto to = w->getTextEditorContents ("name").trim();
+            if (safe != nullptr && r == 1 && kk::Library::renameFolder (from, to)) { safe->current = to; safe->reload(); }
+        }), true);
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    ListBox folderList, soundList;
+    HotButton newBtn { lnf }, renameBtn { lnf }, delFolderBtn { lnf }, factoryBtn { lnf }, pairBtn { lnf }, delBtn { lnf }, showBtn { lnf };
+    StringArray folders;
+    Array<File> files;
+    String current, note;
+    int sel = -1, sig = 0;
+};
+
 // ---------------- CHOP / SLICE: DIGGA's sample on a big waveform, movable slices, MPC pads, keys, drag out ----------------
 class ChopPanel : public Component, private Timer
 {
@@ -1270,14 +1466,18 @@ public:
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (keysBtn, "", "KEYS: the keyboard / FL piano roll plays the slices - C5 = slice 1, C#5 = slice 2 ...",
              [this] { setParamFromUi (proc, ID::playMode, keysOn() ? 0.0f : (float) KeysKillaProcessor::playChop); refresh(); });
-        btn (bankAllBtn, "ALL TO BANK", "Every slice into your sound bank (then pair them)", [this]
+        btn (bankAllBtn, "SAVE ALL", "Every slice into one of your MY SOUNDS folders", [this]
         {
-            int n = 0; if (auto c = proc.chop.current()) for (int i = 0; i < c->numSlices(); ++i) n += proc.chopToBank (i) ? 1 : 0;
-            note = String (n) + " slices in the bank"; repaint();
+            std::vector<kk::PairPtr> all;
+            if (auto c = proc.chop.current()) for (int i = 0; i < c->numSlices(); ++i) all.push_back (sliceSound (i));
+            saveToFolderMenu (proc, all, &bankAllBtn, [safe = Component::SafePointer<ChopPanel> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
         });
         btn (backBtn, "BACK TO DIGGA", "Back to Digga Killa", [this] { if (onBack) onBack(); });
         btn (pairBtn, "SLICE > PAIR", "This slice into PAIR YOUR OWN (next free slot)", [this] { note = proc.chopToPair (sel) ? "slice " + String (sel + 1) + " is in PAIR" : String(); repaint(); });
-        btn (bankBtn, "SLICE > BANK", "This slice into your sound bank", [this] { note = proc.chopToBank (sel) ? "slice " + String (sel + 1) + " is in the bank" : String(); repaint(); });
+        btn (bankBtn, "SAVE SLICE", "This slice into one of your MY SOUNDS folders", [this]
+        {
+            saveToFolderMenu (proc, { sliceSound (sel) }, &bankBtn, [safe = Component::SafePointer<ChopPanel> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
+        });
         dragWav.makeFile = [this] { return proc.chop.exportSlice (sel); };
         dragWav.setTooltip ("Drag this slice into FL Studio (or onto the PAIR tile on the left)");
         dragMidi.makeFile = [this] { return proc.chop.exportMidi (proc.lastBpm.load()); };
@@ -1421,6 +1621,13 @@ public:
     }
     void mouseUp (const MouseEvent&) override { if (dragMark > 0) refresh(); dragMark = -1; }
 private:
+    kk::PairPtr sliceSound (int i) const
+    {
+        auto c = proc.chop.current(); if (c == nullptr) return {};
+        auto b = proc.chop.slice (i);
+        if (b.getNumSamples() < 64) return {};
+        return kk::PairLab::fromBuffer (b, c->rate, c->rate, c->name + " chop " + String (i + 1));
+    }
     bool keysOn() const { return (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playChop; }
     void refresh()
     {
@@ -1517,6 +1724,18 @@ public:
             chopBtn.setTooltip ("CHOP / SLICE the sample: move the cuts, MPC pads, play the chops on the keys, drag slices and the MIDI out");
             chopBtn.onClick = [this] { showChop (! chopOn); };
             addAndMakeVisible (chopBtn);
+            saveShotsBtn.framed = true; saveShotsBtn.setButtonText ("SAVE THE\nSHOTS");
+            saveShotsBtn.setTooltip ("Save DIGGA's one-shots into one of your MY SOUNDS folders");
+            saveShotsBtn.onClick = [this]
+            {
+                double rate = 44100.0;
+                std::vector<kk::PairPtr> all;
+                for (auto& [name, buf] : kkDiggaShots (proc.module (mod), rate, false))
+                    if (buf != nullptr && buf->getNumSamples() > 64) all.push_back (kk::PairLab::fromBuffer (*buf, rate, rate, "DIGGA " + name));
+                saveToFolderMenu (proc, all, &saveShotsBtn, [safe = Component::SafePointer<EmbeddedPage> (this)] (String msg)
+                { if (safe != nullptr) { safe->saveShotsBtn.setTooltip (msg); safe->saveNote = msg; safe->repaint(); } });
+            };
+            addAndMakeVisible (saveShotsBtn);
             chop = std::make_unique<ChopPanel> (proc, lnf);
             chop->onBack = [this] { showChop (false); };
             addChildComponent (*chop);
@@ -1541,9 +1760,9 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff070505));
+        g.fillAll (Colour (0xff121315));
         // left rail behind the BREED LAB / FAMILY TREE / KILLA tiles
-        g.setColour (Colour (0xff0d0909)); g.fillRect (0, 0, kRail, getHeight());
+        g.setColour (Colour (0xff141518)); g.fillRect (0, 0, kRail, getHeight());
         g.setColour (s.panelEdge.withAlpha (0.6f)); g.drawVerticalLine (kRail - 1, 0.0f, (float) getHeight());
         g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
         g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
@@ -1562,12 +1781,12 @@ public:
             g.drawLine (cc.x, cc.y - rr * 1.25f, cc.x, cc.y - rr * 0.2f, 3.5f);
             g.setFont (Font (FontOptions (18.0f, Font::bold)).withExtraKerningFactor (0.15f));
             g.drawText (on ? "ON" : "OFF", Rectangle<float> (0, pr.getBottom() + 8, (float) kRail, 24).toNearestInt(), Justification::centred);
-            g.setColour (Colour (0xff9c9494)); g.setFont (Font (FontOptions (11.0f)));
+            g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f)));
             g.drawFittedText (title + "\non the melodies", Rectangle<float> (4, pr.getBottom() + 32, (float) kRail - 8, 30).toNearestInt(), Justification::centred, 2);
         }
         if (editor == nullptr)
         {
-            g.setColour (Colour (0xffb9b0ac)); g.setFont (serif (18.0f, false, 0.2f));
+            g.setColour (Colour (0xffb8bdc4)); g.setFont (serif (18.0f, false, 0.2f));
             g.drawText ("opening " + title + " ...", getLocalBounds(), Justification::centred);
         }
     }
@@ -1576,10 +1795,11 @@ public:
         const int w = getWidth();
         juce::ignoreUnused (w);
         power = { kRail / 2 - 44, getHeight() - 260, 88, 88 };
-        chopBtn.setBounds (8, getHeight() - 336, kRail - 16, 74);
+        chopBtn.setBounds (8, getHeight() - 336, kRail - 16, 70);
         if (chop) chop->setBounds (getLocalBounds().withTrimmedLeft (kRail));
-        keysBtn.setBounds (8, getHeight() - 250, kRail - 16, 80);
-        pairBtn.setBounds (8, getHeight() - 160, kRail - 16, 80);
+        keysBtn.setBounds (8, getHeight() - 260, kRail - 16, 70);
+        pairBtn.setBounds (8, getHeight() - 184, kRail - 16, 70);
+        saveShotsBtn.setBounds (8, getHeight() - 108, kRail - 16, 70);
         if (editor != nullptr)
         {
             // the plugin keeps its own look and lays itself out for the bigger size (no transform: crisp, OpenGL-safe)
@@ -1639,7 +1859,8 @@ private:
     const char* onId;
     std::unique_ptr<AudioProcessorEditor> editor;
     Rectangle<int> native, placed, power;
-    HotButton onBtn { lnf }, keysBtn { lnf }, pairBtn { lnf }, chopBtn { lnf };
+    HotButton onBtn { lnf }, keysBtn { lnf }, pairBtn { lnf }, chopBtn { lnf }, saveShotsBtn { lnf };
+    String saveNote;
     std::unique_ptr<ChopPanel> chop;
     bool chopOn = false, wantSteal = false;
     void showChop (bool on)
@@ -2395,7 +2616,7 @@ public:
     explicit VstOverlay (juce::AudioPluginInstance& p, KKLookAndFeel& l) : lnf (l)
     {
         back.setButtonText ("BACK TO KEYS KILLA"); back.framed = true;
-        back.onClick = [this] { setVisible (false); };
+        back.onClick = [this] { setVisible (false); if (onBack) onBack(); };
         addAndMakeVisible (back);
         title = p.getName();
         editor.reset (p.createEditorIfNeeded());
@@ -2403,6 +2624,7 @@ public:
         setOpaque (true);
     }
     ~VstOverlay() override { if (editor != nullptr) { removeChildComponent (editor.get()); editor.reset(); } }
+    std::function<void()> onBack;   // PAIR FROM VST: the sound you changed in the plugin is taken again
     bool hasEditor() const { return editor != nullptr; }
     void paint (Graphics& g) override
     {
@@ -2444,18 +2666,17 @@ public:
         search.onTextChange = [this] { filter(); };
         addAndMakeVisible (search);
         list.setModel (this); list.setRowHeight (22);
-        list.setColour (ListBox::backgroundColourId, Colour (0xff0d0b0b));
+        list.setColour (ListBox::backgroundColourId, Colour (0xff0d0e10));
         addAndMakeVisible (list);
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (prevBtn, "<", "Previous sound", [this] { step (-1); });
         btn (nextBtn, ">", "Next sound", [this] { step (1); });
-        btn (bankBtn, "SAVE TO BANK", "Keep this sound in your bank (it stays there for every project)", [this]
+        btn (bankBtn, "SAVE TO FOLDER", "Keep this sound in one of your MY SOUNDS folders", [this]
         {
-            status = proc.vstSideToBank (side) ? "saved to the bank (" + String (kk::harvestCatShort (proc.bank.empty() ? 0 : proc.bank.front().cat)) + ")" : String ("choose a sound first");
-            repaint();
+            saveToFolderMenu (proc, { proc.pairParents[(size_t) side] }, &bankBtn, [safe = Component::SafePointer<VstSide> (this)] (String msg) { if (safe != nullptr) { safe->status = msg; safe->repaint(); } });
         });
         btn (takeBtn, "TAKE CURRENT", "Take the sound the plugin plays right now (after you chose one in SHOW PLUGIN)", [this] { pick (-1); });
-        btn (showBtn, "SHOW PLUGIN", "Show the plugin inside KEYS KILLA - only needed for plugins that don't share their sound list", [this] { if (onShowPlugin) onShowPlugin (side); });
+        btn (showBtn, "SHOW PLUGIN", "Show the plugin inside KEYS KILLA: pick or tweak a sound there - BACK takes it into KEYS KILLA", [this] { if (onShowPlugin) onShowPlugin (side); });
         btn (keysBtn, "KEYS", "Play this plugin live on the keys", [this] { proc.vstKeys = side; setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst); refreshButtons(); });
     }
     std::function<void (int)> onShowPlugin;
@@ -2480,11 +2701,11 @@ public:
     {
         const auto& s = *lnf.skin;
         auto r = getLocalBounds().toFloat();
-        g.setColour (Colour (0xff120d0d)); g.fillRoundedRectangle (r, 10);
-        g.setColour (Colour (0xff4a3a3a)); g.drawRoundedRectangle (r.reduced (0.5f), 10, 1.2f);
+        g.setColour (Colour (0xff17181b)); g.fillRoundedRectangle (r, 10);
+        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r.reduced (0.5f), 10, 1.2f);
         g.setColour (s.accent); g.setFont (Font (FontOptions (34.0f, Font::bold)));
         g.drawText (side == 0 ? "A" : "B", 12, 6, 36, 36, Justification::centred);
-        g.setColour (Colour (0xffb9b0ac)); g.setFont (Font (FontOptions (11.5f)));
+        g.setColour (Colour (0xffb8bdc4)); g.setFont (Font (FontOptions (11.5f)));
         const auto& h = proc.host (side);
         String info = ! h.loaded() ? String ("choose a plugin")
                     : proc.vstSounds[(size_t) side].empty() ? String ("this plugin shares no sound list: SHOW PLUGIN, pick a sound, TAKE CURRENT")
@@ -2518,6 +2739,7 @@ public:
         statusArea = r.removeFromBottom (30);
         list.setBounds (r);
     }
+    void retake() { pick (-1); }   // the sound the plugin plays now (after you changed it in SHOW PLUGIN)
     void refreshButtons() { keysBtn.selected = proc.vstKeys.load() == side && (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playVst; keysBtn.repaint(); }
 private:
     // ListBoxModel
@@ -2528,7 +2750,7 @@ private:
         const int idx = shown[(size_t) row];
         const bool sel = idx == proc.vstSel[(size_t) side];
         if (sel) { g.setColour (lnf.skin->accent.withAlpha (0.35f)); g.fillRect (0, 0, w, h); }
-        else if (row % 2) { g.setColour (Colour (0xff151111)); g.fillRect (0, 0, w, h); }
+        else if (row % 2) { g.setColour (Colour (0xff141518)); g.fillRect (0, 0, w, h); }
         g.setColour (sel ? Colours::white : Colour (0xffd8d2d2)); g.setFont (Font (FontOptions (13.0f)));
         g.drawText (proc.vstSounds[(size_t) side][(size_t) idx].name, 8, 0, w - 16, h, Justification::centredLeft);
     }
@@ -2677,13 +2899,13 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff0a0707));
+        g.fillAll (Colour (0xff141518));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         // ---- HARVEST: drop zone + bank by character
         if (! vstPage)
         {
             const auto dz = dropZone().toFloat();
-            g.setColour (Colour (dropHover ? 0xff2a0d0d : 0xff120d0d)); g.fillRoundedRectangle (dz, 10);
+            g.setColour (Colour (dropHover ? 0xff2a0d0d : 0xff17181b)); g.fillRoundedRectangle (dz, 10);
             Path d; d.addRoundedRectangle (dz.reduced (1), 10);
             const float pat[] { 7.0f, 5.0f };
             PathStrokeType (1.6f).createDashedStroke (d, d, pat, 2);
@@ -2696,8 +2918,8 @@ public:
             for (int c = 0; c < kk::numCats; ++c)
             {
                 const auto col = bankCol (c).toFloat();
-                g.setColour (Colour (0xff100c0c)); g.fillRoundedRectangle (col, 6);
-                g.setColour (Colour (0xff2e2424)); g.drawRoundedRectangle (col, 6, 1.0f);
+                g.setColour (Colour (0xff111214)); g.fillRoundedRectangle (col, 6);
+                g.setColour (Colour (0xff35393f)); g.drawRoundedRectangle (col, 6, 1.0f);
                 g.setColour (s.accent); g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.08f));
                 g.drawText (kk::harvestCatShort (c), col.withHeight (20).toNearestInt(), Justification::centred);
             }
@@ -2707,7 +2929,7 @@ public:
                 const auto& it = proc.bank[(size_t) i];
                 if (row[it.cat] >= kk::Harvest::perCategory) continue;
                 const auto r = chip (it.cat, row[it.cat]++).toFloat();
-                g.setColour (i == armed ? s.accent.withAlpha (0.6f) : Colour (0xff221a1a)); g.fillRoundedRectangle (r, 4);
+                g.setColour (i == armed ? s.accent.withAlpha (0.6f) : Colour (0xff24262a)); g.fillRoundedRectangle (r, 4);
                 drawPeaks (g, r.reduced (3, 2).withWidth (r.getWidth() * 0.45f), it.sound->peaks, s.accent.withAlpha (0.8f));
                 g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (10.5f)));
                 g.drawText (it.sound->pitched && it.cat != kk::catDrum && it.cat != kk::catFx ? MidiMessage::getMidiNoteName (it.sound->rootNote, true, true, 5) : String (i + 1),
@@ -2724,16 +2946,16 @@ public:
         {
             const auto r = slot (k).toFloat();
             const auto& p = proc.pairParents[(size_t) k];
-            g.setColour (Colour (0xff120d0d)); g.fillRoundedRectangle (r, 8);
+            g.setColour (Colour (0xff17181b)); g.fillRoundedRectangle (r, 8);
             if (hoverSlot == k) drawGlowFrame (g, r, s.accent, 8);
             else
             {
                 Path d; d.addRoundedRectangle (r.reduced (1), 8);
                 const float pat[] { 6.0f, 4.0f };
-                if (p == nullptr) PathStrokeType (1.2f).createDashedStroke (d, d, pat, 2), g.setColour (Colour (0xff5a4646)), g.fillPath (d);
-                else { g.setColour (Colour (0xff4a3a3a)); g.drawRoundedRectangle (r, 8, 1.2f); }
+                if (p == nullptr) PathStrokeType (1.2f).createDashedStroke (d, d, pat, 2), g.setColour (Colour (0xff4a4e55)), g.fillPath (d);
+                else { g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r, 8, 1.2f); }
             }
-            g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
+            g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
             g.drawText ("SOUND " + String (k + 1), r.reduced (12, 6).withHeight (16).toNearestInt(), Justification::centredLeft);
             {   // dice: a random sound flies in
                 const auto db = diceBox (k).toFloat();
@@ -2745,7 +2967,7 @@ public:
             }
             if (p == nullptr)
             {
-                g.setColour (Colour (0xffb9b0ac)); g.setFont (serif (15.0f, false, 0.12f));
+                g.setColour (Colour (0xffb8bdc4)); g.setFont (serif (15.0f, false, 0.12f));
                 g.drawFittedText ("drop a WAV here\nor roll the dice", r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
@@ -2754,7 +2976,7 @@ public:
             g.drawText (p->name, r.reduced (12, 6).removeFromBottom (18).toNearestInt(), Justification::centredLeft);
             g.setColour (s.accent); g.setFont (serif (12.0f, false, 0.1f));
             g.drawText (p->pitched ? MidiMessage::getMidiNoteName (p->rootNote, true, true, 5) : String ("DRUM / FX"), r.reduced (12, 6).withHeight (16).withTrimmedRight (26).toNearestInt(), Justification::centredRight);
-            g.setColour (Colour (0xff9c9494)); g.drawText ("x", closeBox (k), Justification::centred);
+            g.setColour (Colour (0xff8a9099)); g.drawText ("x", closeBox (k), Justification::centred);
         }
         // the family line
         g.setColour (s.accent.withAlpha (0.45f));
@@ -2775,8 +2997,9 @@ public:
         g.drawLine (bc.getCentreX(), bc.getBottom() - 6, bc.getCentreX(), busY, 1.5f);
         g.drawLine ((float) kid (0).getCentreX(), busY, (float) kid (5).getCentreX(), busY, 1.5f);
         for (int k = 0; k < 6; ++k) g.drawLine ((float) kid (k).getCentreX(), busY, (float) kid (k).getCentreX(), (float) kid (k).getY(), 1.5f);
-        g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
+        g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
         if (! vstPage) g.drawText ("CHILDREN", flavorBtns.front()->getX(), flavorBtns.front()->getY() - 16, 200, 14, Justification::centredLeft);
+        if (note.isNotEmpty()) { g.setColour (Colour (0xff36ff6a)); g.setFont (Font (FontOptions (13.0f, Font::bold))); g.drawText (note, getWidth() / 2 + 110, kid (0).getY() - 26, getWidth() / 2 - 130, 18, Justification::centredRight); }
         for (int i = 0; i < (int) flavorBtns.size(); ++i) { flavorBtns[(size_t) i]->selected = i == proc.pairFlavor; }
         // children
         for (int k = 0; k < 6; ++k)
@@ -2785,8 +3008,8 @@ public:
             const bool has = k < (int) proc.pairKids.size();
             const bool sel = has && k == proc.pairSel;
             g.setColour (Colour (sel ? 0xff2a0d0d : 0xff141010)); g.fillRoundedRectangle (r, 8);
-            if (sel) drawGlowFrame (g, r, s.accent, 8); else { g.setColour (Colour (0xff3a2e2e)); g.drawRoundedRectangle (r, 8, 1.2f); }
-            g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
+            if (sel) drawGlowFrame (g, r, s.accent, 8); else { g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r, 8, 1.2f); }
+            g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
             g.drawText ("CHILD " + String (k + 1), r.reduced (10, 6).withHeight (16).toNearestInt(), Justification::centredLeft);
             if (! has)
             {
@@ -2806,10 +3029,16 @@ public:
             g.setColour (looping ? s.accent : Colour (0xff2a2020)); g.fillRoundedRectangle (lb, 5);
             g.setColour (Colours::white); g.setFont (serif (12.0f, false, 0.2f));
             g.drawText (looping ? "STOP LOOP" : "LOOP", lb.toNearestInt(), Justification::centred);
-            g.setColour (Colour (0xff9c9494)); g.setFont (serif (10.5f, false, 0.15f));
+            g.setColour (Colour (0xff8a9099)); g.setFont (serif (10.5f, false, 0.15f));
             g.drawText (looping ? "drag: MIDI" : "drag: WAV", r.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredRight);
+            {   // SAVE to a folder
+                const auto sb = saveBox (k).toFloat();
+                g.setColour (Colour (0xff1c2a1e)); g.fillRoundedRectangle (sb, 4);
+                g.setColour (Colour (0xff36ff6a)); g.drawRoundedRectangle (sb, 4, 1.0f);
+                g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawText ("SAVE", sb.toNearestInt(), Justification::centred);
+            }
         }
-        g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
+        g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
         g.drawText (vstPage ? "1. A + B: CHOOSE A PLUGIN   2. CLICK A SOUND = HEAR IT   3. BREED   4. CHILD: CLICK = KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI"
                             : "BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, DEL = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centred);
@@ -2919,6 +3148,11 @@ public:
         for (int k = 0; k < (int) proc.pairKids.size() && k < 6; ++k)
         {
             if (loopBox (k).contains (pos)) { proc.togglePairLoop (k); repaint(); return; }
+            if (saveBox (k).contains (pos))
+            {
+                saveToFolderMenu (proc, { proc.pairKids[(size_t) k] }, this, [safe = Component::SafePointer<PairPage> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
+                return;
+            }
             if (kid (k).contains (pos)) { proc.selectPairKid (k, true); repaint(); return; }
         }
     }
@@ -2945,6 +3179,8 @@ private:
             {
                 vstWin = std::make_unique<VstOverlay> (*inst, lnf);
                 vstWinSide = side;
+                vstWin->onBack = [safe = Component::SafePointer<PairPage> (this), side]
+                { if (safe != nullptr && safe->sides[(size_t) side]) safe->sides[(size_t) side]->retake(); };
                 top->addChildComponent (*vstWin);
             }
             if (vstWin != nullptr) { vstWin->setBounds (top->getLocalBounds()); vstWin->setVisible (true); vstWin->toFront (true); }
@@ -2958,8 +3194,9 @@ private:
     Rectangle<int> diceBox (int k) const { const auto r = slot (k); return { r.getRight() - 34, r.getBottom() - 30, 26, 24 }; }
     Rectangle<int> kid (int k) const { const int w = (getWidth() - 28 - 5 * 10) / 6; return { 14 + k * (w + 10), 352, w, getHeight() - 352 - 24 }; }
     Rectangle<int> loopBox (int k) const { const auto r = kid (k); return { r.getX() + 10, r.getBottom() - 40, r.getWidth() - 20, 22 }; }
+    Rectangle<int> saveBox (int k) const { const auto r = kid (k); return { r.getRight() - 62, r.getY() + 22, 54, 18 }; }
     int slotAt (Point<int> p) const { if (vstPage) return -1; for (int k = 0; k < kk::PairLab::maxParents; ++k) if (slot (k).contains (p)) return k; return -1; }
-    int kidAt (Point<int> p) const { for (int k = 0; k < 6; ++k) if (kid (k).contains (p) && ! loopBox (k).contains (p)) return k < (int) proc.pairKids.size() ? k : -1; return -1; }
+    int kidAt (Point<int> p) const { for (int k = 0; k < 6; ++k) if (kid (k).contains (p) && ! loopBox (k).contains (p) && ! saveBox (k).contains (p)) return k < (int) proc.pairKids.size() ? k : -1; return -1; }
     int firstFree() const { for (int k = 0; k < kk::PairLab::maxParents; ++k) if (proc.pairParents[(size_t) k] == nullptr) return k; return -1; }
     void browse (int k)
     {
@@ -3012,6 +3249,7 @@ private:
     std::vector<std::unique_ptr<HotButton>> flavorBtns;
     std::unique_ptr<FileChooser> chooser;
     int hoverSlot = -1, downKid = -1, lastVer = -1, armed = -1;
+    String note;
     bool dropHover = false;
     bool dragDone = false;
 };
@@ -3051,7 +3289,7 @@ public:
         g.setColour (s.accent); g.fillPath (arrow);
         g.setColour (Colours::white); g.setFont (Font (FontOptions (19.0f, Font::bold)).withExtraKerningFactor (0.12f));
         g.drawFittedText ("DRAG\nTO DAW", Rectangle<float> (r.getX(), ay + 40, r.getWidth(), 46).toNearestInt(), Justification::centred, 2);
-        g.setColour (Colour (0xff9c9494)); g.setFont (Font (FontOptions (11.5f, Font::italic)));
+        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.5f, Font::italic)));
         g.drawFittedText (busy ? "printing..." : "it's yours now", Rectangle<float> (r.getX(), r.getBottom() - 26, r.getWidth(), 18).toNearestInt(), Justification::centred, 1);
     }
     void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
@@ -3099,14 +3337,15 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
+    static constexpr int numTiles = 8;
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "VOODOO\nKILLA", "EFFECTOR\nKILLA", "DIGGA\nKILLA" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "VOODOO\nKILLA", "EFFECTOR\nKILLA", "DIGGA\nKILLA" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
-        for (int k = 0; k < 7; ++k)
+        for (int k = 0; k < numTiles; ++k)
         {
             auto r = part (k);
             const bool on = k == sel || ((dropHover || flash > 0) && k == 2);
@@ -3118,20 +3357,20 @@ public:
                 g.drawFittedText (dropHover ? "DROP\n= PAIR" : flashText, r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
-            if (k == 4)
+            if (k == 5)
             {
-                g.setColour (Colour (0xff9c9494)); g.setFont (serif (10.0f, false, 0.25f));
+                g.setColour (Colour (0xff8a9099)); g.setFont (serif (10.0f, false, 0.25f));
                 g.drawText ("MELODY  FX", r.withY (r.getY() - 15).withHeight (13).toNearestInt(), Justification::centred);
             }
             juce::ignoreUnused (face);
-            g.setColour (Colour (on ? 0xee2a0d0d : 0xcc0e0a0a)); g.fillRoundedRectangle (r, 6);
+            g.setColour (Colour (on ? 0xee2a1a1d : 0xcc17181b)); g.fillRoundedRectangle (r, 6);
             if (on) drawGlowFrame (g, r, s.accent, 6);
             else { g.setColour (Colour (0xff4a3c3c)); g.drawRoundedRectangle (r, 6, 1.2f); }
             juce::ignoreUnused (ink);
-            g.setColour (on ? Colours::white : Colour (0xffb9b0ac));
+            g.setColour (on ? Colours::white : Colour (0xffb8bdc4));
             g.setFont (serif (15.0f, false, 0.2f));
             g.drawFittedText (names[k], r.toNearestInt(), Justification::centred, 2);
-            if ((k == 4 || k == 5) && isOn && isOn (k))
+            if ((k == 5 || k == 6) && isOn && isOn (k))
             {
                 g.setColour (Colour (0xff36ff6a)); g.fillEllipse (r.getRight() - 14, r.getY() + 6, 8, 8);
             }
@@ -3139,15 +3378,15 @@ public:
     }
     void mouseUp (const MouseEvent& e) override
     {
-        for (int k = 0; k < 7; ++k)
+        for (int k = 0; k < numTiles; ++k)
             if (part (k).contains (e.position) && onSwitch) { onSwitch (k); return; }
     }
 private:
     Rectangle<float> part (int k) const
     {
-        const float gap = 6.0f, extra = 22.0f;
-        const float h = ((float) getHeight() - gap * 6 - extra) / 7.0f;
-        return { 3.0f, (float) k * (h + gap) + (k >= 4 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
+        const float gap = 5.0f, extra = 18.0f;
+        const float h = ((float) getHeight() - gap * (numTiles - 1) - extra) / (float) numTiles;
+        return { 3.0f, (float) k * (h + gap) + (k >= 5 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
     }
     void timerCallback() override { flash -= 0.012f; if (flash <= 0) { flash = 0; stopTimer(); } repaint (part (2).expanded (4).toNearestInt()); }
     KKLookAndFeel& lnf;
@@ -3253,10 +3492,10 @@ public:
         labSwitch.onSwitch = [this] (int k)
         {
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
-            static constexpr int target[] { 0, tabTree, tabPair, tabVst, tabHalf, tabEffector, tabDigga };
+            static constexpr int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabHalf, tabEffector, tabDigga };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
         };
-        labSwitch.isOn = [this] (int k) { return proc.apvts.getRawParameterValue (k == 4 ? ID::halfOn : ID::efxOn)->load() > 0.5f; };
+        labSwitch.isOn = [this] (int k) { return proc.apvts.getRawParameterValue (k == 5 ? ID::halfOn : ID::efxOn)->load() > 0.5f; };
         labSwitch.onDropToPair = [this] (const File& f)
         {
             int slot = 0;
@@ -3413,6 +3652,7 @@ public:
         if (v == 19) openTab (tabSnare);
         if (v == 20) openTab (tabHalf);
         if (v == 22) openTab (tabVst);
+        if (v == 24) openTab (tabSounds);
         if (v == 23) { openTab (tabDigga); if (auto* pg = dynamic_cast<EmbeddedPage*> (module (tabDigga))) pg->openChop(); }
         if (v == 21)
         {
@@ -3437,8 +3677,8 @@ public:
         g.drawImageAt (labImages().bg, 0, 0);
         // module bar (v0.17: six modules, drawn over the bitmap's old tab row)
         const auto bar = R (46, 613, 1632, 661).toFloat();
-        g.setColour (Colour (0xff0c0808)); g.fillRoundedRectangle (bar, 6);
-        g.setColour (Colour (0xff3a2c2c)); g.drawRoundedRectangle (bar, 6, 1.2f);
+        g.setColour (Colour (0xff141518)); g.fillRoundedRectangle (bar, 6);
+        g.setColour (Colour (0xff35393f)); g.drawRoundedRectangle (bar, 6, 1.2f);
     }
 
     void resized() override
@@ -3459,7 +3699,7 @@ public:
         for (int i = 0; i < 6; ++i) genes[(size_t) i]->setBounds (gx[i] - 41, 556, 116, 33);
         const int mx[5][2] { { 1049, 1094 }, { 1095, 1142 }, { 1142, 1189 }, { 1189, 1236 }, { 1236, 1288 } };
         for (int i = 0; i < 5; ++i) mutateBtns[(size_t) i]->setBounds (R (mx[i][0], 555, mx[i][1], 595));
-        soundModeBtn.setBounds (R (142, 404, 216, 438)); loopModeBtn.setBounds (R (142, 446, 216, 480));
+        soundModeBtn.setBounds (R (151, 404, 216, 438)); loopModeBtn.setBounds (R (151, 446, 216, 480));
         treeBtn.setBounds (R (1300, 528, 1374, 604)); undoBtn.setBounds (R (1379, 528, 1442, 604));
 
         wildRail.setBounds (R (1466, 118, 1608, 392));
@@ -3488,12 +3728,12 @@ public:
         if (browser) browser->setBounds (R (150, 8, 1662, 612));   // the left tiles never cover the preset names
         if (treePanel) treePanel->setBounds (R (150, 96, 1662, 612));
         for (int i = 0; i < numPages; ++i)
-            if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612) : R (0, 0, 1672, 941));   // the KILLA plugins and the drum pages get the whole window
+            if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst || i == tabSounds ? R (150, 96, 1662, 612) : R (0, 0, 1672, 941));   // the KILLA plugins and the drum pages get the whole window
         labSwitch.setBounds (R (16, 100, 138, 600));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102 };
+    enum { tab808, tabSnare, tabHat, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -3509,6 +3749,13 @@ private:
                 }
                 case tabPair:     m = std::make_unique<PairPage> (proc, lnf); break;
                 case tabVst:      m = std::make_unique<PairPage> (proc, lnf, true); break;
+                case tabSounds:
+                {
+                    auto pg = std::make_unique<MySoundsPage> (proc, lnf);
+                    pg->onFactory = [this] { openTab (tabBrowser); };
+                    pg->onPair = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr) safe->openTab (tabPair); }); };
+                    m = std::move (pg); break;
+                }
                 case tabHalf:     m = std::make_unique<EmbeddedPage> (proc, lnf, KeysKillaProcessor::modHalf, "HALF", "VOODOO KILLA  -  ON THE MELODIES ONLY (KEYS KILLA + DIGGA)", ID::halfOn); break;
                 case tabEffector: m = std::make_unique<EmbeddedPage> (proc, lnf, KeysKillaProcessor::modEffector, "EFFECTOR", "EFFECTOR KILLA  -  ON THE MELODIES ONLY (KEYS KILLA + DIGGA)", ID::efxOn); break;
                 default:
@@ -3597,7 +3844,7 @@ private:
     {
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
-        const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabHalf ? 4 : openTabIndex == tabEffector ? 5 : openTabIndex == tabDigga ? 6 : -1;
+        const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabHalf ? 5 : openTabIndex == tabEffector ? 6 : openTabIndex == tabDigga ? 7 : -1;
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
         if (proc.loopPlaying())   // a loop belongs to the page that started it (FAMILY TREE / PAIR / BREED LAB)
         {
