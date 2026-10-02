@@ -32,9 +32,11 @@ public:
     void showView (int v);   // 0 main, 1..8 advanced tabs, 9 preset browser
 
     static constexpr int designW = 1672, designH = 941;   // = BREED LAB design size
+    int fitScale() const;   // largest size in % that fits the screen under the host's toolbars
 
 private:
     KeysKillaProcessor& proc;
     std::unique_ptr<MainPage> page;
     juce::TooltipWindow tooltips { this, 600 };
+    bool fitted = false;
 };

@@ -4206,8 +4206,11 @@ private:
     void setScale (int pct)
     {
         settings->setValue ("labScale18", pct);
-        if (auto* ed = findParentComponentOfClass<AudioProcessorEditor>())
+        if (auto* ed = findParentComponentOfClass<KeysKillaEditor>())
+        {
+            pct = jmin (pct, ed->fitScale());
             ed->setSize (KeysKillaEditor::designW * pct / 100, KeysKillaEditor::designH * pct / 100);
+        }
     }
 
     // ---------------- BREED LAB ----------------
@@ -4625,6 +4628,27 @@ private:
             treePanel->refresh();
             return;
         }
+        // v0.31: SPACE = stop / start the loop, wherever it was started (BREED LAB, PAIR)
+        if (proc.loopPlaying()) { spaceStopped = proc.loopOwnerId(); proc.stopLoop(); proc.touchLab(); refreshState(); return; }
+        const bool pairOpen = openTabIndex == tabPair || openTabIndex == tabVst;
+        if (pairOpen && spaceStopped == 2 && isPositiveAndBelow (proc.pairLoopKid, (int) proc.pairKids.size()))
+        {
+            proc.resumeLoop();
+            if (auto* m = module (openTabIndex)) m->repaint();
+            return;
+        }
+        if (pairOpen && ! proc.pairKids.empty())
+        {
+            proc.togglePairLoop (jlimit (0, (int) proc.pairKids.size() - 1, proc.pairSel));
+            if (auto* m = module (openTabIndex)) m->repaint();
+            return;
+        }
+        if (openTabIndex < 0 && proc.mainLoopMode && ! proc.kids().empty())   // BREED LAB in LOOP mode: the selected child's loop
+        {
+            proc.playChild (jmax (0, proc.selectedChild()));
+            refreshState();
+            return;
+        }
         proc.previewNote = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f ? 36 : 60;   // hear the current sound
     }
     struct FocusGrabber : public MouseListener
@@ -4639,6 +4663,7 @@ private:
     std::unique_ptr<FileChooser> chooser;
 
     bool isFav = false, modified = false, modifiedNow = false, lastBass = false;
+    int spaceStopped = 0;   // whose loop SPACE stopped last (2 PAIR, 3 BREED LAB)
     int warnHold = 0, lastIndex = -2, slowTick = 0, lastLab = -1, openTabIndex = -1, lastMutate = -1;
     float lastEra = -1;
     String lastName;
@@ -4657,10 +4682,22 @@ KeysKillaEditor::KeysKillaEditor (KeysKillaProcessor& p) : AudioProcessorEditor 
     page = std::make_unique<MainPage> (p);
     addAndMakeVisible (*page);
     setResizable (true, true);
-    setResizeLimits (designW / 2, designH / 2, designW, designH);
+    setResizeLimits (designW * 2 / 5, designH * 2 / 5, designW, designH);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) designW / designH);
-    const int pct = page->preferredScale();
+    const int pct = jmin (page->preferredScale(), fitScale());
     setSize (designW * pct / 100, designH * pct / 100);
+}
+
+// v0.31: the window always fits the screen - the host puts its own toolbars above and its browser beside the plugin
+int KeysKillaEditor::fitScale() const
+{
+    const auto& displays = Desktop::getInstance().getDisplays();
+    const Displays::Display* d = isShowing() ? displays.getDisplayForRect (getScreenBounds()) : displays.getPrimaryDisplay();
+    if (d == nullptr) return 85;
+    const auto area = d->userArea;   // logical pixels: Windows display scaling is already taken into account
+    const double byW = (area.getWidth() * 0.78) / designW;
+    const double byH = (area.getHeight() - 190.0) / designH;
+    return jlimit (40, 100, (int) std::floor (std::min (byW, byH) * 100.0));
 }
 
 KeysKillaEditor::~KeysKillaEditor() = default;
@@ -4671,6 +4708,14 @@ void KeysKillaEditor::showView (int v) { page->showView (v); }
 // plugin out of the host's Direct2D device - hosts can hang on exit when plugin windows hold GPU resources.
 void KeysKillaEditor::parentHierarchyChanged()
 {
+    if (! fitted && getPeer() != nullptr)   // now we know the real screen: shrink if the window would not fit on it
+    {
+        fitted = true;
+        const int fit = fitScale();
+        if (getWidth() > designW * fit / 100 + 2)
+            MessageManager::callAsync ([safe = Component::SafePointer<KeysKillaEditor> (this), fit]
+            { if (safe != nullptr) safe->setSize (designW * fit / 100, designH * fit / 100); });
+    }
    #if JUCE_WINDOWS
     if (auto* peer = getPeer())
         if (peer->getCurrentRenderingEngine() != 0)

@@ -156,6 +156,7 @@ public:
     // ---------------- BREED LOOPS ----------------
     void toggleLoop();                                // play the current sound's loop (host tempo, bar synced)
     void stopLoop() { loopOn = false; }
+    void resumeLoop() { loopOn = true; ++labVer; ++pairVer; }   // SPACE again: the same melody plays on
     bool loopPlaying() const { return loopOn.load(); }
     void setLoopBars (int bars);                      // 8 or 16
     int  loopBars() const { return loopBarsN; }
