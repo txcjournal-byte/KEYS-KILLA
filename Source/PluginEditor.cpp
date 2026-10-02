@@ -2771,8 +2771,16 @@ private:
     {
         if (proc.vstList.isEmpty()) proc.vstList = proc.vst.listInstalled();
         vstBox.clear (dontSendNotification);
+        if (! proc.vstList.isEmpty()) vstBox.addSectionHeading ("VST3 - ready");
         for (int i = 0; i < proc.vstList.size(); ++i) vstBox.addItem (kk::VstHost::displayName (proc.vstList[i]), i + 1);
-        status = proc.vstList.isEmpty() ? String ("no VST3 plugins found - press + FOLDER and choose where yours are installed") : String (proc.vstList.size()) + " plugins found - missing one? + FOLDER";
+        const auto old2 = kk::VstHost::vst2Only (proc.vstList);
+        if (! old2.isEmpty())
+        {
+            vstBox.addSeparator();
+            vstBox.addSectionHeading ("VST2 only - install their VST3 version to use them here");
+            for (int i = 0; i < old2.size(); ++i) { vstBox.addItem (old2[i] + "   (VST2)", 10000 + i); vstBox.setItemEnabled (10000 + i, false); }
+        }
+        status = proc.vstList.isEmpty() ? String ("no VST3 plugins found - press + FOLDER and choose where yours are installed") : String (proc.vstList.size()) + " VST3 plugins ready - FL's own plugins (FLEX, Sytrus...) only run inside FL";
         if (proc.vst.loaded()) status = proc.vst.name() + " loaded";
         repaint();
     }

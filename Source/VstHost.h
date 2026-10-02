@@ -31,7 +31,7 @@ public:
     }
     // FL Studio's own plugin database (Documents/Image-Line/.../Plugin database/Installed/*.nfo):
     // every plugin FL Studio found, with its file path - KEYS KILLA sees the same plugins as FL
-    static juce::StringArray flStudioPlugins (bool generatorsOnly)
+    static juce::StringArray flStudioPlugins (bool generatorsOnly, bool vst2 = false)
     {
         juce::StringArray out;
         const auto il = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Image-Line");
@@ -51,8 +51,8 @@ public:
             for (auto& l : lines)
             {
                 const auto v = l.fromFirstOccurrenceOf ("=", false, false).trim().unquoted();
-                if (v.endsWithIgnoreCase (".vst3") || v.endsWithIgnoreCase (".component"))
-                    if (juce::File::isAbsolutePath (v) && juce::File (v).exists()) out.addIfNotAlreadyThere (v);
+                const bool wanted = vst2 ? v.endsWithIgnoreCase (".dll") : (v.endsWithIgnoreCase (".vst3") || v.endsWithIgnoreCase (".component"));
+                if (wanted && juce::File::isAbsolutePath (v) && juce::File (v).exists()) out.addIfNotAlreadyThere (v);
             }
         }
         return out;
@@ -91,7 +91,20 @@ public:
         juce::StringArray first, rest;
         for (auto& a : all) (gens.contains (a, true) ? first : rest).add (a);
         first.addArray (rest);
-        return first;
+        // the same plugin in two folders: show it once
+        juce::StringArray out, names;
+        for (auto& f : first) if (! names.contains (displayName (f), true)) { names.add (displayName (f)); out.add (f); }
+        return out;
+    }
+    // VST2-only plugins FL Studio knows (KEYS KILLA can't load VST2 - shown so you know to install their VST3 version)
+    static juce::StringArray vst2Only (const juce::StringArray& loadable)
+    {
+        juce::StringArray out, have;
+        for (auto& l : loadable) have.add (displayName (l));
+        for (auto& f : flStudioPlugins (false, true))
+            if (! have.contains (displayName (f), true) && ! out.contains (displayName (f), true) && ! f.containsIgnoreCase ("KEYS KILLA")) out.add (displayName (f));
+        out.sort (true);
+        return out;
     }
     static juce::String displayName (const juce::String& id)
     {
