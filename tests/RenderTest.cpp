@@ -740,9 +740,12 @@ static int unitTests()
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // CI: every line reaches the log even if the process dies
+    std::printf ("KEYS KILLA tests: start\n");
     juce::ScopedJuceInitialiser_GUI init;
     const bool verbose = argc > 1 && juce::String (argv[1]) == "-v";
+    std::printf ("KEYS KILLA tests: juce ready\n");
     KeysKillaProcessor p;
+    std::printf ("KEYS KILLA tests: processor ready\n");
     if (argc > 1 && juce::String (argv[1]) == "-cal")   // prints suggested output gain per preset (target -15 dB short-term RMS)
     {
         for (int i = 0; i < p.getNumPrograms(); ++i)

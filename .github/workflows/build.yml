@@ -64,7 +64,12 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Render + unit tests (all presets)
-        run: build\KeysKillaTests_artefacts\Release\KeysKillaTests.exe
+        shell: pwsh
+        run: |
+          & build\KeysKillaTests_artefacts\Release\KeysKillaTests.exe
+          $code = $LASTEXITCODE
+          Write-Host ("test exit code: {0} (0x{1:X8})" -f $code, $code)
+          exit $code
 
       - name: pluginval (strictness 10)
         shell: pwsh
