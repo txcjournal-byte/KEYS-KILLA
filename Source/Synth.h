@@ -464,7 +464,8 @@ private:
                 float& t = s.phase[0];
                 const float v = std::sin (twoPi * t) + 0.18f * std::sin (twoPi * 2.0f * t) + 0.06f * std::sin (twoPi * 3.0f * t);
                 t += inc; if (t >= 1.0f) t -= 1.0f;
-                const float breath = noise.bi() * c.wave * 0.35f * (0.4f + 0.6f * std::exp (-noteTime * 6.0f));
+                const float hold = 0.4f * c.wave;   // held breath grows with WAVE: clean flutes stay clean, WAVE 1 = air / noise beds
+                const float breath = noise.bi() * c.wave * 0.35f * (hold + (1.0f - hold) * std::exp (-noteTime * 6.0f));
                 oL = oR = v + breath;
                 break;
             }
@@ -498,10 +499,9 @@ private:
                 const float bL = s.brassL.lp (sL) * 1.4f, bR = s.brassR.lp (sR) * 1.4f;
                 float cL = sL, cR = sR;
                 if (wc > 0) formant (s, c, cL, cR);
-                const float bow = noise.bi() * (0.025f + 0.09f * (1.0f - s.brassEnv));   // bow / breath scratch on the attack
+                const float bow = noise.bi() * 0.1f * (1.0f - s.brassEnv);   // bow / breath scratch on the attack only (no hiss under held notes)
                 oL = wb * bL + ws * (sL * 0.8f + bow) + wc * cL;
                 oR = wb * bR + ws * (sR * 0.8f + bow) + wc * cR;
-                oL = std::round (oL * 512.0f) / 512.0f; oR = std::round (oR * 512.0f) / 512.0f;   // cheap-workstation grit
                 break;
             }
             case engModal:

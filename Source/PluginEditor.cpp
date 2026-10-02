@@ -247,8 +247,8 @@ static void drawGlowFrame (Graphics& g, Rectangle<float> r, Colour accent, float
 
 static int iconOfCategory (int cat)
 {
-    //                        Piano Keys Bells Plucks Mallets Guitar Strings Brass Choir Wind Lead Pads Synth Bass 808 Texture Arp FX
-    static const int icon[] { 1,    1,   0,    2,     0,      8,     8,      6,    4,    3,   6,   5,   6,    7,   7,  5,      2,  9 };
+    //                        Piano Keys Bells Plucks Mallets Guitar Strings Brass Choir Wind Lead Pads Synth Bass 808 Texture Arp FX Organ Chip World Drums Game Cine
+    static const int icon[] { 1,    1,   0,    2,     0,      8,     8,      6,    4,    3,   6,   5,   6,    7,   7,  5,      2,  9, 1,    6,   3,    7,    9,   9 };
     return juce::isPositiveAndBelow (cat, (int) numCategories) ? icon[cat] : 9;
 }
 

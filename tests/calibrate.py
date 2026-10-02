@@ -7,6 +7,7 @@ exe, target = sys.argv[1], -14.0
 out = subprocess.run([exe, "-cal"], capture_output=True, text=True).stdout
 rows = []
 for line in out.strip().splitlines():
+    if line.count("|") < 2: continue   # progress lines
     name, g, win = line.rsplit("|", 2)
     g, win = float(g), float(win)
     new = max(-24.0, min(12.0, round(g + (target - win), 1)))

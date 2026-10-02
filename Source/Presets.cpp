@@ -11,7 +11,8 @@
 const juce::StringArray& categoryNames()
 {
     static const juce::StringArray c { "PIANO", "KEYS", "BELLS", "PLUCKS", "MALLETS", "GUITAR", "STRINGS", "BRASS", "CHOIR / VOCAL", "WOODWIND",
-                                       "LEAD", "PADS", "SYNTH", "BASS", "808", "TEXTURE", "ARP / SEQUENCE", "FX" };
+                                       "LEAD", "PADS", "SYNTH", "BASS", "808", "TEXTURE", "ARP / SEQUENCE", "FX",
+                                       "ORGANS", "CHIPTUNE / 8-BIT", "WORLD", "DRUMS", "GAME / SCI-FI FX", "CINEMATIC FX" };
     return c;
 }
 
@@ -35,7 +36,13 @@ const juce::StringArray& subcategoryNames (int cat)
         juce::StringArray { "Clean", "Short", "Long", "Punch", "Clipped", "Distorted", "Saturated", "Glide", "Textured", "Hybrid", "Future" },
         juce::StringArray { "Vinyl", "Tape", "Noise", "Granular", "Reverse", "Atmosphere", "Field", "Mechanical", "Digital Artifacts" },
         juce::StringArray { "Melodic", "Gated", "Rhythmic", "Pulsing", "Triplet", "Polyrhythmic", "Generative" },
-        juce::StringArray { "Riser", "Impact", "Reverse", "Transition", "Atmosphere", "Downer", "Noise", "Tonal FX" } };
+        juce::StringArray { "Riser", "Impact", "Reverse", "Transition", "Atmosphere", "Downer", "Noise", "Tonal FX" },
+        juce::StringArray { "Pipe", "Rotary", "Reed", "Soft" },
+        juce::StringArray { "Lead", "Bass", "Arp", "Chords" },
+        juce::StringArray { "Strings", "Winds", "Percussion", "Drone" },
+        juce::StringArray { "Kick", "Snare", "Hats", "Percussion" },
+        juce::StringArray { "Retro Game", "Laser", "Sci-Fi", "Alarm" },
+        juce::StringArray { "Braam", "Riser", "Downer", "Impact", "Drone" } };
     return s[(size_t) juce::jlimit (0, (int) numCategories - 1, cat)];
 }
 
@@ -54,8 +61,8 @@ const juce::StringArray& tileNames()
 const std::vector<int>& tileCategories (int tile)
 {
     static const std::array<std::vector<int>, numTiles> t { {
-        { cBells, cMallets }, { cPiano, cKeys }, { cPlucks, cGuitar }, { cWoodwind }, { cChoir }, { cPads, cTexture },
-        { cLead, cSynth, cArp }, { c808, cBass }, { cStrings, cBrass }, { cFX } } };
+        { cBells, cMallets }, { cPiano, cKeys, cOrgan }, { cPlucks, cGuitar }, { cWoodwind, cWorld }, { cChoir }, { cPads, cTexture },
+        { cLead, cSynth, cArp, cChip }, { c808, cBass }, { cStrings, cBrass }, { cFX, cGameFx, cCinematic, cDrums } } };
     return t[(size_t) juce::jlimit (0, (int) numTiles - 1, tile)];
 }
 
@@ -183,7 +190,7 @@ void deriveTags (Preset& p)
     else if (sus < 0.05f && dec < 0.6f) p.articulation = "Short";
     else if (sus < 0.05f) p.articulation = "Pluck";
     else p.articulation = "Sustain";
-    if (p.cat == cFX) p.articulation = "One-Shot";
+    if (p.cat == cFX || p.cat == cGameFx || p.cat == cCinematic || p.cat == cDrums) p.articulation = "One-Shot";
     p.tempo = p.articulation == "Short" || p.articulation == "Sequence" ? "Fast" : p.articulation == "Swell" ? "Slow" : "Any";
 
     p.mono = getV (v, mono, 0) > 0.5f || p.isBass();
@@ -1233,6 +1240,294 @@ const std::vector<Preset>& factoryPresets()
                                                            { bodyMix, 0.5f }, { cutoff, 1200 } });
         R (cBass, "Hybrid Bass", "FM Bass", { 1, 4 }, { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.45f }, { fdecay, 0.3f }, { decay, 0.6f }, { sustain, 0.5f },
                                                        { cutoff, 3000 } });
+
+
+        // ================= v0.30 SOUND LIBRARY =================
+        // Clean, stereo studio sounds (no bit crush, no tape noise, no hum): every one gets an original name and is marked NEW.
+        auto N = [&] (int cat, const char* sub, const char* name, Vals vals)
+        {
+            const bool low = cat == cBass;
+            Vals base = low ? Vals { { m1, 0.0f }, { m2, 0.0f }, { m3, 0.0f }, { m4, 0.0f }, { m5, 0.5f }, { m6, 0.0f },
+                                     { revMix, 0.0f }, { width, 0.35f }, { octave, -1 }, { mono, 1 }, { legato, 1 } }
+                            : Vals { { width, 0.75f }, { chorus, 0.12f }, { revMix, 0.2f }, { revType, 1 }, { revSize, 0.6f } };
+            for (auto& [k, x] : vals) setV (base, k, x);
+            setV (base, ID::era, 5.0f); setV (base, eraHome, 5.0f);
+            Preset p; p.name = name; p.cat = cat; p.era = 5; p.sub = sub; p.values = std::move (base); p.version = "0.30";
+            v.push_back (std::move (p));
+        };
+        // shared recipes
+        const Vals hallPad { { engine, VA }, { wave, 0.0f }, { unison, 7 }, { detune, 0.26f }, { cutoff, 4200 }, { attack, 0.9f }, { decay, 1.5f },
+                             { sustain, 1 }, { release, 2.6f }, { revMix, 0.42f }, { revType, 0 }, { revSize, 0.8f }, { chorus, 0.18f }, { width, 0.9f } };
+        const Vals marim { { engine, MD }, { wave, 0.5f }, { fmAmt, 0.35f }, { attack, 0.001f }, { decay, 1.2f }, { sustain, 0 }, { release, 0.6f }, { revMix, 0.22f } };
+        const Vals kal { { engine, MD }, { wave, 0.15f }, { fmAmt, 0.3f }, { decay, 1.4f }, { sustain, 0 }, { release, 0.8f }, { revMix, 0.25f }, { chorus, 0.18f } };
+        const Vals chime { { engine, MD }, { wave, 0.9f }, { fmAmt, 0.4f }, { decay, 4.0f }, { sustain, 0 }, { release, 3.0f }, { revMix, 0.35f }, { revType, 0 } };
+        const Vals pipe { { engine, OR }, { wave, 0.75f }, { attack, 0.04f }, { sustain, 1 }, { release, 0.9f }, { layerB, 1 }, { engineB, OR }, { waveB, 0.45f },
+                          { octaveB, 1 }, { levelB, 0.45f }, { revMix, 0.45f }, { revType, 0 }, { revSize, 0.9f } };
+        const Vals rotary { { engine, OR }, { wave, 0.6f }, { attack, 0.005f }, { sustain, 1 }, { release, 0.12f }, { lfoRate, 6.2f }, { lfoAmp, 0.18f },
+                            { lfoPitch, 0.05f }, { chorus, 0.45f }, { revMix, 0.18f }, { drive, 0.12f }, { driveType, 1 } };
+        const Vals harpB { { engine, PL }, { wave, 0.45f }, { decay, 2.6f }, { sustain, 0 }, { release, 1.2f }, { body, 6 }, { bodyMix, 0.3f }, { revMix, 0.35f }, { chorus, 0.15f } };
+        const Vals windB { { engine, FL }, { wave, 0.15f }, { attack, 0.05f }, { sustain, 0.9f }, { release, 0.45f }, { lfoPitch, 0.05f }, { lfoRate, 5.2f },
+                           { revMix, 0.3f }, { chorus, 0.2f } };
+        const Vals chipB { { engine, VA }, { wave, 0.5f }, { attack, 0.001f }, { decay, 0.3f }, { sustain, 0.7f }, { release, 0.06f }, { cutoff, 12000 },
+                           { chorus, 0.0f }, { revMix, 0.1f }, { delayMix, 0.18f }, { delayTime, 3 }, { delayFb, 0.3f } };
+        const Vals laddLead { { engine, VA }, { wave, 0.0f }, { unison, 2 }, { detune, 0.1f }, { filterType, 1 }, { cutoff, 1800 }, { reso, 0.3f }, { fenv, 0.45f },
+                              { fdecay, 0.35f }, { fsustain, 0.3f }, { sustain, 1 }, { release, 0.2f }, { mono, 1 }, { legato, 1 }, { glide, 0.06f }, { delayMix, 0.18f } };
+        const Vals fmPiano { { engine, FM }, { fmAlgo, 5 }, { fmRatio, 1.0f }, { fmRatio2, 14.0f }, { fmAmt, 0.4f }, { fdecay, 1.0f }, { decay, 2.6f },
+                             { sustain, 0.12f }, { release, 0.5f }, { velSens, 0.8f }, { chorus, 0.22f }, { revMix, 0.22f } };
+        const Vals braam { { engine, OC }, { wave, 0.08f }, { unison, 7 }, { detune, 0.3f }, { octave, -1 }, { attack, 0.01f }, { decay, 2.5f }, { sustain, 0.45f },
+                           { release, 1.6f }, { layerB, 1 }, { engineB, SB }, { octaveB, -2 }, { levelB, 0.55f }, { drive, 0.3f }, { driveType, 1 },
+                           { revMix, 0.38f }, { revType, 0 }, { revSize, 0.9f }, { chorus, 0.0f }, { width, 0.9f } };
+        const Vals kick { { engine, SB }, { octave, -1 }, { wave, 0.35f }, { fmAmt, 0.8f }, { attack, 0.001f }, { decay, 0.45f }, { sustain, 0 }, { release, 0.12f },
+                          { chorus, 0.0f }, { revMix, 0.06f }, { width, 0.3f }, { punch, 0.5f } };
+
+        // ---- PIANO / KEYS
+        N (cPiano, "Grand", "Concert Hall Grand", with (pianoB, { { revMix, 0.3f }, { revType, 0 }, { revSize, 0.85f }, { cutoff, 8500 } }));
+        N (cPiano, "Grand", "Low Pedal Grand", with (pianoB, { { octave, -1 }, { decay, 5.0f }, { release, 1.4f }, { revMix, 0.32f }, { revType, 0 }, { cutoff, 5000 } }));
+        N (cPiano, "Soft", "Velvet Hammer Piano", with (pianoB, { { fmAmt, 0.28f }, { cutoff, 3800 }, { velSens, 0.9f }, { revMix, 0.28f } }));
+        N (cPiano, "Bright", "Studio Pop Piano", with (pianoB, { { fmAmt, 0.5f }, { cutoff, 11000 }, { eqHigh, 2.5f }, { revMix, 0.18f } }));
+        N (cKeys, "Electric", "Satin Tine Keys", fmPiano);
+        N (cKeys, "Electric", "Eighties Crystal EP", with (fmPiano, { { fmAmt, 0.55f }, { fmRatio2, 16.0f }, { chorus, 0.35f }, { delayMix, 0.15f } }));
+        N (cKeys, "Electric", "Warm Reed Piano", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.5f }, { wave, 0.25f }, { fdecay, 0.5f }, { decay, 1.8f }, { sustain, 0.35f },
+                                                   { release, 0.3f }, { drive, 0.18f }, { driveType, 1 }, { lfoAmp, 0.15f }, { lfoRate, 5.0f }, { chorus, 0.15f } });
+        N (cKeys, "Electric", "Barking Reed Keys", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.7f }, { wave, 0.4f }, { fdecay, 0.35f }, { decay, 1.4f }, { sustain, 0.3f },
+                                                     { release, 0.25f }, { drive, 0.3f }, { driveType, 1 }, { velSens, 0.9f } });
+        N (cKeys, "Workstation", "Baroque Harpsichord", { { engine, PL }, { wave, 0.92f }, { decay, 1.4f }, { sustain, 0 }, { release, 0.3f }, { layerB, 1 }, { engineB, PL },
+                                                          { waveB, 0.95f }, { octaveB, 1 }, { levelB, 0.35f }, { body, 5 }, { bodyMix, 0.25f }, { revMix, 0.25f } });
+        N (cKeys, "Workstation", "Court Harpsichord", { { engine, PL }, { wave, 0.85f }, { decay, 1.8f }, { sustain, 0 }, { release, 0.35f }, { body, 5 }, { bodyMix, 0.35f },
+                                                        { revMix, 0.32f }, { revType, 0 } });
+        N (cKeys, "Glass", "Glass FM Keys", { { engine, FM }, { fmAlgo, 4 }, { fmRatio, 3.0f }, { fmAmt, 0.32f }, { decay, 2.0f }, { sustain, 0.1f }, { release, 0.8f },
+                                              { chorus, 0.25f }, { revMix, 0.32f } });
+
+        // ---- ORGANS
+        N (cOrgan, "Pipe", "Cathedral Pipes", pipe);
+        N (cOrgan, "Pipe", "Chapel Flute Stop", with (pipe, { { wave, 0.25f }, { waveB, 0.15f }, { levelB, 0.3f }, { revMix, 0.38f } }));
+        N (cOrgan, "Pipe", "Grand Organ Tutti", with (pipe, { { wave, 0.95f }, { waveB, 0.8f }, { levelB, 0.6f }, { octaveB, -1 } }));
+        N (cOrgan, "Rotary", "Rotary Drawbars", rotary);
+        N (cOrgan, "Rotary", "Gospel Rotary", with (rotary, { { wave, 0.8f }, { lfoRate, 6.8f }, { drive, 0.22f } }));
+        N (cOrgan, "Rotary", "Smoky Jazz Organ", with (rotary, { { wave, 0.4f }, { lfoRate, 1.2f }, { lfoAmp, 0.1f }, { cutoff, 5000 } }));
+        N (cOrgan, "Rotary", "Percussive Drawbars", with (rotary, { { layerB, 1 }, { engineB, OR }, { waveB, 0.9f }, { octaveB, 1 }, { levelB, 0.5f },
+                                                                   { decay, 0.4f }, { sustain, 0.75f } }));
+        N (cOrgan, "Reed", "Street Melodica", { { engine, VA }, { wave, 0.5f }, { filterType, 0 }, { cutoff, 2400 }, { attack, 0.02f }, { sustain, 0.95f }, { release, 0.15f },
+                                                { lfoPitch, 0.04f }, { lfoRate, 5.5f }, { chorus, 0.2f } });
+        N (cOrgan, "Reed", "Accordion Bellows", { { engine, VA }, { wave, 0.6f }, { unison, 3 }, { detune, 0.12f }, { cutoff, 3000 }, { attack, 0.04f }, { sustain, 1 },
+                                                  { release, 0.2f }, { lfoAmp, 0.08f }, { lfoRate, 4.0f } });
+        N (cOrgan, "Soft", "Soft Choir Organ", with (pipe, { { wave, 0.35f }, { attack, 0.25f }, { release, 1.5f }, { layerB, 1 }, { engineB, VX }, { waveB, 0.5f },
+                                                            { octaveB, 0 }, { levelB, 0.3f } }));
+
+        // ---- MALLETS / BELLS
+        N (cMallets, "Marimba", "Rosewood Marimba", marim);
+        N (cMallets, "Marimba", "Soft Mallet Marimba", with (marim, { { fmAmt, 0.15f }, { decay, 1.6f }, { revMix, 0.3f } }));
+        N (cMallets, "Xylophone", "Bright Xylo Bars", with (marim, { { octave, 1 }, { fmAmt, 0.6f }, { decay, 0.6f } }));
+        N (cMallets, "Kalimba", "Thumb Piano Sun", kal);
+        N (cMallets, "Kalimba", "Kalimba Dew", with (kal, { { octave, 1 }, { delayMix, 0.2f }, { delayTime, 2 } }));
+        N (cMallets, "Celesta", "Velvet Celesta", { { engine, FM }, { fmRatio, 4.0f }, { fmAmt, 0.22f }, { octave, 1 }, { decay, 1.6f }, { sustain, 0 }, { release, 1.0f },
+                                                    { layerB, 1 }, { engineB, MD }, { waveB, 0.9f }, { octaveB, 1 }, { levelB, 0.35f }, { revMix, 0.3f } });
+        N (cMallets, "Metallic", "Glockenspiel Sparkle", with (chime, { { octave, 2 }, { decay, 1.6f }, { fmAmt, 0.5f }, { revMix, 0.28f } }));
+        N (cMallets, "Metallic", "Midnight Vibraphone", { { engine, FM }, { fmRatio, 4.0f }, { fmAmt, 0.15f }, { decay, 3.0f }, { sustain, 0 }, { release, 1.0f },
+                                                          { lfoAmp, 0.3f }, { lfoRate, 5.0f }, { revMix, 0.28f } });
+        N (cMallets, "Metallic", "Motor Vibes", { { engine, FM }, { fmRatio, 4.0f }, { fmAmt, 0.2f }, { decay, 3.5f }, { sustain, 0 }, { release, 1.2f },
+                                                  { lfoAmp, 0.45f }, { lfoRate, 7.0f }, { chorus, 0.2f }, { revMix, 0.3f } });
+        N (cMallets, "Wooden", "Woodblock Melody", with (marim, { { wave, 0.45f }, { fmAmt, 0.7f }, { decay, 0.25f }, { body, 5 }, { bodyMix, 0.4f } }));
+        N (cBells, "Tubular", "Cathedral Chimes", with (chime, { { octave, -1 }, { decay, 6.0f }, { revMix, 0.4f } }));
+        N (cBells, "Tubular", "Village Church Bell", with (chime, { { octave, -2 }, { decay, 7.0f }, { fmAmt, 0.6f }, { revMix, 0.42f }, { revSize, 0.95f } }));
+        N (cBells, "Ambient", "Singing Bowl", { { engine, FM }, { fmRatio, 2.76f }, { fmAmt, 0.18f }, { attack, 0.05f }, { decay, 7.0f }, { sustain, 0.3f }, { release, 4.0f },
+                                                { lfoAmp, 0.22f }, { lfoRate, 3.2f }, { revMix, 0.4f }, { revType, 0 } });
+        N (cBells, "Glass", "Crystal Music Box", { { engine, MD }, { wave, 0.95f }, { octave, 2 }, { decay, 1.4f }, { sustain, 0 }, { release, 1.2f }, { revMix, 0.32f },
+                                                  { delayMix, 0.12f } });
+        N (cBells, "Digital", "Chime Notification", { { engine, FM }, { fmRatio, 3.0f }, { fmAmt, 0.3f }, { octave, 1 }, { decay, 0.7f }, { sustain, 0 }, { release, 0.5f },
+                                                      { revMix, 0.2f } });
+
+        // ---- WORLD
+        N (cWorld, "Percussion", "Steel Tongue Drum", with (kal, { { wave, 0.25f }, { fmAmt, 0.15f }, { decay, 3.0f }, { body, 2 }, { bodyMix, 0.3f }, { revMix, 0.32f } }));
+        N (cWorld, "Percussion", "Hand Pan Halo", with (kal, { { wave, 0.3f }, { fmAmt, 0.2f }, { decay, 3.5f }, { body, 4 }, { bodyMix, 0.25f }, { revMix, 0.38f },
+                                                            { revType, 0 } }));
+        N (cWorld, "Strings", "Silk Koto", { { engine, PL }, { wave, 0.75f }, { decay, 2.0f }, { sustain, 0 }, { release, 0.6f }, { body, 6 }, { bodyMix, 0.35f },
+                                             { bend, 0.25f }, { bendMode, 2 }, { bendSemis, 2 }, { revMix, 0.3f } });
+        N (cWorld, "Strings", "Zither Bloom", { { engine, PL }, { wave, 0.6f }, { decay, 3.0f }, { sustain, 0 }, { release, 1.0f }, { body, 6 }, { bodyMix, 0.45f },
+                                                { revMix, 0.35f }, { delayMix, 0.15f } });
+        N (cWorld, "Strings", "Porch Banjo", { { engine, PL }, { wave, 0.95f }, { decay, 0.8f }, { sustain, 0 }, { release, 0.2f }, { body, 5 }, { bodyMix, 0.5f },
+                                               { revMix, 0.15f } });
+        N (cWorld, "Winds", "Andes Pan Pipes", with (windB, { { wave, 0.22f }, { attack, 0.06f } }));
+        N (cWorld, "Winds", "Bamboo Breeze", with (windB, { { wave, 0.18f }, { octave, 1 }, { revMix, 0.38f }, { delayMix, 0.15f } }));
+        N (cWorld, "Winds", "Clay Ocarina", with (windB, { { wave, 0.05f }, { octave, 1 }, { lfoPitch, 0.07f } }));
+        N (cWorld, "Drone", "Outback Drone Pipe", mm ({ { engine, VX }, { wave, 0.6f }, { octave, -2 }, { attack, 0.2f }, { sustain, 1 }, { release, 0.8f },
+                                                        { lfo2Rate, 0.35f }, { lfo2Shape, 0 }, { chorus, 0.15f }, { revMix, 0.2f } }, 0, srcLfo2, dstWaveA, 0.35f));
+        N (cWorld, "Drone", "Temple Drone", { { engine, OR }, { wave, 0.5f }, { octave, -1 }, { attack, 1.2f }, { sustain, 1 }, { release, 2.0f }, { layerB, 1 },
+                                              { engineB, OR }, { semiB, 7 }, { levelB, 0.5f }, { lfoAmp, 0.1f }, { lfoRate, 0.3f }, { revMix, 0.45f }, { revType, 0 } });
+
+        // ---- STRINGS / PLUCKS / GUITAR
+        N (cStrings, "Pizzicato", "Chamber Pizzicato", { { engine, PL }, { wave, 0.4f }, { decay, 0.35f }, { sustain, 0 }, { release, 0.25f }, { body, 6 }, { bodyMix, 0.5f },
+                                                         { revMix, 0.32f }, { revType, 0 } });
+        N (cStrings, "Pizzicato", "Cello Pizz Low", { { engine, PL }, { wave, 0.3f }, { octave, -1 }, { decay, 0.6f }, { sustain, 0 }, { release, 0.3f }, { body, 6 },
+                                                      { bodyMix, 0.55f }, { revMix, 0.3f } });
+        N (cStrings, "Ensemble", "Silver Screen Strings", { { engine, VA }, { wave, 0.0f }, { unison, 6 }, { detune, 0.18f }, { cutoff, 3500 }, { attack, 0.25f },
+                                                            { sustain, 1 }, { release, 0.9f }, { lfoPitch, 0.04f }, { lfoRate, 5.0f }, { revMix, 0.38f }, { revType, 0 },
+                                                            { chorus, 0.2f } });
+        N (cStrings, "Sustained", "Warm Cello Section", { { engine, VA }, { wave, 0.05f }, { unison, 4 }, { detune, 0.14f }, { octave, -1 }, { cutoff, 1800 },
+                                                          { attack, 0.2f }, { sustain, 1 }, { release, 0.8f }, { lfoPitch, 0.05f }, { revMix, 0.35f } });
+        N (cPlucks, "Guitar-like", "Golden Harp", harpB);
+        N (cPlucks, "Guitar-like", "Angel Harp", with (harpB, { { octave, 1 }, { revMix, 0.45f }, { revType, 0 }, { delayMix, 0.15f } }));
+        N (cPlucks, "Digital", "Neon Pluck", { { engine, VA }, { wave, 0.2f }, { unison, 4 }, { detune, 0.2f }, { cutoff, 1500 }, { fenv, 0.65f }, { fdecay, 0.18f },
+                                               { decay, 0.35f }, { sustain, 0 }, { release, 0.25f }, { delayMix, 0.2f }, { revMix, 0.25f } });
+        N (cPlucks, "Soft", "Cotton Pluck", { { engine, FM }, { fmRatio, 2.0f }, { fmAmt, 0.2f }, { decay, 0.6f }, { sustain, 0 }, { release, 0.4f }, { cutoff, 3500 },
+                                              { revMix, 0.3f } });
+        N (cGuitar, "Acoustic", "Campfire Acoustic", with (guitB, { { wave, 0.65f }, { decay, 2.2f }, { revMix, 0.22f } }));
+        N (cGuitar, "Acoustic", "Steel String Pick", with (guitB, { { wave, 0.85f }, { decay, 2.6f }, { bodyMix, 0.3f }, { revMix, 0.25f } }));
+        N (cGuitar, "Nylon", "Nylon Serenade", with (guitB, { { wave, 0.4f }, { decay, 2.4f }, { bodyMix, 0.45f }, { revMix, 0.28f } }));
+        N (cGuitar, "Acoustic", "Strummed Campfire Chord", with (guitB, { { wave, 0.7f }, { chord, 1 }, { chordType, 8 }, { strum, 0.03f }, { revMix, 0.25f } }));
+        N (cGuitar, "Electric", "Arena Power Chord", with (guitB, { { wave, 0.85f }, { body, 0 }, { chord, 1 }, { chordType, 4 }, { decay, 3.0f }, { drive, 0.55f },
+                                                                   { driveType, 2 }, { cutoff, 4500 }, { revMix, 0.2f } }));
+        N (cGuitar, "Clean", "Clean Chorus Guitar", with (guitB, { { wave, 0.7f }, { body, 0 }, { chorus, 0.45f }, { decay, 2.4f }, { revMix, 0.25f } }));
+
+        // ---- BRASS / WIND
+        N (cBrass, "Synth Brass", "Studio Brass Stab", { { engine, VA }, { wave, 0.0f }, { unison, 4 }, { detune, 0.16f }, { cutoff, 1200 }, { fenv, 0.7f },
+                                                         { fdecay, 0.3f }, { fsustain, 0.3f }, { attack, 0.01f }, { decay, 0.5f }, { sustain, 0.3f }, { release, 0.2f },
+                                                         { punch, 0.4f }, { revMix, 0.22f } });
+        N (cBrass, "Synth Brass", "Funk Brass Section", { { engine, VA }, { wave, 0.05f }, { unison, 6 }, { detune, 0.18f }, { cutoff, 1500 }, { fenv, 0.6f },
+                                                          { fdecay, 0.25f }, { attack, 0.02f }, { sustain, 0.8f }, { release, 0.2f }, { revMix, 0.2f } });
+        N (cBrass, "Synth Brass", "Ladder Brass Swell", { { engine, VA }, { wave, 0.0f }, { unison, 3 }, { detune, 0.12f }, { filterType, 1 }, { cutoff, 600 },
+                                                          { fenv, 0.6f }, { fattack, 0.4f }, { fdecay, 1.0f }, { fsustain, 0.6f }, { attack, 0.3f }, { sustain, 1 },
+                                                          { release, 0.6f }, { revMix, 0.3f } });
+        N (cWoodwind, "Flute", "Wooden Recorder", with (windB, { { wave, 0.12f }, { attack, 0.03f }, { lfoPitch, 0.0f } }));
+        N (cWoodwind, "Flute", "Silver Concert Flute", with (windB, { { wave, 0.2f }, { attack, 0.08f }, { lfoPitch, 0.07f }, { revMix, 0.35f }, { revType, 0 } }));
+        N (cWoodwind, "Clarinet-like", "Blues Harp Reed", { { engine, VA }, { wave, 0.62f }, { filterType, 4 }, { cutoff, 1500 }, { reso, 0.25f }, { attack, 0.03f },
+                                                            { sustain, 0.95f }, { release, 0.15f }, { lfoAmp, 0.12f }, { lfoRate, 6.0f }, { mono, 1 },
+                                                            { glide, 0.04f }, { bend, 0.2f }, { bendMode, 2 }, { bendSemis, 1 } });
+        N (cWoodwind, "Clarinet-like", "Ebony Clarinet", { { engine, VA }, { wave, 0.5f }, { cutoff, 1800 }, { attack, 0.05f }, { sustain, 0.95f }, { release, 0.25f },
+                                                           { lfoPitch, 0.04f }, { revMix, 0.3f } });
+
+        // ---- LEAD / SYNTH / PADS
+        N (cLead, "Analog", "Velvet Ladder Lead", laddLead);
+        N (cLead, "Mono", "Mono Ladder Solo", with (laddLead, { { wave, 0.3f }, { unison, 1 }, { reso, 0.45f }, { lfoPitch, 0.06f } }));
+        N (cLead, "Portamento", "Gliding Saw Lead", with (laddLead, { { glide, 0.2f }, { unison, 3 }, { detune, 0.15f }, { cutoff, 2600 } }));
+        N (cLead, "Detuned", "Stadium Saw Lead", { { engine, VA }, { wave, 0.0f }, { unison, 8 }, { detune, 0.32f }, { cutoff, 6000 }, { sustain, 1 }, { release, 0.25f },
+                                                   { mono, 1 }, { legato, 1 }, { glide, 0.04f }, { delayMix, 0.2f }, { revMix, 0.25f }, { width, 0.9f } });
+        N (cLead, "Digital", "Sine Whistle Lead", { { engine, FL }, { wave, 0.03f }, { octave, 1 }, { attack, 0.02f }, { sustain, 1 }, { release, 0.25f }, { mono, 1 },
+                                                    { glide, 0.07f }, { lfoPitch, 0.08f }, { delayMix, 0.22f }, { revMix, 0.3f } });
+        N (cSynth, "FM", "Eighties FM Bells Keys", { { engine, FM }, { fmAlgo, 2 }, { fmRatio, 2.0f }, { fmAmt, 0.4f }, { decay, 1.6f }, { sustain, 0.25f }, { release, 0.6f },
+                                                     { chorus, 0.3f } });
+        N (cSynth, "Poly", "Midnight Poly", { { engine, VA }, { wave, 0.2f }, { unison, 4 }, { detune, 0.2f }, { cutoff, 2600 }, { fenv, 0.35f }, { fdecay, 0.5f },
+                                              { decay, 1.0f }, { sustain, 0.6f }, { release, 0.6f }, { chorus, 0.25f } });
+        N (cSynth, "Wavetable", "Prism Table Keys", { { engine, WT }, { wave, 0.4f }, { unison, 4 }, { detune, 0.18f }, { decay, 1.2f }, { sustain, 0.5f }, { release, 0.6f },
+                                                      { revMix, 0.28f } });
+        N (cPads, "Analog", "Neon Supersaw Pad", hallPad);
+        N (cPads, "Space", "Aurora Pad", with (hallPad, { { cutoff, 2800 }, { lfoFilter, 0.2f }, { lfoRate, 0.15f }, { revType, 0 }, { revMix, 0.48f } }));
+        N (cPads, "Dream", "Halo Reverb Pad", with (hallPad, { { wave, 0.35f }, { attack, 1.5f }, { release, 3.5f }, { revMix, 0.52f }, { revSize, 0.95f } }));
+        N (cPads, "Choir", "Glass Cathedral Pad", with (hallPad, { { layerB, 1 }, { engineB, VX }, { waveB, 0.4f }, { levelB, 0.45f }, { cutoff, 3800 } }));
+        N (cPads, "Digital", "Skyline Pad", { { engine, WT }, { wave, 0.55f }, { unison, 6 }, { detune, 0.24f }, { attack, 0.8f }, { sustain, 1 }, { release, 2.5f },
+                                              { revMix, 0.42f }, { revType, 0 }, { width, 0.9f } });
+        N (cPads, "Dark", "Underworld Pad", with (hallPad, { { octave, -1 }, { cutoff, 1200 }, { revMix, 0.45f } }));
+        N (cPads, "Evolving", "Shimmer Motion Pad", mm (with (hallPad, { { engine, WT }, { wave, 0.3f }, { lfo2Rate, 0.12f }, { phaser, 0.25f } }), 0, srcLfo2, dstWaveA, 0.4f));
+        N (cChoir, "Vowels", "Heavenly Aah", { { engine, VX }, { wave, 0.0f }, { unison, 6 }, { detune, 0.2f }, { attack, 0.35f }, { sustain, 1 }, { release, 1.4f },
+                                               { revMix, 0.45f }, { revType, 0 }, { width, 0.9f } });
+        N (cChoir, "Vowels", "Soft Ooh Ensemble", { { engine, VX }, { wave, 0.95f }, { unison, 6 }, { detune, 0.18f }, { attack, 0.3f }, { sustain, 1 }, { release, 1.2f },
+                                                    { revMix, 0.42f } });
+
+        // ---- BASS
+        N (cBass, "Synth Bass", "Ladder Saw Bass", { { engine, VA }, { wave, 0.0f }, { filterType, 1 }, { cutoff, 650 }, { reso, 0.3f }, { fenv, 0.55f }, { fdecay, 0.3f },
+                                                     { fsustain, 0.25f }, { sustain, 0.9f }, { release, 0.12f }, { glide, 0.05f } });
+        N (cBass, "Synth Bass", "Rubber Ladder Bass", { { engine, VA }, { wave, 0.4f }, { filterType, 1 }, { cutoff, 420 }, { reso, 0.4f }, { fenv, 0.7f }, { fdecay, 0.2f },
+                                                        { sustain, 0.8f }, { release, 0.1f } });
+        N (cBass, "Hybrid Bass", "Glass FM Bass", { { engine, FM }, { fmRatio, 1.0f }, { fmAmt, 0.5f }, { fdecay, 0.25f }, { decay, 0.7f }, { sustain, 0.6f }, { release, 0.12f },
+                                                    { cutoff, 4000 } });
+        N (cBass, "Hybrid Bass", "Wooden FM Bass", { { engine, FM }, { fmRatio, 0.5f }, { fmAmt, 0.35f }, { fdecay, 0.4f }, { decay, 0.9f }, { sustain, 0.4f }, { release, 0.12f } });
+        N (cBass, "Pluck Bass", "Thumb Slap Bass", { { engine, PL }, { wave, 0.8f }, { decay, 1.0f }, { sustain, 0 }, { release, 0.12f }, { punch, 0.6f }, { body, 5 },
+                                                     { bodyMix, 0.25f }, { cutoff, 3500 }, { sub, 0.25f } });
+        N (cBass, "Sub", "Pure Sine Sub", { { engine, SB }, { wave, 0.05f }, { sustain, 1 }, { release, 0.15f } });
+        N (cBass, "Sub", "Warm Round Sub", { { engine, SB }, { wave, 0.3f }, { sustain, 1 }, { release, 0.2f }, { drive, 0.1f }, { driveType, 1 } });
+
+        // ---- CHIPTUNE / 8-BIT
+        N (cChip, "Lead", "Pixel Square Lead", with (chipB, { { mono, 1 } }));
+        N (cChip, "Lead", "Narrow Pulse Lead", with (chipB, { { wave, 0.85f }, { mono, 1 }, { lfoPitch, 0.1f }, { lfoRate, 6.0f } }));
+        N (cChip, "Lead", "Console Hero Lead", with (chipB, { { wave, 0.7f }, { mono, 1 }, { glide, 0.03f }, { lfoPitch, 0.08f }, { delayMix, 0.25f } }));
+        N (cChip, "Bass", "Console Triangle Bass", { { engine, FL }, { wave, 0.0f }, { octave, -1 }, { attack, 0.001f }, { sustain, 1 }, { release, 0.05f }, { mono, 1 },
+                                                     { chorus, 0.0f }, { revMix, 0.0f }, { width, 0.3f } });
+        N (cChip, "Bass", "Square Bit Bass", with (chipB, { { octave, -1 }, { wave, 0.5f }, { cutoff, 4000 }, { mono, 1 }, { delayMix, 0.0f }, { revMix, 0.0f }, { width, 0.3f } }));
+        N (cChip, "Arp", "Arcade Arpeggio", arpOn (with (chipB, { { sustain, 0.5f } }), 3, 0, 2, 0.5f));
+        N (cChip, "Arp", "Pocket Console Arp", arpOn (with (chipB, { { wave, 0.8f }, { sustain, 0.5f } }), 1, 2, 2, 0.6f));
+        N (cChip, "Chords", "Bit Chord Stab", with (chipB, { { chord, 1 }, { chordType, 0 }, { decay, 0.25f }, { sustain, 0 }, { release, 0.1f } }));
+
+        // ---- DRUMS (play them on the keys, in tune)
+        N (cDrums, "Kick", "Analog Boom Kick", kick);
+        N (cDrums, "Kick", "Tight Punch Kick", with (kick, { { decay, 0.25f }, { fmAmt, 1.0f }, { wave, 0.5f }, { punch, 0.8f } }));
+        N (cDrums, "Kick", "Long Sub Kick", with (kick, { { decay, 1.4f }, { fmAmt, 0.6f }, { wave, 0.2f } }));
+        N (cDrums, "Percussion", "Heartbeat Thump", with (kick, { { octave, -2 }, { decay, 0.35f }, { fmAmt, 0.4f }, { wave, 0.1f }, { punch, 0.2f } }));
+        N (cDrums, "Snare", "Analog Tone Snare", { { engine, SB }, { wave, 0.2f }, { fmAmt, 0.35f }, { decay, 0.18f }, { sustain, 0 }, { release, 0.1f }, { layerB, 1 },
+                                                   { engineB, PL }, { waveB, 1.0f }, { octaveB, 2 }, { levelB, 0.9f }, { filterType, 3 }, { cutoff, 180 },
+                                                   { chorus, 0.0f }, { revMix, 0.15f }, { punch, 0.5f } });
+        N (cDrums, "Snare", "Crack Rimshot", { { engine, FM }, { fmRatio, 1.5f }, { fmAmt, 0.7f }, { wave, 0.5f }, { decay, 0.08f }, { sustain, 0 }, { release, 0.05f },
+                                               { layerB, 1 }, { engineB, PL }, { waveB, 1.0f }, { octaveB, 2 }, { levelB, 0.6f }, { filterType, 3 }, { cutoff, 300 },
+                                               { chorus, 0.0f }, { revMix, 0.15f } });
+        N (cDrums, "Hats", "Analog Closed Hat", { { engine, FM }, { fmRatio, 7.13f }, { fmAmt, 1.0f }, { wave, 1.0f }, { octave, 2 }, { decay, 0.06f }, { sustain, 0 },
+                                                  { release, 0.04f }, { filterType, 3 }, { cutoff, 7000 }, { chorus, 0.0f }, { revMix, 0.08f } });
+        N (cDrums, "Hats", "Analog Open Hat", { { engine, FM }, { fmRatio, 7.13f }, { fmAmt, 1.0f }, { wave, 1.0f }, { octave, 2 }, { decay, 0.45f }, { sustain, 0 },
+                                                { release, 0.3f }, { filterType, 3 }, { cutoff, 6500 }, { chorus, 0.0f }, { revMix, 0.12f } });
+        N (cDrums, "Percussion", "Analog Cowbell", { { engine, VA }, { wave, 0.5f }, { decay, 0.32f }, { sustain, 0 }, { release, 0.1f }, { layerB, 1 }, { engineB, VA },
+                                                     { waveB, 0.5f }, { semiB, 7 }, { fineB, -18 }, { levelB, 0.8f }, { filterType, 4 }, { cutoff, 1100 },
+                                                     { reso, 0.3f }, { chorus, 0.0f }, { revMix, 0.12f } });
+        N (cDrums, "Percussion", "Deep Floor Tom", with (kick, { { octave, 0 }, { decay, 0.6f }, { fmAmt, 0.35f }, { wave, 0.25f }, { revMix, 0.15f } }));
+        N (cDrums, "Percussion", "Wood Conga", { { engine, MD }, { wave, 0.1f }, { fmAmt, 0.2f }, { decay, 0.35f }, { sustain, 0 }, { release, 0.2f }, { body, 5 },
+                                                 { bodyMix, 0.4f }, { chorus, 0.0f }, { revMix, 0.12f } });
+
+        // ---- GAME / SCI-FI FX
+        N (cGameFx, "Retro Game", "Pixel Jump", mm (with (chipB, { { decay, 0.18f }, { sustain, 0 }, { release, 0.05f }, { e3decay, 0.15f }, { e3sustain, 0 }, { mono, 1 } }),
+                                                     0, srcEnv3, dstPitch, -0.6f));
+        N (cGameFx, "Retro Game", "Coin Grab", mm (with (chipB, { { octave, 1 }, { decay, 0.45f }, { sustain, 0 }, { release, 0.1f }, { e3attack, 0.07f }, { e3sustain, 1 } }),
+                                                   0, srcEnv3, dstPitch, 0.42f));
+        N (cGameFx, "Retro Game", "Power Up Climb", arpOn (with (chipB, { { sustain, 0.6f }, { octave, 0 } }), 3, 0, 3, 0.6f));
+        N (cGameFx, "Retro Game", "Treasure Chest Sparkle", arpOn (with (chime, { { octave, 1 }, { decay, 0.8f }, { revMix, 0.35f } }), 3, 0, 3, 0.5f));
+        N (cGameFx, "Retro Game", "Game Over Fall", arpOn (with (chipB, { { sustain, 0.6f }, { wave, 0.3f } }), 0, 1, 2, 0.7f));
+        N (cGameFx, "Laser", "Laser Pew", mm (mm ({ { engine, VA }, { wave, 0.5f }, { decay, 0.2f }, { sustain, 0 }, { release, 0.05f }, { e3decay, 0.18f }, { e3sustain, 0 },
+                                                    { delayMix, 0.25f }, { delayTime, 3 } }, 0, srcEnv3, dstPitch, 1.0f), 1, srcEnv3, dstPitch, 1.0f));
+        N (cGameFx, "Laser", "Plasma Blaster", mm (mm ({ { engine, FM }, { fmRatio, 1.5f }, { fmAmt, 0.6f }, { decay, 0.35f }, { sustain, 0 }, { release, 0.1f },
+                                                         { e3decay, 0.3f }, { e3sustain, 0 }, { revMix, 0.2f } }, 0, srcEnv3, dstPitch, 1.0f), 1, srcEnv3, dstFmA, 0.4f));
+        N (cGameFx, "Sci-Fi", "Teleport Charge", mm ({ { engine, VA }, { wave, 0.0f }, { unison, 5 }, { detune, 0.3f }, { attack, 1.2f }, { sustain, 1 }, { release, 0.4f },
+                                                       { e3attack, 1.5f }, { e3sustain, 1 }, { lfoPitch, 0.3f }, { lfoRate, 12.0f }, { phaser, 0.35f }, { revMix, 0.35f } },
+                                                     0, srcEnv3, dstPitch, 1.0f));
+        N (cGameFx, "Sci-Fi", "Shield Energy Hum", { { engine, WT }, { wave, 0.6f }, { unison, 4 }, { detune, 0.15f }, { octave, -1 }, { attack, 0.3f }, { sustain, 1 },
+                                                     { release, 0.8f }, { lfoAmp, 0.25f }, { lfoRate, 8.0f }, { phaser, 0.3f }, { revMix, 0.3f } });
+        N (cGameFx, "Sci-Fi", "Sonar Ping", { { engine, FL }, { wave, 0.0f }, { octave, 1 }, { decay, 0.5f }, { sustain, 0 }, { release, 0.4f }, { delayMix, 0.45f },
+                                              { delayTime, 0 }, { delayFb, 0.55f }, { revMix, 0.45f }, { revType, 0 }, { revSize, 0.95f } });
+        N (cGameFx, "Sci-Fi", "Reactor Core Hum", { { engine, OR }, { wave, 0.9f }, { octave, -2 }, { attack, 0.8f }, { sustain, 1 }, { release, 1.5f }, { layerB, 1 },
+                                                    { engineB, VA }, { waveB, 0.0f }, { octaveB, -1 }, { levelB, 0.25f }, { cutoff, 900 }, { lfoAmp, 0.15f },
+                                                    { lfoRate, 0.6f }, { phaser, 0.3f }, { revMix, 0.3f } });
+        N (cGameFx, "Alarm", "Patrol Siren", mm ({ { engine, VA }, { wave, 0.5f }, { cutoff, 5000 }, { sustain, 1 }, { release, 0.3f }, { lfoRate, 0.8f }, { lfoShape, 1 },
+                                                   { revMix, 0.2f } }, 0, srcLfo1, dstPitch, 0.45f));
+        N (cGameFx, "Alarm", "Backup Beeper", { { engine, FL }, { wave, 0.0f }, { octave, 1 }, { sustain, 1 }, { release, 0.05f }, { lfoSync, 1 }, { lfoDiv, 2 },
+                                                { lfoShape, 3 }, { lfoAmp, 1.0f }, { revMix, 0.15f } });
+        N (cGameFx, "Alarm", "Retro Phone Ring", { { engine, FM }, { fmRatio, 3.0f }, { fmAmt, 0.3f }, { octave, 1 }, { sustain, 1 }, { release, 0.1f }, { lfoRate, 18.0f },
+                                                   { lfoShape, 3 }, { lfoAmp, 0.8f }, { revMix, 0.15f } });
+        N (cGameFx, "Alarm", "Barcode Beep", { { engine, VA }, { wave, 0.5f }, { octave, 2 }, { decay, 0.12f }, { sustain, 0 }, { release, 0.04f }, { cutoff, 6000 },
+                                               { chorus, 0.0f }, { revMix, 0.1f } });
+
+        // ---- CINEMATIC FX
+        N (cCinematic, "Braam", "Titan Braam", braam);
+        N (cCinematic, "Braam", "Colossus Horn", with (braam, { { wave, 0.15f }, { drive, 0.4f }, { decay, 3.5f }, { sustain, 0.6f } }));
+        N (cCinematic, "Braam", "Iron Horizon Braam", with (braam, { { attack, 0.25f }, { cutoff, 2200 }, { revMix, 0.45f } }));
+        N (cCinematic, "Riser", "Ascension Riser", mm (mm ({ { engine, VA }, { wave, 0.0f }, { unison, 7 }, { detune, 0.4f }, { cutoff, 400 }, { reso, 0.35f },
+                                                             { attack, 2.5f }, { sustain, 1 }, { release, 1.5f }, { e3attack, 4.0f }, { e3sustain, 1 },
+                                                             { revMix, 0.45f }, { revType, 0 }, { width, 0.95f } }, 0, srcEnv3, dstCutoff, 0.9f),
+                                                       1, srcEnv3, dstPitch, 1.0f));
+        N (cCinematic, "Riser", "Tension Builder", mm ({ { engine, OC }, { wave, 0.5f }, { unison, 6 }, { detune, 0.2f }, { attack, 3.0f }, { sustain, 1 }, { release, 1.0f },
+                                                         { e3attack, 5.0f }, { e3sustain, 1 }, { lfoAmp, 0.4f }, { lfoSync, 1 }, { lfoDiv, 4 }, { lfoShape, 3 },
+                                                         { revMix, 0.4f } }, 0, srcEnv3, dstPitch, 0.6f));
+        N (cCinematic, "Downer", "Gravity Sub Drop", mm (mm ({ { engine, SB }, { wave, 0.15f }, { octave, -1 }, { decay, 2.5f }, { sustain, 0 }, { release, 0.8f },
+                                                               { e3decay, 1.4f }, { e3sustain, 0 }, { chorus, 0.0f }, { revMix, 0.15f }, { width, 0.3f } },
+                                                             0, srcEnv3, dstPitch, 1.0f), 1, srcEnv3, dstPitch, 1.0f));
+        N (cCinematic, "Downer", "Power Down", { { engine, VA }, { wave, 0.0f }, { unison, 4 }, { detune, 0.25f }, { decay, 2.5f }, { sustain, 0 }, { release, 0.5f },
+                                                 { bend, 1.0f }, { bendMode, 0 }, { bendSemis, -24 }, { cutoff, 3000 }, { revMix, 0.3f } });
+        N (cCinematic, "Impact", "Trailer Boom", with (kick, { { octave, -2 }, { decay, 2.5f }, { fmAmt, 0.5f }, { wave, 0.45f }, { revMix, 0.35f }, { revType, 0 },
+                                                               { revSize, 0.95f }, { width, 0.7f } }));
+        N (cCinematic, "Impact", "Thunder Hit", { { engine, OC }, { wave, 0.3f }, { unison, 6 }, { detune, 0.35f }, { octave, -2 }, { decay, 2.0f }, { sustain, 0 },
+                                                  { release, 1.2f }, { layerB, 1 }, { engineB, SB }, { octaveB, -2 }, { fmAmtB, 0.6f }, { levelB, 0.7f },
+                                                  { punch, 0.8f }, { revMix, 0.4f }, { revType, 0 } });
+        N (cCinematic, "Drone", "Deep Space Drone", with (hallPad, { { octave, -2 }, { cutoff, 900 }, { attack, 2.0f }, { release, 4.0f }, { lfoFilter, 0.3f },
+                                                                     { lfoRate, 0.08f }, { revType, 0 }, { revMix, 0.5f } }));
+        N (cCinematic, "Drone", "Warp Core Drone", mm (with (hallPad, { { engine, WT }, { wave, 0.7f }, { octave, -1 }, { lfo2Rate, 0.07f }, { phaser, 0.35f } }),
+                                                       0, srcLfo2, dstWaveA, 0.3f));
+        N (cCinematic, "Riser", "Air Swipe", { { engine, VA }, { wave, 0.0f }, { unison, 8 }, { detune, 1.0f }, { octave, 1 }, { filterType, 4 }, { cutoff, 800 },
+                                               { reso, 0.3f }, { attack, 0.35f }, { decay, 0.5f }, { sustain, 0 }, { release, 0.6f }, { fenv, 0.8f }, { fattack, 0.35f },
+                                               { fdecay, 0.4f }, { revMix, 0.35f }, { width, 1.0f } });
 
         // ---- v0.6: macro 1 is DARK (turn right = darker) on melodic sounds
         for (auto& pr : v)

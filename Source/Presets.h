@@ -4,7 +4,8 @@
 
 // Factory sound taxonomy (TRAP 2010 -> FUTURE spec, chapter 4)
 enum Category { cPiano, cKeys, cBells, cPlucks, cMallets, cGuitar, cStrings, cBrass, cChoir, cWoodwind,
-                cLead, cPads, cSynth, cBass, c808, cTexture, cArp, cFX, numCategories };
+                cLead, cPads, cSynth, cBass, c808, cTexture, cArp, cFX,
+                cOrgan, cChip, cWorld, cDrums, cGameFx, cCinematic, numCategories };   // v0.30 SOUND LIBRARY categories
 
 // Eras: 0 = 2010-12, 1 = 2013-15, 2 = 2016-18, 3 = 2019-21, 4 = 2022-24, 5 = 2025-26, 6 = FUTURE
 enum { eraFuture = 6, numEras = 7 };

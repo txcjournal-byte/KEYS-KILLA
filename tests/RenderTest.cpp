@@ -54,6 +54,47 @@ static bool renderPreset (KeysKillaProcessor& p, int idx, double sr, float& rmsD
 }
 
 
+static int libraryCheck (KeysKillaProcessor& p, bool verbose)
+{
+    // v0.30 SOUND LIBRARY: every new sound is clean (tail goes silent - no hiss, hum or endless noise), stereo, no clipping, no DC
+    int newSounds = 0, dirty = 0;
+    for (int i = 0; i < p.getNumPrograms(); ++i)
+    {
+        const auto& pr = factoryPresets()[(size_t) i];
+        if (pr.version != "0.30") continue;
+        ++newSounds;
+        p.setCurrentProgram (i); p.prepareToPlay (44100, 441);
+        const bool low = pr.isBass() || pr.cat == cDrums || pr.cat == cChip;
+        const int root = pr.isBass() ? 36 : 60;
+        juce::AudioBuffer<float> b (2, 441);
+        double mid = 0, side = 0, tail = 0, dcSum = 0; float pk = 0; long dcN = 0; bool fin = true;
+        for (int k = 0; k < 1100; ++k)   // 11 s: 1.2 s of notes, then the release, reverb and echo must die away
+        {
+            juce::MidiBuffer m;
+            if (k == 0) { m.addEvent (juce::MidiMessage::noteOn (1, root, (juce::uint8) 100), 0); if (! pr.isBass()) m.addEvent (juce::MidiMessage::noteOn (1, root + 7, (juce::uint8) 100), 3); }
+            if (k == 120) { m.addEvent (juce::MidiMessage::noteOff (1, root), 0); m.addEvent (juce::MidiMessage::noteOff (1, root + 7), 0); }
+            p.processBlock (b, m);
+            for (int j = 0; j < 441; ++j)
+            {
+                const float l = b.getSample (0, j), r = b.getSample (1, j);
+                fin &= std::isfinite (l) && std::isfinite (r);
+                pk = std::max (pk, std::max (std::abs (l), std::abs (r)));
+                if (k < 120) { mid += (l + r) * (l + r) * 0.25; side += (l - r) * (l - r) * 0.25; dcSum += l + r; dcN += 2; }
+                if (k >= 1050) tail += (double) l * l + (double) r * r;
+            }
+        }
+        const float tailDb = (float) juce::Decibels::gainToDecibels (std::sqrt (tail / (50.0 * 441 * 2)), -150.0);
+        const float stereoDb = (float) juce::Decibels::gainToDecibels (std::sqrt (side / std::max (1e-12, mid)), -150.0);
+        const float dcv = (float) (dcSum / std::max (1L, dcN));
+        const bool ok = fin && pk <= 1.0f && tailDb < -80.0f && std::abs (dcv) < 0.02f && (low || stereoDb > -30.0f);
+        if (! ok || verbose)
+            std::printf ("%s NEW %-28s peak %.2f  tail %6.1f dB  stereo %6.1f dB  dc %+.4f\n", ok ? "  " : "!!", pr.name.toRawUTF8(), pk, tailDb, stereoDb, dcv);
+        if (! ok) ++dirty;
+    }
+    std::printf ("SOUND LIBRARY: %d new sounds, %d not clean\n", newSounds, dirty);
+    return (dirty > 0 || newSounds < 100) ? 1 : 0;
+}
+
 // ---------------------------------------------------------------- DSP unit tests
 static int unitTests()
 {
@@ -796,6 +837,7 @@ int main (int argc, char** argv)
     std::printf ("KEYS KILLA tests: juce ready\n");
     KeysKillaProcessor p;
     std::printf ("KEYS KILLA tests: processor ready (%d KB)\n", (int) (sizeof (KeysKillaProcessor) / 1024));
+    if (argc > 1 && juce::String (argv[1]) == "-lib") return libraryCheck (p, true);   // v0.30 sound library cleanliness only
     if (argc > 1 && juce::String (argv[1]) == "-cal")   // prints suggested output gain per preset (target -15 dB short-term RMS)
     {
         for (int i = 0; i < p.getNumPrograms(); ++i)
@@ -1130,6 +1172,7 @@ int main (int argc, char** argv)
             if (! ok) ++failures;
         }
     }
+    failures += libraryCheck (p, verbose);
     // chord + arp + dice smoke tests
     {
         float rms, peak, dc; bool fin;

@@ -1,5 +1,14 @@
 #pragma once
-// Preset browser overlay: search, category / era / exclusive / favourites / user filters.
+// SOUND LIBRARY (preset browser): colourful category chips, search, filters, NEW sounds, favourites, your presets.
+
+// every category has its own colour - you see at a glance what you pick
+inline Colour categoryColour (int cat)
+{
+    static const uint32 c[] { 0xffff5d8f, 0xffff8a3d, 0xff7cdcff, 0xffffd23f, 0xffffb86b, 0xffe0a060, 0xffc77dff, 0xffffc23d, 0xfff0a6ff, 0xff6ee7b7,
+                              0xffff3b5c, 0xff8b8bff, 0xff4dd2ff, 0xff3d8bff, 0xff3d5bff, 0xffa78bfa, 0xff34d399, 0xffff3fd2,
+                              0xfff59e0b, 0xff22e07a, 0xff2dd4bf, 0xffff6b4a, 0xffa3e635, 0xff9b4dff };
+    return isPositiveAndBelow (cat, (int) (sizeof (c) / sizeof (c[0]))) ? Colour (c[cat]) : Colour (0xffff2f6d);
+}
 
 class PresetBrowser : public Component, private ListBoxModel
 {
@@ -53,9 +62,18 @@ public:
             addAndMakeVisible (*b);
         }
         exclusiveOnly.setButtonText ("EXCLUSIVE"); favOnly.setButtonText ("FAVOURITES"); userOnly.setButtonText ("USER");
-        addAndMakeVisible (category); addAndMakeVisible (subcat); addChildComponent (era);   // eras are not shown any more (v0.7)
+        addChildComponent (category); addAndMakeVisible (subcat); addChildComponent (era);   // eras are not shown any more (v0.7); chips pick the category
+        for (auto* b : { &exclusiveOnly, &favOnly, &userOnly }) b->setVisible (false);
+        chips.push_back ({ "ALL SOUNDS", -1, 0 }); chips.push_back ({ "NEW", -1, 3 }); chips.push_back ({ "FAVOURITES", -1, 2 }); chips.push_back ({ "MY PRESETS", -1, 1 });
+        for (int c : { (int) cPiano, (int) cKeys, (int) cOrgan, (int) cBells, (int) cMallets, (int) cPlucks, (int) cGuitar, (int) cStrings, (int) cBrass,
+                       (int) cWoodwind, (int) cWorld, (int) cChoir, (int) cLead, (int) cSynth, (int) cPads, (int) cBass, (int) cChip, (int) cArp,
+                       (int) cTexture, (int) cDrums, (int) cFX, (int) cGameFx, (int) cCinematic })
+            chips.push_back ({ categoryNames()[c], c, 0 });
+        for (auto& ch : chips)
+            for (auto& pr : factoryPresets()) ch.count += (ch.cat >= 0 && pr.cat == ch.cat) || (ch.cat < 0 && ch.special == 0) || (ch.special == 3 && pr.version == "0.30");
         list.setModel (this);
         list.setRowHeight (40);
+        list.setColour (ListBox::backgroundColourId, Colours::transparentBlack);
         addAndMakeVisible (list);
         closeBtn.setButtonText ("CLOSE");
         closeBtn.onClick = [this] { setVisible (false); };
@@ -72,6 +90,7 @@ public:
         if (cat >= 0 && proc.uiSub >= 0 && ! pick) subcat.setSelectedId (proc.uiSub + 2, dontSendNotification);
         era.setSelectedId (1, dontSendNotification); ignoreUnused (eraIdx);
         exclusiveOnly.setToggleState (exclusive, dontSendNotification);
+        newOnly = false; favOnly.setToggleState (false, dontSendNotification); userOnly.setToggleState (false, dontSendNotification);
         refresh();
         setVisible (true); toFront (true);
         if (focusKeys) focusKeys();   // the computer keys play notes; click the search box to type
@@ -79,28 +98,71 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (lnf.skin->dark ? Colour (0xf2080606) : Colour (0xf2dfe3e8));
-        drawPanel (g, getLocalBounds().toFloat().reduced (10), *lnf.skin, title);
+        auto r = getLocalBounds().toFloat();
+        g.setGradientFill (ColourGradient (Colour (0xff15123a), 0, 0, Colour (0xff0a0920), 0, r.getBottom(), false));
+        g.fillRoundedRectangle (r.reduced (4), 12);
+        auto glow = [&] (Point<float> c, float rad, Colour col) { g.setGradientFill (ColourGradient (col.withAlpha (0.18f), c.x, c.y, col.withAlpha (0.0f), c.x + rad, c.y, true)); g.fillEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c)); };
+        glow ({ r.getWidth() * 0.15f, 30 }, 380, Colour (0xffff2f6d)); glow ({ r.getWidth() * 0.85f, 60 }, 380, Colour (0xff9b4dff)); glow ({ r.getWidth() * 0.5f, r.getBottom() }, 420, Colour (0xff22d3ee));
+        g.setGradientFill (ColourGradient (Colour (0xffff2f6d), 0, 0, Colour (0xff9b4dff), r.getRight(), r.getBottom(), false));
+        g.drawRoundedRectangle (r.reduced (4), 12, 1.6f);
+        // title
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.06f));
+        const bool lib = title == "PRESETS";
+        g.drawText (lib ? "SOUND" : title, 24, 12, 400, 34, Justification::centredLeft);
+        if (lib)
+        {
+            g.setGradientFill (ColourGradient (Colour (0xffff2f6d), 140, 0, Colour (0xffff8a3d), 300, 0, false));
+            g.drawText ("LIBRARY", 134, 12, 300, 34, Justification::centredLeft);
+        }
+        // category chips
+        for (int i = 0; i < (int) chips.size(); ++i)
+        {
+            const auto& ch = chips[(size_t) i];
+            auto cr = chipRect (i).reduced (3, 3);
+            const bool sel = i == chipSel, hot = i == chipHot;
+            const Colour col = ch.cat >= 0 ? categoryColour (ch.cat) : ch.special == 3 ? Colour (0xff36ff6a) : ch.special == 2 ? Colour (0xffffd23f)
+                             : ch.special == 1 ? Colour (0xff22d3ee) : Colour (0xffff2f6d);
+            if (sel)
+            {
+                g.setColour (col.withAlpha (0.3f)); g.fillRoundedRectangle (cr.expanded (3), 10);
+                g.setGradientFill (ColourGradient (col, cr.getX(), cr.getY(), col.darker (0.45f), cr.getRight(), cr.getBottom(), false)); g.fillRoundedRectangle (cr, 8);
+            }
+            else
+            {
+                g.setGradientFill (ColourGradient (col.withAlpha (hot ? 0.32f : 0.2f), cr.getX(), cr.getY(), col.withAlpha (0.05f), cr.getRight(), cr.getBottom(), false));
+                g.fillRoundedRectangle (cr, 8);
+                g.setColour (col.withAlpha (hot ? 0.95f : 0.6f)); g.drawRoundedRectangle (cr, 8, 1.2f);
+            }
+            g.setColour (sel ? Colours::white : col); g.fillEllipse (cr.getX() + 9, cr.getCentreY() - 4, 8, 8);
+            g.setColour (sel ? Colours::white : Colour (0xffeeeaff)); g.setFont (Font (FontOptions (13.0f, Font::bold)).withExtraKerningFactor (0.05f));
+            g.drawFittedText (ch.name, cr.withTrimmedLeft (22).withTrimmedRight (30).toNearestInt(), Justification::centredLeft, 1, 0.65f);
+            if (ch.count > 0)
+            {
+                g.setColour (sel ? Colours::white.withAlpha (0.85f) : col.withAlpha (0.85f)); g.setFont (Font (FontOptions (11.0f)));
+                g.drawText (String (ch.count), cr.withTrimmedRight (8).toNearestInt(), Justification::centredRight);
+            }
+        }
+    }
+    void mouseMove (const MouseEvent& e) override { int h = -1; for (int i = 0; i < (int) chips.size(); ++i) if (chipRect (i).contains (e.position)) h = i; if (h != chipHot) { chipHot = h; repaint(); } }
+    void mouseExit (const MouseEvent&) override { chipHot = -1; repaint(); }
+    void mouseDown (const MouseEvent& e) override
+    {
+        for (int i = 0; i < (int) chips.size(); ++i)
+            if (chipRect (i).contains (e.position)) { selectChip (i); return; }
     }
 
     void resized() override
     {
         closeBtn.setBounds (getWidth() - 140, 14, 116, 36);
-        auto r = getLocalBounds().reduced (24).withTrimmedTop (34);
-        auto top = r.removeFromTop (44);
-        search.setBounds (top.removeFromLeft (350)); top.removeFromLeft (8);
-        category.setBounds (top.removeFromLeft (290)); top.removeFromLeft (6);
-        subcat.setBounds (top.removeFromLeft (300)); top.removeFromLeft (6);
-        exclusiveOnly.setBounds (top.removeFromLeft (200)); top.removeFromLeft (6);
-        favOnly.setBounds (top);
-        r.removeFromTop (6);
-        auto row2 = r.removeFromTop (38);
-        userOnly.setBounds (row2.removeFromRight (110));
+        search.setBounds (300, 14, getWidth() - 300 - 160, 36);
+        auto r = getLocalBounds().reduced (20).withTrimmedTop (chipsBottom() - 10);
+        auto row2 = r.removeFromTop (34);
+        subcat.setBounds (row2.removeFromLeft (230)); row2.removeFromLeft (6);
         const int w = row2.getWidth() / 7;
         for (auto* cb : { &mood, &character, &artic, &voicing, &bright, &motion, &cpuSel })
             cb->setBounds (row2.removeFromLeft (w).reduced (3, 0));
         r.removeFromTop (8);
-        count.setBounds (r.removeFromBottom (28));
+        count.setBounds (r.removeFromBottom (24));
         list.setBounds (r);
     }
 
@@ -114,13 +176,13 @@ public:
         const int vo = voicing.getSelectedId() - 2, br = bright.getSelectedId() - 2, mv = motion.getSelectedId() - 2, cp = cpuSel.getSelectedId() - 2;
         const bool tagFilter = sb >= 0 || md >= 0 || chx >= 0 || ar >= 0 || vo >= 0 || br >= 0 || mv >= 0 || cp >= 0;
         auto matches = [&] (const String& hay) { return q.isEmpty() || hay.toLowerCase().contains (q); };
-        if (! exclusiveOnly.getToggleState())
+        if (! exclusiveOnly.getToggleState() && ! newOnly)
             for (auto& f : proc.userPresets())
             {
                 const auto name = f.getFileNameWithoutExtension();
                 if (cat >= 0 || er >= 0 || tagFilter) continue;
                 if (favOnly.getToggleState() && ! favs.contains (name)) continue;
-                if (matches (name + " user")) entries.push_back ({ name, "USER", -1, f });
+                if (matches (name + " user")) entries.push_back ({ name, "MY PRESET", -1, f });
             }
         if (! userOnly.getToggleState())
         {
@@ -139,6 +201,7 @@ public:
                 if (mv >= 0 && (mv == 0 ? pr.movement > 1 : mv == 1 ? (pr.movement < 2 || pr.movement > 3) : pr.movement < 4)) continue;
                 if (cp >= 0 && pr.cpu != cp + 1) continue;
                 if (exclusiveOnly.getToggleState() && ! pr.exclusive) continue;
+                if (newOnly && pr.version != "0.30") continue;
                 if (favOnly.getToggleState() && ! favs.contains (pr.name)) continue;
                 const auto info = pr.info();
                 if (q.isEmpty() || pr.searchText().contains (q)) entries.push_back ({ pr.name, info, i, {} });
@@ -146,7 +209,11 @@ public:
         }
         list.updateContent();
         list.repaint();
-        count.setText (String ((int) entries.size()) + " presets", dontSendNotification);
+        count.setText (String ((int) entries.size()) + " sounds   -   click = hear it and play it on the keys,  double-click = load and close,  right-click = more", dontSendNotification);
+        int want = 0;
+        if (userOnly.getToggleState()) want = 3; else if (favOnly.getToggleState()) want = 2; else if (newOnly) want = 1;
+        else for (int i = 4; i < (int) chips.size(); ++i) if (chips[(size_t) i].cat == cat) want = i;
+        if (want != chipSel) { chipSel = want; repaint(); }
     }
 
 private:
@@ -157,18 +224,42 @@ private:
     void paintListBoxItem (int row, Graphics& g, int w, int h, bool selected) override
     {
         if (! isPositiveAndBelow (row, (int) entries.size())) return;
-        const auto& s = *lnf.skin;
         const auto& e = entries[(size_t) row];
         const bool current = (e.factoryIndex >= 0 && e.factoryIndex == proc.currentPresetIndex())
                           || (e.factoryIndex < 0 && e.file == proc.currentUserFile());
-        if (selected || current) { g.setColour (s.accent.withAlpha (current ? 0.28f : 0.14f)); g.fillRect (0, 0, w, h); }
+        const auto* pr = e.factoryIndex >= 0 ? &factoryPresets()[(size_t) e.factoryIndex] : nullptr;
+        const Colour col = pr ? categoryColour (pr->cat) : Colour (0xff22d3ee);
+        auto r = Rectangle<float> (2, 2, (float) w - 4, (float) h - 4);
+        g.setGradientFill (ColourGradient (col.withAlpha (current ? 0.34f : selected ? 0.24f : (row % 2 ? 0.07f : 0.11f)), r.getX(), 0,
+                                           Colour (0x0015123a), r.getRight() * 0.7f, 0, false));
+        g.fillRoundedRectangle (r, 7);
+        if (current) { g.setColour (col); g.drawRoundedRectangle (r, 7, 1.6f); }
+        g.setColour (col); g.fillRoundedRectangle (r.getX(), r.getY() + 4, 4, r.getHeight() - 8, 2);
         const auto favs = getFavourites ? getFavourites() : StringArray();
-        g.setColour (favs.contains (e.name) ? s.accent : s.textDim.withAlpha (0.5f));
-        g.setFont (serif (26.0f)); g.drawText (favs.contains (e.name) ? "*" : "+", 6, 0, 30, h, Justification::centred);
-        g.setColour (s.text); g.setFont (serif (23.0f, false, 0.05f));
-        g.drawText (e.name, 44, 0, w * 2 / 5, h, Justification::centredLeft);
-        g.setColour (s.textDim); g.setFont (serif (16.0f, false, 0.06f));
-        g.drawFittedText (e.info, w * 2 / 5 + 50, 0, w * 3 / 5 - 60, h, Justification::centredRight, 1, 0.8f);
+        const bool fav = favs.contains (e.name);
+        g.setColour (fav ? Colour (0xffffd23f) : Colour (0xff6a6290));
+        g.setFont (Font (FontOptions (22.0f))); g.drawText (fav ? String (CharPointer_UTF8 ("\xe2\x98\x85")) : String (CharPointer_UTF8 ("\xe2\x98\x86")), 8, 0, 30, h, Justification::centred);
+        // category pill
+        const String tag = pr ? categoryNames()[pr->cat] : String ("MY PRESET");
+        auto pill = Rectangle<float> (44, (float) h * 0.5f - 11, 150, 22);
+        g.setColour (col.withAlpha (0.22f)); g.fillRoundedRectangle (pill, 11);
+        g.setColour (col); g.drawRoundedRectangle (pill, 11, 1.0f);
+        g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.06f));
+        g.drawFittedText (tag, pill.reduced (8, 0).toNearestInt(), Justification::centred, 1, 0.6f);
+        // name, NEW badge, tags
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (19.0f, Font::bold)));
+        g.drawFittedText (e.name, 206, 0, w * 2 / 5, h, Justification::centredLeft, 1, 0.8f);
+        if (pr && pr->version == "0.30")
+        {
+            GlyphArrangement ga; ga.addLineOfText (Font (FontOptions (19.0f, Font::bold)), e.name, 0, 0);
+            const float nx = 206.0f + jmin ((float) w * 0.4f, ga.getBoundingBox (0, -1, true).getWidth()) + 10.0f;
+            auto badge = Rectangle<float> (nx, (float) h * 0.5f - 9, 40, 18);
+            g.setGradientFill (ColourGradient (Colour (0xff36ff6a), badge.getX(), 0, Colour (0xff22d3ee), badge.getRight(), 0, false)); g.fillRoundedRectangle (badge, 9);
+            g.setColour (Colour (0xff0a0920)); g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawText ("NEW", badge, Justification::centred);
+        }
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (13.0f)));
+        String info = pr ? pr->sub.toUpperCase() + "   " + pr->mood + " . " + pr->articulation + (pr->mono ? " . MONO" : "") : String ("your sound");
+        g.drawFittedText (info, w * 2 / 5 + 260, 0, w - (w * 2 / 5 + 260) - 14, h, Justification::centredRight, 1, 0.8f);
     }
 
     void activate (int row, bool close)
@@ -238,6 +329,26 @@ private:
         subcat.setEnabled (c >= 0);
     }
     TextButton exclusiveOnly, favOnly, userOnly, closeBtn;
+    struct Chip { String name; int cat; int special; int count = 0; };   // special: 1 my presets, 2 favourites, 3 NEW
+    std::vector<Chip> chips;
+    int chipSel = 0, chipHot = -1;
+    bool newOnly = false;
+    static constexpr int chipCols = 9;
+    int chipsBottom() const { return 60 + ((int) chips.size() + chipCols - 1) / chipCols * 38 + 14; }
+    Rectangle<float> chipRect (int i) const
+    {
+        const float x0 = 20, w = ((float) getWidth() - 40) / (float) chipCols;
+        return { x0 + (float) (i % chipCols) * w, 60.0f + (float) (i / chipCols) * 38.0f, w, 38.0f };
+    }
+    void selectChip (int i)
+    {
+        const auto& ch = chips[(size_t) i];
+        userOnly.setToggleState (ch.special == 1, dontSendNotification);
+        favOnly.setToggleState (ch.special == 2, dontSendNotification);
+        newOnly = ch.special == 3;
+        category.setSelectedId (ch.cat >= 0 ? ch.cat + 2 : 1, dontSendNotification);
+        fillSubs(); chipSel = i; refresh(); repaint();
+    }
     Label count;
     ListBox list;
     std::vector<Entry> entries;
