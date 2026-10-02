@@ -2430,6 +2430,156 @@ private:
     String title;
 };
 
+// ---------------- PAIR FROM VST: one side (A or B) - a plugin and its sounds, in KEYS KILLA's own design ----------------
+class VstSide : public Component, private ListBoxModel
+{
+public:
+    VstSide (KeysKillaProcessor& p, KKLookAndFeel& l, int s) : proc (p), lnf (l), side (s)
+    {
+        pluginBox.setTextWhenNothingSelected ("choose a plugin ...");
+        pluginBox.setTooltip ("The VST3 instruments on this computer (the same ones FL Studio uses)");
+        pluginBox.onChange = [this] { choosePlugin(); };
+        addAndMakeVisible (pluginBox);
+        search.setTextToShowWhenEmpty ("search sounds ...", Colour (0xff6a6a6a));
+        search.onTextChange = [this] { filter(); };
+        addAndMakeVisible (search);
+        list.setModel (this); list.setRowHeight (22);
+        list.setColour (ListBox::backgroundColourId, Colour (0xff0d0b0b));
+        addAndMakeVisible (list);
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (prevBtn, "<", "Previous sound", [this] { step (-1); });
+        btn (nextBtn, ">", "Next sound", [this] { step (1); });
+        btn (bankBtn, "SAVE TO BANK", "Keep this sound in your bank (it stays there for every project)", [this]
+        {
+            status = proc.vstSideToBank (side) ? "saved to the bank (" + String (kk::harvestCatShort (proc.bank.empty() ? 0 : proc.bank.front().cat)) + ")" : String ("choose a sound first");
+            repaint();
+        });
+        btn (takeBtn, "TAKE CURRENT", "Take the sound the plugin plays right now (after you chose one in SHOW PLUGIN)", [this] { pick (-1); });
+        btn (showBtn, "SHOW PLUGIN", "Show the plugin inside KEYS KILLA - only needed for plugins that don't share their sound list", [this] { if (onShowPlugin) onShowPlugin (side); });
+        btn (keysBtn, "KEYS", "Play this plugin live on the keys", [this] { proc.vstKeys = side; setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst); refreshButtons(); });
+    }
+    std::function<void (int)> onShowPlugin;
+    std::function<void()> onChanged, onAddFolder;
+    void setPlugins (const StringArray& ids, const StringArray& vst2)
+    {
+        pluginBox.clear (dontSendNotification);
+        if (! ids.isEmpty()) pluginBox.addSectionHeading ("VST3 - ready");
+        for (int i = 0; i < ids.size(); ++i) pluginBox.addItem (kk::VstHost::displayName (ids[i]), i + 1);
+        if (! vst2.isEmpty())
+        {
+            pluginBox.addSeparator(); pluginBox.addSectionHeading ("VST2 only - install their VST3 version");
+            for (int i = 0; i < vst2.size(); ++i) { pluginBox.addItem (vst2[i] + "   (VST2)", 10000 + i); pluginBox.setItemEnabled (10000 + i, false); }
+        }
+        pluginBox.addSeparator();
+        pluginBox.addItem ("+ my plugin is missing: add its folder ...", 9999);
+        if (proc.host (side).loaded())
+            for (int i = 0; i < ids.size(); ++i) if (kk::VstHost::displayName (ids[i]) == proc.host (side).name() || ids[i].containsIgnoreCase (proc.host (side).name())) { pluginBox.setSelectedId (i + 1, dontSendNotification); break; }
+        filter();
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        auto r = getLocalBounds().toFloat();
+        g.setColour (Colour (0xff120d0d)); g.fillRoundedRectangle (r, 10);
+        g.setColour (Colour (0xff4a3a3a)); g.drawRoundedRectangle (r.reduced (0.5f), 10, 1.2f);
+        g.setColour (s.accent); g.setFont (Font (FontOptions (34.0f, Font::bold)));
+        g.drawText (side == 0 ? "A" : "B", 12, 6, 36, 36, Justification::centred);
+        g.setColour (Colour (0xffb9b0ac)); g.setFont (Font (FontOptions (11.5f)));
+        const auto& h = proc.host (side);
+        String info = ! h.loaded() ? String ("choose a plugin")
+                    : proc.vstSounds[(size_t) side].empty() ? String ("this plugin shares no sound list: SHOW PLUGIN, pick a sound, TAKE CURRENT")
+                    : String ((int) proc.vstSounds[(size_t) side].size()) + " sounds - click one = hear it and use it";
+        if (status.isNotEmpty()) info = status;
+        g.drawFittedText (info, statusArea, Justification::centredLeft, 2);
+        if (auto& snd = proc.pairParents[(size_t) side]; snd != nullptr)
+        {
+            g.setColour (Colours::white); g.setFont (Font (FontOptions (13.0f, Font::bold)));
+            g.drawText (snd->name, soundArea.withTrimmedLeft (84), Justification::centredLeft);
+            drawPeaks (g, soundArea.withWidth (78).toFloat().reduced (2), snd->peaks, s.accent);
+        }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (10);
+        auto top = r.removeFromTop (34);
+        top.removeFromLeft (44);
+        keysBtn.setBounds (top.removeFromRight (70)); top.removeFromRight (6);
+        showBtn.setBounds (top.removeFromRight (120)); top.removeFromRight (6);
+        pluginBox.setBounds (top);
+        r.removeFromTop (6);
+        search.setBounds (r.removeFromTop (26));
+        r.removeFromTop (4);
+        auto bottom = r.removeFromBottom (32);
+        prevBtn.setBounds (bottom.removeFromLeft (36)); bottom.removeFromLeft (4);
+        nextBtn.setBounds (bottom.removeFromLeft (36)); bottom.removeFromLeft (8);
+        bankBtn.setBounds (bottom.removeFromRight (130)); bottom.removeFromRight (6);
+        takeBtn.setBounds (bottom.removeFromRight (124));
+        soundArea = bottom.withTrimmedLeft (4);
+        statusArea = r.removeFromBottom (30);
+        list.setBounds (r);
+    }
+    void refreshButtons() { keysBtn.selected = proc.vstKeys.load() == side && (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playVst; keysBtn.repaint(); }
+private:
+    // ListBoxModel
+    int getNumRows() override { return (int) shown.size(); }
+    void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
+    {
+        if (row < 0 || row >= (int) shown.size()) return;
+        const int idx = shown[(size_t) row];
+        const bool sel = idx == proc.vstSel[(size_t) side];
+        if (sel) { g.setColour (lnf.skin->accent.withAlpha (0.35f)); g.fillRect (0, 0, w, h); }
+        else if (row % 2) { g.setColour (Colour (0xff151111)); g.fillRect (0, 0, w, h); }
+        g.setColour (sel ? Colours::white : Colour (0xffd8d2d2)); g.setFont (Font (FontOptions (13.0f)));
+        g.drawText (proc.vstSounds[(size_t) side][(size_t) idx].name, 8, 0, w - 16, h, Justification::centredLeft);
+    }
+    void listBoxItemClicked (int row, const MouseEvent&) override { if (row >= 0 && row < (int) shown.size()) pick (shown[(size_t) row]); }
+    void choosePlugin()
+    {
+        if (pluginBox.getSelectedId() == 9999) { pluginBox.setSelectedId (0, dontSendNotification); if (onAddFolder) onAddFolder(); return; }
+        const int i = pluginBox.getSelectedId() - 1;
+        if (i < 0 || i >= proc.vstList.size()) return;
+        if (onShowPlugin) onShowPlugin (-1 - side);   // close a shown editor of this side first
+        status = "loading ...";
+        repaint();
+        const auto err = proc.loadVstSide (side, proc.vstList[i]);
+        status = err;
+        search.clear();
+        filter();
+        if (err.isEmpty()) pick (proc.vstSounds[(size_t) side].empty() ? -1 : 0);
+        repaint();
+    }
+    void filter()
+    {
+        shown.clear();
+        const auto q = search.getText().trim().toLowerCase();
+        const auto& all = proc.vstSounds[(size_t) side];
+        for (int i = 0; i < (int) all.size(); ++i) if (q.isEmpty() || all[(size_t) i].name.toLowerCase().contains (q)) shown.push_back (i);
+        list.updateContent(); list.repaint();
+    }
+    void step (int dir)
+    {
+        if (shown.empty()) return;
+        int row = 0;
+        for (int r = 0; r < (int) shown.size(); ++r) if (shown[(size_t) r] == proc.vstSel[(size_t) side]) row = r + dir;
+        row = (row + (int) shown.size()) % (int) shown.size();
+        list.scrollToEnsureRowIsOnscreen (row);
+        pick (shown[(size_t) row]);
+    }
+    void pick (int index)
+    {
+        if (! proc.host (side).loaded()) { status = "choose a plugin first"; repaint(); return; }
+        status = proc.pickVstSound (side, index) ? String() : String ("no sound came out - try another one");
+        list.repaint(); repaint();
+        if (onChanged) onChanged();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf; int side;
+    ComboBox pluginBox; TextEditor search; ListBox list;
+    HotButton prevBtn { lnf }, nextBtn { lnf }, bankBtn { lnf }, takeBtn { lnf }, showBtn { lnf }, keysBtn { lnf };
+    std::vector<int> shown;
+    String status;
+    Rectangle<int> soundArea, statusArea;
+};
+
 class PairPage : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -2442,67 +2592,24 @@ public:
         saveBtn.onClick = [this] { const int n = proc.saveBank(); saveBtn.setButtonText (n > 0 ? "SAVED " + String (n) : "SAVE TO BANK"); repaint(); };
         if (vstMode)
         {
-            vstBox.setTextWhenNothingSelected ("choose an instrument ...");
-            vstBox.setTooltip ("The VST3 instruments installed on this computer - the same ones FL Studio uses");
-            vstBox.onChange = [this]
+            for (int k = 0; k < 2; ++k)
             {
-                const int i = vstBox.getSelectedId() - 1;
-                if (i < 0 || i >= proc.vstList.size()) return;
-                vstWin.reset();
-                const auto err = proc.loadVst (proc.vstList[i]);
-                status = err.isEmpty() ? proc.vst.name() + " loaded - GRAB ALL ITS SOUNDS, or play it on the keys and CAPTURE" : err;
-                if (err.isEmpty()) setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst);
-                repaint();
-            };
-            addAndMakeVisible (vstBox);
-            folderBtn.setButtonText ("+ FOLDER"); folderBtn.framed = true;
-            folderBtn.setTooltip ("Your plugin is not in the list? Add the folder where it is installed (FL Studio: Options > Manage plugins shows the folders). VST3 plugins are supported.");
-            folderBtn.onClick = [this]
-            {
-                chooser = std::make_unique<FileChooser> ("Folder with your VST3 plugins", File::getSpecialLocation (File::globalApplicationsDirectory));
-                chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
-                                      [safe = Component::SafePointer<PairPage> (this)] (const FileChooser& fc)
-                                      {
-                                          if (safe == nullptr || ! fc.getResult().isDirectory()) return;
-                                          kk::VstHost::addUserFolder (fc.getResult());
-                                          safe->proc.vstList.clear(); safe->scanVsts();
-                                      });
-            };
-            addAndMakeVisible (folderBtn);
-            uiBtn.setButtonText ("OPEN PLUGIN"); uiBtn.framed = true; uiBtn.onClick = [this] { openVstUi(); };
-            capBtn.setButtonText ("CAPTURE"); capBtn.framed = true;
-            capBtn.setTooltip ("Record the plugin's current sound (one note) into your bank");
-            capBtn.onClick = [this]
-            {
-                const auto n = proc.captureVst (noteBox.getSelectedId(), shelfBox.getSelectedId() - 2);
-                status = n.isNotEmpty() ? "captured: " + n : String ("nothing captured - load a plugin, choose a sound, try again");
-                repaint();
-            };
-            grabBtn.setButtonText ("GRAB ALL ITS SOUNDS"); grabBtn.framed = true;
-            grabBtn.setTooltip ("KEYS KILLA steps through the plugin's own presets and records each one into your bank - no plugin window needed. Then pair them.");
-            grabBtn.onClick = [this]
-            {
-                if (grabNext >= 0) { grabNext = -1; status = "stopped - " + String (grabbed) + " sounds in the bank"; grabBtn.setButtonText ("GRAB ALL ITS SOUNDS"); repaint(); return; }
-                if (! proc.vst.loaded()) { status = "choose a plugin first"; repaint(); return; }
-                grabTotal = std::min (proc.vst.numPrograms(), 64);
-                if (grabTotal <= 1)
+                sides[(size_t) k] = std::make_unique<VstSide> (proc, lnf, k);
+                sides[(size_t) k]->onShowPlugin = [this] (int sd) { if (sd < 0) { if (vstWin != nullptr && vstWinSide == -1 - sd) vstWin.reset(); } else openVstUi (sd); };
+                sides[(size_t) k]->onChanged = [this] { repaint(); };
+                sides[(size_t) k]->onAddFolder = [this]
                 {
-                    status = proc.vst.name() + " does not share its preset list - OPEN PLUGIN once, choose a sound, CAPTURE";
-                    repaint(); return;
-                }
-                grabNext = 0; grabbed = 0; grabBtn.setButtonText ("STOP"); repaint();
-            };
-            addAndMakeVisible (grabBtn);
-            shelfBox.addItem ("SHELF: AUTO", 1);
-            for (int c = 0; c < kk::numCats; ++c) shelfBox.addItem ("SHELF: " + String (kk::harvestCatShort (kk::harvestCatAt (c))), kk::harvestCatAt (c) + 2);
-            shelfBox.setSelectedId (1, dontSendNotification);
-            shelfBox.setTooltip ("Where CAPTURE puts the sound. AUTO = from the preset name, else by listening");
-            addAndMakeVisible (shelfBox);
-            keysBtn.setButtonText ("PLAY IT ON KEYS"); keysBtn.framed = true;
-            keysBtn.onClick = [this] { setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst); repaint(); };
-            for (int nt = 36; nt <= 84; ++nt) noteBox.addItem ("NOTE " + MidiMessage::getMidiNoteName (nt, true, true, 5), nt);
-            noteBox.setSelectedId (60, dontSendNotification);
-            for (Component* c : { (Component*) &uiBtn, (Component*) &capBtn, (Component*) &keysBtn, (Component*) &noteBox }) addAndMakeVisible (c);
+                    chooser = std::make_unique<FileChooser> ("Folder with your VST3 plugins", File::getSpecialLocation (File::globalApplicationsDirectory));
+                    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                                          [safe = Component::SafePointer<PairPage> (this)] (const FileChooser& fc)
+                                          {
+                                              if (safe == nullptr || ! fc.getResult().isDirectory()) return;
+                                              kk::VstHost::addUserFolder (fc.getResult());
+                                              safe->proc.vstList.clear(); safe->scanVsts();
+                                          });
+                };
+                addAndMakeVisible (*sides[(size_t) k]);
+            }
             Component::SafePointer<PairPage> safe (this);
             Timer::callAfterDelay (50, [safe] { if (safe != nullptr) safe->scanVsts(); });
         }
@@ -2536,6 +2643,12 @@ public:
         startTimerHz (20);
     }
     ~PairPage() override { stopTimer(); vstWin.reset(); }   // the hosted editor goes before the plugin
+    void visibilityChanged() override
+    {
+        if (! isVisible()) return;
+        proc.pairUse = vstPage ? 2 : kk::PairLab::maxParents;
+        for (auto& sd : sides) if (sd) sd->refreshButtons();
+    }
 
     bool isInterestedInFileDrag (const StringArray& files) override { for (auto& f : files) if (isAudio (f)) return true; return false; }
     void fileDragMove (const StringArray&, int x, int y) override { hoverSlot = slotAt ({ x, y }); dropHover = hoverSlot < 0; repaint(); }
@@ -2567,6 +2680,7 @@ public:
         g.fillAll (Colour (0xff0a0707));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         // ---- HARVEST: drop zone + bank by character
+        if (! vstPage)
         {
             const auto dz = dropZone().toFloat();
             g.setColour (Colour (dropHover ? 0xff2a0d0d : 0xff120d0d)); g.fillRoundedRectangle (dz, 10);
@@ -2606,7 +2720,7 @@ public:
             }
         }
         // parents
-        for (int k = 0; k < kk::PairLab::maxParents; ++k)
+        for (int k = 0; k < (vstPage ? 0 : kk::PairLab::maxParents); ++k)
         {
             const auto r = slot (k).toFloat();
             const auto& p = proc.pairParents[(size_t) k];
@@ -2645,16 +2759,24 @@ public:
         // the family line
         g.setColour (s.accent.withAlpha (0.45f));
         const auto bc = breedBtn.getBounds().toFloat();
-        const float joinY = (float) slot (0).getBottom() + 4.0f;
-        g.drawLine ((float) slot (0).getCentreX(), joinY, (float) slot (3).getCentreX(), joinY, 1.5f);
-        for (int k = 0; k < 4; ++k) g.drawLine ((float) slot (k).getCentreX(), (float) slot (k).getBottom(), (float) slot (k).getCentreX(), joinY, 1.5f);
-        g.drawLine (bc.getCentreX(), joinY, bc.getCentreX(), bc.getY() + 6, 1.5f);
+        if (vstPage && sides[0] && sides[1])   // A -> BREED <- B
+        {
+            g.drawLine ((float) sides[0]->getRight(), bc.getCentreY(), bc.getX() + 4, bc.getCentreY(), 2.0f);
+            g.drawLine (bc.getRight() - 4, bc.getCentreY(), (float) sides[1]->getX(), bc.getCentreY(), 2.0f);
+        }
+        else
+        {
+            const float joinY = (float) slot (0).getBottom() + 4.0f;
+            g.drawLine ((float) slot (0).getCentreX(), joinY, (float) slot (3).getCentreX(), joinY, 1.5f);
+            for (int k = 0; k < 4; ++k) g.drawLine ((float) slot (k).getCentreX(), (float) slot (k).getBottom(), (float) slot (k).getCentreX(), joinY, 1.5f);
+            g.drawLine (bc.getCentreX(), joinY, bc.getCentreX(), bc.getY() + 6, 1.5f);
+        }
         const float busY = (float) kid (0).getY() - 2.0f;
         g.drawLine (bc.getCentreX(), bc.getBottom() - 6, bc.getCentreX(), busY, 1.5f);
         g.drawLine ((float) kid (0).getCentreX(), busY, (float) kid (5).getCentreX(), busY, 1.5f);
         for (int k = 0; k < 6; ++k) g.drawLine ((float) kid (k).getCentreX(), busY, (float) kid (k).getCentreX(), (float) kid (k).getY(), 1.5f);
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
-        g.drawText ("CHILDREN", flavorBtns.front()->getX(), flavorBtns.front()->getY() - 16, 200, 14, Justification::centredLeft);
+        if (! vstPage) g.drawText ("CHILDREN", flavorBtns.front()->getX(), flavorBtns.front()->getY() - 16, 200, 14, Justification::centredLeft);
         for (int i = 0; i < (int) flavorBtns.size(); ++i) { flavorBtns[(size_t) i]->selected = i == proc.pairFlavor; }
         // children
         for (int k = 0; k < 6; ++k)
@@ -2669,7 +2791,7 @@ public:
             if (! has)
             {
                 g.setColour (Colour (0xff6a5c5c)); g.setFont (serif (13.0f, false, 0.12f));
-                g.drawText (proc.pairParents[0] || proc.pairParents[1] || proc.pairParents[2] || proc.pairParents[3] ? "press BREED" : "drop your sounds", r.toNearestInt(), Justification::centred);
+                g.drawText (proc.pairParents[0] || proc.pairParents[1] || proc.pairParents[2] || proc.pairParents[3] ? "press BREED" : (vstPage ? "choose a sound in A and B" : "drop your sounds"), r.toNearestInt(), Justification::centred);
                 continue;
             }
             const auto& c = *proc.pairKids[(size_t) k];
@@ -2688,7 +2810,8 @@ public:
             g.drawText (looping ? "drag: MIDI" : "drag: WAV", r.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredRight);
         }
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
-        g.drawText ("BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, DEL = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
+        g.drawText (vstPage ? "1. A + B: CHOOSE A PLUGIN   2. CLICK A SOUND = HEAR IT   3. BREED   4. CHILD: CLICK = KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI"
+                            : "BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, DEL = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centred);
     }
     void resized() override
@@ -2697,13 +2820,17 @@ public:
         for (int i = 0; i < (int) flavorBtns.size(); ++i) flavorBtns[(size_t) i]->setBounds (14 + i * 84, 306, 80, 28);
         diggaBtn.setBounds (24, 104, 210, 30); saveBtn.setBounds (24, 138, 210, 30);
         diggaBtn.setVisible (! vstPage);
-        if (vstPage)
-        {
-            vstBox.setBounds (28, 46, 182, 30); folderBtn.setBounds (214, 44, 76, 34); uiBtn.setBounds (296, 44, 134, 34);
-            noteBox.setBounds (28, 86, 130, 30); capBtn.setBounds (166, 82, 120, 38); keysBtn.setBounds (296, 84, 134, 34);
-            grabBtn.setBounds (28, 126, 232, 30); shelfBox.setBounds (266, 126, 164, 30);
-        }
         diceAll.setBounds (getWidth() - 214, 304, 200, 32);
+        diceAll.setVisible (! vstPage);
+        saveBtn.setVisible (! vstPage);
+        if (vstPage)   // A  -  BREED  -  B
+        {
+            const int w = getWidth(), sw = (w - 28 - 200) / 2;
+            if (sides[0]) sides[0]->setBounds (14, 10, sw, 284);
+            if (sides[1]) sides[1]->setBounds (w - 14 - sw, 10, sw, 284);
+            breedBtn.setBounds (w / 2 - 60, 92, 120, 120);
+            for (int i = 0; i < (int) flavorBtns.size(); ++i) flavorBtns[(size_t) i]->setBounds (w / 2 - 92 + (i % 3) * 62 - (i >= 3 ? -31 : 0), 222 + (i / 3) * 32, 58, 26);
+        }
     }
     void mouseDown (const MouseEvent& e) override { downKid = kidAt (e.getPosition()); dragDone = false; }
     void mouseDrag (const MouseEvent& e) override
@@ -2716,6 +2843,7 @@ public:
     }
     int bankAt (Point<int> p) const
     {
+        if (vstPage) return -1;
         int row[kk::numCats] {};
         for (int i = 0; i < (int) proc.bank.size(); ++i)
         {
@@ -2781,7 +2909,7 @@ public:
                 return;
             }
         if (! vstPage && dropZone().contains (pos) && ! diggaBtn.getBounds().contains (pos) && ! saveBtn.getBounds().contains (pos)) { browseHarvest(); return; }
-        for (int k = 0; k < kk::PairLab::maxParents; ++k)
+        for (int k = 0; k < (vstPage ? 0 : kk::PairLab::maxParents); ++k)
         {
             if (armed >= 0 && slot (k).contains (pos)) { proc.bankToPair (armed, k); armed = -1; repaint(); return; }
             if (proc.pairParents[(size_t) k] != nullptr && closeBox (k).contains (pos)) { proc.clearPairParent (k); repaint(); return; }
@@ -2802,28 +2930,21 @@ private:
     void scanVsts()
     {
         if (proc.vstList.isEmpty()) proc.vstList = proc.vst.listInstalled();
-        vstBox.clear (dontSendNotification);
-        if (! proc.vstList.isEmpty()) vstBox.addSectionHeading ("VST3 - ready");
-        for (int i = 0; i < proc.vstList.size(); ++i) vstBox.addItem (kk::VstHost::displayName (proc.vstList[i]), i + 1);
         const auto old2 = kk::VstHost::vst2Only (proc.vstList);
-        if (! old2.isEmpty())
-        {
-            vstBox.addSeparator();
-            vstBox.addSectionHeading ("VST2 only - install their VST3 version to use them here");
-            for (int i = 0; i < old2.size(); ++i) { vstBox.addItem (old2[i] + "   (VST2)", 10000 + i); vstBox.setItemEnabled (10000 + i, false); }
-        }
-        status = proc.vstList.isEmpty() ? String ("no VST3 plugins found - press + FOLDER and choose where yours are installed") : String (proc.vstList.size()) + " VST3 plugins ready - FL's own plugins (FLEX, Sytrus...) only run inside FL";
-        if (proc.vst.loaded()) status = proc.vst.name() + " loaded";
+        for (auto& sd : sides) if (sd) sd->setPlugins (proc.vstList, old2);
         repaint();
     }
-    void openVstUi()
+    // a plugin's own window, shown INSIDE KEYS KILLA (only for plugins that share no sound list)
+    void openVstUi (int side)
     {
         auto* top = getTopLevelComponent();
-        if (auto* inst = proc.vst.instance(); inst != nullptr && top != nullptr)
+        if (auto* inst = proc.host (side).instance(); inst != nullptr && top != nullptr)
         {
+            if (vstWin != nullptr && vstWinSide != side) vstWin.reset();
             if (vstWin == nullptr && inst->hasEditor())
             {
                 vstWin = std::make_unique<VstOverlay> (*inst, lnf);
+                vstWinSide = side;
                 top->addChildComponent (*vstWin);
             }
             if (vstWin != nullptr) { vstWin->setBounds (top->getLocalBounds()); vstWin->setVisible (true); vstWin->toFront (true); }
@@ -2837,7 +2958,7 @@ private:
     Rectangle<int> diceBox (int k) const { const auto r = slot (k); return { r.getRight() - 34, r.getBottom() - 30, 26, 24 }; }
     Rectangle<int> kid (int k) const { const int w = (getWidth() - 28 - 5 * 10) / 6; return { 14 + k * (w + 10), 352, w, getHeight() - 352 - 24 }; }
     Rectangle<int> loopBox (int k) const { const auto r = kid (k); return { r.getX() + 10, r.getBottom() - 40, r.getWidth() - 20, 22 }; }
-    int slotAt (Point<int> p) const { for (int k = 0; k < kk::PairLab::maxParents; ++k) if (slot (k).contains (p)) return k; return -1; }
+    int slotAt (Point<int> p) const { if (vstPage) return -1; for (int k = 0; k < kk::PairLab::maxParents; ++k) if (slot (k).contains (p)) return k; return -1; }
     int kidAt (Point<int> p) const { for (int k = 0; k < 6; ++k) if (kid (k).contains (p) && ! loopBox (k).contains (p)) return k < (int) proc.pairKids.size() ? k : -1; return -1; }
     int firstFree() const { for (int k = 0; k < kk::PairLab::maxParents; ++k) if (proc.pairParents[(size_t) k] == nullptr) return k; return -1; }
     void browse (int k)
@@ -2884,6 +3005,8 @@ private:
     HotButton folderBtn { lnf }, grabBtn { lnf };
     int grabNext = -1, grabTotal = 0, grabbed = 0;
     std::unique_ptr<VstOverlay> vstWin;
+    int vstWinSide = -1;
+    std::array<std::unique_ptr<VstSide>, 2> sides;
     String status;
     bool vstPage = false;
     std::vector<std::unique_ptr<HotButton>> flavorBtns;

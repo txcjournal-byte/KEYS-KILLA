@@ -124,7 +124,7 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 
 KeysKillaProcessor::~KeysKillaProcessor()
 {
-    vst.unload();
+    vst.unload(); vstB.unload();
     harvestPool.removeAllJobs (true, 60000);
     drumPool.removeAllJobs (true, 60000);   // a running harvest finishes before the plugin goes
     cancelPendingUpdate();
@@ -172,6 +172,7 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     modBuf.setSize (2, modBlock); modDry.setSize (2, modBlock);
     modMidi.ensureSize (4096); keysForModules.ensureSize (4096); noMidi.ensureSize (64); vstMidi.ensureSize (4096);
     vst.prepare (sampleRate, std::max (64, samplesPerBlock));
+    vstB.prepare (sampleRate, std::max (64, samplesPerBlock));
     chop.prepare (sampleRate);
     fxIn.setSize (2, std::max (64, samplesPerBlock) * 2);
     extBuf.setSize (2, std::max (64, samplesPerBlock) * 2);
@@ -776,7 +777,10 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         pairPlayer.render (eL, eR, n, sr);
         if (const int h = chopPad.exchange (-1); h >= 0) chop.noteOn (kk::ChopLab::firstNote + h, 0.9f, 0);
         chop.render (eL, eR, n);
-        if (vst.loaded()) vst.process (eL, eR, n, vstMidi, getPlayHead());
+        vstNoMidi.clear();
+        if (vst.loaded()) vst.process (eL, eR, n, vstKeys.load() == 0 ? vstMidi : vstNoMidi, getPlayHead());
+        vstNoMidi.clear();
+        if (vstB.loaded()) vstB.process (eL, eR, n, vstKeys.load() == 1 ? vstMidi : vstNoMidi, getPlayHead());
         if (hasInput) for (int c = 0; c < 2; ++c) extBuf.addFrom (c, 0, fxIn, c, 0, n);
         worldExt.process (eL, eR, n, (int) raw[(size_t) I.world]->load(), raw[(size_t) I.worldAmt]->load(),
                           (int) raw[(size_t) I.gate]->load(), raw[(size_t) I.gateDepth]->load(), beatPos, bps);
@@ -958,7 +962,7 @@ int KeysKillaProcessor::pairFromDigga()
 
 void KeysKillaProcessor::pairBreed (bool newChildren)
 {
-    std::vector<kk::PairPtr> ps (pairParents.begin(), pairParents.end());
+    std::vector<kk::PairPtr> ps (pairParents.begin(), pairParents.begin() + juce::jlimit (1, (int) pairParents.size(), pairUse));
     if (newChildren) pairSeed = kk::hash32 (pairSeed + (uint32_t) juce::Time::getMillisecondCounter());
     pairKids = kk::PairLab::breed (ps, pairSeed, pairFlavor, sr > 0 ? sr : 44100.0);
     pairSel = -1; pairLoopKid = -1;
@@ -1175,6 +1179,54 @@ juce::String KeysKillaProcessor::loadVst (const juce::String& id)
     const auto err = vst.load (id, sr > 0 ? sr : 44100.0, std::max (64, modBlock > 0 ? modBlock : 512));
     ++pairVer;
     return err;
+}
+
+// ---- PAIR FROM VST: A / B sides ----
+juce::String KeysKillaProcessor::loadVstSide (int side, const juce::String& id)
+{
+    side = juce::jlimit (0, 1, side);
+    const auto err = host (side).load (id, sr > 0 ? sr : 44100.0, std::max (64, modBlock > 0 ? modBlock : 512));
+    vstSounds[(size_t) side] = err.isEmpty() ? host (side).sounds() : std::vector<kk::VstHost::Sound> {};
+    vstSel[(size_t) side] = -1;
+    ++pairVer;
+    return err;
+}
+
+bool KeysKillaProcessor::pickVstSound (int side, int index, int note)
+{
+    side = juce::jlimit (0, 1, side);
+    auto& h = host (side);
+    const auto& list = vstSounds[(size_t) side];
+    if (! h.loaded()) return false;
+    juce::String nm = h.name();
+    if (index >= 0 && index < (int) list.size())
+    {
+        if (! h.applySound (list[(size_t) index])) return false;
+        nm << " " << list[(size_t) index].name;
+    }
+    auto buf = h.capture (note, 0.9f, 1.4);
+    if (buf.getMagnitude (0, buf.getNumSamples()) < 1.0e-4f) return false;
+    auto snd = kk::PairLab::fromBuffer (buf, h.rate(), sr > 0 ? sr : 44100.0, nm);
+    if (snd == nullptr) return false;
+    pairParents[(size_t) side] = snd; pairFiles[(size_t) side] = {};
+    vstSel[(size_t) side] = index;
+    pairPlayer.setSound (snd);   // hear it
+    if (auto* q = apvts.getParameter (ID::playMode))
+    {
+        const float v = q->convertTo0to1 ((float) playPair);
+        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
+    }
+    previewNote = snd->rootNote;
+    ++pairVer;
+    return true;
+}
+
+bool KeysKillaProcessor::vstSideToBank (int side, int shelf)
+{
+    side = juce::jlimit (0, 1, side);
+    if (pairParents[(size_t) side] == nullptr) return false;
+    addToBank (pairParents[(size_t) side], host (side).name(), true, shelf);
+    return true;
 }
 
 juce::String KeysKillaProcessor::captureVst (int note, int shelf)

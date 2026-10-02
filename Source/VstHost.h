@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <memory>
+#include <vector>
 
 // v0.22 PAIR FROM VST: KEYS KILLA hosts another instrument (any VST3 / AU installed on this computer),
 // plays it on the keys and CAPTURES its sound into the bank. Nothing is copied out of the other plugin:
@@ -155,6 +156,67 @@ public:
         return p.trim().isNotEmpty() ? p.trim() : juce::String();
     }
     juce::AudioPluginInstance* instance() const { return plugin.get(); }
+
+    // ---- the plugin's sounds, read without opening its window: its own preset list + .vstpreset files on disk ----
+    struct Sound { juce::String name; int program = -1; juce::File file; };
+    std::vector<Sound> sounds() const
+    {
+        std::vector<Sound> out;
+        if (plugin == nullptr) return out;
+        const int np = plugin->getNumPrograms();
+        if (np > 1)
+            for (int i = 0; i < np && i < 2000; ++i)
+            {
+                auto n = plugin->getProgramName (i).trim();
+                if (n.isEmpty()) n = "Preset " + juce::String (i + 1);
+                out.push_back ({ n, i, {} });
+            }
+        for (auto& f : presetFiles())
+        {
+            auto n = f.getFileNameWithoutExtension();
+            const auto cat = f.getParentDirectory().getFileName();
+            if (! cat.equalsIgnoreCase (desc.name)) n = cat + " / " + n;
+            out.push_back ({ n, -1, f });
+        }
+        return out;
+    }
+    bool applySound (const Sound& snd)
+    {
+        if (plugin == nullptr) return false;
+        if (snd.program >= 0) { setProgram (snd.program); return true; }
+        juce::MemoryBlock mb;
+        if (! snd.file.loadFileAsData (mb)) return false;
+        const juce::SpinLock::ScopedLockType l (lock);
+        if (auto* v3 = plugin->getVST3Client()) return v3->setPreset (mb);
+        return false;
+    }
+    // .vstpreset files of this plugin: <presets>/<Vendor>/<Plugin name>/** (Windows: Documents + Common Files, macOS: Library)
+    juce::Array<juce::File> presetFiles() const
+    {
+        juce::Array<juce::File> roots, out;
+       #if JUCE_WINDOWS
+        roots.add (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("VST3 Presets"));
+        roots.add (juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory).getChildFile ("Common Files").getChildFile ("VST3 Presets"));
+       #elif JUCE_MAC
+        roots.add (juce::File ("~/Library/Audio/Presets"));
+        roots.add (juce::File ("/Library/Audio/Presets"));
+       #else
+        roots.add (juce::File ("~/.vst3/presets"));
+       #endif
+        for (auto& r : roots)
+        {
+            if (! r.isDirectory()) continue;
+            for (const auto& vendor : juce::RangedDirectoryIterator (r, false, "*", juce::File::findDirectories))
+                for (const auto& pl : juce::RangedDirectoryIterator (vendor.getFile(), false, "*", juce::File::findDirectories))
+                    if (pl.getFile().getFileName().equalsIgnoreCase (desc.name))
+                        for (const auto& f : juce::RangedDirectoryIterator (pl.getFile(), true, "*.vstpreset", juce::File::findFiles))
+                        {
+                            out.add (f.getFile());
+                            if (out.size() >= 2000) return out;
+                        }
+        }
+        return out;
+    }
     // the plugin's own sound list (its presets / programs) - KEYS KILLA steps through it, no plugin window needed
     int numPrograms() const { return plugin != nullptr ? plugin->getNumPrograms() : 0; }
     juce::String programNameAt (int i) const { return plugin != nullptr ? plugin->getProgramName (i).trim() : juce::String(); }

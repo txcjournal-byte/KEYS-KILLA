@@ -207,6 +207,7 @@ public:
     kk::ChopLab chop;
     std::atomic<int> chopPad { -1 };
     juce::AudioBuffer<float> fxIn, extBuf;
+    juce::MidiBuffer vstNoMidi;
     kk::WorldStage worldExt;                                     // SOUND WORLD for PAIR / VST / CHOP / input                               // FX INPUT (mixer insert) copy                             // UI pad -> audio thread
     bool chopFromDigga();
     bool chopToPair (int slice, int slot = -1);
@@ -239,7 +240,15 @@ public:
     void moveInBank (int i, int cat);
     void sortBank();
     // PAIR FROM VST
-    kk::VstHost vst;
+    kk::VstHost vst, vstB;                                       // PAIR FROM VST: plugin A (left) and B (right)
+    kk::VstHost& host (int side) { return side == 1 ? vstB : vst; }
+    std::array<std::vector<kk::VstHost::Sound>, 2> vstSounds;     // their sounds, read without their windows
+    std::array<int, 2> vstSel { -1, -1 };
+    std::atomic<int> vstKeys { 0 };
+    int pairUse = 4;                                            // BREED uses the first N sounds (PAIR FROM VST: A + B = 2)                             // the keys play A (0) or B (1)
+    juce::String loadVstSide (int side, const juce::String& id);
+    bool pickVstSound (int side, int index, int note = 60);     // the sound -> captured -> SOUND A / B (and heard)
+    bool vstSideToBank (int side, int shelf = -1);
     juce::StringArray vstList;                                  // installed instrument plugin files
     juce::String loadVst (const juce::String& id);
     juce::String captureVst (int note, int shelf = -1);         // shelf -1 = AUTO (name, then the ears)

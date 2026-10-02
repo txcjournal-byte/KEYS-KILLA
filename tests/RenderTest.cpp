@@ -453,6 +453,14 @@ static int unitTests()
             juce::AudioBuffer<float> b (2, 512); float pk = 0;
             for (int k = 0; k < 60; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, 512)); }
             check (pk > 0.01f, "the keys play the hosted plugin");
+            // PAIR FROM VST, A + B: the plugin's sounds listed in KEYS KILLA, a click = the sound in A / B, BREED from the two
+            check (p.loadVstSide (1, vst3.getFullPathName()).isEmpty() && p.vstSounds[1].size() > 10, "VST side B lists the plugin's sounds");
+            check (p.pickVstSound (1, 7) && p.pairParents[1] != nullptr && p.pairParents[1]->name.contains (p.vstSounds[1][7].name), "VST side B: a sound from the list becomes SOUND B");
+            check (p.pickVstSound (0, -1) && p.pairParents[0] != nullptr, "VST side A: the current sound becomes SOUND A");
+            p.pairUse = 2; p.pairBreed();
+            check (p.pairKids.size() == 6, "VST A x B breeds six children");
+            const auto bankBefore = p.bank.size();
+            check (p.vstSideToBank (1) && p.bank.size() == bankBefore + 1, "VST side B: SAVE TO BANK");
             // GRAB SOUNDS: the plugin's own presets, one by one, without its window
             check (p.vst.numPrograms() > 10, "the hosted plugin shares its preset list");
             const auto g5 = p.captureVstProgram (5, 60);
