@@ -183,7 +183,7 @@ inline constexpr int numModSlots = 8;
 
 namespace Choices
 {
-    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat", "Pair", "VST", "Chop" };
+    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat", "Pair", "VST", "Chop", "Kick", "Open Hat", "Perc", "Drum FX" };
     inline const juce::StringArray satModes   { "Tape", "Tube", "Fold" };
     inline const juce::StringArray worlds     { "Off", "Rompler 90", "Fat Analog", "Glass Squash", "Hi-Fi Shine", "Organic", "Velocity Deep", "Drift Analog", "Mix Ready" };
     inline const juce::StringArray gates      { "Off", "1/8", "1/16", "1/8 Triplet", "Stutter A", "Stutter B" };
@@ -452,15 +452,17 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     c (ID::clipMode, "Clipper", Choices::clipModes, 0); f (ID::clipDrive, "Clip Drive", 0, 12, 3);
     c (ID::rlStyle, "Rolls Style", Choices::rollStyles, 0); i (ID::rlSeed, "Rolls Pattern", 0, 99999, 1);
     c (ID::rlBars, "Rolls Length", Choices::rollBars, 1); f (ID::rlDensity, "Rolls Density", 0, 1, 0.5f);
-    static const char* drumNames[] { "808", "Snare", "Hat" };
-    for (int d = 0; d < 3; ++d)
+    static const char* drumNames[] { "808", "Snare", "Hat", "Kick", "Open Hat", "Perc", "Drum FX" };
+    static const int drumKind[] { 0, 1, 2, 0, 2, 1, 1 };   // the boost engine of each slot (808 / snare / hat)
+    for (int d = 0; d < 7; ++d)
     {
         const String n (drumNames[d]);
+        const int kd = drumKind[d];
         f (ID::boost (d, 0), n + " Gain", -12, 12, 0);        f (ID::boost (d, 1), n + " Pitch", -12, 12, 0);
         f (ID::boost (d, 2), n + " Punch", 0, 1, 0);          f (ID::boost (d, 3), n + " Drive", 0, 1, 0);
         c (ID::boost (d, 4), n + " Saturation", Choices::satModes, 1);
-        f (ID::boost (d, 5), n + " Clipper", 0, 18, 0);       f (ID::boost (d, 6), n + (d == 0 ? " Sub" : d == 1 ? " Body" : " Low"), -1, 1, 0);
-        f (ID::boost (d, 7), n + (d == 0 ? " Tone" : d == 1 ? " Snap" : " Air"), -1, 1, 0);
+        f (ID::boost (d, 5), n + " Clipper", 0, 18, 0);       f (ID::boost (d, 6), n + (kd == 0 ? " Sub" : kd == 1 ? " Body" : " Low"), -1, 1, 0);
+        f (ID::boost (d, 7), n + (kd == 0 ? " Tone" : kd == 1 ? " Snap" : " Air"), -1, 1, 0);
         f (ID::boost (d, 8), n + " Length", 0.05f, 1, 1);      f (ID::boost (d, 9), n + " Room", 0, 1, 0);
         f (ID::boost (d, 10), n + " Width", 0, 1, 0);         f (ID::boost (d, 11), n + " De-Res", 0, 1, 0);
     }

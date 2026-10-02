@@ -201,7 +201,9 @@ public:
     // DIGGA = Digga Killa (sampler). Drums never go through them.
     enum Module { modHalf, modEffector, modDigga, numModules };
     juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
-    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair, playVst, playChop };
+    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair, playVst, playChop, playKick, playOpenHat, playPerc, playDrumFx };
+    static int modeOfDrum (int d) { return d < 3 ? play808 + d : playKick + (d - 3); }
+    static int drumOfMode (int pm) { return pm >= play808 && pm <= playHat ? pm - play808 : pm >= playKick && pm <= playDrumFx ? 3 + pm - playKick : -1; }
     // PAIR YOUR OWN: your sounds (WAV / Digga one-shots) -> BREED -> 6 children -> keys + loops
     bool loadPairParent (int slot, const juce::File& f);
     // CHOP / SLICE: DIGGA's sample cut into slices (pads, keys, drag out, to PAIR / bank)
@@ -233,7 +235,8 @@ public:
     std::vector<kk::HarvestItem> bank;
     // the bank on disk: Documents/KEYS KILLA/Bank/<SHELF>/*.wav (VST captures are saved right away)
     // MY SOUNDS: your own folders (apart from the factory sounds and the HARVEST bank)
-    juce::String lastFolder { kk::Library::defaultFolder() };
+    juce::String lastFolder { kk::Library::defaultFolder() }, lastKit { kk::Kits::defaultKit() };
+    juce::File saveDrumToKit (int d, const juce::String& kit);   // the boosted drum into a drum kit folder
     juce::File saveToFolder (kk::PairPtr s, const juce::String& folder);
     void auditionFile (const juce::File& f);                   // hear a sound file on the keys (PAIR player)
     static juce::File bankFolder();
@@ -263,7 +266,7 @@ public:
     // DRUM BOOST (808 / SNARE-CLAP / HI-HAT): your drum WAV in, boosted WAV out
     bool loadDrum (int d, const juce::File& f);
     void clearDrum (int d);
-    const kk::DrumBoost& drum (int d) const { return drums[(size_t) juce::jlimit (0, 2, d)]; }
+    const kk::DrumBoost& drum (int d) const { return drums[(size_t) juce::jlimit (0, kk::numDrumSlots - 1, d)]; }
     juce::File exportDrum (int d) const;
     void hitDrum (int d, int note = -1);                        // UI pad (any thread)
     void renderDrum (int d);                                    // message thread
@@ -325,12 +328,12 @@ private:
     std::vector<std::vector<kk::HarvestItem>> harvestDone;   // finished jobs, merged on the message thread
     std::array<juce::String, kk::PairLab::maxParents> pairFiles;
     uint32_t pairSeed = 1;
-    std::array<kk::DrumBoost, 3> drums;
-    std::array<std::atomic<int>, 3> drumPad {};
-    std::array<int, 3> drumSig { -1, -1, -1 }, drumPadOff { 0, 0, 0 }, drumPadNote { -1, -1, -1 };
-    std::array<double, 3> drumDirtyAt { 0, 0, 0 };
-    std::array<int, 3> drumSeenSig { -1, -1, -1 };
-    std::array<std::atomic<bool>, 3> drumBusy {};          // a background boost render is running
+    std::array<kk::DrumBoost, kk::numDrumSlots> drums;
+    std::array<std::atomic<int>, kk::numDrumSlots> drumPad {};
+    std::array<int, kk::numDrumSlots> drumSig { -1, -1, -1, -1, -1, -1, -1 }, drumPadOff {}, drumPadNote { -1, -1, -1, -1, -1, -1, -1 };
+    std::array<double, kk::numDrumSlots> drumDirtyAt {};
+    std::array<int, kk::numDrumSlots> drumSeenSig { -1, -1, -1, -1, -1, -1, -1 };
+    std::array<std::atomic<bool>, kk::numDrumSlots> drumBusy {};          // a background boost render is running
     juce::ThreadPool drumPool { 1 };
     int drumSignature (int d) const;
     kk::BoostParams boostParams (int d) const;

@@ -514,6 +514,29 @@ static int unitTests()
         check (kk::Library::deleteSound (kk::Library::sounds (f2)[0]) && kk::Library::sounds (f2).isEmpty(), "MY SOUNDS: delete a sound");
         check (kk::Library::deleteFolder (f2) && ! kk::Library::folders().contains (f2), "MY SOUNDS: delete a folder");
     }
+    // DRUM KIT: seven drum slots, the boosted sound saved into a kit folder (808s / Kicks / ... like a bought kit)
+    {
+        KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_kick_test.wav");
+        {
+            juce::AudioBuffer<float> b (1, 22050);
+            for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (0, i, 0.8f * std::sin (kk::twoPi * (60.0f + 200.0f * std::exp (-(float) i / 900.0f)) * (float) i / 44100.0f) * std::exp (-(float) i / 6000.0f));
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 1, 24, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        check (p.loadDrum (kk::slotKick, f) && p.drum (kk::slotKick).hasSample(), "KICK slot loads a drum");
+        set (p, ID::playMode, (float) KeysKillaProcessor::modeOfDrum (kk::slotKick));
+        juce::AudioBuffer<float> b (2, 512); float pk = 0;
+        for (int k = 0; k < 20; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, p.drum (kk::slotKick).current()->rootNote, (juce::uint8) 110), 0); p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, 512)); }
+        check (pk > 0.1f, "the keys play the KICK slot");
+        const juce::String kit = "kk test kit";
+        kk::Kits::kit (kit).deleteRecursively();
+        const auto saved = p.saveDrumToKit (kk::slotKick, kit);
+        check (saved.existsAsFile() && saved.getParentDirectory().getFileName() == "Kicks" && kk::Kits::count (kit) == 1, "SAVE TO KIT: the kick lands in <kit>/Kicks");
+        kk::Kits::kit (kit).deleteRecursively(); f.deleteFile();
+    }
     // shelves: the preset name decides first
     check (kk::harvestCatFromName ("Surge XT Brass Stab C5") == kk::catBrass && kk::harvestCatFromName ("Lush Strings") == kk::catStrings
            && kk::harvestCatFromName ("Init Saw") < 0, "BANK: brass / strings found by the preset name");

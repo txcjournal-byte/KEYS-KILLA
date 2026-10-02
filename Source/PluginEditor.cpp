@@ -1261,6 +1261,43 @@ static void saveToFolderMenu (KeysKillaProcessor& proc, std::vector<kk::PairPtr>
     });
 }
 
+// ---------------- SAVE TO KIT: the boosted drums into your own drum kit (Documents/KEYS KILLA/Drum Kits/<kit>/...) ----------------
+static void saveToKitMenu (KeysKillaProcessor& proc, std::vector<int> drums, Component* target, std::function<void (String)> done)
+{
+    drums.erase (std::remove_if (drums.begin(), drums.end(), [&proc] (int d) { return ! proc.drum (d).hasSample(); }), drums.end());
+    if (drums.empty()) { if (done) done ("load a sound first"); return; }
+    const auto kits = kk::Kits::kits();
+    PopupMenu m;
+    m.addSectionHeader (drums.size() > 1 ? "SAVE " + String ((int) drums.size()) + " DRUMS INTO KIT" : "SAVE INTO KIT");
+    m.addItem (1, "> " + proc.lastKit + "   (last used)");
+    m.addSeparator();
+    for (int i = 0; i < kits.size(); ++i) m.addItem (10 + i, kits[i] + "   (" + String (kk::Kits::count (kits[i])) + " sounds)");
+    m.addSeparator();
+    m.addItem (2, "+ new drum kit ...");
+    auto save = [&proc, drums, done] (const String& kit)
+    {
+        int n = 0; for (int d : drums) n += proc.saveDrumToKit (d, kit).existsAsFile() ? 1 : 0;
+        if (done) done (n > 0 ? "saved into " + kit + (n > 1 ? "  (" + String (n) + ")" : String()) : String ("could not save"));
+    };
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (target), [save, kits, &proc] (int r)
+    {
+        if (r == 1) save (proc.lastKit);
+        else if (r == 2)
+        {
+            auto* w = new AlertWindow ("NEW DRUM KIT", "Name of your drum kit:", MessageBoxIconType::NoIcon);
+            w->addTextEditor ("name", "MY DRUM KIT " + String (kits.size() + 1), "Kit");
+            w->addButton ("CREATE", 1, KeyPress (KeyPress::returnKey));
+            w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+            w->enterModalState (true, ModalCallbackFunction::create ([w, save] (int res)
+            {
+                const auto name = w->getTextEditorContents ("name").trim();
+                if (res == 1 && kk::Kits::createKit (name)) save (name);
+            }), true);
+        }
+        else if (r >= 10 && r - 10 < kits.size()) save (kits[r - 10]);
+    });
+}
+
 // ---------------- MY SOUNDS: your folders, your sounds (hear, into PAIR, drag into FL, delete) ----------------
 class MySoundsPage : public Component, public DragAndDropContainer, private Timer
 {
@@ -1874,6 +1911,17 @@ private:
 };
 
 // ---------------- DRUM BOOST pages: 808 / SNARE-CLAP / HI-HAT, every one with its own trap look ----------------
+static void drawPeaks (Graphics& g, Rectangle<float> r, const std::vector<float>& pk, Colour c)
+{
+    if (pk.empty()) return;
+    Path p; const float mid = r.getCentreY(), half = r.getHeight() * 0.5f;
+    p.startNewSubPath (r.getX(), mid);
+    for (size_t i = 0; i < pk.size(); ++i) p.lineTo (r.getX() + r.getWidth() * (float) i / (float) pk.size(), mid - pk[i] * half);
+    for (size_t i = pk.size(); i-- > 0;) p.lineTo (r.getX() + r.getWidth() * (float) i / (float) pk.size(), mid + pk[i] * half);
+    p.closeSubPath();
+    g.setColour (c); g.fillPath (p);
+}
+
 struct DrumTheme
 {
     String title, sub, dropText, patTitle;
@@ -1883,14 +1931,22 @@ struct DrumTheme
 // v0.22: futuristic MPC grey, one neon accent per drum
 static const DrumTheme& drumTheme (int d)
 {
-    static const DrumTheme t[3] {
+    static const DrumTheme t[kk::numDrumSlots] {
         { "808", "SUB BOOSTER  -  DROP YOUR 808, MAKE IT KNOCK, WRITE THE 808 LINE, DRAG IT ALL BACK INTO FL", "DROP YOUR 808 HERE", "808 PATTERNS",
           Colour (0xff2b2e33), Colour (0xff111215), Colour (0xffff5a1f), Colour (0xffffc23d), Colour (0xffeef0f2), { "ATLANTA", "DRILL", "PLUGG", "RAGE" } },
         { "SNARE / CLAP", "CRACK LAB  -  DROP A SNARE OR CLAP, SHARPEN IT, GENERATE TRAP SNARE ROLLS", "DROP YOUR SNARE / CLAP HERE", "SNARE ROLLS",
           Colour (0xff2a2e33), Colour (0xff101215), Colour (0xff1fe0ff), Colour (0xffff3fd2), Colour (0xffeef0f2), { "TRAP", "TRIPLET", "DRILL", "BUILD-UP" } },
         { "HI-HAT", "HAT FACTORY  -  DROP A HI-HAT, MAKE IT SHINE, TRAP ROLLS IN THE PIANO ROLL", "DROP YOUR HI-HAT HERE", "HI-HAT ROLLS",
-          Colour (0xff2d2d31), Colour (0xff121214), Colour (0xffffd23f), Colour (0xffb070ff), Colour (0xffeef0f2), { "ATLANTA", "TRIPLET", "DRILL", "CRAZY" } } };
-    return t[jlimit (0, 2, d)];
+          Colour (0xff2d2d31), Colour (0xff121214), Colour (0xffffd23f), Colour (0xffb070ff), Colour (0xffeef0f2), { "ATLANTA", "TRIPLET", "DRILL", "CRAZY" } },
+        { "KICK", "KICK LAB  -  DROP A KICK, MAKE IT HIT, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR KICK HERE", "MY DRUM KIT",
+          Colour (0xff2b2e33), Colour (0xff111215), Colour (0xffff3b30), Colour (0xffff9f0a), Colour (0xffeef0f2), { "", "", "", "" } },
+        { "OPEN HAT", "OPEN HAT  -  DROP AN OPEN HAT / CRASH, SHAPE ITS TAIL, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR OPEN HAT HERE", "MY DRUM KIT",
+          Colour (0xff2d2d31), Colour (0xff121214), Colour (0xffffe066), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } },
+        { "PERC", "PERCUSSION  -  RIMS, TOMS, SHAKERS, BONGOS ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR PERC HERE", "MY DRUM KIT",
+          Colour (0xff2a2e33), Colour (0xff101215), Colour (0xff30d158), Colour (0xffffd60a), Colour (0xffeef0f2), { "", "", "", "" } },
+        { "FX", "DRUM FX  -  RISERS, IMPACTS, VOX TAGS, REVERSES ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR FX HERE", "MY DRUM KIT",
+          Colour (0xff2c2b33), Colour (0xff111015), Colour (0xffbf5af2), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } } };
+    return t[jlimit (0, kk::numDrumSlots - 1, d)];
 }
 
 class ThemedKnob : public Slider
@@ -2179,8 +2235,9 @@ public:
     {
         // knob set per drum: { knob index, label }
         std::vector<std::pair<int, const char*>> ks;
-        if (d == kk::drum808) ks = { { 0, "GAIN" }, { 1, "PITCH" }, { 2, "PUNCH" }, { 6, "SUB" }, { 7, "TONE" }, { 3, "DRIVE" }, { 5, "CLIPPER" }, { 8, "LENGTH" }, { 10, "WIDTH" } };
-        else if (d == kk::drumSnare) ks = { { 0, "GAIN" }, { 1, "PITCH" }, { 2, "PUNCH" }, { 6, "BODY" }, { 7, "SNAP" }, { 3, "DRIVE" }, { 5, "CLIPPER" }, { 9, "ROOM" }, { 8, "LENGTH" }, { 10, "WIDTH" } };
+        const auto kind = kk::kindOfSlot (d);
+        if (kind == kk::drum808) ks = { { 0, "GAIN" }, { 1, "PITCH" }, { 2, "PUNCH" }, { 6, "SUB" }, { 7, "TONE" }, { 3, "DRIVE" }, { 5, "CLIPPER" }, { 8, "LENGTH" }, { 10, "WIDTH" } };
+        else if (kind == kk::drumSnare) ks = { { 0, "GAIN" }, { 1, "PITCH" }, { 2, "PUNCH" }, { 6, "BODY" }, { 7, "SNAP" }, { 3, "DRIVE" }, { 5, "CLIPPER" }, { 9, "ROOM" }, { 8, "LENGTH" }, { 10, "WIDTH" } };
         else ks = { { 0, "GAIN" }, { 1, "PITCH" }, { 2, "PUNCH" }, { 7, "AIR" }, { 11, "DE-RES" }, { 3, "DRIVE" }, { 5, "CLIPPER" }, { 8, "LENGTH" }, { 10, "WIDTH" } };
         for (auto& [k, name] : ks)
         {
@@ -2204,7 +2261,7 @@ public:
         btn (loadBtn, "LOAD WAV", "Load your drum (WAV, AIFF, FLAC, MP3) - or just drag it onto this page", [this] { browse(); });
         btn (hitBtn, "PLAY", "Hear the boosted drum", [this] { proc.hitDrum (d); });
         btn (keysBtn, "", "KEYS: the keyboard / FL piano roll plays this drum" + String (d == kk::drum808 ? " - in tune: the 808's own note sits on its key" : ""),
-             [this] { setParamFromUi (proc, ID::playMode, keysOn() ? 0.0f : (float) (KeysKillaProcessor::play808 + d)); refresh(); });
+             [this] { setParamFromUi (proc, ID::playMode, keysOn() ? 0.0f : (float) KeysKillaProcessor::modeOfDrum (d)); refresh(); });
         btn (dragBtn, "SAVE WAV", "Save the boosted drum next to the original (or drag the waveform straight into FL)", [this] { saveNextToOriginal(); });
         dragBtn.setVisible (false);
         dragWav.makeFile = [this] { return proc.exportDrum (d); };
@@ -2213,8 +2270,8 @@ public:
         btn (clearBtn, "CLEAR", "Remove the sample", [this] { proc.clearDrum (d); refresh(); });
 
         // switch between the three drum pages
-        static const char* names[] { "808", "SNARE / CLAP", "HI-HAT" };
-        for (int i = 0; i < 3; ++i)
+        static const char* names[] { "808", "SNARE/CLAP", "HI-HAT", "KICK", "OPEN HAT", "PERC", "FX" };
+        for (int i = 0; i < kk::numDrumSlots; ++i)
         {
             auto b = std::make_unique<HotButton> (lnf, names[i]);
             b->framed = true; b->selected = i == d;
@@ -2260,6 +2317,14 @@ public:
         btn (undoBtn, "UNDO", "Undo the last change (Ctrl+Z)", [this] { editor.undo(); });
         btn (redoBtn, "REDO", "Redo (Ctrl+Y)", [this] { editor.redo(); });
         btn (resetBtn, "RESET", "Back to the pattern as it was generated", [this] { editor.reset(); });
+        btn (kitBtn, "SAVE TO KIT", "Save this boosted drum into your own drum kit (a folder FL Studio can browse)", [this]
+        { saveToKitMenu (proc, { d }, &kitBtn, [safe = Component::SafePointer<DrumPage> (this)] (String m) { if (safe != nullptr) { safe->kitNote = m; safe->repaint(); } }); });
+        btn (saveAllBtn, "SAVE WHOLE KIT", "Save every loaded drum (808, snare, hats, kick, open hat, perc, FX) into one kit", [this]
+        {
+            std::vector<int> all; for (int i = 0; i < kk::numDrumSlots; ++i) all.push_back (i);
+            saveToKitMenu (proc, all, &saveAllBtn, [safe = Component::SafePointer<DrumPage> (this)] (String m) { if (safe != nullptr) { safe->kitNote = m; safe->repaint(); } });
+        });
+        btn (openKitBtn, "OPEN KITS FOLDER", "Your drum kits on the computer - add this folder to FL Studio's browser once", [this] { kk::Kits::kit (proc.lastKit).createDirectory(); kk::Kits::kit (proc.lastKit).revealToUser(); });
         btn (resetKnobsBtn, "RESET KNOBS", "All knobs of this drum back to their start values", [this]
         {
             for (int k = 0; k < ID::boostKnobs.size(); ++k)
@@ -2292,7 +2357,7 @@ public:
     void visibilityChanged() override
     {
         if (! isVisible() && proc.patPlay.load() == d) proc.patPlay = -1;
-        if (isVisible()) { loadArt(); editor.reload(); refreshPattern(); }
+        if (isVisible()) { loadArt(); editor.reload(); refreshPattern(); repaint(); }   // the kit overview shows the other drum pages too
     }
 
     void paint (Graphics& g) override
@@ -2326,18 +2391,28 @@ public:
         drawWave (g);
         g.setColour (th.text.withAlpha (0.7f)); g.setFont (Font (FontOptions (12.0f, Font::bold)).withExtraKerningFactor (0.15f));
         g.drawText ("DRIVE FLAVOUR", satBtns.front()->getX(), satBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
+        if (kitNote.isNotEmpty()) { g.setColour (Colour (0xff36ff6a)); g.setFont (Font (FontOptions (12.0f, Font::bold))); g.drawText (kitNote, kitBtn.getX() - 20, kitBtn.getBottom() + 2, 220, 16, Justification::centred); }
+        g.setColour (th.text.withAlpha (0.7f)); g.setFont (Font (FontOptions (12.0f, Font::bold)).withExtraKerningFactor (0.15f));
+        // pattern title with an LED
+        g.setColour (th.accent); g.fillEllipse ((float) patPanel.getX() + 22, (float) patPanel.getY() + 22, 10, 10);
+        g.setColour (th.text); g.setFont (Font (FontOptions (22.0f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.drawText (hasPattern() ? th.patTitle : "MY DRUM KIT", patPanel.getX() + 40, patPanel.getY() + 12, 300, 30, Justification::centredLeft);
+        if (! hasPattern())
+        {
+            paintKit (g);
+        }
+        else
+        {
+        g.setColour (th.text.withAlpha (0.7f)); g.setFont (Font (FontOptions (12.0f, Font::bold)).withExtraKerningFactor (0.15f));
         g.drawText ("STYLE", styleBtns.front()->getX(), styleBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
         g.drawText ("LENGTH", barBtns.front()->getX(), barBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
         g.drawText ("DENSITY", density.getX(), density.getY() - 18, 200, 16, Justification::centredLeft);
         g.drawText ("GRID", snapBtns.front()->getX(), snapBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
-        // pattern title with an LED
-        g.setColour (th.accent); g.fillEllipse ((float) patPanel.getX() + 22, (float) patPanel.getY() + 22, 10, 10);
-        g.setColour (th.text); g.setFont (Font (FontOptions (22.0f, Font::bold)).withExtraKerningFactor (0.08f));
-        g.drawText (th.patTitle, patPanel.getX() + 40, patPanel.getY() + 12, 260, 30, Justification::centredLeft);
         g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
         g.drawText (proc.drum (d).hasSample() ? String ((int) proc.pattern (d).size()) + " NOTES  -  CLICK DRAW / DRAG MOVE / DOUBLE-CLICK DELETE"
                                                : "LOAD YOUR " + th.title + " TO HEAR IT  -  THE MIDI DRAGS ANYWAY",
                     patPanel.getX() + 40, patPanel.getY() + 40, 520, 16, Justification::centredLeft);
+        }
         if (auto s = proc.drum (d).current(); s != nullptr && d == kk::drum808)
         {
             g.setColour (th.accent2); g.setFont (Font (FontOptions (22.0f, Font::bold)));
@@ -2348,7 +2423,7 @@ public:
     void resized() override
     {
         const int w = getWidth(), h = getHeight(), x0 = kRail + 14;
-        for (int i = 0; i < 3; ++i) switchBtns[(size_t) i]->setBounds (w - 3 * 172 - 14 + i * 172, 18, 166, 44);
+        for (int i = 0; i < kk::numDrumSlots; ++i) switchBtns[(size_t) i]->setBounds (w - kk::numDrumSlots * 122 - 14 + i * 122, 20, 116, 40);
         boostPanel = { x0, 88, w - x0 - 14, 372 };
         art = { x0 + 26, 106, 222, 222 };
         wave = { x0 + 290, 100, w - x0 - 290 - 30, 160 };
@@ -2379,7 +2454,24 @@ public:
         resetBtn.setBounds (right - 100, py, 100, 32);
         redoBtn.setBounds (right - 100 - 8 - 86, py, 86, 32);
         undoBtn.setBounds (right - 100 - 8 - 86 - 8 - 86, py, 86, 32);
-        resetKnobsBtn.setBounds (art.getX() + 21, 400, 180, 34);
+        resetKnobsBtn.setBounds (art.getX() + 21, 380, 180, 30);
+        kitBtn.setBounds (art.getX() + 21, 416, 180, 34);
+        if (! hasPattern())
+        {
+            saveAllBtn.setBounds (patPanel.getRight() - 18 - 200, patPanel.getY() + 16, 200, 40);
+            openKitBtn.setBounds (patPanel.getRight() - 18 - 200 - 10 - 190, patPanel.getY() + 16, 190, 40);
+        }
+        else
+        {   // on the pattern pages the kit buttons sit in the boost panel
+            saveAllBtn.setBounds (boostPanel.getX() + 12, boostPanel.getBottom() + 0, 0, 0);
+            openKitBtn.setBounds (boostPanel.getX() + 12, boostPanel.getBottom() + 0, 0, 0);
+        }
+        for (Component* c : std::initializer_list<Component*> { &editor, &genBtn, &playPatBtn, &clearPatBtn, &undoBtn, &redoBtn, &resetBtn, &dragMidi, &density })
+            c->setVisible (hasPattern());
+        for (auto& b : styleBtns) b->setVisible (hasPattern());
+        for (auto& b : barBtns) b->setVisible (hasPattern());
+        for (auto& b : snapBtns) b->setVisible (hasPattern());
+        saveAllBtn.setVisible (! hasPattern()); openKitBtn.setVisible (! hasPattern());
         editor.setBounds (patPanel.getX() + 14, py + 44, patPanel.getWidth() - 28, patPanel.getBottom() - py - 44 - 14);
     }
     void mouseDown (const MouseEvent& e) override { dragFromWave = wave.contains (e.getPosition()); }
@@ -2394,15 +2486,48 @@ public:
         if (art.contains (e.getPosition())) proc.hitDrum (d);
         else if (wave.contains (e.getPosition()) && ! proc.drum (d).hasSample() && e.getDistanceFromDragStart() < 4) browse();
     }
+    // MY DRUM KIT overview: what is loaded in each of the seven slots + how the kit reaches FL Studio
+    void paintKit (Graphics& g)
+    {
+        auto r = patPanel.reduced (22).withTrimmedTop (50);
+        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.drawText ("KIT: " + proc.lastKit.toUpperCase() + "   -   " + String (kk::Kits::count (proc.lastKit)) + " SOUNDS SAVED", r.removeFromTop (18), Justification::centredLeft);
+        r.removeFromTop (8);
+        static const char* slotNames[] { "808", "SNARE / CLAP", "HI-HAT", "KICK", "OPEN HAT", "PERC", "FX" };
+        const int cw = (r.getWidth() - 6 * 10) / kk::numDrumSlots;
+        auto cards = r.removeFromTop (130);
+        for (int i = 0; i < kk::numDrumSlots; ++i)
+        {
+            auto c = Rectangle<int> (cards.getX() + i * (cw + 10), cards.getY(), cw, cards.getHeight()).toFloat();
+            const auto& t = drumTheme (i);
+            auto smp = proc.drum (i).current();
+            g.setColour (Colour (0xff0d0e10)); g.fillRoundedRectangle (c, 8);
+            g.setColour (i == d ? t.accent : Colour (0xff3c4046)); g.drawRoundedRectangle (c.reduced (0.5f), 8, i == d ? 2.0f : 1.0f);
+            g.setColour (t.accent); g.setFont (Font (FontOptions (13.0f, Font::bold)).withExtraKerningFactor (0.08f));
+            g.drawText (slotNames[i], c.reduced (10, 8).withHeight (18).toNearestInt(), Justification::centredLeft);
+            if (smp != nullptr)
+            {
+                drawPeaks (g, c.reduced (10, 34).withTrimmedBottom (20), smp->peaks, t.accent.withAlpha (0.8f));
+                g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (11.0f)));
+                g.drawText (smp->name, c.reduced (10, 8).removeFromBottom (16).toNearestInt(), Justification::centredLeft);
+            }
+            else { g.setColour (Colour (0xff6a7078)); g.setFont (Font (FontOptions (12.0f))); g.drawText ("empty", c.toNearestInt(), Justification::centred); }
+        }
+        r.removeFromTop (16);
+        g.setColour (Colour (0xffb8bdc4)); g.setFont (Font (FontOptions (13.0f)));
+        g.drawFittedText ("1. Load a sound on any drum page and shape it.   2. SAVE TO KIT (or SAVE WHOLE KIT).   3. Your kit is a folder with 808s, Kicks, Snares & Claps, Hi-Hats, Open Hats, Percussion and FX.\n"
+                          "In FL Studio once: Options > File settings > Browser extra search folders > add  Documents / KEYS KILLA / Drum Kits  -  your kits then sit in FL's browser like any drum kit.",
+                          r.removeFromTop (44), Justification::centredLeft, 2);
+    }
     // your own picture for this page: Documents/KEYS KILLA/Art/808.png, snare.png, hat.png (it pulses on every hit)
     static File artFile (int d)
     {
-        static const char* n[] { "808", "snare", "hat" };
-        return File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Art").getChildFile (String (n[jlimit (0, 2, d)]) + ".png");
+        static const char* n[] { "808", "snare", "hat", "kick", "openhat", "perc", "fx" };
+        return File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Art").getChildFile (String (n[jlimit (0, kk::numDrumSlots - 1, d)]) + ".png");
     }
 private:
     static bool isAudio (const String& f) { return File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
-    bool keysOn() const { return (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::play808 + d; }
+    bool keysOn() const { return (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::modeOfDrum (d); }
     void loadArt()
     {
         const auto f = artFile (d);
@@ -2461,7 +2586,8 @@ private:
         }
         const float rad = (float) r.getWidth() * 0.5f * (1.0f + 0.05f * pulse);
         g.setColour (th.accent.withAlpha (0.14f + 0.3f * pulse)); g.fillEllipse (c.x - rad - 12, c.y - rad - 12, (rad + 12) * 2, (rad + 12) * 2);
-        if (d == kk::drum808)   // speaker cone
+        const auto kind = kk::kindOfSlot (d);
+        if (kind == kk::drum808)   // speaker cone
         {
             g.setGradientFill (ColourGradient (Colour (0xff3a3d42), c.x, c.y - rad, Colour (0xff0b0c0e), c.x, c.y + rad, false));
             g.fillEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2);
@@ -2480,7 +2606,7 @@ private:
                 g.setColour (Colours::white.withAlpha (0.5f)); g.fillEllipse (c.x + std::cos (a) * rad * 0.93f - 3, c.y + std::sin (a) * rad * 0.93f - 3, 6, 6);
             }
         }
-        else if (d == kk::drumSnare)   // snare from above: head, rim, lugs, wires
+        else if (kind == kk::drumSnare)   // snare from above: head, rim, lugs, wires
         {
             g.setColour (Colour (0xff0e1215)); g.fillEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2);
             g.setColour (th.accent.withAlpha (0.8f)); g.drawEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2, 5.0f);
@@ -2580,7 +2706,10 @@ private:
     std::vector<std::unique_ptr<ThemedKnob>> knobs;
     std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> atts;
     std::vector<std::unique_ptr<HotButton>> satBtns, switchBtns, styleBtns, barBtns, snapBtns;
-    HotButton loadBtn { lnf }, hitBtn { lnf }, keysBtn { lnf }, dragBtn { lnf }, clearBtn { lnf }, genBtn { lnf }, playPatBtn { lnf }, clearPatBtn { lnf }, undoBtn { lnf }, redoBtn { lnf }, resetBtn { lnf }, resetKnobsBtn { lnf };
+    HotButton loadBtn { lnf }, hitBtn { lnf }, keysBtn { lnf }, dragBtn { lnf }, clearBtn { lnf }, genBtn { lnf }, playPatBtn { lnf }, clearPatBtn { lnf }, undoBtn { lnf }, redoBtn { lnf }, resetBtn { lnf }, resetKnobsBtn { lnf },
+              kitBtn { lnf }, saveAllBtn { lnf }, openKitBtn { lnf };
+    String kitNote;
+    bool hasPattern() const { return d < 3; }   // 808 / snare / hats have pattern generators; kick, open hat, perc, FX show the kit
     Slider density;
     DragFileButton dragMidi { "DRAG MIDI TO FL", Colour (0xff36ff6a) }, dragWav { "DRAG WAV TO FL", Colour (0xff36ff6a) };
     PatternEditor editor;
@@ -2596,16 +2725,6 @@ private:
 };
 
 // ---------------- PAIR YOUR OWN: your sounds -> BREED -> 6 children -> keys, loops, drag to DAW ----------------
-static void drawPeaks (Graphics& g, Rectangle<float> r, const std::vector<float>& pk, Colour c)
-{
-    if (pk.empty()) return;
-    Path p; const float mid = r.getCentreY(), half = r.getHeight() * 0.5f;
-    p.startNewSubPath (r.getX(), mid);
-    for (size_t i = 0; i < pk.size(); ++i) p.lineTo (r.getX() + r.getWidth() * (float) i / (float) pk.size(), mid - pk[i] * half);
-    for (size_t i = pk.size(); i-- > 0;) p.lineTo (r.getX() + r.getWidth() * (float) i / (float) pk.size(), mid + pk[i] * half);
-    p.closeSubPath();
-    g.setColour (c); g.fillPath (p);
-}
 
 // the hosted plugin's own editor in its own window (it looks exactly like itself)
 // the hosted plugin's editor shown INSIDE KEYS KILLA (over the whole window, BACK bar on top) - never a
@@ -3526,10 +3645,14 @@ public:
         }
 
         // ---- module row: every tab opens one KILLA plugin inside KEYS KILLA ("10 in 1")
-        static const char* tabNames[] { "808", "SNARE / CLAP", "HI-HAT" };
+        static const char* tabNames[] { "808", "SNARE / CLAP", "HI-HAT", "KICK", "OPEN HAT", "PERC", "FX" };
         static const char* tabTips[] { "808: drop your 808, boost it (punch, sub, drive, clipper, pitch), drag it back into FL",
                                        "SNARE / CLAP: drop a snare or clap, make it crack, drag it back into FL",
-                                       "HI-HAT: drop a hat, make it shine - plus the roll generator" };
+                                       "HI-HAT: drop a hat, make it shine - plus the roll generator",
+                                       "KICK: drop a kick, make it hit - SAVE TO KIT",
+                                       "OPEN HAT: open hats and crashes for your drum kit",
+                                       "PERC: rims, toms, shakers, bongos for your drum kit",
+                                       "FX: risers, impacts, vox tags for your drum kit" };
         for (int i = 0; i < numTabs; ++i)
         {
             auto b = std::make_unique<HotButton> (lnf, tabNames[i]);
@@ -3653,6 +3776,7 @@ public:
         if (v == 20) openTab (tabHalf);
         if (v == 22) openTab (tabVst);
         if (v == 24) openTab (tabSounds);
+        if (v == 25) openTab (tabKick);
         if (v == 23) { openTab (tabDigga); if (auto* pg = dynamic_cast<EmbeddedPage*> (module (tabDigga))) pg->openChop(); }
         if (v == 21)
         {
@@ -3733,7 +3857,7 @@ public:
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -3741,9 +3865,9 @@ private:
         {
             switch (t)
             {
-                case tab808: case tabSnare: case tabHat:
+                case tab808: case tabSnare: case tabHat: case tabKick: case tabOpenHat: case tabPerc: case tabDrumFx:
                 {
-                    auto pg = std::make_unique<DrumPage> (proc, lnf, t == tab808 ? kk::drum808 : t == tabSnare ? kk::drumSnare : kk::drumHat);
+                    auto pg = std::make_unique<DrumPage> (proc, lnf, t - tab808);   // tab order = drum slot order
                     pg->onSwitch = [this] (int dd) { MessageManager::callAsync ([safe = Component::SafePointer<Component> (this), this, dd] { if (safe != nullptr) openTab (tab808 + dd); }); };
                     m = std::move (pg); break;
                 }

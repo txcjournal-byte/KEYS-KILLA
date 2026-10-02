@@ -14,6 +14,19 @@
 namespace kk
 {
 enum DrumKind { drum808, drumSnare, drumHat, numDrumKinds };
+// v0.27 DRUM KIT: seven drum slots, each boosted by one of the three engines
+enum DrumSlot { slot808, slotSnare, slotHat, slotKick, slotOpenHat, slotPerc, slotFx, numDrumSlots };
+inline DrumKind kindOfSlot (int d)
+{
+    static const DrumKind k[numDrumSlots] { drum808, drumSnare, drumHat, drum808, drumHat, drumSnare, drumSnare };
+    return k[d < 0 ? 0 : d >= numDrumSlots ? numDrumSlots - 1 : d];
+}
+// the folder a sound goes into inside a drum kit
+inline const char* kitFolderOfSlot (int d)
+{
+    static const char* n[numDrumSlots] { "808s", "Snares & Claps", "Hi-Hats", "Kicks", "Open Hats", "Percussion", "FX" };
+    return n[d < 0 ? 0 : d >= numDrumSlots ? numDrumSlots - 1 : d];
+}
 
 struct BoostParams
 {

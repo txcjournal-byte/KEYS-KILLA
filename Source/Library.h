@@ -68,4 +68,36 @@ struct Library
         return {};
     }
 };
+// DRUM KITS: Documents/KEYS KILLA/Drum Kits/<kit>/<808s | Kicks | Snares & Claps | ...>/*.wav
+// (add "Drum Kits" to FL Studio's browser once: Options > File settings > Browser extra search folders)
+struct Kits
+{
+    static juce::File root() { return Library::root().getParentDirectory().getChildFile ("Drum Kits"); }
+    static juce::String defaultKit() { return "MY DRUM KIT 1"; }
+    static juce::StringArray kits()
+    {
+        if (! root().getChildFile (defaultKit()).isDirectory()) root().getChildFile (defaultKit()).createDirectory();
+        juce::StringArray out;
+        for (const auto& e : juce::RangedDirectoryIterator (root(), false, "*", juce::File::findDirectories)) out.add (e.getFile().getFileName());
+        out.sortNatural();
+        return out;
+    }
+    static juce::File kit (const juce::String& name) { return root().getChildFile (juce::File::createLegalFileName (name.trim().isEmpty() ? defaultKit() : name.trim())); }
+    static bool createKit (const juce::String& name) { return name.trim().isNotEmpty() && kit (name).createDirectory().wasOk(); }
+    // copy a rendered drum WAV into the kit's folder for that drum
+    static juce::File add (const juce::String& kitName, const juce::String& folder, const juce::File& wav, const juce::String& name)
+    {
+        if (! wav.existsAsFile()) return {};
+        auto dir = kit (kitName).getChildFile (folder);
+        dir.createDirectory();
+        auto to = dir.getNonexistentChildFile (juce::File::createLegalFileName (name).substring (0, 90), ".wav", false);
+        return wav.copyFileTo (to) ? to : juce::File();
+    }
+    static int count (const juce::String& kitName)
+    {
+        int n = 0;
+        for (const auto& e : juce::RangedDirectoryIterator (kit (kitName), true, "*.wav", juce::File::findFiles)) { juce::ignoreUnused (e); ++n; }
+        return n;
+    }
+};
 } // namespace kk
