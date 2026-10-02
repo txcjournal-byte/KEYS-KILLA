@@ -1528,11 +1528,12 @@ public:
         tryCreateEditor();
         setOpaque (true);
         refresh();
-        startTimerHz (5);
+        startTimerHz (10);
     }
     ~EmbeddedPage() override { stopTimer(); releaseEditor(); }
     std::function<void()> onPair;
     void openChop() { showChop (true); }
+    void visibilityChanged() override { if (isVisible()) { wantSteal = true; tryCreateEditor (true); } }
     void mouseUp (const MouseEvent& e) override
     {
         if (onId != nullptr && power.expanded (6).contains (e.getPosition())) { setParamFromUi (proc, onId, isOn() ? 0.0f : 1.0f); refresh(); repaint(); }
@@ -1610,14 +1611,15 @@ private:
         if (auto* m = proc.module (mod); m != nullptr && owners()[m] == this) owners().erase (m);
         removeChildComponent (editor.get()); editor.reset(); repaint();
     }
-    void tryCreateEditor()
+    void tryCreateEditor (bool steal = false)
     {
         auto* m = proc.module (mod);
         if (m == nullptr || editor != nullptr) return;
         if (m->getActiveEditor() != nullptr)
         {
+            // the page you are looking at always wins: the other (older / hidden) window hands its editor over
             auto it = owners().find (m);
-            if (it == owners().end() || it->second == this || ! isShowing() || it->second->isShowing()) return;
+            if (! steal || it == owners().end() || it->second == this) return;
             it->second->releaseEditor();
             if (m->getActiveEditor() != nullptr) return;
         }
@@ -1626,7 +1628,8 @@ private:
     }
     void timerCallback() override
     {
-        if (editor == nullptr && isShowing()) tryCreateEditor();
+        if (editor == nullptr && isShowing()) tryCreateEditor (wantSteal);
+        wantSteal = false;
         if (editor != nullptr && editor->getBounds() != placed) resized();   // the plugin changed its own size: fit it again
         if ((isOn() ? 1 : 0) + (keysToDigga() ? 2 : 0) != lastSig) refresh();
     }
@@ -1638,7 +1641,7 @@ private:
     Rectangle<int> native, placed, power;
     HotButton onBtn { lnf }, keysBtn { lnf }, pairBtn { lnf }, chopBtn { lnf };
     std::unique_ptr<ChopPanel> chop;
-    bool chopOn = false;
+    bool chopOn = false, wantSteal = false;
     void showChop (bool on)
     {
         chopOn = on && chop != nullptr;
@@ -1982,6 +1985,10 @@ public:
         btn (keysBtn, "", "KEYS: the keyboard / FL piano roll plays this drum" + String (d == kk::drum808 ? " - in tune: the 808's own note sits on its key" : ""),
              [this] { setParamFromUi (proc, ID::playMode, keysOn() ? 0.0f : (float) (KeysKillaProcessor::play808 + d)); refresh(); });
         btn (dragBtn, "SAVE WAV", "Save the boosted drum next to the original (or drag the waveform straight into FL)", [this] { saveNextToOriginal(); });
+        dragBtn.setVisible (false);
+        dragWav.makeFile = [this] { return proc.exportDrum (d); };
+        dragWav.setTooltip ("Drag the boosted " + th.title + " into FL Studio (channel rack / playlist)");
+        addAndMakeVisible (dragWav);
         btn (clearBtn, "CLEAR", "Remove the sample", [this] { proc.clearDrum (d); refresh(); });
 
         // switch between the three drum pages
@@ -2125,10 +2132,11 @@ public:
         art = { x0 + 26, 106, 222, 222 };
         wave = { x0 + 290, 100, w - x0 - 290 - 30, 160 };
         int x = wave.getX();
-        for (auto* b : { &loadBtn, &hitBtn, &keysBtn, &dragBtn, &clearBtn })
+        for (auto* b : { &loadBtn, &hitBtn, &keysBtn, &clearBtn })
         {
             const int bw = b == &keysBtn ? 270 : 120;
             b->setBounds (x, 270, bw, 36); x += bw + 10;
+            if (b == &keysBtn) { dragWav.setBounds (x, 266, 190, 44); x += 200; }
         }
         for (int i = 0; i < 3; ++i) satBtns[(size_t) i]->setBounds (wave.getRight() - 3 * 106 - 8 + i * 106, 276, 100, 28);
         const int n = (int) knobs.size(), area = wave.getRight() - wave.getX(), kw = std::min (98, area / n);
@@ -2188,6 +2196,7 @@ private:
         keysBtn.setButtonText (keysOn() ? "KEYS PLAY " + th.title : "PLAY " + th.title + " ON KEYS"); keysBtn.selected = keysOn(); keysBtn.repaint();
         const bool has = proc.drum (d).hasSample();
         for (auto* b : { &hitBtn, &dragBtn, &clearBtn }) b->setEnabled (has);
+        dragWav.setVisible (has);
         lastSig = sat * 7 + (keysOn() ? 1 : 0) + (has ? 2 : 0);
         repaint();
     }
@@ -2352,7 +2361,7 @@ private:
     std::vector<std::unique_ptr<HotButton>> satBtns, switchBtns, styleBtns, barBtns, snapBtns;
     HotButton loadBtn { lnf }, hitBtn { lnf }, keysBtn { lnf }, dragBtn { lnf }, clearBtn { lnf }, genBtn { lnf }, playPatBtn { lnf }, clearPatBtn { lnf }, undoBtn { lnf }, redoBtn { lnf }, resetBtn { lnf }, resetKnobsBtn { lnf };
     Slider density;
-    DragFileButton dragMidi { "DRAG MIDI TO FL", Colour (0xff36ff6a) };
+    DragFileButton dragMidi { "DRAG MIDI TO FL", Colour (0xff36ff6a) }, dragWav { "DRAG WAV TO FL", Colour (0xff36ff6a) };
     PatternEditor editor;
     std::unique_ptr<FileChooser> chooser;
     Rectangle<int> art, wave, boostPanel, patPanel;
@@ -2426,6 +2435,7 @@ class PairPage : public Component, public FileDragAndDropTarget, private Timer
 public:
     PairPage (KeysKillaProcessor& p, KKLookAndFeel& l, bool vstMode = false) : proc (p), lnf (l), breedBtn (l), vstPage (vstMode)
     {
+        setWantsKeyboardFocus (true);
         proc.loadSavedBank();
         saveBtn.setButtonText ("SAVE TO BANK"); saveBtn.framed = true;
         saveBtn.setTooltip ("Keep the harvested sounds: they are saved to Documents / KEYS KILLA / Bank and come back next time");
@@ -2464,7 +2474,7 @@ public:
             capBtn.setTooltip ("Record the plugin's current sound (one note) into your bank");
             capBtn.onClick = [this]
             {
-                const auto n = proc.captureVst (noteBox.getSelectedId());
+                const auto n = proc.captureVst (noteBox.getSelectedId(), shelfBox.getSelectedId() - 2);
                 status = n.isNotEmpty() ? "captured: " + n : String ("nothing captured - load a plugin, choose a sound, try again");
                 repaint();
             };
@@ -2483,6 +2493,11 @@ public:
                 grabNext = 0; grabbed = 0; grabBtn.setButtonText ("STOP"); repaint();
             };
             addAndMakeVisible (grabBtn);
+            shelfBox.addItem ("SHELF: AUTO", 1);
+            for (int c = 0; c < kk::numCats; ++c) shelfBox.addItem ("SHELF: " + String (kk::harvestCatShort (kk::harvestCatAt (c))), kk::harvestCatAt (c) + 2);
+            shelfBox.setSelectedId (1, dontSendNotification);
+            shelfBox.setTooltip ("Where CAPTURE puts the sound. AUTO = from the preset name, else by listening");
+            addAndMakeVisible (shelfBox);
             keysBtn.setButtonText ("PLAY IT ON KEYS"); keysBtn.framed = true;
             keysBtn.onClick = [this] { setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst); repaint(); };
             for (int nt = 36; nt <= 84; ++nt) noteBox.addItem ("NOTE " + MidiMessage::getMidiNoteName (nt, true, true, 5), nt);
@@ -2673,7 +2688,7 @@ public:
             g.drawText (looping ? "drag: MIDI" : "drag: WAV", r.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredRight);
         }
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
-        g.drawText ("BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, RIGHT-CLICK = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
+        g.drawText ("BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, DEL = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centred);
     }
     void resized() override
@@ -2686,7 +2701,7 @@ public:
         {
             vstBox.setBounds (28, 46, 182, 30); folderBtn.setBounds (214, 44, 76, 34); uiBtn.setBounds (296, 44, 134, 34);
             noteBox.setBounds (28, 86, 130, 30); capBtn.setBounds (166, 82, 120, 38); keysBtn.setBounds (296, 84, 134, 34);
-            grabBtn.setBounds (28, 126, 402, 30);
+            grabBtn.setBounds (28, 126, 232, 30); shelfBox.setBounds (266, 126, 164, 30);
         }
         diceAll.setBounds (getWidth() - 214, 304, 200, 32);
     }
@@ -2714,6 +2729,19 @@ public:
     {
         if (const int b = bankAt (e.getPosition()); b >= 0) { proc.bankToPair (b); armed = -1; repaint(); }
     }
+    // DELETE / BACKSPACE: the selected bank sound goes, the next one is selected (fast clean-up)
+    bool keyPressed (const KeyPress& k) override
+    {
+        if ((k == KeyPress::deleteKey || k == KeyPress::backspaceKey) && armed >= 0 && armed < (int) proc.bank.size())
+        {
+            const int cat = proc.bank[(size_t) armed].cat;
+            proc.removeFromBank (armed);
+            if (armed >= (int) proc.bank.size() || proc.bank[(size_t) armed].cat != cat) armed = -1;
+            repaint();
+            return true;
+        }
+        return false;
+    }
     void mouseUp (const MouseEvent& e) override
     {
         if (dragDone) return;
@@ -2725,19 +2753,23 @@ public:
                 PopupMenu m;
                 m.addItem (1, "Hear it");
                 for (int k = 0; k < kk::PairLab::maxParents; ++k) m.addItem (10 + k, "Into SOUND " + String (k + 1));
+                PopupMenu mv;
+                for (int c = 0; c < kk::numCats; ++c) { const int cat = kk::harvestCatAt (c); mv.addItem (100 + cat, kk::harvestCatName (cat), cat != proc.bank[(size_t) b].cat); }
+                m.addSubMenu ("Move to", mv);
                 m.addSeparator();
-                m.addItem (2, "Delete from the bank");
+                m.addItem (2, "Delete from the bank   (Del)");
                 m.showMenuAsync (PopupMenu::Options().withTargetComponent (this).withMousePosition(), [safe = Component::SafePointer<PairPage> (this), b] (int r)
                 {
                     if (safe == nullptr || r == 0 || b >= (int) safe->proc.bank.size()) return;
                     if (r == 1) safe->proc.auditionBank (b);
                     else if (r == 2) { safe->proc.removeFromBank (b); safe->armed = -1; }
+                    else if (r >= 100) { safe->proc.moveInBank (b, r - 100); safe->armed = -1; }
                     else if (r >= 10) safe->proc.bankToPair (b, r - 10);
                     safe->repaint();
                 });
                 return;
             }
-            armed = b; proc.auditionBank (b); repaint(); return;
+            armed = b; proc.auditionBank (b); grabKeyboardFocus(); repaint(); return;
         }
         for (int c = 0; c < kk::numCats; ++c)   // click a shelf name: clear that shelf
             if (bankCol (c).withHeight (20).contains (pos))
@@ -2797,7 +2829,8 @@ private:
             if (vstWin != nullptr) { vstWin->setBounds (top->getLocalBounds()); vstWin->setVisible (true); vstWin->toFront (true); }
         }
     }
-    Rectangle<int> bankCol (int c) const { const auto b = bankArea(); const int w = (b.getWidth() - 7 * 6) / kk::numCats; return { b.getX() + c * (w + 6), b.getY(), w, b.getHeight() }; }
+    // c = category; its column follows the display order (BASS KEYS PLUCK PAD STRINGS BRASS LEAD VOX DRUMS FX)
+    Rectangle<int> bankCol (int c) const { const auto b = bankArea(); const int w = (b.getWidth() - (kk::numCats - 1) * 6) / kk::numCats; const int col = kk::harvestColumnOf (c); return { b.getX() + col * (w + 6), b.getY(), w, b.getHeight() }; }
     Rectangle<int> chip (int c, int row) const { const auto col = bankCol (c); return { col.getX() + 4, col.getY() + 22 + row * 18, col.getWidth() - 8, 16 }; }
     Rectangle<int> slot (int k) const { const int w = (getWidth() - 28 - 3 * 12) / 4; return { 14 + k * (w + 12), 190, w, 88 }; }
     Rectangle<int> closeBox (int k) const { const auto r = slot (k); return { r.getRight() - 26, r.getY() + 4, 22, 18 }; }
@@ -2847,7 +2880,7 @@ private:
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     TreeBreedButton breedBtn;
     HotButton diggaBtn { lnf }, diceAll { lnf }, saveBtn { lnf }, uiBtn { lnf }, capBtn { lnf }, keysBtn { lnf };
-    ComboBox vstBox, noteBox;
+    ComboBox vstBox, noteBox, shelfBox;
     HotButton folderBtn { lnf }, grabBtn { lnf };
     int grabNext = -1, grabTotal = 0, grabbed = 0;
     std::unique_ptr<VstOverlay> vstWin;
@@ -3179,6 +3212,11 @@ public:
         addMouseListener (&focusGrabber, true);   // a click anywhere in the plugin gives it the PC keyboard
         refreshState();
         startTimerHz (30);
+        // warm up the KILLA plugins in the background (one after another) - a click on their tile opens them at once
+        Component::SafePointer<MainPage> safe (this);
+        Timer::callAfterDelay (1200, [safe] { if (safe != nullptr) safe->module (tabDigga); });
+        Timer::callAfterDelay (1700, [safe] { if (safe != nullptr) safe->module (tabHalf); });
+        Timer::callAfterDelay (2200, [safe] { if (safe != nullptr) safe->module (tabEffector); });
     }
 
     ~MainPage() override
@@ -3207,8 +3245,35 @@ public:
         const auto mods = k.getModifiers();
         if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;   // host shortcuts (save, undo...) stay with the host
         if (k.getKeyCode() == KeyPress::spaceKey) { spaceAction(); return true; }
+        // the computer keys play notes while KEYS KILLA has the focus (like FL's typing keyboard)
+        if (const int n = qwertyNote (k.getKeyCode()); n >= 0)
+        {
+            if (! qwertyHeld[(size_t) n]) { qwertyHeld[(size_t) n] = true; heldCode[(size_t) n] = k.getKeyCode(); proc.keyboardState.noteOn (1, n, 0.8f); }
+            return true;
+        }
         return false;
     }
+    bool keyStateChanged (bool isKeyDown) override
+    {
+        bool any = false;
+        for (int n = 0; n < 128; ++n)
+            if (qwertyHeld[(size_t) n] && ! KeyPress::isKeyCurrentlyDown (heldCode[(size_t) n]))
+            { qwertyHeld[(size_t) n] = false; proc.keyboardState.noteOff (1, n, 0.0f); any = true; }
+        juce::ignoreUnused (isKeyDown);
+        return any;
+    }
+    // FL Studio layout: Z S X D C V G B H N J M = C3..B3, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P = C4..E5
+    int qwertyNote (int code) const
+    {
+        static const char* low = "ZSXDCVGBHNJM";
+        static const char* high = "Q2W3ER5T6Y7UI9O0P";
+        const int c = CharacterFunctions::toUpperCase ((juce_wchar) code);
+        for (int i = 0; low[i] != 0; ++i) if (c == low[i]) return 48 + i;
+        for (int i = 0; high[i] != 0; ++i) if (c == high[i]) return 60 + i;
+        return -1;
+    }
+    std::array<bool, 128> qwertyHeld {};
+    std::array<int, 128> heldCode {};
     static bool typingText() { return dynamic_cast<TextEditor*> (Component::getCurrentlyFocusedComponent()) != nullptr; }
 
     // tests / screenshots: 0 main, 1..8 advanced tab, 9 browser, 10 movement, 11 808

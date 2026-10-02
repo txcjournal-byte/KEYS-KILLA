@@ -206,7 +206,8 @@ public:
     // CHOP / SLICE: DIGGA's sample cut into slices (pads, keys, drag out, to PAIR / bank)
     kk::ChopLab chop;
     std::atomic<int> chopPad { -1 };
-    juce::AudioBuffer<float> fxIn;                               // FX INPUT (mixer insert) copy                             // UI pad -> audio thread
+    juce::AudioBuffer<float> fxIn, extBuf;
+    kk::WorldStage worldExt;                                     // SOUND WORLD for PAIR / VST / CHOP / input                               // FX INPUT (mixer insert) copy                             // UI pad -> audio thread
     bool chopFromDigga();
     bool chopToPair (int slice, int slot = -1);
     bool chopToBank (int slice);
@@ -232,15 +233,16 @@ public:
     static juce::File bankFolder();
     void loadSavedBank();
     int  saveBank();                                            // saves the unsaved (harvested) sounds; returns how many
-    void addToBank (kk::PairPtr s, const juce::String& origin, bool save);
+    void addToBank (kk::PairPtr s, const juce::String& origin, bool save, int shelf = -1);
     void removeFromBank (int i);                                // also deletes its WAV in the Bank folder
     void clearShelf (int cat);
+    void moveInBank (int i, int cat);
     void sortBank();
     // PAIR FROM VST
     kk::VstHost vst;
     juce::StringArray vstList;                                  // installed instrument plugin files
     juce::String loadVst (const juce::String& id);
-    juce::String captureVst (int note);
+    juce::String captureVst (int note, int shelf = -1);         // shelf -1 = AUTO (name, then the ears)
     juce::String captureVstProgram (int program, int note);   // GRAB SOUNDS: one of the plugin's presets into the bank                         // records the plugin into the bank; returns the sound name
     bool bankLoaded = false;
     juce::StringArray harvestedFrom;
@@ -313,6 +315,9 @@ private:
     std::array<std::atomic<int>, 3> drumPad {};
     std::array<int, 3> drumSig { -1, -1, -1 }, drumPadOff { 0, 0, 0 }, drumPadNote { -1, -1, -1 };
     std::array<double, 3> drumDirtyAt { 0, 0, 0 };
+    std::array<int, 3> drumSeenSig { -1, -1, -1 };
+    std::array<std::atomic<bool>, 3> drumBusy {};          // a background boost render is running
+    juce::ThreadPool drumPool { 1 };
     int drumSignature (int d) const;
     kk::BoostParams boostParams (int d) const;
     std::array<std::array<float, 2>, 2> clipDc {};

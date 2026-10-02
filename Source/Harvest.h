@@ -11,17 +11,42 @@
 // into the sound bank by character. The bank feeds PAIR / BREED / loops - no factory sounds needed.
 namespace kk
 {
-enum HarvestCat { catBass, catKeys, catPluck, catPad, catLead, catVocal, catDrum, catFx, numCats };
+// (new shelves are added at the end: the numbers of the old ones never change - saved banks stay valid)
+enum HarvestCat { catBass, catKeys, catPluck, catPad, catLead, catVocal, catDrum, catFx, catBrass, catStrings, numCats };
 
 inline const char* harvestCatName (int c)
 {
-    static const char* n[] { "BASS", "KEYS / PIANO", "PLUCK / BELL", "PAD / STRINGS", "LEAD / BRASS / FLUTE", "VOX", "DRUMS", "FX" };
+    static const char* n[] { "BASS", "KEYS / PIANO", "PLUCK / BELL", "PAD", "LEAD / FLUTE", "VOX", "DRUMS", "FX", "BRASS", "STRINGS" };
     return n[std::clamp (c, 0, (int) numCats - 1)];
 }
 inline const char* harvestCatShort (int c)
 {
-    static const char* n[] { "BASS", "KEYS", "PLUCK", "PAD", "LEAD", "VOX", "DRUMS", "FX" };
+    static const char* n[] { "BASS", "KEYS", "PLUCK", "PAD", "LEAD", "VOX", "DRUMS", "FX", "BRASS", "STRINGS" };
     return n[std::clamp (c, 0, (int) numCats - 1)];
+}
+// the order the shelves are shown in
+inline int harvestCatAt (int column)
+{
+    static const int order[] { catBass, catKeys, catPluck, catPad, catStrings, catBrass, catLead, catVocal, catDrum, catFx };
+    return order[std::clamp (column, 0, (int) numCats - 1)];
+}
+inline int harvestColumnOf (int cat) { for (int i = 0; i < numCats; ++i) if (harvestCatAt (i) == cat) return i; return 0; }
+// a sound's name tells its family better than its waveform ("Brass Stab", "Lush Strings" ...): -1 = no clue in the name
+inline int harvestCatFromName (const juce::String& nm)
+{
+    const auto n = nm.toLowerCase();
+    auto has = [&n] (std::initializer_list<const char*> w) { for (auto* x : w) if (n.contains (x)) return true; return false; };
+    if (has ({ "brass", "horn", "trumpet", "trombone", "tuba", "sax", "bugle" })) return catBrass;
+    if (has ({ "string", "violin", "viola", "cello", "orchestra", "pizz", "spiccato", "staccato" })) return catStrings;
+    if (has ({ "vox", "vocal", "voice", "choir", "chant", "aah", "ooh" })) return catVocal;
+    if (has ({ "kick", "snare", "hat", "clap", "perc", "drum", "tom", "rim", "cymbal", "shaker" })) return catDrum;
+    if (has ({ "bass", "808", "sub", "reese" })) return catBass;
+    if (has ({ "pluck", "bell", "mallet", "marimba", "kalimba", "harp", "guitar", "xylo", "vibra", "glock", "music box" })) return catPluck;
+    if (has ({ "piano", "keys", "rhodes", "organ", "wurli", "clav", "e.p", " ep " })) return catKeys;
+    if (has ({ "pad", "atmos", "ambient", "drone", "texture", "evolving" })) return catPad;
+    if (has ({ "lead", "flute", "whistle", "solo", "saw lead" })) return catLead;
+    if (has ({ "fx", "riser", "sweep", "impact", "noise", "downlifter", "uplifter", "hit " })) return catFx;
+    return -1;
 }
 
 struct HarvestItem

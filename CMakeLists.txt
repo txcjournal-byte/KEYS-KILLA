@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.23.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.24.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -123,6 +123,10 @@ if(KK_BUILD_TESTS)
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_USE_FLAC=1 JUCE_PLUGINHOST_VST3=1 KK_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1
         JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1 JucePlugin_VersionString="${PROJECT_VERSION}")
     set_source_files_properties(tests/RenderTest.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga")
+    # the tests keep several KEYS KILLA instances on the stack: Windows' default 1 MB stack is too small
+    if (MSVC)
+        target_link_options(KeysKillaTests PRIVATE /STACK:67108864)
+    endif()
     target_link_libraries(KeysKillaTests PRIVATE
         KeysKillaAssets ${KK_MODULE_DATA}
         juce::juce_audio_utils juce::juce_dsp juce::juce_opengl

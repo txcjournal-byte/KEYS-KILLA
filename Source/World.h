@@ -45,7 +45,7 @@ public:
                 // loudness match: the world changes the colour, not the level
                 const float li = 0.5f * (dry[0] * dry[0] + dry[1] * dry[1]), lo = 0.5f * (x[0] * x[0] + x[1] * x[1]);
                 inEnv = li + slow * (inEnv - li); outEnv = lo + slow * (outEnv - lo);
-                const float g = std::clamp (std::sqrt ((inEnv + 1.0e-9f) / (outEnv + 1.0e-9f)), 0.5f, 2.0f);
+                const float g = std::clamp (std::sqrt ((inEnv + 1.0e-9f) / (outEnv + 1.0e-9f)), 0.25f, 2.0f);
                 for (int c = 0; c < 2; ++c) x[c] = dry[c] + (x[c] * g - dry[c]) * a;
             }
             if (gate > 0)
@@ -92,15 +92,16 @@ private:
             case worldRompler:   // 90s PCM rompler: no sub mud, hard mids, squeezed
             {
                 x -= onePole (s.hp1, x, 150.0f, sr); x -= onePole (s.hp2, x, 150.0f, sr);
-                SvfCoef pc; pc.set (4000.0f, 1.4f, sr); s.peak.tick (pc, x); x += s.peak.bp * 0.55f;
-                return comp (s.env, x * 1.4f, 0.18f, 4.0f, 2.0f, 60.0f);
+                SvfCoef pc; pc.set (2800.0f, 1.2f, sr); s.peak.tick (pc, x); x += s.peak.bp * 1.1f;
+                x = std::round (x * 2048.0f) / 2048.0f;   // 12-bit PCM grain
+                return onePole (s.lp1, comp (s.env, x * 1.8f, 0.15f, 6.0f, 2.0f, 60.0f), 9000.0f, sr);
             }
             case worldFat: // fat analog: warm low end, driven, a little darker
             {
                 const float low = onePole (s.lp1, x, 160.0f, sr);
-                x += low * 0.6f;
-                x = std::tanh (x * 2.2f) / 2.2f * 1.6f;
-                return onePole (s.lp2, x, 8000.0f, sr);
+                x += low * 0.9f;
+                x = std::tanh (x * 3.5f) / 3.5f * 1.3f;
+                return onePole (s.lp2, x, 5000.0f, sr);
             }
             case worldGlass: // three-band upward / downward squash, asymmetric grit
             {
@@ -112,7 +113,7 @@ private:
                     const float g = std::clamp (std::pow (0.22f / (lev + 1.0e-4f), 0.55f), 0.3f, 5.0f);
                     return v * g * boost;
                 };
-                float y = ott (s.envB[0], lo, 0.9f) + ott (s.envB[1], mid, 1.0f) + ott (s.envB[2], hi, 1.25f);
+                float y = ott (s.envB[0], lo, 0.9f) + ott (s.envB[1], mid, 1.1f) + ott (s.envB[2], hi, 1.6f);
                 y = y - 0.2f * y * y + 0.05f * y * y * y;
                 const float o = y - s.dcx + 0.995f * s.dc; s.dcx = y; s.dc = o;   // the asymmetry makes DC
                 return o;
@@ -120,13 +121,13 @@ private:
             case worldShine:  // modern hi-fi: clean, shiny top
             {
                 const float hi = x - onePole (s.lp1, x, 7000.0f, sr);
-                return x + hi * 0.45f;
+                return x + hi * 1.0f;
             }
             case worldOrganic: // organic / foley: breath noise that follows the note, soft top
             {
                 const float e = follow (s.env, x, 5.0f, 200.0f);
                 SvfCoef nc; nc.set (5500.0f, 1.0f, sr); s.noiseBp.tick (nc, rng.bi());
-                return onePole (s.lp1, x, 11000.0f, sr) + s.noiseBp.bp * e * 0.35f;
+                return onePole (s.lp1, x, 7000.0f, sr) + s.noiseBp.bp * e * 0.8f;
             }
             case worldVelocity: // deep multisample feel: soft = felt and dark, hard = open and saturated
             {
@@ -138,14 +139,14 @@ private:
             }
             case worldDrift: // component analog: pre-filter drive (the drift is in spatial())
             {
-                const float y = std::tanh (x * 1.8f) / 1.8f * 1.3f;
-                return onePole (s.lp1, y, 12000.0f, sr);
+                const float y = std::tanh (x * 3.0f) / 3.0f * 1.8f;
+                return onePole (s.lp1, y, 6500.0f, sr);
             }
             case worldMix: // mix-ready rompler: glued, bright, finished
             {
-                float y = comp (s.env, x * 1.3f, 0.2f, 3.0f, 3.0f, 120.0f);
-                const float hi = y - onePole (s.lp1, y, 6000.0f, sr);
-                return y + hi * 0.35f;
+                float y = comp (s.env, x * 1.6f, 0.15f, 5.0f, 3.0f, 120.0f);
+                const float hi = y - onePole (s.lp1, y, 5000.0f, sr);
+                return y + hi * 0.7f;
             }
             default: return x;
         }
@@ -157,7 +158,7 @@ private:
         const bool chorus = world == worldShine || world == worldOrganic;
         const bool drift = world == worldDrift || world == worldFat;
         if (! chorus && ! drift) return;
-        float rate = 0.5f, base = 3.5f, depth = 1.6f, mix = 0.5f;
+        float rate = 0.6f, base = 6.0f, depth = 3.5f, mix = 0.8f;
         if (world == worldOrganic) { rate = 0.13f; base = 14.0f; depth = 5.0f; mix = 0.4f; }
         if (drift)
         {
@@ -165,7 +166,7 @@ private:
             drPh += 0.35f / sr;
             if (drPh >= 1) { drPh -= 1; drA = drB; drB = rng.bi(); }
             drT = drA + (drB - drA) * (0.5f - 0.5f * std::cos (pi * drPh));
-            rate = 0; base = 3.0f; depth = world == worldDrift ? 1.4f : 0.8f; mix = 1.0f;
+            rate = 0; base = 3.0f; depth = world == worldDrift ? 3.0f : 1.6f; mix = 1.0f;
         }
         chPh += rate / sr; if (chPh >= 1) chPh -= 1;
         for (int c = 0; c < 2; ++c)

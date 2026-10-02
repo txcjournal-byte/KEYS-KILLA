@@ -490,6 +490,9 @@ static int unitTests()
         std::set<juce::String> methods; for (auto& k : clean) methods.insert (k->method);
         check (methods.size() >= 5, "PAIR: the six children are six different characters");
     }
+    // shelves: the preset name decides first
+    check (kk::harvestCatFromName ("Surge XT Brass Stab C5") == kk::catBrass && kk::harvestCatFromName ("Lush Strings") == kk::catStrings
+           && kk::harvestCatFromName ("Init Saw") < 0, "BANK: brass / strings found by the preset name");
     // KEYS KILLA sees the plugins FL Studio found (its plugin database), instruments first
     {
         const auto il = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Image-Line");
@@ -745,7 +748,7 @@ int main (int argc, char** argv)
     const bool verbose = argc > 1 && juce::String (argv[1]) == "-v";
     std::printf ("KEYS KILLA tests: juce ready\n");
     KeysKillaProcessor p;
-    std::printf ("KEYS KILLA tests: processor ready\n");
+    std::printf ("KEYS KILLA tests: processor ready (%d KB)\n", (int) (sizeof (KeysKillaProcessor) / 1024));
     if (argc > 1 && juce::String (argv[1]) == "-cal")   // prints suggested output gain per preset (target -15 dB short-term RMS)
     {
         for (int i = 0; i < p.getNumPrograms(); ++i)

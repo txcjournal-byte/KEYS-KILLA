@@ -125,7 +125,8 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 KeysKillaProcessor::~KeysKillaProcessor()
 {
     vst.unload();
-    harvestPool.removeAllJobs (true, 60000);   // a running harvest finishes before the plugin goes
+    harvestPool.removeAllJobs (true, 60000);
+    drumPool.removeAllJobs (true, 60000);   // a running harvest finishes before the plugin goes
     cancelPendingUpdate();
     thumbRenderer.reset();   // the offline waveform renderer goes first
     history.clear(); children.clear();
@@ -173,6 +174,8 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     vst.prepare (sampleRate, std::max (64, samplesPerBlock));
     chop.prepare (sampleRate);
     fxIn.setSize (2, std::max (64, samplesPerBlock) * 2);
+    extBuf.setSize (2, std::max (64, samplesPerBlock) * 2);
+    worldExt.prepare (sampleRate);
     modFade = { 0, 0 };
     for (auto& m : modules)
         if (m)
@@ -764,14 +767,28 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     while (midiIt != processedMidi.cend()) { handleMidi ((*midiIt).getMessage()); ++midiIt; }
     sampleClock += n;
 
-    if (buffer.getNumChannels() > 1) pairPlayer.render (buffer.getWritePointer (0), buffer.getWritePointer (1), n, sr);
-    if (buffer.getNumChannels() > 1)   // CHOP: DIGGA's slices (pads + keys), on the melody bus like DIGGA
+    // PAIR / CHOP / VST / the mixer input: rendered apart, coloured by their own SOUND WORLD + GATE, then added
+    const bool ext = buffer.getNumChannels() > 1 && n <= extBuf.getNumSamples();
+    if (ext)
     {
+        extBuf.clear (0, n);
+        float* eL = extBuf.getWritePointer (0); float* eR = extBuf.getWritePointer (1);
+        pairPlayer.render (eL, eR, n, sr);
         if (const int h = chopPad.exchange (-1); h >= 0) chop.noteOn (kk::ChopLab::firstNote + h, 0.9f, 0);
-        chop.render (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
+        chop.render (eL, eR, n);
+        if (vst.loaded()) vst.process (eL, eR, n, vstMidi, getPlayHead());
+        if (hasInput) for (int c = 0; c < 2; ++c) extBuf.addFrom (c, 0, fxIn, c, 0, n);
+        worldExt.process (eL, eR, n, (int) raw[(size_t) I.world]->load(), raw[(size_t) I.worldAmt]->load(),
+                          (int) raw[(size_t) I.gate]->load(), raw[(size_t) I.gateDepth]->load(), beatPos, bps);
+        for (int c = 0; c < 2; ++c) buffer.addFrom (c, 0, extBuf, c, 0, n);
     }
-    if (buffer.getNumChannels() > 1 && vst.loaded()) vst.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, vstMidi, getPlayHead());
-    if (hasInput && buffer.getNumChannels() > 1) for (int c = 0; c < 2; ++c) buffer.addFrom (c, 0, fxIn, c, 0, n);
+    else if (buffer.getNumChannels() > 1)   // an oversized host block: play them without the world colour
+    {
+        float* L = buffer.getWritePointer (0); float* R = buffer.getWritePointer (1);
+        pairPlayer.render (L, R, n, sr);
+        chop.render (L, R, n);
+        if (vst.loaded()) vst.process (L, R, n, vstMidi, getPlayHead());
+    }
     processModules (buffer, keysForModules, n);   // PAIR + DIGGA + FX INPUT + HALF + EFFECTOR: the melody bus
     // DRUM BOOST: the drums play after the melody effects - HALF / EFFECTOR never touch them
     if (buffer.getNumChannels() > 1)
@@ -1056,11 +1073,13 @@ juce::File KeysKillaProcessor::bankFolder()
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Bank");
 }
 
-void KeysKillaProcessor::addToBank (kk::PairPtr s, const juce::String& origin, bool save)
+void KeysKillaProcessor::addToBank (kk::PairPtr s, const juce::String& origin, bool save, int shelf)
 {
     if (s == nullptr) return;
     const double rate = sr > 0 ? sr : 44100.0;
-    kk::HarvestItem it; it.sound = s; it.cat = kk::Harvest::classifySound (*s, rate); it.score = 10.0f; it.origin = origin;
+    kk::HarvestItem it; it.sound = s; it.score = 10.0f; it.origin = origin;
+    const int byName = kk::harvestCatFromName (s->name);   // the preset name first ("Brass Stab"), then the ears
+    it.cat = shelf >= 0 && shelf < kk::numCats ? shelf : byName >= 0 ? byName : kk::Harvest::classifySound (*s, rate);
     if (save)
     {
         auto dir = bankFolder().getChildFile (kk::harvestCatShort (it.cat));
@@ -1088,6 +1107,23 @@ void KeysKillaProcessor::removeFromBank (int i)
     if (i < 0 || i >= (int) bank.size()) return;
     if (bank[(size_t) i].file.isNotEmpty()) juce::File (bank[(size_t) i].file).deleteFile();
     bank.erase (bank.begin() + i);
+    ++pairVer;
+}
+// put a sound on another shelf (its WAV moves to that folder too)
+void KeysKillaProcessor::moveInBank (int i, int cat)
+{
+    if (i < 0 || i >= (int) bank.size() || cat < 0 || cat >= kk::numCats) return;
+    auto& it = bank[(size_t) i];
+    if (it.file.isNotEmpty())
+    {
+        const juce::File f (it.file);
+        auto dir = bankFolder().getChildFile (kk::harvestCatShort (cat)); dir.createDirectory();
+        auto to = dir.getNonexistentChildFile (f.getFileNameWithoutExtension(), ".wav", false);
+        if (f.moveFileTo (to)) it.file = to.getFullPathName();
+    }
+    it.cat = cat;
+    it.stamp = juce::Time::getHighResolutionTicks();
+    sortBank();
     ++pairVer;
 }
 void KeysKillaProcessor::clearShelf (int cat)
@@ -1141,7 +1177,7 @@ juce::String KeysKillaProcessor::loadVst (const juce::String& id)
     return err;
 }
 
-juce::String KeysKillaProcessor::captureVst (int note)
+juce::String KeysKillaProcessor::captureVst (int note, int shelf)
 {
     if (! vst.loaded()) return {};
     auto buf = vst.capture (note, 0.9f, 1.4);
@@ -1150,7 +1186,7 @@ juce::String KeysKillaProcessor::captureVst (int note)
     const auto prog = vst.programName();
     const juce::String name = vst.name() + " " + (prog.isNotEmpty() ? prog : juce::String (++counter)) + " " + juce::MidiMessage::getMidiNoteName (note, true, true, 5);
     auto s = kk::PairLab::fromBuffer (buf, vst.rate(), sr > 0 ? sr : 44100.0, name);
-    addToBank (s, vst.name(), true);
+    addToBank (s, vst.name(), true, shelf);
     return name;
 }
 
@@ -1188,6 +1224,7 @@ void KeysKillaProcessor::renderDrum (int d)
 
 bool KeysKillaProcessor::loadDrum (int d, const juce::File& f)
 {
+    while (drumBusy[(size_t) d].load()) juce::Thread::sleep (2);   // never load under a running render
     if (! drums[(size_t) d].load (f, sr > 0 ? sr : 44100.0)) return false;
     renderDrum (d);
     return true;
@@ -1214,14 +1251,24 @@ void KeysKillaProcessor::moduleHousekeeping()
         { const juce::SpinLock::ScopedLockType l (harvestLock); done.swap (harvestDone); }
         for (auto& d : done) { kk::Harvest::merge (bank, std::move (d)); sortBank(); ++pairVer; }
     }
-    // drums re-render a moment after a knob stops moving (keeps the knobs smooth)
+    // drums re-render in the background once a knob has stopped moving for a moment (the UI never stutters)
     const double now = juce::Time::getMillisecondCounterHiRes();
     for (int d = 0; d < 3 && ix != nullptr; ++d)
-        if (drums[(size_t) d].hasSample() && drumSignature (d) != drumSig[(size_t) d])
+    {
+        if (! drums[(size_t) d].hasSample() || drumBusy[(size_t) d].load()) continue;
+        const int sig = drumSignature (d);
+        if (sig == drumSig[(size_t) d]) { drumDirtyAt[(size_t) d] = 0; continue; }
+        if (sig != drumSeenSig[(size_t) d]) { drumSeenSig[(size_t) d] = sig; drumDirtyAt[(size_t) d] = now; continue; }   // still moving
+        if (now - drumDirtyAt[(size_t) d] < 120.0) continue;
+        drumBusy[(size_t) d] = true;
+        const auto params = boostParams (d);
+        drumSig[(size_t) d] = sig;
+        drumPool.addJob ([this, d, params]
         {
-            if (drumDirtyAt[(size_t) d] == 0) drumDirtyAt[(size_t) d] = now;
-            if (now - drumDirtyAt[(size_t) d] > 90.0) { renderDrum (d); drumDirtyAt[(size_t) d] = 0; }
-        }
+            drums[(size_t) d].render ((kk::DrumKind) d, params);
+            drumBusy[(size_t) d] = false;
+        });
+    }
     if (ix == nullptr || modules[modHalf] == nullptr) return;
     int lat = 0;
     if (raw[(size_t) ix->halfOn]->load() > 0.5f) lat += modules[modHalf]->getLatencySamples();
