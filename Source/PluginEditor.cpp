@@ -13,16 +13,16 @@ using namespace juce;
 void KKLookAndFeel::setSkin (const Skin& s)
 {
     skin = &s;
-    setColour (PopupMenu::backgroundColourId, s.dark ? Colour (0xff141111) : Colour (0xffeef0f3));
+    setColour (PopupMenu::backgroundColourId, s.dark ? Colour (0xff15132e) : Colour (0xffeef0f3));
     setColour (PopupMenu::textColourId, s.text);
     setColour (PopupMenu::highlightedBackgroundColourId, s.accent.withAlpha (0.8f));
     setColour (PopupMenu::highlightedTextColourId, s.dark ? Colours::white : Colours::black);
     setColour (PopupMenu::headerTextColourId, s.accent);
     setColour (Label::textColourId, s.text);
-    setColour (TooltipWindow::backgroundColourId, s.dark ? Colour (0xff1a1515) : Colour (0xfff2f4f6));
+    setColour (TooltipWindow::backgroundColourId, s.dark ? Colour (0xff1c1a3a) : Colour (0xfff2f4f6));
     setColour (TooltipWindow::textColourId, s.text);
     setColour (TooltipWindow::outlineColourId, s.accent);
-    setColour (ComboBox::backgroundColourId, s.dark ? Colour (0xff1a1616) : Colour (0xfff5f6f8));
+    setColour (ComboBox::backgroundColourId, s.dark ? Colour (0xff1c1a3a) : Colour (0xfff5f6f8));
     setColour (ComboBox::textColourId, s.text);
     setColour (ComboBox::outlineColourId, s.panelEdge);
     setColour (ComboBox::arrowColourId, s.accent);
@@ -38,7 +38,7 @@ void KKLookAndFeel::setSkin (const Skin& s)
     setColour (TabbedButtonBar::tabOutlineColourId, s.panelEdge);
     setColour (TabbedButtonBar::frontOutlineColourId, s.accent);
     setColour (TabbedComponent::outlineColourId, Colours::transparentBlack);
-    setColour (TextEditor::backgroundColourId, s.dark ? Colour (0xff141010) : Colour (0xfff7f8fa));
+    setColour (TextEditor::backgroundColourId, s.dark ? Colour (0xff131130) : Colour (0xfff7f8fa));
     setColour (TextEditor::textColourId, s.text);
     setColour (TextEditor::outlineColourId, s.panelEdge);
     setColour (TextEditor::focusedOutlineColourId, s.accent);
@@ -150,7 +150,7 @@ void KKLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour&,
     const auto& s = *skin;
     auto r = b.getLocalBounds().toFloat().reduced (1.5f);
     const bool on = b.getToggleState();
-    g.setColour (s.dark ? Colour (0xff120f0f) : Colour (0xffe9ecef));
+    g.setColour (s.dark ? Colour (0xff12102a) : Colour (0xffe9ecef));
     g.fillRoundedRectangle (r, 4);
     if (on)
     {
@@ -275,9 +275,18 @@ public:
         {
             Path arc; arc.addCentredArc (c.x, c.y, (float) arcR, (float) arcR, 0, -MathConstants<float>::pi * 0.75f, ang, true);
             const float w = capR > 26 ? 1.0f : 0.7f;
-            g.setColour (s.accent.withAlpha (0.16f)); g.strokePath (arc, PathStrokeType (12.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
-            g.setColour (s.accent.withAlpha (0.4f));  g.strokePath (arc, PathStrokeType (6.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
-            g.setColour (s.accent);                   g.strokePath (arc, PathStrokeType (3.2f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            // every knob its own neon pair (pink -> orange, violet -> pink, orange -> pink ...)
+            static const Colour pairs[][2] { { Colour (0xffff2f6d), Colour (0xffff8a3d) }, { Colour (0xffff8a3d), Colour (0xffff2f6d) },
+                                             { Colour (0xff9b4dff), Colour (0xffff2f6d) }, { Colour (0xffff2f6d), Colour (0xff9b4dff) },
+                                             { Colour (0xff4d7dff), Colour (0xff9b4dff) } };
+            const auto& pr = pairs[(size_t) ((centre.x / 37 + centre.y / 11) % 5)];
+            const ColourGradient grad (pr[0], c.x - (float) arcR, c.y + (float) arcR, pr[1], c.x + (float) arcR, c.y - (float) arcR, false);
+            ColourGradient soft = grad; soft.multiplyOpacity (0.18f);
+            ColourGradient mid = grad;  mid.multiplyOpacity (0.45f);
+            g.setGradientFill (soft); g.strokePath (arc, PathStrokeType (13.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setGradientFill (mid);  g.strokePath (arc, PathStrokeType (7.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setGradientFill (grad); g.strokePath (arc, PathStrokeType (3.6f * w, PathStrokeType::curved, PathStrokeType::rounded));
+            ignoreUnused (s);
             g.setColour (Colours::white.withAlpha (0.5f)); g.strokePath (arc, PathStrokeType (1.0f * w));
         }
     }
@@ -304,14 +313,19 @@ public:
         const float corner = round ? r.getHeight() * 0.5f : 5.0f;
         if (framed && ! selected)
         {
-            g.setColour (Colour (0xff181111)); g.fillRoundedRectangle (r, corner);
-            g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r, corner, 1.2f);
+            g.setGradientFill (ColourGradient (Colour (0xff221f44), 0, r.getY(), Colour (0xff14132c), 0, r.getBottom(), false)); g.fillRoundedRectangle (r, corner);
+            g.setColour (Colour (0xff3f3870)); g.drawRoundedRectangle (r, corner, 1.2f);
         }
-        if (selected) { drawGlowFrame (g, r, s.accent, corner); g.setColour (s.accent.withAlpha (0.12f)); g.fillRoundedRectangle (r, corner); }
+        if (selected)
+        {
+            drawGlowFrame (g, r, s.accent, corner);
+            g.setGradientFill (ColourGradient (Colour (0x55ff2f6d), r.getX(), r.getY(), Colour (0x339b4dff), r.getRight(), r.getBottom(), false));
+            g.fillRoundedRectangle (r, corner);
+        }
         if (over && ! selected) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, corner); }
         if (const auto text = getButtonText(); text.isNotEmpty())
         {
-            g.setColour (selected ? Colour (0xffffe9e9) : Colour (0xffd9d3d3));
+            g.setColour (selected ? Colours::white : Colour (0xffe6e3ff));
             g.setFont (serif (framed ? std::min (r.getHeight() * 0.5f, 20.0f) : r.getHeight() * 0.5f, false, 0.12f));
             g.drawFittedText (text, r.reduced (4, 0).toNearestInt(), Justification::centred, text.containsChar ('\n') ? 2 : 1, 0.7f);
         }
@@ -363,7 +377,8 @@ public:
             for (int i = 0; i < lit; ++i)
             {
                 auto seg = Rectangle<float> ((float) i * segW + 1.0f, y, segW - 2.0f, 11.0f);
-                const Colour c = (warn && i >= segs - 3) ? Colours::orange : (i >= segs - 2 ? Colour (0xffff6060) : s.accent);
+                const Colour c = (warn && i >= segs - 3) ? Colours::orange : Colour (0xffff2f6d).interpolatedWith (Colour (0xffffa53d), (float) i / (float) segs);
+                ignoreUnused (s);
                 g.setColour (c.withAlpha (0.3f)); g.fillRect (seg.expanded (1.0f));
                 g.setColour (c); g.fillRect (seg);
             }
@@ -389,7 +404,7 @@ public:
     }
     void paint (Graphics& g) override
     {
-        g.setColour (Colour (0xff0b0909));
+        g.setColour (Colour (0xff0d0b20));
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 3);
         MidiKeyboardComponent::paint (g);
     }
@@ -578,7 +593,7 @@ public:
             if (pg.preset >= 0) tags << "  .  " << factoryPresets()[(size_t) pg.preset].mood.toUpperCase();
             if (pg.gen > 0) tags << "  .  GEN " << pg.gen;
         }
-        g.setColour (Colour (0xffb8bdc4));
+        g.setColour (Colour (0xffc8c4e8));
         g.setFont (serif (15.0f, false, 0.2f));
         g.drawFittedText (tags, Rectangle<int> (0, 208, getWidth(), 20), Justification::centred, 1, 0.7f);
     }
@@ -640,12 +655,12 @@ public:
         const auto& c = kids[(size_t) index];
         // waveform (mirrored bars) - or, in LOOP mode, the child's melody loop
         const Rectangle<float> wv (14, 42, 126, 46);
-        const Colour col = sel ? s.accent : Colour (0xffd8d2d2);
+        const Colour col = sel ? s.accent : Colour (0xffd9b8ff);
         if (proc.mainLoopMode)
         {
             const bool playing = proc.loopIsChild (index);
             drawLoopRoll (g, wv, proc.loopNotes (c.g), (float) proc.loopBars() * 4.0f, col, playing ? proc.loopBeat.load() : -1.0f);
-            g.setColour (playing ? s.accent : Colour (0xffd8d2d2)); g.setFont (serif (11.0f, true, 0.2f));
+            g.setColour (playing ? s.accent : Colour (0xffd9d4f5)); g.setFont (serif (11.0f, true, 0.2f));
             g.drawText (playing ? "LOOP PLAYING" : "LOOP", Rectangle<float> (14, 24, 126, 14), Justification::centredLeft);
         }
         else
@@ -654,8 +669,8 @@ public:
             const float v = c.waveReady ? std::pow (c.wave[(size_t) b], 0.7f) : 0.04f;
             const float h = std::max (1.0f, v * wv.getHeight() * 0.5f);
             const float x = wv.getX() + (float) b * wv.getWidth() / 64.0f;
-            g.setColour (col.withAlpha (sel ? 0.95f : 0.8f));
-            g.fillRect (x, wv.getCentreY() - h, 1.3f, h * 2.0f);
+            g.setColour ((sel ? s.accent.interpolatedWith (Colour (0xffff8a3d), (float) b / 64.0f) : col.interpolatedWith (Colour (0xffff6aa0), (float) b / 80.0f)).withAlpha (sel ? 0.95f : 0.85f));
+            g.fillRect (x, wv.getCentreY() - h, 1.6f, h * 2.0f);
         }
         if (sel) { g.setColour (s.accent.withAlpha (0.15f)); g.fillRect (wv.withHeight (8).withCentre (wv.getCentre())); }
         // stars
@@ -767,7 +782,7 @@ public:
             const float y = top + (bottom - top) * (float) i / 4.0f;
             g.setColour (Colour (0xff8e8686)); g.fillEllipse (Rectangle<float> (9, 9).withCentre ({ x, y }));
             g.drawLine (x + 8, y, x + 18, y, 1.0f);
-            g.setColour (Colour (0xffd9d3d3)); g.setFont (serif (15.0f, false, 0.1f));
+            g.setColour (Colour (0xffe6e3ff)); g.setFont (serif (15.0f, false, 0.1f));
             g.drawText (labels[i], Rectangle<float> (x + 24, y - 9, 90, 18), Justification::centredLeft);
         }
         const float y = bottom - (bottom - top) * proc.breedWild;
@@ -810,15 +825,15 @@ public:
         const auto& s = *lnf.skin;
         const auto& an = proc.ancestor (slot);
         auto r = getLocalBounds().toFloat().reduced (2);
-        g.setColour (Colour (an.valid() ? 0xff181212 : 0xff110d0d)); g.fillRoundedRectangle (r, 8);
+        g.setColour (Colour (an.valid() ? 0xff181634 : 0xff110f26)); g.fillRoundedRectangle (r, 8);
         if (an.valid()) drawGlowFrame (g, r, s.accent.withAlpha (over ? 1.0f : 0.55f), 8);
         else
         {
             Path o; o.addRoundedRectangle (r, 8); const float dash[] { 6, 5 };
             PathStrokeType (1.2f).createDashedStroke (o, o, dash, 2);
-            g.setColour (over ? s.accent : Colour (0xff4a3c3c)); g.fillPath (o);
+            g.setColour (over ? s.accent : Colour (0xff4a4478)); g.fillPath (o);
         }
-        g.setColour (Colour (0xffd9d3d3)); g.setFont (serif (15.0f, false, 0.3f));
+        g.setColour (Colour (0xffe6e3ff)); g.setFont (serif (15.0f, false, 0.3f));
         g.drawText ("SOUND " + String (slot + 1), Rectangle<float> (14, 8, 200, 20), Justification::centredLeft);
         const auto& icons = labImages().icons;
         if (an.valid() && icons.isValid())
@@ -866,10 +881,12 @@ public:
         const float R = (float) std::min (getWidth(), getHeight()) * 0.5f - 6.0f;
         g.setGradientFill (ColourGradient (s.accent.withAlpha (0.35f + 0.4f * flash + (over ? 0.15f : 0.0f)), c.x, c.y, s.accent.withAlpha (0.0f), c.x + R + 6, c.y, true));
         g.fillEllipse (Rectangle<float> (2 * R + 12, 2 * R + 12).withCentre (c));
-        g.setGradientFill (ColourGradient (Colour (0xff3a0c0c), c.x, c.y - R, Colour (0xff120606), c.x, c.y + R, false));
-        g.fillEllipse (Rectangle<float> (2 * R * 0.84f, 2 * R * 0.84f).withCentre (c));
-        g.setColour (s.accent); g.drawEllipse (Rectangle<float> (2 * R * 0.84f, 2 * R * 0.84f).withCentre (c), 3.0f);
-        g.setColour (s.accent.withAlpha (0.5f)); g.drawEllipse (Rectangle<float> (2 * R, 2 * R).withCentre (c), 1.5f);
+        g.setColour (Colour (0xff0d0b20)); g.fillEllipse (Rectangle<float> (2 * R, 2 * R).withCentre (c));
+        g.setGradientFill (ColourGradient (Colour (0xff9b4dff), c.x - R, c.y - R, Colour (0xffff2f6d), c.x + R, c.y + R, false));
+        g.drawEllipse (Rectangle<float> (2 * R - 2, 2 * R - 2).withCentre (c), 2.5f);
+        g.setGradientFill (ColourGradient (Colour (0xffff4d6d).brighter (over ? 0.2f : 0.0f), c.x, c.y - R * 0.8f, Colour (0xffff8a3d), c.x, c.y + R * 0.8f, false));
+        g.fillEllipse (Rectangle<float> (2 * R * 0.8f, 2 * R * 0.8f).withCentre (c));
+        g.setColour (Colours::white.withAlpha (0.22f)); g.fillEllipse (Rectangle<float> (R * 1.0f, R * 0.32f).withCentre (c.translated (0, -R * 0.52f)));
         g.setColour (Colours::white); g.setFont (serif (R * 0.36f, false, 0.12f));
         g.drawText ("BREED", Rectangle<float> (2 * R, R * 0.5f).withCentre (c), Justification::centred);
     }
@@ -895,10 +912,10 @@ public:
         const bool loopMode = proc.getTreeMode() == KeysKillaProcessor::treeLoop;
         auto r = getLocalBounds().toFloat().reduced (3);
         const bool sel = has && proc.treeSelected() == index;
-        g.setColour (Colour (sel ? 0xff221212 : 0xff151010)); g.fillRoundedRectangle (r, 7);
+        g.setColour (Colour (sel ? 0xff221a3e : 0xff15132e)); g.fillRoundedRectangle (r, 7);
         if (sel) drawGlowFrame (g, r, s.accent, 7);
-        else { g.setColour (over && has ? s.accent.withAlpha (0.7f) : Colour (0xff3a3030)); g.drawRoundedRectangle (r, 7, 1.2f); }
-        g.setColour (Colour (0xffd9d3d3)); g.setFont (serif (15.0f, false, 0.3f));
+        else { g.setColour (over && has ? s.accent.withAlpha (0.7f) : Colour (0xff3a3264)); g.drawRoundedRectangle (r, 7, 1.2f); }
+        g.setColour (Colour (0xffe6e3ff)); g.setFont (serif (15.0f, false, 0.3f));
         g.drawText ((loopMode ? "LOOP " : "SOUND ") + String (index + 1), Rectangle<float> (14, 8, 150, 20), Justification::centredLeft);
         if (! has)
         {
@@ -910,7 +927,7 @@ public:
         auto area = Rectangle<float> (14, 32, r.getWidth() - 56, r.getHeight() - 76);
         if (loopMode)
         {
-            g.setColour (Colour (0xff0c0909)); g.fillRoundedRectangle (area, 4);
+            g.setColour (Colour (0xff0e0c22)); g.fillRoundedRectangle (area, 4);
             drawLoopRoll (g, area.reduced (5, 5), proc.loopNotes (t.g), (float) proc.loopBars() * 4.0f, sel ? s.accent : Colour (0xffcfc6c6),
                           proc.loopIsTree (index) ? proc.loopBeat.load() : -1.0f);
         }
@@ -919,26 +936,26 @@ public:
             {
                 const float v = t.waveReady ? std::pow (t.wave[(size_t) b], 0.7f) : 0.04f;
                 const float h = std::max (1.0f, v * area.getHeight() * 0.5f);
-                g.setColour ((sel ? s.accent : Colour (0xffd8d2d2)).withAlpha (0.9f));
+                g.setColour ((sel ? s.accent.interpolatedWith (Colour (0xffff8a3d), (float) b / 64.0f) : Colour (0xffd9b8ff).interpolatedWith (Colour (0xffff6aa0), (float) b / 80.0f)).withAlpha (0.9f));
                 g.fillRect (area.getX() + (float) b * area.getWidth() / 64.0f, area.getCentreY() - h, 1.6f, h * 2.0f);
             }
         // play / loop button
         const auto pc = playCentre();
         const bool playing = proc.loopIsTree (index);
-        g.setColour (playing ? s.accent : Colour (0xff2a2020)); g.fillEllipse (Rectangle<float> (30, 30).withCentre (pc));
+        g.setColour (playing ? s.accent : Colour (0xff2a2450)); g.fillEllipse (Rectangle<float> (30, 30).withCentre (pc));
         g.setColour (s.accent.withAlpha (0.8f)); g.drawEllipse (Rectangle<float> (30, 30).withCentre (pc), 1.5f);
         g.setColour (Colours::white);
         if (playing) g.fillRect (Rectangle<float> (10, 10).withCentre (pc));
         else { Path tri; tri.addTriangle (pc.x - 4, pc.y - 7, pc.x - 4, pc.y + 7, pc.x + 8, pc.y); g.fillPath (tri); }
         // name + stars
-        g.setColour (Colour (0xffc9c0c0)); g.setFont (serif (13.0f, false, 0.02f));
+        g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (13.0f, false, 0.02f));
         auto info = t.g.name;
         if (loopMode) info = String (kk::keyName (proc.effectiveLoopKey (t.g.loop))) + " MIN  .  " + info;
         g.drawFittedText (info, Rectangle<int> (14, (int) r.getBottom() - 42, (int) r.getWidth() - 20, 18), Justification::centredLeft, 1, 0.7f);
         for (int st = 0; st < 5; ++st)
         {
             auto sr = starRect (st);
-            g.setColour (st < t.rating ? s.accent : Colour (0xff6a6060));
+            g.setColour (st < t.rating ? s.accent : Colour (0xff6a6290));
             if (st < t.rating) g.fillEllipse (sr.reduced (2)); else g.drawEllipse (sr.reduced (2), 1.1f);
         }
     }
@@ -1012,7 +1029,7 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff141518));
+        g.fillAll (Colour (0xff12112a));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         // family lines: 1 + 2 and 3 + 4 join, both run into BREED, BREED feeds the results
         g.setColour (s.accent.withAlpha (0.5f));
@@ -1032,7 +1049,7 @@ public:
         g.drawLine (bc.getCentreX(), bc.getBottom() - 6, bc.getCentreX(), busY, 1.6f);
         g.drawLine ((float) results.front()->getBounds().getCentreX(), busY, (float) results.back()->getBounds().getCentreX(), busY, 1.6f);
         for (auto& r : results) g.drawLine ((float) r->getBounds().getCentreX(), busY, (float) r->getBounds().getCentreX(), (float) r->getY() + 3, 1.6f);
-        g.setColour (Colour (0xff8a9099)); g.setFont (serif (13.0f, false, 0.25f));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (13.0f, false, 0.25f));
         g.drawText (proc.getTreeMode() == KeysKillaProcessor::treeLoop ? "DRAG A LOOP INTO FL STUDIO = MIDI CLIP" : "RIGHT-CLICK A RESULT: USE IT AS PARENT A / B, SAVE IT, BREED ON",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centredRight);
     }
@@ -1098,14 +1115,14 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff141518));
+        g.fillAll (Colour (0xff12112a));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         g.setColour (Colours::white); g.setFont (serif (38.0f, true, 0.3f));
         const int tw = (int) std::ceil (GlyphArrangement::getStringWidth (g.getCurrentFont(), title)) + 30;
         g.drawText (title, 24, 10, tw, 48, Justification::centredLeft);
-        g.setColour (Colour (0xff8a9099)); g.setFont (serif (14.0f, false, 0.2f));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (14.0f, false, 0.2f));
         g.drawText (subtitle, 24 + tw + 10, 22, 760, 24, Justification::centredLeft);
-        g.setColour (Colour (0xffb8bdc4)); g.setFont (serif (13.0f, false, 0.25f));
+        g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (13.0f, false, 0.25f));
         for (auto& k : knobs) g.drawText (k.label, k.slider->getBounds().withY (k.slider->getBottom() - 2).withHeight (18).expanded (12, 0), Justification::centred);
         for (auto& c : chips) if (c.caption.isNotEmpty() && ! c.buttons.empty())
             g.drawText (c.caption, c.buttons.front()->getX() + 2, c.buttons.front()->getY() - 20, 300, 18, Justification::centredLeft);
@@ -1307,7 +1324,7 @@ public:
         folderModel.page = this; soundModel.page = this;   // before the lists ask for rows
         folderList.setModel (&folderModel); folderList.setRowHeight (30);
         soundList.setModel (&soundModel); soundList.setRowHeight (26);
-        for (auto* lb : { &folderList, &soundList }) { lb->setColour (ListBox::backgroundColourId, Colour (0xff0d0e10)); addAndMakeVisible (*lb); }
+        for (auto* lb : { &folderList, &soundList }) { lb->setColour (ListBox::backgroundColourId, Colour (0xff100e26)); addAndMakeVisible (*lb); }
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (newBtn, "+ NEW FOLDER", "Create a folder for your sounds", [this] { askNewFolder ([this] (String n) { current = n; reload(); }); });
         btn (renameBtn, "RENAME", "Rename this folder", [this] { renameFolder(); });
@@ -1325,11 +1342,11 @@ public:
     void visibilityChanged() override { if (isVisible()) reload(); }
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff141518));
-        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 8, 1.2f);
+        g.fillAll (Colour (0xff12112a));
+        g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 8, 1.2f);
         g.setColour (Colours::white); g.setFont (Font (FontOptions (24.0f, Font::bold)).withExtraKerningFactor (0.08f));
         g.drawText ("MY SOUNDS", 20, 12, 300, 32, Justification::centredLeft);
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
         g.drawText ("YOUR FOLDERS", folderList.getX(), folderList.getY() - 18, 200, 16, Justification::centredLeft);
         g.drawText (current.toUpperCase() + "  -  " + String (files.size()) + " SOUNDS", soundList.getX(), soundList.getY() - 18, 500, 16, Justification::centredLeft);
         g.drawText ("CLICK = HEAR (AND PLAY ON THE KEYS)    DOUBLE-CLICK = INTO PAIR    DRAG = INTO FL STUDIO    DEL = DELETE",
@@ -1337,7 +1354,7 @@ public:
         g.setColour (lnf.skin->accent); g.drawText (note, 330, 20, 700, 20, Justification::centredLeft);
         if (files.isEmpty())
         {
-            g.setColour (Colour (0xff6a7078)); g.setFont (Font (FontOptions (16.0f)));
+            g.setColour (Colour (0xff7d77a8)); g.setFont (Font (FontOptions (16.0f)));
             g.drawFittedText ("This folder is empty.\nUse SAVE TO FOLDER under PAIR children, VST A / B, CHOP slices or DIGGA.", soundList.getBounds().reduced (20), Justification::centred, 3);
         }
     }
@@ -1386,10 +1403,10 @@ private:
         {
             const bool sel = row == page->sel;
             if (sel) { g.setColour (page->lnf.skin->accent.withAlpha (0.3f)); g.fillRect (0, 0, w, h); }
-            else if (row % 2) { g.setColour (Colour (0xff121316)); g.fillRect (0, 0, w, h); }
+            else if (row % 2) { g.setColour (Colour (0xff131130)); g.fillRect (0, 0, w, h); }
             g.setColour (Colours::white.withAlpha (sel ? 1.0f : 0.85f)); g.setFont (Font (FontOptions (13.5f)));
             g.drawText (page->files[row].getFileNameWithoutExtension(), 12, 0, w - 140, h, Justification::centredLeft);
-            g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f)));
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f)));
             g.drawText (page->files[row].getLastModificationTime().formatted ("%d.%m.%Y"), w - 120, 0, 110, h, Justification::centredRight);
         }
         void listBoxItemClicked (int row, const MouseEvent&) override { page->sel = row; page->proc.auditionFile (page->files[row]); page->soundList.repaint(); page->grabKeyboardFocus(); }
@@ -1530,18 +1547,18 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff111215));
-        g.setColour (Colour (0xff1a1b1f)); g.fillRect (0, 0, getWidth(), 64);
+        g.fillAll (Colour (0xff0a0a1a));
+        g.setColour (Colour (0xff1a1838)); g.fillRect (0, 0, getWidth(), 64);
         g.setColour (s.accent); g.fillEllipse (22, 26, 10, 10);
         g.setColour (Colours::white); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.08f));
         g.drawText ("CHOP / SLICE", 40, 12, 260, 40, Justification::centredLeft);
         auto c = proc.chop.current();
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
         g.drawText (c != nullptr ? c->name.toUpperCase() + "   " + String (c->numSlices()) + " SLICES" : String(), 42, 44, 400, 16, Justification::centredLeft);
         // waveform with slices
         const auto w = wave.toFloat();
-        g.setColour (Colour (0xff0b0c0e)); g.fillRoundedRectangle (w, 8);
-        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (w, 8, 1.2f);
+        g.setColour (Colour (0xff0e0c22)); g.fillRoundedRectangle (w, 8);
+        g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (w, 8, 1.2f);
         if (c == nullptr || c->src == nullptr)
         {
             g.setColour (Colours::white.withAlpha (0.8f)); g.setFont (Font (FontOptions (24.0f, Font::bold)));
@@ -1553,7 +1570,7 @@ public:
         for (int i = 0; i < c->numSlices(); ++i)
         {
             const float x0 = xOf (c->sliceStart (i)), x1 = xOf (c->sliceEnd (i));
-            g.setColour (i == sel ? s.accent.withAlpha (0.22f) : (i % 2 ? Colour (0xff17191c) : Colour (0xff121316)));
+            g.setColour (i == sel ? s.accent.withAlpha (0.22f) : (i % 2 ? Colour (0xff17153a) : Colour (0xff131130)));
             g.fillRect (x0, w.getY() + 2, x1 - x0, w.getHeight() - 4);
         }
         const float mid = w.getCentreY(), half = w.getHeight() * 0.42f;
@@ -1578,7 +1595,7 @@ public:
         {
             g.setColour (Colours::white); g.drawVerticalLine ((int) (w.getX() + 10 + (w.getWidth() - 20) * ph), w.getY(), w.getBottom());
         }
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
         g.drawText ("CLICK = PLAY A SLICE   DRAG A YELLOW MARKER = MOVE IT   DOUBLE-CLICK = NEW CUT   RIGHT-CLICK A MARKER = REMOVE", wave.withY (wave.getBottom() + 4).withHeight (16), Justification::centredLeft);
         // selected slice
         g.setColour (Colours::white); g.setFont (Font (FontOptions (18.0f, Font::bold)));
@@ -1593,13 +1610,13 @@ public:
             const auto r = pad (i).toFloat();
             const bool has = i < c->numSlices();
             const float lit = padLit[(size_t) i];
-            g.setColour (has ? Colour (0xff2a2c31).interpolatedWith (s.accent, 0.25f * (i == sel) + 0.6f * lit) : Colour (0xff17181b));
+            g.setColour (has ? Colour (0xff1f1d3e).interpolatedWith (s.accent, 0.25f * (i == sel) + 0.6f * lit) : Colour (0xff16152e));
             g.fillRoundedRectangle (r, 8);
-            g.setColour (has ? Colour (0xff4a4e55) : Colour (0xff24262a)); g.drawRoundedRectangle (r, 8, 1.4f);
+            g.setColour (has ? Colour (0xff4a4478) : Colour (0xff1e1c3c)); g.drawRoundedRectangle (r, 8, 1.4f);
             if (! has) continue;
             g.setColour (Colours::white.withAlpha (0.9f)); g.setFont (Font (FontOptions (15.0f, Font::bold)));
             g.drawText (String (i + 1), r.reduced (10, 6).toNearestInt(), Justification::topLeft);
-            g.setColour (Colour (0xff9aa0a8)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+            g.setColour (Colour (0xffb4aed8)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
             g.drawText (MidiMessage::getMidiNoteName (kk::ChopLab::firstNote + i, true, true, 5), r.reduced (10, 6).toNearestInt(), Justification::topRight);
         }
     }
@@ -1797,9 +1814,9 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff121315));
+        g.fillAll (Colour (0xff0f0e22));
         // left rail behind the BREED LAB / FAMILY TREE / KILLA tiles
-        g.setColour (Colour (0xff141518)); g.fillRect (0, 0, kRail, getHeight());
+        g.setColour (Colour (0xff12112a)); g.fillRect (0, 0, kRail, getHeight());
         g.setColour (s.panelEdge.withAlpha (0.6f)); g.drawVerticalLine (kRail - 1, 0.0f, (float) getHeight());
         g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
         g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
@@ -1809,7 +1826,7 @@ public:
             const bool on = isOn();
             const Colour c = on ? Colour (0xff36ff6a) : Colour (0xffff3030);
             g.setColour (c.withAlpha (on ? 0.25f : 0.12f)); g.fillEllipse (pr.expanded (10));
-            g.setGradientFill (ColourGradient (Colour (0xff2c2626), pr.getCentreX(), pr.getY(), Colour (0xff0a0808), pr.getCentreX(), pr.getBottom(), false));
+            g.setGradientFill (ColourGradient (Colour (0xff2c2858), pr.getCentreX(), pr.getY(), Colour (0xff0a0918), pr.getCentreX(), pr.getBottom(), false));
             g.fillEllipse (pr);
             g.setColour (c); g.drawEllipse (pr.reduced (2), 3.0f);
             const auto cc = pr.getCentre(); const float rr = pr.getWidth() * 0.22f;
@@ -1818,12 +1835,12 @@ public:
             g.drawLine (cc.x, cc.y - rr * 1.25f, cc.x, cc.y - rr * 0.2f, 3.5f);
             g.setFont (Font (FontOptions (18.0f, Font::bold)).withExtraKerningFactor (0.15f));
             g.drawText (on ? "ON" : "OFF", Rectangle<float> (0, pr.getBottom() + 8, (float) kRail, 24).toNearestInt(), Justification::centred);
-            g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f)));
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f)));
             g.drawFittedText (title + "\non the melodies", Rectangle<float> (4, pr.getBottom() + 32, (float) kRail - 8, 30).toNearestInt(), Justification::centred, 2);
         }
         if (editor == nullptr)
         {
-            g.setColour (Colour (0xffb8bdc4)); g.setFont (serif (18.0f, false, 0.2f));
+            g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (18.0f, false, 0.2f));
             g.drawText ("opening " + title + " ...", getLocalBounds(), Justification::centred);
         }
     }
@@ -1933,19 +1950,19 @@ static const DrumTheme& drumTheme (int d)
 {
     static const DrumTheme t[kk::numDrumSlots] {
         { "808", "SUB BOOSTER  -  DROP YOUR 808, MAKE IT KNOCK, WRITE THE 808 LINE, DRAG IT ALL BACK INTO FL", "DROP YOUR 808 HERE", "808 PATTERNS",
-          Colour (0xff2b2e33), Colour (0xff111215), Colour (0xffff5a1f), Colour (0xffffc23d), Colour (0xffeef0f2), { "ATLANTA", "DRILL", "PLUGG", "RAGE" } },
+          Colour (0xff1d1a3c), Colour (0xff0a0a1a), Colour (0xffff5a1f), Colour (0xffffc23d), Colour (0xffeef0f2), { "ATLANTA", "DRILL", "PLUGG", "RAGE" } },
         { "SNARE / CLAP", "CRACK LAB  -  DROP A SNARE OR CLAP, SHARPEN IT, GENERATE TRAP SNARE ROLLS", "DROP YOUR SNARE / CLAP HERE", "SNARE ROLLS",
-          Colour (0xff2a2e33), Colour (0xff101215), Colour (0xff1fe0ff), Colour (0xffff3fd2), Colour (0xffeef0f2), { "TRAP", "TRIPLET", "DRILL", "BUILD-UP" } },
+          Colour (0xff1b1a3a), Colour (0xff0a0a1a), Colour (0xff1fe0ff), Colour (0xffff3fd2), Colour (0xffeef0f2), { "TRAP", "TRIPLET", "DRILL", "BUILD-UP" } },
         { "HI-HAT", "HAT FACTORY  -  DROP A HI-HAT, MAKE IT SHINE, TRAP ROLLS IN THE PIANO ROLL", "DROP YOUR HI-HAT HERE", "HI-HAT ROLLS",
-          Colour (0xff2d2d31), Colour (0xff121214), Colour (0xffffd23f), Colour (0xffb070ff), Colour (0xffeef0f2), { "ATLANTA", "TRIPLET", "DRILL", "CRAZY" } },
+          Colour (0xff1f1a3e), Colour (0xff0a0a1a), Colour (0xffffd23f), Colour (0xffb070ff), Colour (0xffeef0f2), { "ATLANTA", "TRIPLET", "DRILL", "CRAZY" } },
         { "KICK", "KICK LAB  -  DROP A KICK, MAKE IT HIT, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR KICK HERE", "MY DRUM KIT",
-          Colour (0xff2b2e33), Colour (0xff111215), Colour (0xffff3b30), Colour (0xffff9f0a), Colour (0xffeef0f2), { "", "", "", "" } },
+          Colour (0xff1d1a3c), Colour (0xff0a0a1a), Colour (0xffff3b30), Colour (0xffff9f0a), Colour (0xffeef0f2), { "", "", "", "" } },
         { "OPEN HAT", "OPEN HAT  -  DROP AN OPEN HAT / CRASH, SHAPE ITS TAIL, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR OPEN HAT HERE", "MY DRUM KIT",
-          Colour (0xff2d2d31), Colour (0xff121214), Colour (0xffffe066), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } },
+          Colour (0xff1f1a3e), Colour (0xff0a0a1a), Colour (0xffffe066), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } },
         { "PERC", "PERCUSSION  -  RIMS, TOMS, SHAKERS, BONGOS ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR PERC HERE", "MY DRUM KIT",
-          Colour (0xff2a2e33), Colour (0xff101215), Colour (0xff30d158), Colour (0xffffd60a), Colour (0xffeef0f2), { "", "", "", "" } },
+          Colour (0xff1b1a3a), Colour (0xff0a0a1a), Colour (0xff30d158), Colour (0xffffd60a), Colour (0xffeef0f2), { "", "", "", "" } },
         { "FX", "DRUM FX  -  RISERS, IMPACTS, VOX TAGS, REVERSES ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR FX HERE", "MY DRUM KIT",
-          Colour (0xff2c2b33), Colour (0xff111015), Colour (0xffbf5af2), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } } };
+          Colour (0xff211a40), Colour (0xff0a0a1a), Colour (0xffbf5af2), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } } };
     return t[jlimit (0, kk::numDrumSlots - 1, d)];
 }
 
@@ -1972,7 +1989,7 @@ public:
         g.setGradientFill (ColourGradient (th.accent2, c.x - r, c.y, th.accent, c.x + r, c.y, false));
         g.strokePath (arc, PathStrokeType (5.0f, PathStrokeType::curved, PathStrokeType::rounded));
         const float cr = r * 0.68f;
-        g.setGradientFill (ColourGradient (Colour (0xff4a4d52), c.x, c.y - cr, Colour (0xff17181b), c.x, c.y + cr, false));
+        g.setGradientFill (ColourGradient (Colour (0xff4a4670), c.x, c.y - cr, Colour (0xff16152e), c.x, c.y + cr, false));
         g.fillEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2);
         g.setColour (Colours::white.withAlpha (0.14f)); g.drawEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2, 1.2f);
         const float ang = a1 - MathConstants<float>::halfPi;
@@ -2020,8 +2037,8 @@ public:
     void paint (Graphics& g) override
     {
         const auto all = getLocalBounds().toFloat();
-        g.setColour (Colour (0xff0d0e10)); g.fillRoundedRectangle (all, 8);
-        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (all.reduced (0.5f), 8, 1.2f);
+        g.setColour (Colour (0xff0b0a18)); g.fillRoundedRectangle (all, 8);
+        g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (all.reduced (0.5f), 8, 1.2f);
         const auto gr = grid(), vl = velLane();
         const int rows = hi - lo + 1;
         const float rh = gr.getHeight() / (float) rows;
@@ -2032,11 +2049,11 @@ public:
             const int semi = hi - r;
             const float y = gr.getY() + r * rh;
             const bool black = MidiMessage::isMidiNoteBlack (root + semi);
-            g.setColour (semi == 0 ? th.accent.withAlpha (0.12f) : Colour (black ? 0xff141518 : 0xff1a1c20)); g.fillRect (gr.getX(), y, gr.getWidth(), rh);
-            g.setColour (Colour (0xff23262b)); g.drawHorizontalLine ((int) y, gr.getX(), gr.getRight());
+            g.setColour (semi == 0 ? th.accent.withAlpha (0.12f) : Colour (black ? 0xff12112a : 0xff17152f)); g.fillRect (gr.getX(), y, gr.getWidth(), rh);
+            g.setColour (Colour (0xff221f40)); g.drawHorizontalLine ((int) y, gr.getX(), gr.getRight());
             if (rh >= 9.0f)
             {
-                g.setColour (semi == 0 ? th.accent : Colour (0xff8a9099)); g.setFont (Font (FontOptions (std::min (12.0f, rh - 1.0f), semi == 0 ? Font::bold : Font::plain)));
+                g.setColour (semi == 0 ? th.accent : Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (std::min (12.0f, rh - 1.0f), semi == 0 ? Font::bold : Font::plain)));
                 const String lab = d == 0 ? MidiMessage::getMidiNoteName (root + semi, true, true, 5) : (semi == 0 ? String ("ROOT") : (semi > 0 ? "+" : "") + String (semi));
                 g.drawText (lab, Rectangle<float> (all.getX() + 4, y, gr.getX() - all.getX() - 8, rh), Justification::centredRight);
             }
@@ -2049,11 +2066,11 @@ public:
             const double b = k / (double) sub;
             const float x = beatX (b);
             const bool beat = std::abs (b - std::round (b)) < 1.0e-6, bar = beat && ((int) std::round (b)) % 4 == 0;
-            g.setColour (Colour (bar ? 0xff6a7078 : beat ? 0xff3a3e44 : 0xff212327));
+            g.setColour (Colour (bar ? 0xff7d77a8 : beat ? 0xff3a3462 : 0xff1d1b38));
             g.drawVerticalLine ((int) x, gr.getY(), vl.getBottom());
             if (bar && b < len)
             {
-                g.setColour (Colour (0xff9aa0a8)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+                g.setColour (Colour (0xffb4aed8)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
                 g.drawText (String ((int) std::round (b) / 4 + 1), Rectangle<float> (x + 4, all.getY() + 2, 30, 14), Justification::centredLeft);
             }
         }
@@ -2071,8 +2088,8 @@ public:
             const float vx = beatX (h.beat);
             g.setColour (c); g.fillRect (vx, vl.getBottom() - vl.getHeight() * h.vel, 3.0f, vl.getHeight() * h.vel);
         }
-        g.setColour (Colour (0xff3c4046)); g.drawHorizontalLine ((int) vl.getY() - 1, gr.getX(), gr.getRight());
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (10.0f, Font::bold)));
+        g.setColour (Colour (0xff3a3264)); g.drawHorizontalLine ((int) vl.getY() - 1, gr.getX(), gr.getRight());
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (10.0f, Font::bold)));
         g.drawText ("VEL", Rectangle<float> (all.getX() + 4, vl.getY(), gr.getX() - all.getX() - 8, vl.getHeight()), Justification::centredRight);
         if (playBeat >= 0)
         {
@@ -2081,7 +2098,7 @@ public:
         }
         if (pat.empty())
         {
-            g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (18.0f, Font::bold)));
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (18.0f, Font::bold)));
             g.drawText ("CLICK TO DRAW NOTES  -  OR HIT GENERATE", gr.toNearestInt(), Justification::centred);
         }
     }
@@ -2369,8 +2386,8 @@ public:
         g.setGradientFill (ColourGradient (th.accent.withAlpha (0.10f), w * 0.6f, 0, Colours::transparentBlack, w * 0.6f, 340, false));
         g.fillRect (0.0f, 0.0f, w, 340.0f);
         // the rail behind the tiles
-        g.setColour (Colour (0xff141518)); g.fillRect (0, 0, kRail, getHeight());
-        g.setColour (Colour (0xff3c4046)); g.drawVerticalLine (kRail - 1, 0.0f, h);
+        g.setColour (Colour (0xff12112a)); g.fillRect (0, 0, kRail, getHeight());
+        g.setColour (Colour (0xff3a3264)); g.drawVerticalLine (kRail - 1, 0.0f, h);
         g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
         g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
         // title
@@ -2382,10 +2399,10 @@ public:
         // section panels (MPC style: dark inset plates with screws)
         for (auto r : { boostPanel, patPanel })
         {
-            g.setColour (Colour (0xff17181b).withAlpha (0.9f)); g.fillRoundedRectangle (r.toFloat(), 10);
-            g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 10, 1.2f);
+            g.setColour (Colour (0xff16152e).withAlpha (0.9f)); g.fillRoundedRectangle (r.toFloat(), 10);
+            g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 10, 1.2f);
             for (auto c : { r.getTopLeft().translated (9, 9), r.getTopRight().translated (-9, 9), r.getBottomLeft().translated (9, -9), r.getBottomRight().translated (-9, -9) })
-            { g.setColour (Colour (0xff4a4e55)); g.fillEllipse ((float) c.x - 3, (float) c.y - 3, 6, 6); }
+            { g.setColour (Colour (0xff4a4478)); g.fillEllipse ((float) c.x - 3, (float) c.y - 3, 6, 6); }
         }
         drawArt (g, art);
         drawWave (g);
@@ -2408,7 +2425,7 @@ public:
         g.drawText ("LENGTH", barBtns.front()->getX(), barBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
         g.drawText ("DENSITY", density.getX(), density.getY() - 18, 200, 16, Justification::centredLeft);
         g.drawText ("GRID", snapBtns.front()->getX(), snapBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
         g.drawText (proc.drum (d).hasSample() ? String ((int) proc.pattern (d).size()) + " NOTES  -  CLICK DRAW / DRAG MOVE / DOUBLE-CLICK DELETE"
                                                : "LOAD YOUR " + th.title + " TO HEAR IT  -  THE MIDI DRAGS ANYWAY",
                     patPanel.getX() + 40, patPanel.getY() + 40, 520, 16, Justification::centredLeft);
@@ -2490,7 +2507,7 @@ public:
     void paintKit (Graphics& g)
     {
         auto r = patPanel.reduced (22).withTrimmedTop (50);
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
         g.drawText ("KIT: " + proc.lastKit.toUpperCase() + "   -   " + String (kk::Kits::count (proc.lastKit)) + " SOUNDS SAVED", r.removeFromTop (18), Justification::centredLeft);
         r.removeFromTop (8);
         static const char* slotNames[] { "808", "SNARE / CLAP", "HI-HAT", "KICK", "OPEN HAT", "PERC", "FX" };
@@ -2501,8 +2518,8 @@ public:
             auto c = Rectangle<int> (cards.getX() + i * (cw + 10), cards.getY(), cw, cards.getHeight()).toFloat();
             const auto& t = drumTheme (i);
             auto smp = proc.drum (i).current();
-            g.setColour (Colour (0xff0d0e10)); g.fillRoundedRectangle (c, 8);
-            g.setColour (i == d ? t.accent : Colour (0xff3c4046)); g.drawRoundedRectangle (c.reduced (0.5f), 8, i == d ? 2.0f : 1.0f);
+            g.setColour (Colour (0xff0b0a18)); g.fillRoundedRectangle (c, 8);
+            g.setColour (i == d ? t.accent : Colour (0xff3a3264)); g.drawRoundedRectangle (c.reduced (0.5f), 8, i == d ? 2.0f : 1.0f);
             g.setColour (t.accent); g.setFont (Font (FontOptions (13.0f, Font::bold)).withExtraKerningFactor (0.08f));
             g.drawText (slotNames[i], c.reduced (10, 8).withHeight (18).toNearestInt(), Justification::centredLeft);
             if (smp != nullptr)
@@ -2511,10 +2528,10 @@ public:
                 g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (11.0f)));
                 g.drawText (smp->name, c.reduced (10, 8).removeFromBottom (16).toNearestInt(), Justification::centredLeft);
             }
-            else { g.setColour (Colour (0xff6a7078)); g.setFont (Font (FontOptions (12.0f))); g.drawText ("empty", c.toNearestInt(), Justification::centred); }
+            else { g.setColour (Colour (0xff7d77a8)); g.setFont (Font (FontOptions (12.0f))); g.drawText ("empty", c.toNearestInt(), Justification::centred); }
         }
         r.removeFromTop (16);
-        g.setColour (Colour (0xffb8bdc4)); g.setFont (Font (FontOptions (13.0f)));
+        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (13.0f)));
         g.drawFittedText ("1. Load a sound on any drum page and shape it.   2. SAVE TO KIT (or SAVE WHOLE KIT).   3. Your kit is a folder with 808s, Kicks, Snares & Claps, Hi-Hats, Open Hats, Percussion and FX.\n"
                           "In FL Studio once: Options > File settings > Browser extra search folders > add  Documents / KEYS KILLA / Drum Kits  -  your kits then sit in FL's browser like any drum kit.",
                           r.removeFromTop (44), Justification::centredLeft, 2);
@@ -2589,7 +2606,7 @@ private:
         const auto kind = kk::kindOfSlot (d);
         if (kind == kk::drum808)   // speaker cone
         {
-            g.setGradientFill (ColourGradient (Colour (0xff3a3d42), c.x, c.y - rad, Colour (0xff0b0c0e), c.x, c.y + rad, false));
+            g.setGradientFill (ColourGradient (Colour (0xff36306a), c.x, c.y - rad, Colour (0xff0b0a1c), c.x, c.y + rad, false));
             g.fillEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2);
             for (int i = 1; i <= 5; ++i)
             {
@@ -2608,7 +2625,7 @@ private:
         }
         else if (kind == kk::drumSnare)   // snare from above: head, rim, lugs, wires
         {
-            g.setColour (Colour (0xff0e1215)); g.fillEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2);
+            g.setColour (Colour (0xff141230)); g.fillEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2);
             g.setColour (th.accent.withAlpha (0.8f)); g.drawEllipse (c.x - rad, c.y - rad, rad * 2, rad * 2, 5.0f);
             const float hr = rad * 0.86f;
             g.setGradientFill (ColourGradient (Colour (0xffe9f0f2), c.x - hr * 0.3f, c.y - hr * 0.4f, Colour (0xff98a2a8), c.x + hr, c.y + hr, true));
@@ -2638,8 +2655,10 @@ private:
     void drawWave (Graphics& g)
     {
         const auto r = wave.toFloat();
-        g.setColour (Colour (0xff0b0c0e)); g.fillRoundedRectangle (r, 10);
-        g.setColour ((dragHover ? th.accent2 : th.accent).withAlpha (dragHover ? 0.9f : 0.35f)); g.drawRoundedRectangle (r, 10, dragHover ? 3.0f : 1.4f);
+        g.setGradientFill (ColourGradient (Colour (0xff1a1638), r.getX(), r.getY(), Colour (0xff0b0a1c), r.getX(), r.getBottom(), false)); g.fillRoundedRectangle (r, 10);
+        for (int k = 3; k >= 1; --k) { g.setColour (th.accent.withAlpha (0.06f * (float) k)); g.drawRoundedRectangle (r.expanded ((float) (4 - k) * 2.0f), 12, 2.0f); }
+        g.setGradientFill (ColourGradient ((dragHover ? th.accent2 : th.accent).withAlpha (dragHover ? 1.0f : 0.8f), r.getX(), r.getY(), th.accent2.withAlpha (dragHover ? 1.0f : 0.55f), r.getRight(), r.getBottom(), false));
+        g.drawRoundedRectangle (r, 10, dragHover ? 3.0f : 1.8f);
         auto s = proc.drum (d).current();
         if (s == nullptr)
         {
@@ -2747,8 +2766,8 @@ public:
     bool hasEditor() const { return editor != nullptr; }
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff0b0c0e));
-        g.setColour (Colour (0xff17181b)); g.fillRect (0, 0, getWidth(), 48);
+        g.fillAll (Colour (0xff0e0c22));
+        g.setColour (Colour (0xff16152e)); g.fillRect (0, 0, getWidth(), 48);
         g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (16.0f, Font::bold)).withExtraKerningFactor (0.1f));
         g.drawText (title.toUpperCase() + "   -   choose a sound, then CAPTURE in PAIR FROM VST", 20, 0, getWidth() - 300, 48, Justification::centredLeft);
     }
@@ -2785,7 +2804,7 @@ public:
         search.onTextChange = [this] { filter(); };
         addAndMakeVisible (search);
         list.setModel (this); list.setRowHeight (22);
-        list.setColour (ListBox::backgroundColourId, Colour (0xff0d0e10));
+        list.setColour (ListBox::backgroundColourId, Colour (0xff100e26));
         addAndMakeVisible (list);
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (prevBtn, "<", "Previous sound", [this] { step (-1); });
@@ -2820,11 +2839,13 @@ public:
     {
         const auto& s = *lnf.skin;
         auto r = getLocalBounds().toFloat();
-        g.setColour (Colour (0xff17181b)); g.fillRoundedRectangle (r, 10);
-        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r.reduced (0.5f), 10, 1.2f);
-        g.setColour (s.accent); g.setFont (Font (FontOptions (34.0f, Font::bold)));
+        const Colour c1 = side == 0 ? Colour (0xffff2f6d) : Colour (0xff9b4dff), c2 = side == 0 ? Colour (0xffff8a3d) : Colour (0xff4d7dff);
+        g.setGradientFill (ColourGradient (Colour (0xff1c1940), 0, 0, Colour (0xff100e26), 0, r.getBottom(), false)); g.fillRoundedRectangle (r, 10);
+        g.setGradientFill (ColourGradient (c1, 0, 0, c2, r.getRight(), r.getBottom(), false)); g.drawRoundedRectangle (r.reduced (1.0f), 10, 1.8f);
+        ignoreUnused (s);
+        g.setGradientFill (ColourGradient (c1, 12, 6, c2, 48, 42, false)); g.setFont (Font (FontOptions (34.0f, Font::bold)));
         g.drawText (side == 0 ? "A" : "B", 12, 6, 36, 36, Justification::centred);
-        g.setColour (Colour (0xffb8bdc4)); g.setFont (Font (FontOptions (11.5f)));
+        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (11.5f)));
         const auto& h = proc.host (side);
         String info = ! h.loaded() ? String ("choose a plugin")
                     : proc.vstSounds[(size_t) side].empty() ? String ("this plugin shares no sound list: SHOW PLUGIN, pick a sound, TAKE CURRENT")
@@ -2869,8 +2890,8 @@ private:
         const int idx = shown[(size_t) row];
         const bool sel = idx == proc.vstSel[(size_t) side];
         if (sel) { g.setColour (lnf.skin->accent.withAlpha (0.35f)); g.fillRect (0, 0, w, h); }
-        else if (row % 2) { g.setColour (Colour (0xff141518)); g.fillRect (0, 0, w, h); }
-        g.setColour (sel ? Colours::white : Colour (0xffd8d2d2)); g.setFont (Font (FontOptions (13.0f)));
+        else if (row % 2) { g.setColour (Colour (0xff12112a)); g.fillRect (0, 0, w, h); }
+        g.setColour (sel ? Colours::white : Colour (0xffd9d4f5)); g.setFont (Font (FontOptions (13.0f)));
         g.drawText (proc.vstSounds[(size_t) side][(size_t) idx].name, 8, 0, w - 16, h, Justification::centredLeft);
     }
     void listBoxItemClicked (int row, const MouseEvent&) override { if (row >= 0 && row < (int) shown.size()) pick (shown[(size_t) row]); }
@@ -3018,13 +3039,13 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff141518));
+        g.fillAll (Colour (0xff12112a));
         g.setColour (s.panelEdge); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8, 1.4f);
         // ---- HARVEST: drop zone + bank by character
         if (! vstPage)
         {
             const auto dz = dropZone().toFloat();
-            g.setColour (Colour (dropHover ? 0xff2a0d0d : 0xff17181b)); g.fillRoundedRectangle (dz, 10);
+            g.setColour (Colour (dropHover ? 0xff3a1640 : 0xff16152e)); g.fillRoundedRectangle (dz, 10);
             Path d; d.addRoundedRectangle (dz.reduced (1), 10);
             const float pat[] { 7.0f, 5.0f };
             PathStrokeType (1.6f).createDashedStroke (d, d, pat, 2);
@@ -3037,8 +3058,8 @@ public:
             for (int c = 0; c < kk::numCats; ++c)
             {
                 const auto col = bankCol (c).toFloat();
-                g.setColour (Colour (0xff111214)); g.fillRoundedRectangle (col, 6);
-                g.setColour (Colour (0xff35393f)); g.drawRoundedRectangle (col, 6, 1.0f);
+                g.setColour (Colour (0xff0e0d20)); g.fillRoundedRectangle (col, 6);
+                g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (col, 6, 1.0f);
                 g.setColour (s.accent); g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.08f));
                 g.drawText (kk::harvestCatShort (c), col.withHeight (20).toNearestInt(), Justification::centred);
             }
@@ -3048,7 +3069,7 @@ public:
                 const auto& it = proc.bank[(size_t) i];
                 if (row[it.cat] >= kk::Harvest::perCategory) continue;
                 const auto r = chip (it.cat, row[it.cat]++).toFloat();
-                g.setColour (i == armed ? s.accent.withAlpha (0.6f) : Colour (0xff24262a)); g.fillRoundedRectangle (r, 4);
+                g.setColour (i == armed ? s.accent.withAlpha (0.6f) : Colour (0xff1e1c3c)); g.fillRoundedRectangle (r, 4);
                 drawPeaks (g, r.reduced (3, 2).withWidth (r.getWidth() * 0.45f), it.sound->peaks, s.accent.withAlpha (0.8f));
                 g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (10.5f)));
                 g.drawText (it.sound->pitched && it.cat != kk::catDrum && it.cat != kk::catFx ? MidiMessage::getMidiNoteName (it.sound->rootNote, true, true, 5) : String (i + 1),
@@ -3056,7 +3077,7 @@ public:
             }
             if (proc.bank.empty())
             {
-                g.setColour (Colour (0xff6a5c5c)); g.setFont (serif (13.0f, false, 0.1f));
+                g.setColour (Colour (0xff6a6290)); g.setFont (serif (13.0f, false, 0.1f));
                 g.drawFittedText (vstPage ? "your sound bank is empty - choose a plugin, GRAB ALL ITS SOUNDS" : "your sound bank is empty - drop a song on HARVEST", bankArea().withTrimmedTop (60), Justification::centredTop, 2);
             }
         }
@@ -3065,20 +3086,20 @@ public:
         {
             const auto r = slot (k).toFloat();
             const auto& p = proc.pairParents[(size_t) k];
-            g.setColour (Colour (0xff17181b)); g.fillRoundedRectangle (r, 8);
+            g.setColour (Colour (0xff16152e)); g.fillRoundedRectangle (r, 8);
             if (hoverSlot == k) drawGlowFrame (g, r, s.accent, 8);
             else
             {
                 Path d; d.addRoundedRectangle (r.reduced (1), 8);
                 const float pat[] { 6.0f, 4.0f };
-                if (p == nullptr) PathStrokeType (1.2f).createDashedStroke (d, d, pat, 2), g.setColour (Colour (0xff4a4e55)), g.fillPath (d);
-                else { g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r, 8, 1.2f); }
+                if (p == nullptr) PathStrokeType (1.2f).createDashedStroke (d, d, pat, 2), g.setColour (Colour (0xff4a4478)), g.fillPath (d);
+                else { g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r, 8, 1.2f); }
             }
-            g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (12.0f, false, 0.25f));
             g.drawText ("SOUND " + String (k + 1), r.reduced (12, 6).withHeight (16).toNearestInt(), Justification::centredLeft);
             {   // dice: a random sound flies in
                 const auto db = diceBox (k).toFloat();
-                g.setColour (Colour (0xff2a1414)); g.fillRoundedRectangle (db, 5);
+                g.setColour (Colour (0xff2e1846)); g.fillRoundedRectangle (db, 5);
                 g.setColour (s.accent); g.drawRoundedRectangle (db, 5, 1.2f);
                 g.setColour (Colours::white);
                 for (auto pt : { Point<float> (0.3f, 0.3f), Point<float> (0.7f, 0.3f), Point<float> (0.5f, 0.5f), Point<float> (0.3f, 0.7f), Point<float> (0.7f, 0.7f) })
@@ -3086,7 +3107,7 @@ public:
             }
             if (p == nullptr)
             {
-                g.setColour (Colour (0xffb8bdc4)); g.setFont (serif (15.0f, false, 0.12f));
+                g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (15.0f, false, 0.12f));
                 g.drawFittedText ("drop a WAV here\nor roll the dice", r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
@@ -3095,7 +3116,7 @@ public:
             g.drawText (p->name, r.reduced (12, 6).removeFromBottom (18).toNearestInt(), Justification::centredLeft);
             g.setColour (s.accent); g.setFont (serif (12.0f, false, 0.1f));
             g.drawText (p->pitched ? MidiMessage::getMidiNoteName (p->rootNote, true, true, 5) : String ("DRUM / FX"), r.reduced (12, 6).withHeight (16).withTrimmedRight (26).toNearestInt(), Justification::centredRight);
-            g.setColour (Colour (0xff8a9099)); g.drawText ("x", closeBox (k), Justification::centred);
+            g.setColour (Colour (0xffaaa4cf)); g.drawText ("x", closeBox (k), Justification::centred);
         }
         // the family line
         g.setColour (s.accent.withAlpha (0.45f));
@@ -3116,7 +3137,7 @@ public:
         g.drawLine (bc.getCentreX(), bc.getBottom() - 6, bc.getCentreX(), busY, 1.5f);
         g.drawLine ((float) kid (0).getCentreX(), busY, (float) kid (5).getCentreX(), busY, 1.5f);
         for (int k = 0; k < 6; ++k) g.drawLine ((float) kid (k).getCentreX(), busY, (float) kid (k).getCentreX(), (float) kid (k).getY(), 1.5f);
-        g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (12.0f, false, 0.25f));
         if (! vstPage) g.drawText ("CHILDREN", flavorBtns.front()->getX(), flavorBtns.front()->getY() - 16, 200, 14, Justification::centredLeft);
         if (note.isNotEmpty()) { g.setColour (Colour (0xff36ff6a)); g.setFont (Font (FontOptions (13.0f, Font::bold))); g.drawText (note, getWidth() / 2 + 110, kid (0).getY() - 26, getWidth() / 2 - 130, 18, Justification::centredRight); }
         for (int i = 0; i < (int) flavorBtns.size(); ++i) { flavorBtns[(size_t) i]->selected = i == proc.pairFlavor; }
@@ -3126,13 +3147,13 @@ public:
             const auto r = kid (k).toFloat();
             const bool has = k < (int) proc.pairKids.size();
             const bool sel = has && k == proc.pairSel;
-            g.setColour (Colour (sel ? 0xff2a0d0d : 0xff141010)); g.fillRoundedRectangle (r, 8);
-            if (sel) drawGlowFrame (g, r, s.accent, 8); else { g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (r, 8, 1.2f); }
-            g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
+            g.setGradientFill (ColourGradient (Colour (sel ? 0xff3a1640 : 0xff1c1940), r.getX(), r.getY(), Colour (sel ? 0xff1a0c26 : 0xff100e26), r.getX(), r.getBottom(), false)); g.fillRoundedRectangle (r, 8);
+            if (sel) drawGlowFrame (g, r, s.accent, 8); else { g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r, 8, 1.2f); }
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (12.0f, false, 0.25f));
             g.drawText ("CHILD " + String (k + 1), r.reduced (10, 6).withHeight (16).toNearestInt(), Justification::centredLeft);
             if (! has)
             {
-                g.setColour (Colour (0xff6a5c5c)); g.setFont (serif (13.0f, false, 0.12f));
+                g.setColour (Colour (0xff6a6290)); g.setFont (serif (13.0f, false, 0.12f));
                 g.drawText (proc.pairParents[0] || proc.pairParents[1] || proc.pairParents[2] || proc.pairParents[3] ? "press BREED" : (vstPage ? "choose a sound in A and B" : "drop your sounds"), r.toNearestInt(), Justification::centred);
                 continue;
             }
@@ -3145,10 +3166,10 @@ public:
             // LOOP button + drag hint
             const auto lb = loopBox (k).toFloat();
             const bool looping = proc.loopPlaying() && proc.pairLoopKid == k;
-            g.setColour (looping ? s.accent : Colour (0xff2a2020)); g.fillRoundedRectangle (lb, 5);
+            g.setColour (looping ? s.accent : Colour (0xff2a2450)); g.fillRoundedRectangle (lb, 5);
             g.setColour (Colours::white); g.setFont (serif (12.0f, false, 0.2f));
             g.drawText (looping ? "STOP LOOP" : "LOOP", lb.toNearestInt(), Justification::centred);
-            g.setColour (Colour (0xff8a9099)); g.setFont (serif (10.5f, false, 0.15f));
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (10.5f, false, 0.15f));
             g.drawText (looping ? "drag: MIDI" : "drag: WAV", r.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredRight);
             {   // SAVE to a folder
                 const auto sb = saveBox (k).toFloat();
@@ -3157,7 +3178,7 @@ public:
                 g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawText ("SAVE", sb.toNearestInt(), Justification::centred);
             }
         }
-        g.setColour (Colour (0xff8a9099)); g.setFont (serif (12.0f, false, 0.25f));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (12.0f, false, 0.25f));
         g.drawText (vstPage ? "1. A + B: CHOOSE A PLUGIN   2. CLICK A SOUND = HEAR IT   3. BREED   4. CHILD: CLICK = KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI"
                             : "BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, DEL = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centred);
@@ -3408,7 +3429,7 @@ public:
         g.setColour (s.accent); g.fillPath (arrow);
         g.setColour (Colours::white); g.setFont (Font (FontOptions (19.0f, Font::bold)).withExtraKerningFactor (0.12f));
         g.drawFittedText ("DRAG\nTO DAW", Rectangle<float> (r.getX(), ay + 40, r.getWidth(), 46).toNearestInt(), Justification::centred, 2);
-        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.5f, Font::italic)));
+        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.5f, Font::italic)));
         g.drawFittedText (busy ? "printing..." : "it's yours now", Rectangle<float> (r.getX(), r.getBottom() - 26, r.getWidth(), 18).toNearestInt(), Justification::centred, 1);
     }
     void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
@@ -3433,6 +3454,43 @@ private:
 
 // left column: BREED LAB / FAMILY TREE, then the melody extras VOODOO KILLA / EFFECTOR KILLA / DIGGA KILLA
 // (-1 = a drum page of the bottom row is open)
+// little neon icons for the left tiles
+static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, Colour c)
+{
+    g.setColour (c);
+    const auto cx = r.getCentreX(), cy = r.getCentreY(), w = r.getWidth();
+    PathStrokeType st (2.0f, PathStrokeType::curved, PathStrokeType::rounded);
+    Path p;
+    switch (k)
+    {
+        case 0:   // BREED LAB: helix
+            for (int s = 0; s < 2; ++s) { p.startNewSubPath (cx - 6, r.getY()); for (int i = 0; i <= 16; ++i) { const float t = (float) i / 16.0f; p.lineTo (cx + std::sin (t * 6.283f + (float) s * 3.1416f) * 6.0f, r.getY() + t * w); } }
+            g.strokePath (p, st); break;
+        case 1:   // FAMILY TREE
+            g.fillEllipse (cx - 3, r.getY(), 6, 6); g.fillEllipse (r.getX() + 1, r.getBottom() - 6, 6, 6); g.fillEllipse (r.getRight() - 7, r.getBottom() - 6, 6, 6);
+            p.startNewSubPath (cx, r.getY() + 6); p.lineTo (cx, cy); p.startNewSubPath (r.getX() + 4, r.getBottom() - 6); p.lineTo (r.getX() + 4, cy); p.lineTo (r.getRight() - 4, cy); p.lineTo (r.getRight() - 4, r.getBottom() - 6);
+            g.strokePath (p, st); break;
+        case 2:   // PAIR YOUR OWN: two links
+            p.addRoundedRectangle (r.getX(), cy - 5, w * 0.6f, 10, 5); p.addRoundedRectangle (r.getX() + w * 0.4f, cy - 5, w * 0.6f, 10, 5);
+            g.strokePath (p, st); break;
+        case 3:   // PAIR FROM VST: four squares
+            for (int i = 0; i < 4; ++i) p.addRoundedRectangle (r.getX() + (float) (i % 2) * w * 0.55f, r.getY() + (float) (i / 2) * w * 0.55f, w * 0.42f, w * 0.42f, 2.5f);
+            g.strokePath (p, st); break;
+        case 4:   // MY SOUNDS: pulse
+            p.startNewSubPath (r.getX(), cy); p.lineTo (r.getX() + w * 0.25f, cy); p.lineTo (r.getX() + w * 0.38f, r.getY() + 2); p.lineTo (r.getX() + w * 0.55f, r.getBottom() - 2); p.lineTo (r.getX() + w * 0.68f, cy); p.lineTo (r.getRight(), cy);
+            g.strokePath (p, st); break;
+        case 5:   // VOODOO: crown
+            p.startNewSubPath (r.getX() + 2, r.getBottom() - 4); p.lineTo (r.getX() + 2, r.getY() + 6); p.lineTo (cx - 5, cy); p.lineTo (cx, r.getY() + 3); p.lineTo (cx + 5, cy); p.lineTo (r.getRight() - 2, r.getY() + 6); p.lineTo (r.getRight() - 2, r.getBottom() - 4); p.closeSubPath();
+            g.strokePath (p, st); break;
+        case 6:   // EFFECTOR: fx
+            g.setFont (Font (FontOptions (w * 0.9f, Font::bold | Font::italic))); g.drawText ("fx", r, Justification::centred); break;
+        default:  // DIGGA: diamond
+            p.startNewSubPath (r.getX() + 2, cy - 4); p.lineTo (r.getX() + w * 0.3f, r.getY() + 3); p.lineTo (r.getRight() - w * 0.3f, r.getY() + 3); p.lineTo (r.getRight() - 2, cy - 4); p.lineTo (cx, r.getBottom() - 2); p.closeSubPath();
+            p.startNewSubPath (r.getX() + 2, cy - 4); p.lineTo (r.getRight() - 2, cy - 4);
+            g.strokePath (p, st); break;
+    }
+}
+
 class LabSwitch : public Component, public SettableTooltipClient, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -3478,17 +3536,30 @@ public:
             }
             if (k == 5)
             {
-                g.setColour (Colour (0xff8a9099)); g.setFont (serif (10.0f, false, 0.25f));
+                g.setColour (Colour (0xffaaa4cf)); g.setFont (serif (10.0f, false, 0.25f));
                 g.drawText ("MELODY  FX", r.withY (r.getY() - 15).withHeight (13).toNearestInt(), Justification::centred);
             }
             juce::ignoreUnused (face);
-            g.setColour (Colour (on ? 0xee2a1a1d : 0xcc17181b)); g.fillRoundedRectangle (r, 6);
-            if (on) drawGlowFrame (g, r, s.accent, 6);
-            else { g.setColour (Colour (0xff4a3c3c)); g.drawRoundedRectangle (r, 6, 1.2f); }
+            if (on)
+            {
+                drawGlowFrame (g, r, s.accent, 8);
+                g.setGradientFill (ColourGradient (Colour (0x66ff2f6d), r.getX(), r.getY(), Colour (0x339b4dff), r.getRight(), r.getBottom(), false));
+                g.fillRoundedRectangle (r, 8);
+            }
+            else
+            {
+                g.setGradientFill (ColourGradient (Colour (0xff1e1b40), 0, r.getY(), Colour (0xff131230), 0, r.getBottom(), false)); g.fillRoundedRectangle (r, 8);
+                g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r, 8, 1.2f);
+            }
             juce::ignoreUnused (ink);
-            g.setColour (on ? Colours::white : Colour (0xffb8bdc4));
-            g.setFont (serif (15.0f, false, 0.2f));
-            g.drawFittedText (names[k], r.toNearestInt(), Justification::centred, 2);
+            // icon + name (left aligned) - each tile its own neon colour
+            static const Colour iconCol[] { Colour (0xffff2f6d), Colour (0xff9b4dff), Colour (0xff4d9dff), Colour (0xff4d7dff), Colour (0xffff8a3d),
+                                            Colour (0xffffb020), Colour (0xffd04dff), Colour (0xffb06dff) };
+            const auto ic = Rectangle<float> (r.getX() + 8, r.getCentreY() - 13, 26, 26);
+            drawTileIcon (g, k, ic, iconCol[k]);
+            g.setColour (on ? Colours::white : Colour (0xffe6e3ff));
+            g.setFont (serif (13.5f, true, 0.12f));
+            g.drawFittedText (String (names[k]), r.withTrimmedLeft (40).toNearestInt(), Justification::centredLeft, 2);
             if ((k == 5 || k == 6) && isOn && isOn (k))
             {
                 g.setColour (Colour (0xff36ff6a)); g.fillEllipse (r.getRight() - 14, r.getY() + 6, 8, 8);
@@ -3801,8 +3872,8 @@ public:
         g.drawImageAt (labImages().bg, 0, 0);
         // module bar (v0.17: six modules, drawn over the bitmap's old tab row)
         const auto bar = R (46, 613, 1632, 661).toFloat();
-        g.setColour (Colour (0xff141518)); g.fillRoundedRectangle (bar, 6);
-        g.setColour (Colour (0xff35393f)); g.drawRoundedRectangle (bar, 6, 1.2f);
+        g.setColour (Colour (0xff12112a)); g.fillRoundedRectangle (bar, 6);
+        g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (bar, 6, 1.2f);
     }
 
     void resized() override
