@@ -115,11 +115,12 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
         modules[modEffector].reset (kkCreateEffectorKilla());
         modules[modDigga].reset (kkCreateDiggaKilla());
     }
-    rebuildRolls();
+    for (int d = 0; d < 3; ++d) generatePattern (d, 0, 2, 0.5f);
 }
 
 KeysKillaProcessor::~KeysKillaProcessor()
 {
+    vst.unload();
     harvestPool.removeAllJobs (true, 60000);   // a running harvest finishes before the plugin goes
     cancelPendingUpdate();
     thumbRenderer.reset();   // the offline waveform renderer goes first
@@ -164,7 +165,8 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
             loadDrum (d, juce::File (drums[(size_t) d].filePath()));
     modBlock = std::max (64, samplesPerBlock);
     modBuf.setSize (2, modBlock); modDry.setSize (2, modBlock);
-    modMidi.ensureSize (4096); keysForModules.ensureSize (4096); noMidi.ensureSize (64);
+    modMidi.ensureSize (4096); keysForModules.ensureSize (4096); noMidi.ensureSize (64); vstMidi.ensureSize (4096);
+    vst.prepare (sampleRate, std::max (64, samplesPerBlock));
     modFade = { 0, 0 };
     for (auto& m : modules)
         if (m)
@@ -620,7 +622,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     fp.bpm = bpm;
 
     // v0.17: the keys play KEYS KILLA or DIGGA (Digga Killa gets the notes, the synth stays silent)
-    keysForModules.clear();
+    keysForModules.clear(); vstMidi.clear();
     {
         const int pm = (int) raw[(size_t) I.playMode]->load();
         if (pm != lastPlayMode)
@@ -628,11 +630,12 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (lastPlayMode == playKeys) synth.allOff (false);
             else if (lastPlayMode == playDigga) keysForModules.addEvent (juce::MidiMessage::allNotesOff (1), 0);
             else if (lastPlayMode == playPair) pairPlayer.allOff();
+            else if (lastPlayMode == playVst) vstMidi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
             else drums[(size_t) juce::jlimit (0, 2, lastPlayMode - play808)].allOff();
             lastPlayMode = pm;
         }
         if (pm == playDigga) { keysForModules.addEvents (midi, 0, n, 0); midi.clear(); }
-        else if (pm == playPair) {}   // routed after the loop player (keys + loop notes)
+        else if (pm == playPair || pm == playVst) {}   // routed after the loop player (keys + loop notes)
         else if (pm >= play808 && pm <= playHat)   // the keys play the boosted drum (808: in tune with its detected note)
         {
             auto& d = drums[(size_t) (pm - play808)];
@@ -650,6 +653,9 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     processMidi (midi, processedMidi, n, beatPos, bpm);
     lastBpm = bpm;
     renderLoop (processedMidi, n, beatPos, bps, hostPlaying);
+    renderPatterns (n, beatPos, bps, hostPlaying);
+    // PAIR FROM VST: keys and loop notes play the hosted plugin
+    if ((int) raw[(size_t) I.playMode]->load() == playVst) { vstMidi.addEvents (processedMidi, 0, n, 0); processedMidi.clear(); }
     // PAIR YOUR OWN: keys and loop notes play the selected child instead of the synth
     if ((int) raw[(size_t) I.playMode]->load() == playPair)
     {
@@ -733,6 +739,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     sampleClock += n;
 
     if (buffer.getNumChannels() > 1) pairPlayer.render (buffer.getWritePointer (0), buffer.getWritePointer (1), n, sr);
+    if (buffer.getNumChannels() > 1 && vst.loaded()) vst.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, vstMidi, getPlayHead());
     processModules (buffer, keysForModules, n);   // PAIR + DIGGA + HALF + EFFECTOR: the melody bus
     // DRUM BOOST: the drums play after the melody effects - HALF / EFFECTOR never touch them
     if (buffer.getNumChannels() > 1)
@@ -980,6 +987,92 @@ void KeysKillaProcessor::auditionBank (int bankIndex)
     previewNote = bank[(size_t) bankIndex].sound->rootNote;
 }
 
+// ---------------- BANK on disk ----------------
+juce::File KeysKillaProcessor::bankFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Bank");
+}
+
+void KeysKillaProcessor::addToBank (kk::PairPtr s, const juce::String& origin, bool save)
+{
+    if (s == nullptr) return;
+    const double rate = sr > 0 ? sr : 44100.0;
+    kk::HarvestItem it; it.sound = s; it.cat = kk::Harvest::classifySound (*s, rate); it.score = 10.0f; it.origin = origin;
+    if (save)
+    {
+        auto dir = bankFolder().getChildFile (kk::harvestCatShort (it.cat));
+        dir.createDirectory();
+        auto f = dir.getNonexistentChildFile (juce::File::createLegalFileName (s->name).substring (0, 80), ".wav", false);
+        juce::WavAudioFormat wav;
+        auto os = std::make_unique<juce::FileOutputStream> (f);
+        if (os->openedOk())
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (os.get(), rate, 2, 24, {}, 0)))
+            { os.release(); w->writeFromAudioSampleBuffer (s->audio, 0, s->audio.getNumSamples()); it.saved = true; }
+    }
+    bank.insert (bank.begin(), std::move (it));
+    std::stable_sort (bank.begin(), bank.end(), [] (const kk::HarvestItem& a, const kk::HarvestItem& b) { return a.cat < b.cat; });
+    ++pairVer;
+}
+
+void KeysKillaProcessor::loadSavedBank()
+{
+    if (bankLoaded) return;
+    bankLoaded = true;
+    const double rate = sr > 0 ? sr : 44100.0;
+    std::vector<kk::HarvestItem> items;
+    for (int c = 0; c < kk::numCats; ++c)
+        for (auto& f : bankFolder().getChildFile (kk::harvestCatShort (c)).findChildFiles (juce::File::findFiles, false, "*.wav"))
+            if (auto s = kk::PairLab::fromFile (f, rate))
+            {
+                kk::HarvestItem it; it.sound = s; it.cat = c; it.saved = true; it.score = 10.0f; it.origin = "BANK";
+                items.push_back (std::move (it));
+            }
+    for (auto& it : items) bank.push_back (std::move (it));
+    std::stable_sort (bank.begin(), bank.end(), [] (const kk::HarvestItem& a, const kk::HarvestItem& b) { return a.cat < b.cat; });
+    ++pairVer;
+}
+
+int KeysKillaProcessor::saveBank()
+{
+    const double rate = sr > 0 ? sr : 44100.0;
+    int n = 0;
+    for (auto& it : bank)
+    {
+        if (it.saved || it.sound == nullptr) continue;
+        auto dir = bankFolder().getChildFile (kk::harvestCatShort (it.cat));
+        dir.createDirectory();
+        auto f = dir.getNonexistentChildFile (juce::File::createLegalFileName (it.sound->name).substring (0, 80), ".wav", false);
+        juce::WavAudioFormat wav;
+        auto os = std::make_unique<juce::FileOutputStream> (f);
+        if (os->openedOk())
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (os.get(), rate, 2, 24, {}, 0)))
+            { os.release(); w->writeFromAudioSampleBuffer (it.sound->audio, 0, it.sound->audio.getNumSamples()); it.saved = true; ++n; }
+    }
+    ++pairVer;
+    return n;
+}
+
+// ---------------- PAIR FROM VST ----------------
+juce::String KeysKillaProcessor::loadVst (const juce::String& id)
+{
+    const auto err = vst.load (id, sr > 0 ? sr : 44100.0, std::max (64, modBlock > 0 ? modBlock : 512));
+    ++pairVer;
+    return err;
+}
+
+juce::String KeysKillaProcessor::captureVst (int note)
+{
+    if (! vst.loaded()) return {};
+    auto buf = vst.capture (note, 0.9f, 1.4);
+    if (buf.getMagnitude (0, buf.getNumSamples()) < 1.0e-4f) return {};
+    static int counter = 0;
+    const auto prog = vst.programName();
+    const juce::String name = vst.name() + " " + (prog.isNotEmpty() ? prog : juce::String (++counter)) + " " + juce::MidiMessage::getMidiNoteName (note, true, true, 5);
+    auto s = kk::PairLab::fromBuffer (buf, vst.rate(), sr > 0 ? sr : 44100.0, name);
+    addToBank (s, vst.name(), true);
+    return name;
+}
+
 // ---------------- DRUM BOOST ----------------
 kk::BoostParams KeysKillaProcessor::boostParams (int d) const
 {
@@ -1048,53 +1141,97 @@ void KeysKillaProcessor::moduleHousekeeping()
     if (lat != reportedLatency) { reportedLatency = lat; setLatencySamples (lat); }
 }
 
-void KeysKillaProcessor::rebuildRolls()
+// ---------------- PATTERNS: 808 lines, snare rolls, hi-hat rolls (generate, edit, preview, drag MIDI) ----------------
+void KeysKillaProcessor::generatePattern (int d, int style, int bars, float density)
 {
-    const auto& I = *ix;
-    auto P = [this] (int i) { return raw[(size_t) i]->load(); };
-    const int bars = (int) P (I.rlBars) == 0 ? 1 : (int) P (I.rlBars) == 1 ? 2 : 4;
-    auto pat = kk::makeRolls ((uint32_t) P (I.rlSeed), (int) P (I.rlStyle), bars, P (I.rlDensity));
+    d = juce::jlimit (0, 2, d);
+    patStyle[(size_t) d] = style; patBars[(size_t) d] = bars; patDensity[(size_t) d] = density;
+    const auto seed = (uint32_t) juce::Random::getSystemRandom().nextInt (1 << 30);
+    auto pat = d == 0 ? kk::make808 (seed, style, bars, density) : d == 1 ? kk::makeSnares (seed, style, bars, density) : kk::makeRolls (seed, style, bars, density);
+    setPattern (d, std::move (pat), bars);
+}
+
+void KeysKillaProcessor::setPattern (int d, std::vector<kk::RollHit> pat, int bars)
+{
+    d = juce::jlimit (0, 2, d);
+    std::sort (pat.begin(), pat.end(), [] (const kk::RollHit& a, const kk::RollHit& b) { return a.beat < b.beat; });
     const juce::SpinLock::ScopedLockType l (rollLock);
-    rolls.swap (pat);
+    patterns[(size_t) d].swap (pat);
+    patBars[(size_t) d] = bars;
+    ++patVer;
 }
 
-std::vector<kk::RollHit> KeysKillaProcessor::rollPattern() const
+std::vector<kk::RollHit> KeysKillaProcessor::pattern (int d) const
 {
     const juce::SpinLock::ScopedLockType l (rollLock);
-    return rolls;
+    return patterns[(size_t) juce::jlimit (0, 2, d)];
 }
 
-void KeysKillaProcessor::newRolls()
+juce::File KeysKillaProcessor::exportPatternMidi (int d) const
 {
-    auto* p = apvts.getParameter (ID::rlSeed);
-    const int next = juce::Random::getSystemRandom().nextInt (99999) + 1;
-    p->beginChangeGesture(); p->setValueNotifyingHost (p->convertTo0to1 ((float) next)); p->endChangeGesture();
-    rebuildRolls();
-}
-
-juce::File KeysKillaProcessor::exportRollsMidi() const
-{
-    const auto pat = rollPattern();
+    d = juce::jlimit (0, 2, d);
+    const auto pat = pattern (d);
     const double bpm = lastBpm.load();
     const int ppq = 960;
+    auto smp = drums[(size_t) d].current();
+    const int root = d == 0 ? (smp ? smp->rootNote : 36) : 60;   // 808: its own note, so the MIDI plays it in tune
     juce::MidiMessageSequence seq;
     auto tempo = juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / bpm)); tempo.setTimeStamp (0); seq.addEvent (tempo);
     for (auto& h : pat)
     {
-        const int note = juce::jlimit (0, 127, 60 + h.semi);
+        const int note = juce::jlimit (0, 127, root + h.semi);
         seq.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) juce::jlimit (1, 127, (int) std::lround (h.vel * 127.0f))), std::round (h.beat * ppq));
-        seq.addEvent (juce::MidiMessage::noteOff (1, note), std::round ((h.beat + h.len) * ppq));
+        seq.addEvent (juce::MidiMessage::noteOff (1, note), std::round ((h.beat + std::max (0.02, h.len)) * ppq));
     }
     seq.updateMatchedPairs();
     juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq); mf.addTrack (seq);
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("KEYS KILLA Loops");
     dir.createDirectory();
-    static const char* styles[] { "Classic", "Triplet", "Drill", "Crazy" };
-    const int st = juce::jlimit (0, 3, (int) raw[(size_t) ix->rlStyle]->load());
-    auto f = dir.getChildFile ("KK Rolls - " + juce::String (styles[st]) + " " + juce::String ((int) raw[(size_t) ix->rlSeed]->load()) + " - " + juce::String (juce::roundToInt (bpm)) + "BPM.mid");
+    static const char* tag[] { "808", "Snare", "Hats" };
+    auto f = dir.getChildFile ("KK " + juce::String (tag[d]) + " pattern " + juce::String (patVer.load()) + " - " + juce::String (juce::roundToInt (bpm)) + "BPM.mid");
     f.deleteFile();
     if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
     return f;
+}
+
+// audio thread: the pattern of the open drum page plays its boosted sample (host tempo, or free when stopped)
+void KeysKillaProcessor::renderPatterns (int n, double beatPos, double bps, bool hostPlaying)
+{
+    const int d = patPlay.load();
+    if (d < 0 || d > 2)
+    {
+        if (patRunning >= 0) { drums[(size_t) patRunning].allOff(); patRunning = -1; }
+        return;
+    }
+    const juce::SpinLock::ScopedTryLockType tl (rollLock);
+    if (! tl.isLocked()) return;
+    const auto& pat = patterns[(size_t) d];
+    const double len = std::max (1, patBars[(size_t) d]) * 4.0;
+    if (patRunning != d || hostPlaying != patHostWas)
+    {
+        if (patRunning >= 0) drums[(size_t) patRunning].allOff();
+        patOrigin = hostPlaying ? 0.0 : beatPos; patRunning = d; patHostWas = hostPlaying;
+    }
+    auto smp = drums[(size_t) d].current();
+    const int root = smp ? smp->rootNote : 60;
+    const double start = beatPos - patOrigin, end = start + bps * n;
+    for (const auto& h : pat)
+    {
+        const double m = std::ceil ((start - h.beat) / len);
+        for (double t = h.beat + m * len; t < end; t += len)
+            if (t >= start)
+            {
+                const int at = juce::jlimit (0, n - 1, (int) ((t - start) / bps));
+                if (d == 0) { drums[0].allOff(); pat808Off = at + (int) (std::max (0.05, h.len) / bps); pat808Note = root + h.semi; }   // an 808 is mono and holds its length
+                drums[(size_t) d].noteOn (root + h.semi, h.vel, at);
+            }
+    }
+    if (d == 0 && pat808Off >= 0)
+    {
+        if (pat808Off < n) { drums[0].noteOff (pat808Note); pat808Off = -1; }
+        else pat808Off -= n;
+    }
+    patBeat = (float) std::fmod (std::max (0.0, start), len);
 }
 
 //==============================================================================
@@ -2213,6 +2350,12 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("macroNames", macroLabels.joinIntoString ("|"), nullptr);
     for (int d = 0; d < 3; ++d) state.setProperty ("drum" + juce::String (d), drums[(size_t) d].filePath(), nullptr);
     for (int k = 0; k < kk::PairLab::maxParents; ++k) state.setProperty ("pair" + juce::String (k), pairFiles[(size_t) k], nullptr);
+    for (int d = 0; d < 3; ++d)   // the edited patterns: "bars|beat:vel:semi:len;..."
+    {
+        juce::String t (patBars[(size_t) d]); t << "|";
+        for (auto& h : pattern (d)) t << juce::String (h.beat, 4) << ":" << juce::String (h.vel, 3) << ":" << h.semi << ":" << juce::String (h.len, 4) << ";";
+        state.setProperty ("pattern" + juce::String (d), t, nullptr);
+    }
     for (int m = 0; m < numModules; ++m)
         if (modules[(size_t) m])
         {
@@ -2254,7 +2397,18 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                     if (mb.fromBase64Encoding (vt.getProperty ("module" + juce::String (m)).toString()) && mb.getSize() > 0)
                         modules[(size_t) m]->setStateInformation (mb.getData(), (int) mb.getSize());
                 }
-            rebuildRolls();
+            for (int d = 0; d < 3; ++d)
+                if (vt.hasProperty ("pattern" + juce::String (d)))
+                {
+                    const auto t = vt.getProperty ("pattern" + juce::String (d)).toString();
+                    std::vector<kk::RollHit> pat;
+                    for (auto& e : juce::StringArray::fromTokens (t.fromFirstOccurrenceOf ("|", false, false), ";", ""))
+                    {
+                        auto f = juce::StringArray::fromTokens (e, ":", "");
+                        if (f.size() == 4) pat.push_back ({ f[0].getDoubleValue(), juce::jlimit (0.05f, 1.0f, f[1].getFloatValue()), juce::jlimit (-24, 24, f[2].getIntValue()), juce::jmax (0.01, f[3].getDoubleValue()) });
+                    }
+                    setPattern (d, std::move (pat), juce::jlimit (1, 8, t.upToFirstOccurrenceOf ("|", false, false).getIntValue()));
+                }
             for (int k = 0; k < kk::PairLab::maxParents; ++k)
             {
                 const juce::File pf (vt.getProperty ("pair" + juce::String (k), "").toString());

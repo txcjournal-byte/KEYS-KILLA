@@ -188,9 +188,40 @@ static int unitTests()
                 seen.insert (sig);
             }
         check (inside && seen.size() > 700, "ROLLS: a new pattern for (almost) every seed / style");
-        const auto f = p.exportRollsMidi();
-        juce::MidiFile mf; juce::FileInputStream is (f);
-        check (f.existsAsFile() && mf.readFrom (is) && mf.getTrack (0)->getNumEvents() > 10, "ROLLS export a MIDI clip");
+        // v0.22 808 lines + snare rolls: trap styles, new for every seed, inside the bars
+        for (int kind = 0; kind < 2; ++kind)
+        {
+            std::set<std::vector<int>> seen2; bool in2 = true, slides = false;
+            for (int sd = 1; sd <= 100; ++sd)
+                for (int st = 0; st < 4; ++st)
+                {
+                    const auto r = kind == 0 ? kk::make808 ((uint32_t) sd, st, 2, 0.6f) : kk::makeSnares ((uint32_t) sd, st, 2, 0.6f);
+                    std::vector<int> sig;
+                    for (size_t k = 0; k < r.size(); ++k)
+                    {
+                        sig.push_back ((int) std::lround (r[k].beat * 96) * 64 + r[k].semi);
+                        in2 &= r[k].beat >= 0 && r[k].beat < 8.0 && r[k].vel > 0 && r[k].vel <= 1 && r[k].len > 0;
+                        if (kind == 0 && k + 1 < r.size()) slides |= r[k].beat + r[k].len > r[k + 1].beat + 1.0e-6;
+                    }
+                    in2 &= ! r.empty();
+                    seen2.insert (sig);
+                }
+            check (in2 && seen2.size() > 350 && (kind == 1 || slides), kind == 0 ? "808 PATTERNS: trap lines with slides, new every time" : "SNARE ROLLS: new every time, inside the bars");
+        }
+        for (int d = 0; d < 3; ++d)
+        {
+            p.generatePattern (d, 1, 2, 0.6f);
+            const auto f = p.exportPatternMidi (d);
+            juce::MidiFile mf; juce::FileInputStream is (f);
+            check (f.existsAsFile() && mf.readFrom (is) && mf.getTrack (0)->getNumEvents() > 4, ("PATTERN " + juce::String (d) + " exports a MIDI clip").toRawUTF8());
+        }
+        // an edited pattern comes back with the project
+        std::vector<kk::RollHit> mine { { 0.0, 0.9f, 0, 0.75 }, { 1.5, 0.6f, 5, 0.5 }, { 3.0, 1.0f, -2, 1.0 } };
+        p.setPattern (0, mine, 1);
+        juce::MemoryBlock pmb; p.getStateInformation (pmb);
+        KeysKillaProcessor pq (false); pq.setStateInformation (pmb.getData(), (int) pmb.getSize());
+        const auto back = pq.pattern (0);
+        check (back.size() == 3 && back[1].semi == 5 && std::abs (back[1].beat - 1.5) < 1.0e-3 && pq.patBars[0] == 1, "the edited 808 pattern comes back with the project");
     }
     // v0.18 DRUM BOOST: your 808 in, boosted 808 out (in tune on the keys)
     {
@@ -226,6 +257,13 @@ static int unitTests()
         juce::MemoryBlock mb; p.getStateInformation (mb);
         KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
         check (q.drum (0).hasSample(), "the 808 comes back with the project");
+        // the 808 pattern plays the boosted 808 (preview on the page)
+        set (p, ID::playMode, 0);
+        p.setPattern (0, { { 0.0, 1.0f, 0, 0.5 }, { 1.0, 1.0f, 3, 0.5 } }, 1);
+        p.patPlay = 0; peak = 0;
+        for (int k = 0; k < 80; ++k) { juce::MidiBuffer m; p.processBlock (b, m); peak = std::max (peak, b.getMagnitude (0, 512)); }
+        p.patPlay = -1;
+        check (peak > 0.2f && p.patBeat.load() >= 0.0f, "PATTERN preview plays the 808");
         f.deleteFile();
     }
     // DIGGA KILLA inside KEYS KILLA: a dropped sample is analysed and cut into loops / one-shots
@@ -371,6 +409,28 @@ static int unitTests()
                "HARVEST sorts bass / keys / pad-lead / drums");
         p.pairDice (0); p.pairDice (1); p.pairBreed();
         check (p.pairKids.size() == 6, "HARVEST bank breeds");
+    }
+    // PAIR FROM VST: host a VST3 instrument (KEYS KILLA itself here), capture a note into the bank
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto vst3 = juce::File::getCurrentWorkingDirectory().getChildFile ("build15/KeysKilla_artefacts/Release/VST3/KEYS KILLA.vst3");
+        if (vst3.exists())
+        {
+            const auto err = p.loadVst (vst3.getFullPathName());
+            check (err.isEmpty() && p.vst.loaded(), "VST host loads a VST3 instrument");
+            std::printf ("VST: %s %s\n", p.vst.name().toRawUTF8(), err.toRawUTF8());
+            const size_t before = p.bank.size();
+            const auto name = p.captureVst (60);
+            check (name.isNotEmpty() && p.bank.size() == before + 1, "VST capture lands in the bank");
+            if (! p.bank.empty()) std::printf ("VST capture: %s -> %s\n", name.toRawUTF8(), kk::harvestCatShort (p.bank.front().cat));
+            set (p, ID::playMode, (float) KeysKillaProcessor::playVst);
+            juce::AudioBuffer<float> b (2, 512); float pk = 0;
+            for (int k = 0; k < 60; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, 512)); }
+            check (pk > 0.01f, "the keys play the hosted plugin");
+            // clean the test capture out of the user's bank folder
+            for (auto& it : p.bank) if (it.saved && it.origin == p.vst.name()) for (auto& f : KeysKillaProcessor::bankFolder().findChildFiles (juce::File::findFiles, true, juce::File::createLegalFileName (it.sound->name).substring (0, 80) + "*.wav")) f.deleteFile();
+        }
+        else std::printf ("VST: (no built VST3 to host - skipped)\n");
     }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
     {
@@ -770,7 +830,7 @@ int main (int argc, char** argv)
                 case 11: ke->showView (13 + action % 2); break;
                 case 12: ke->showView (15 + action % 6); setp (ID::playMode, (float) (action % 2)); break;
                 case 13: setp (ID::efxOn, (float) (action % 2)); break;
-                case 14: setp (ID::rlStyle, (float) (action % 4)); proc->newRolls(); break;
+                case 14: proc->generatePattern (action % 3, action % 4, 1 << (action % 3), 0.5f); proc->patPlay = action % 2 ? -1 : action % 3; break;
                 case 15: setp (ID::halfOn, (float) (action % 2)); break;
                 case 16: ke->showView (15 + action % 6); break;
                 default: break;

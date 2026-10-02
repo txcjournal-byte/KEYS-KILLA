@@ -24,7 +24,7 @@ inline const char* harvestCatShort (int c)
     return n[std::clamp (c, 0, (int) numCats - 1)];
 }
 
-struct HarvestItem { PairPtr sound; int cat = catFx; float score = 0; };
+struct HarvestItem { PairPtr sound; int cat = catFx; float score = 0; bool saved = false; juce::String origin; };
 
 class Harvest
 {
@@ -57,6 +57,13 @@ public:
             out.push_back (std::move (it));
         }
         return keepBest (std::move (out));
+    }
+
+    // one sound (a VST capture, a WAV from your folder): which shelf of the bank does it belong on?
+    static int classifySound (const PairSound& s, double rate)
+    {
+        const auto f = features (s.audio, rate);
+        return classify (f, s);
     }
 
     // merge new sounds into a bank (best per category, near-duplicates dropped)
@@ -205,8 +212,10 @@ private:
         std::sort (all.begin(), all.end(), [] (const HarvestItem& a, const HarvestItem& b) { return a.score > b.score; });
         std::vector<HarvestItem> keep;
         int count[numCats] {};
+        for (auto& it : all) if (it.saved) keep.push_back (it);   // saved sounds always stay
         for (auto& it : all)
         {
+            if (it.saved) continue;
             if (count[it.cat] >= perCategory) continue;
             bool dup = false;   // same note and nearly the same length = the same sound repeated in the song
             for (auto& k : keep)

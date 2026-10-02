@@ -183,7 +183,7 @@ inline constexpr int numModSlots = 8;
 
 namespace Choices
 {
-    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat", "Pair" };
+    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat", "Pair", "VST" };
     inline const juce::StringArray satModes   { "Tape", "Tube", "Fold" };
     inline const juce::StringArray worlds     { "Off", "XV", "Moog", "Serum", "Zenology", "Omni", "Kontakt", "Diva", "Nexus" };
     inline const juce::StringArray gates      { "Off", "1/8", "1/16", "1/8 Triplet", "Stutter A", "Stutter B" };

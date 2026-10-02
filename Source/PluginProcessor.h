@@ -11,6 +11,7 @@
 #include "DrumBoost.h"
 #include "PairLab.h"
 #include "Harvest.h"
+#include "VstHost.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -192,7 +193,7 @@ public:
     // DIGGA = Digga Killa (sampler). Drums never go through them.
     enum Module { modHalf, modEffector, modDigga, numModules };
     juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
-    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair };
+    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair, playVst };
     // PAIR YOUR OWN: your sounds (WAV / Digga one-shots) -> BREED -> 6 children -> keys + loops
     bool loadPairParent (int slot, const juce::File& f);
     void clearPairParent (int slot);
@@ -213,6 +214,17 @@ public:
     void bankToPair (int bankIndex, int slot = -1);             // -1 = first free slot
     void auditionBank (int bankIndex);
     std::vector<kk::HarvestItem> bank;
+    // the bank on disk: Documents/KEYS KILLA/Bank/<SHELF>/*.wav (VST captures are saved right away)
+    static juce::File bankFolder();
+    void loadSavedBank();
+    int  saveBank();                                            // saves the unsaved (harvested) sounds; returns how many
+    void addToBank (kk::PairPtr s, const juce::String& origin, bool save);
+    // PAIR FROM VST
+    kk::VstHost vst;
+    juce::StringArray vstList;                                  // installed instrument plugin files
+    juce::String loadVst (const juce::String& id);
+    juce::String captureVst (int note);                         // records the plugin into the bank; returns the sound name
+    bool bankLoaded = false;
     juce::StringArray harvestedFrom;
     // DRUM BOOST (808 / SNARE-CLAP / HI-HAT): your drum WAV in, boosted WAV out
     bool loadDrum (int d, const juce::File& f);
@@ -222,11 +234,16 @@ public:
     void hitDrum (int d, int note = -1);                        // UI pad (any thread)
     void renderDrum (int d);                                    // message thread
     void moduleHousekeeping();                                  // message thread, ~30 Hz from the editor
-    // ROLLS (hi-hat roll MIDI generator)
-    std::vector<kk::RollHit> rollPattern() const;
-    void newRolls();
-    juce::File exportRollsMidi() const;
-    void rebuildRolls();
+    // PATTERNS per drum page: 0 = 808 line, 1 = snare / clap rolls, 2 = hi-hat rolls
+    void generatePattern (int d, int style, int bars, float density);
+    void setPattern (int d, std::vector<kk::RollHit> pat, int bars);
+    std::vector<kk::RollHit> pattern (int d) const;
+    juce::File exportPatternMidi (int d) const;
+    std::atomic<int> patPlay { -1 };                            // which drum's pattern plays (-1 = none)
+    std::atomic<float> patBeat { -1.0f };
+    std::atomic<int> patVer { 0 };
+    std::array<int, 3> patStyle { 0, 0, 0 }, patBars { 2, 2, 2 };
+    std::array<float, 3> patDensity { 0.5f, 0.5f, 0.5f };
     std::atomic<bool>  overload { false };
     std::atomic<float> guiPitch { 0 }, guiMod { 0 };   // from on-screen wheels
     std::array<std::atomic<bool>, 128> playing {};
@@ -260,7 +277,7 @@ private:
     // modules
     std::array<std::unique_ptr<juce::AudioProcessor>, 3> modules;
     juce::AudioBuffer<float> modBuf;                            // scratch: DIGGA output
-    juce::MidiBuffer modMidi, noMidi, keysForModules;
+    juce::MidiBuffer modMidi, noMidi, keysForModules, vstMidi;
     std::array<float, 2> modFade { 0, 0 };                      // HALF / EFFECTOR on-off crossfades
     juce::AudioBuffer<float> modDry;
     int modBlock = 0, lastPlayMode = 0, reportedLatency = 0;
@@ -282,7 +299,9 @@ private:
     kk::BoostParams boostParams (int d) const;
     std::array<std::array<float, 2>, 2> clipDc {};
     mutable juce::SpinLock rollLock;
-    std::vector<kk::RollHit> rolls;
+    std::array<std::vector<kk::RollHit>, 3> patterns;
+    int patRunning = -1, pat808Off = -1, pat808Note = 60; bool patHostWas = false; double patOrigin = 0;
+    void renderPatterns (int n, double beatPos, double bps, bool hostPlaying);
     kk::VoiceParams vp;
     kk::FxParams fp;
 
