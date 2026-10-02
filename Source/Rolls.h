@@ -166,4 +166,108 @@ inline std::vector<RollHit> makeSnares (uint32_t seed, int style, int bars, floa
     std::sort (out.begin(), out.end(), [] (const RollHit& a, const RollHit& c) { return a.beat < c.beat; });
     return out;
 }
+// ---------------- v0.32: kick, open hat, perc and FX patterns (every drum page can generate + edit) ----------------
+// kick: style 0 TRAP (1 + syncopated 16ths), 1 DRILL (sliding, late), 2 BOUNCE (busy, plugg), 3 HALF-TIME (sparse, heavy)
+inline std::vector<RollHit> makeKicks (uint32_t seed, int style, int bars, float density)
+{
+    Rng rng; rng.seed (hash32 (seed * 7919u + (uint32_t) style * 61u + 11u));
+    std::vector<RollHit> out;
+    density = std::clamp (density, 0.0f, 1.0f);
+    static constexpr float base[4][16] {
+        { 1, 0, 0, .25f, 0, 0, .55f, 0, 0, 0, .5f, 0, 0, .35f, 0, .2f },
+        { 1, 0, 0, .5f, 0, 0, 0, .55f, 0, 0, .45f, 0, 0, 0, .5f, 0 },
+        { 1, 0, .4f, 0, 0, .45f, 0, .4f, .5f, 0, .4f, 0, .45f, 0, .35f, .3f },
+        { 1, 0, 0, 0, 0, 0, 0, .3f, 0, 0, .35f, 0, 0, 0, 0, 0 } };
+    const auto& pat = base[style & 3];
+    for (int bar = 0; bar < bars; ++bar)
+        for (int st = 0; st < 16; ++st)
+        {
+            float pr = pat[st] * (0.5f + 0.9f * density);
+            if (st == 0) pr = 1.0f;
+            if (st == 8 && style != 3) pr *= 0.2f;   // the snare's beat stays clear
+            if (rng.uni() >= pr) continue;
+            out.push_back ({ (bar * 16 + st) * 0.25, st == 0 ? 1.0f : 0.75f + 0.2f * rng.uni(), 0, 0.2 });
+        }
+    for (auto& h : out) h.len = std::min (h.len, bars * 4.0 - h.beat - 0.01);   // nothing rings past the end
+    return out;
+}
+// open hat / crash: style 0 OFFBEAT (the "ands"), 1 SPARSE (end of phrases), 2 SYNCOPATED, 3 BUSY
+inline std::vector<RollHit> makeOpenHats (uint32_t seed, int style, int bars, float density)
+{
+    Rng rng; rng.seed (hash32 (seed * 6007u + (uint32_t) style * 43u + 5u));
+    std::vector<RollHit> out;
+    density = std::clamp (density, 0.0f, 1.0f);
+    for (int bar = 0; bar < bars; ++bar)
+        for (int st = 0; st < 16; ++st)
+        {
+            float pr = 0;
+            switch (style & 3)
+            {
+                case 0:  pr = st % 4 == 2 ? 0.35f + 0.6f * density : 0.0f; break;
+                case 1:  pr = (bar % 2 == 1 && st == 14) || (bar == 0 && st == 0) ? 0.9f : st % 8 == 6 ? 0.1f * density : 0.0f; break;
+                case 2:  pr = (st == 3 || st == 7 || st == 11 || st == 14) ? 0.25f + 0.5f * density : 0.0f; break;
+                default: pr = st % 2 == 0 ? 0.15f + 0.5f * density : 0.08f * density; break;
+            }
+            if (rng.uni() >= pr) continue;
+            out.push_back ({ (bar * 16 + st) * 0.25, 0.6f + 0.35f * rng.uni(), 0, 0.5 });
+        }
+    for (auto& h : out) h.len = std::min (h.len, bars * 4.0 - h.beat - 0.01);   // nothing rings past the end
+    return out;
+}
+// percussion: style 0 RIMS (ghost 16ths), 1 TRIPLET, 2 BOUNCE (3-3-2), 3 SHAKER (steady 16ths, accents) - pitch moves like toms / congas
+inline std::vector<RollHit> makePercs (uint32_t seed, int style, int bars, float density)
+{
+    Rng rng; rng.seed (hash32 (seed * 4513u + (uint32_t) style * 29u + 13u));
+    std::vector<RollHit> out;
+    density = std::clamp (density, 0.0f, 1.0f);
+    static constexpr int tones[] { 0, 0, 3, 5, 7, -2, 12 };
+    for (int bar = 0; bar < bars; ++bar)
+    {
+        const double b0 = bar * 4.0;
+        if ((style & 3) == 1)   // triplet 8ths
+        {
+            for (int k = 0; k < 12; ++k)
+                if (rng.uni() < 0.2f + 0.55f * density)
+                    out.push_back ({ b0 + k / 3.0, k % 3 == 0 ? 0.85f : 0.55f, tones[(int) (rng.uni() * 6.99f)], 0.15 });
+            continue;
+        }
+        for (int st = 0; st < 16; ++st)
+        {
+            float pr = 0; float v = 0.6f;
+            switch (style & 3)
+            {
+                case 0:  pr = (st % 4 == 3 ? 0.45f : st % 2 == 1 ? 0.2f : 0.05f) * (0.5f + density); v = 0.5f + 0.35f * rng.uni(); break;
+                case 2:  pr = (st == 0 || st == 3 || st == 6 || st == 8 || st == 11 || st == 14) ? 0.55f + 0.4f * density : 0.05f; v = st % 8 == 0 ? 0.9f : 0.65f; break;
+                default: pr = 0.6f + 0.4f * density; v = st % 4 == 2 ? 0.85f : st % 2 == 0 ? 0.6f : 0.38f; break;
+            }
+            if (rng.uni() >= std::min (1.0f, pr)) continue;
+            const int semi = (style & 3) == 3 ? 0 : tones[(int) (rng.uni() * 6.99f)];
+            out.push_back ({ b0 + st * 0.25, v, semi, 0.12 });
+        }
+    }
+    for (auto& h : out) h.len = std::min (h.len, bars * 4.0 - h.beat - 0.01);   // nothing rings past the end
+    return out;
+}
+// FX: style 0 INTRO (an impact on the 1), 1 PHRASE (every 2 bars), 2 RISER (into the next phrase), 3 STUTTER (fast repeats at the end)
+inline std::vector<RollHit> makeFxHits (uint32_t seed, int style, int bars, float density)
+{
+    Rng rng; rng.seed (hash32 (seed * 3001u + (uint32_t) style * 19u + 17u));
+    std::vector<RollHit> out;
+    density = std::clamp (density, 0.0f, 1.0f);
+    const double end = bars * 4.0;
+    switch (style & 3)
+    {
+        case 0:  out.push_back ({ 0.0, 1.0f, 0, 2.0 }); if (density > 0.5f && bars > 1) out.push_back ({ end - 4.0, 0.8f, 0, 2.0 }); break;
+        case 1:  for (int b = 0; b < bars; b += 2) out.push_back ({ b * 4.0, 0.9f, (int) (rng.uni() * 2.0f) * 12 - 0, 1.5 }); break;
+        case 2:  out.push_back ({ std::max (0.0, end - 2.0), 0.9f, 0, 1.95 }); break;
+        default:
+        {
+            const int n = 4 + (int) (density * 8.0f);
+            for (int k = 0; k < n; ++k) out.push_back ({ end - 1.0 + k / (double) n, 0.5f + 0.5f * (float) k / (float) n, k * 12 / n, 0.5 / n });
+            break;
+        }
+    }
+    for (auto& h : out) h.len = std::min (h.len, end - h.beat - 0.01);
+    return out;
+}
 } // namespace kk

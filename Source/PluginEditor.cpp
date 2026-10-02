@@ -6,7 +6,6 @@ using namespace juce;
 
 #include "UiCommon.h"
 #include "BinaryData.h"
-#include "EmbeddedPlugins.h"
 #include "ModernSkin.h"
 
 //==============================================================================
@@ -1269,7 +1268,7 @@ private:
     bool hover = false, fired = false;
 };
 
-// ---------------- SAVE TO FOLDER: one menu everywhere a sound is made (pair children, VST A / B, chops, DIGGA) ----------------
+// ---------------- SAVE TO FOLDER: one menu everywhere a sound is made (pair children, VST A / B, SAMPLER slices) ----------------
 static void askNewFolder (std::function<void (String)> done)
 {
     auto* w = new AlertWindow ("NEW FOLDER", "Name of the new folder for your sounds:", MessageBoxIconType::NoIcon);
@@ -1282,28 +1281,63 @@ static void askNewFolder (std::function<void (String)> done)
         if (r == 1 && name.isNotEmpty() && kk::Library::createFolder (name)) done (name);
     }), true);
 }
-// sounds: one or more sounds to save; done gets a short message ("saved to MOJE ZVUKY")
+// SAVE TO: one menu everywhere - your folders and your SOUND KITS (a kit sorts every sound into Bass / Keys / Plucks / Pads ... by itself)
 static void saveToFolderMenu (KeysKillaProcessor& proc, std::vector<kk::PairPtr> sounds, Component* target, std::function<void (String)> done)
 {
     sounds.erase (std::remove (sounds.begin(), sounds.end(), nullptr), sounds.end());
     if (sounds.empty()) { if (done) done ("nothing to save yet"); return; }
     const auto folders = kk::Library::folders();
-    PopupMenu m;
+    const auto kits = kk::SoundKits::kits();
+    PopupMenu m, folderMenu, kitMenu;
     m.addSectionHeader (sounds.size() > 1 ? "SAVE " + String ((int) sounds.size()) + " SOUNDS TO" : "SAVE TO");
-    m.addItem (1, "> " + proc.lastFolder + "   (last used)");
+    m.addItem (1, "> FOLDER  " + proc.lastFolder + "   (last used)");
+    m.addItem (3, "> SOUND KIT  " + proc.lastSoundKit + "   (sorted by sound)");
     m.addSeparator();
-    for (int i = 0; i < folders.size(); ++i) m.addItem (10 + i, folders[i]);
-    m.addSeparator();
-    m.addItem (2, "+ new folder ...");
+    for (int i = 0; i < folders.size(); ++i) folderMenu.addItem (10 + i, folders[i] + "   (" + String (kk::Library::sounds (folders[i]).size()) + ")");
+    folderMenu.addSeparator(); folderMenu.addItem (2, "+ new folder ...");
+    m.addSubMenu ("MY FOLDERS", folderMenu);
+    for (int i = 0; i < kits.size(); ++i)
+    {
+        PopupMenu one;
+        one.addItem (1000 + i * 20, "AUTO  (sorted by the sound: Bass, Keys, Plucks ...)");
+        one.addSeparator();
+        for (int c = 0; c < kk::SoundKits::categories().size(); ++c) one.addItem (1000 + i * 20 + 1 + c, kk::SoundKits::categories()[c]);
+        kitMenu.addSubMenu (kits[i] + "   (" + String (kk::SoundKits::count (kits[i])) + ")", one);
+    }
+    kitMenu.addSeparator(); kitMenu.addItem (4, "+ new sound kit ...");
+    m.addSubMenu ("SOUND KITS", kitMenu);
     auto save = [&proc, sounds, done] (const String& folder)
     {
         int n = 0; for (auto& s : sounds) n += proc.saveToFolder (s, folder).existsAsFile() ? 1 : 0;
         if (done) done (n > 0 ? "saved to " + folder + (n > 1 ? "  (" + String (n) + ")" : String()) : String ("could not save"));
     };
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (target), [save, folders, &proc] (int r)
+    auto saveKit = [&proc, sounds, done] (const String& kit, const String& cat)
+    {
+        int n = 0; for (auto& s : sounds) n += proc.saveToSoundKit (s, kit, cat).existsAsFile() ? 1 : 0;
+        if (done) done (n > 0 ? "saved into the sound kit " + kit + (n > 1 ? "  (" + String (n) + ")" : String()) : String ("could not save"));
+    };
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (target), [save, saveKit, folders, kits, &proc] (int r)
     {
         if (r == 1) save (proc.lastFolder);
+        else if (r == 3) saveKit (proc.lastSoundKit, {});
         else if (r == 2) askNewFolder ([save] (String name) { save (name); });
+        else if (r == 4)
+        {
+            auto* w = new AlertWindow ("NEW SOUND KIT", "Name of the new sound kit:", MessageBoxIconType::NoIcon);
+            w->addTextEditor ("name", "", "Kit");
+            w->addButton ("CREATE", 1, KeyPress (KeyPress::returnKey));
+            w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+            w->enterModalState (true, ModalCallbackFunction::create ([w, saveKit] (int res)
+            {
+                const auto name = w->getTextEditorContents ("name").trim();
+                if (res == 1 && kk::SoundKits::createKit (name)) saveKit (name, {});
+            }), true);
+        }
+        else if (r >= 1000 && (r - 1000) / 20 < kits.size())
+        {
+            const int k = (r - 1000) / 20, c = (r - 1000) % 20;
+            saveKit (kits[k], c == 0 ? String() : kk::SoundKits::categories()[c - 1]);
+        }
         else if (r >= 10 && r - 10 < folders.size()) save (folders[r - 10]);
     });
 }
@@ -1345,24 +1379,39 @@ static void saveToKitMenu (KeysKillaProcessor& proc, std::vector<int> drums, Com
     });
 }
 
-// ---------------- MY SOUNDS: your folders, your sounds (hear, into PAIR, drag into FL, delete) ----------------
+// ---------------- MY SOUNDS (v0.33): your folders and SOUND KITS in one clear place - search, colour filters, hear, drag, PAIR ----------------
+static Colour soundCatColour (const String& c)
+{
+    static const std::pair<const char*, uint32> m[] { { "Bass", 0xff3d8bff }, { "Keys", 0xffff8a3d }, { "Plucks", 0xffffd23f }, { "Pads", 0xff8b8bff },
+                                                       { "Leads", 0xffff3b5c }, { "Vox", 0xfff0a6ff }, { "Brass & Strings", 0xffffc23d }, { "FX", 0xffff3fd2 },
+                                                       { "Loops", 0xff34d399 }, { "Other", 0xff9ca3af } };
+    for (auto& [n, col] : m) if (c == n) return Colour (col);
+    return Colour (0xff9ca3af);
+}
 class MySoundsPage : public Component, public DragAndDropContainer, private Timer
 {
 public:
     MySoundsPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
-        folderModel.page = this; soundModel.page = this;   // before the lists ask for rows
-        folderList.setModel (&folderModel); folderList.setRowHeight (30);
-        soundList.setModel (&soundModel); soundList.setRowHeight (26);
-        for (auto* lb : { &folderList, &soundList }) { lb->setColour (ListBox::backgroundColourId, Colour (0xff100e26)); addAndMakeVisible (*lb); }
-        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
-        btn (newBtn, "+ NEW FOLDER", "Create a folder for your sounds", [this] { askNewFolder ([this] (String n) { current = n; reload(); }); });
-        btn (renameBtn, "RENAME", "Rename this folder", [this] { renameFolder(); });
-        btn (delFolderBtn, "DELETE FOLDER", "Delete this folder with its sounds (they go to the recycle bin)", [this] { deleteFolder(); });
-        btn (factoryBtn, "FACTORY SOUNDS", "The sounds that come with KEYS KILLA (kept apart from yours)", [this] { if (onFactory) onFactory(); });
-        btn (pairBtn, "INTO PAIR", "This sound into PAIR YOUR OWN (next free slot) - breed it with others", [this] { toPair(); });
-        btn (delBtn, "DELETE", "Delete this sound (Del) - it goes to the recycle bin", [this] { deleteSound(); });
-        btn (showBtn, "SHOW IN EXPLORER", "Open the folder on your computer", [this] { kk::Library::folder (current).revealToUser(); });
+        placeModel.page = this; soundModel.page = this;   // before the lists ask for rows
+        placeList.setModel (&placeModel); placeList.setRowHeight (30);
+        soundList.setModel (&soundModel); soundList.setRowHeight (30);
+        for (auto* lb : { &placeList, &soundList }) { lb->setColour (ListBox::backgroundColourId, Colours::transparentBlack); addAndMakeVisible (*lb); }
+        search.setTextToShowWhenEmpty ("search your sounds ...", Colour (0xff7d77a8));
+        search.setFont (Font (FontOptions (16.0f)));
+        search.onTextChange = [this] { filter(); };
+        addAndMakeVisible (search);
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, Colour tint, std::function<void()> fn)
+        { b.setButtonText (t); b.framed = true; b.tint = tint; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (newFolderBtn, "+ FOLDER", "A new folder for your sounds", Colour (0xffff8a3d), [this] { askNewFolder ([this] (String n) { place = { 1, n }; reload(); }); });
+        btn (newKitBtn, "+ SOUND KIT", "A new sound kit: a folder FL Studio can browse, your sounds sorted into Bass, Keys, Plucks, Pads ...", Colour (0xff22d3ee), [this] { newKit(); });
+        btn (renameBtn, "RENAME", "Rename the chosen folder / kit", Colour (0xffaaa4cf), [this] { renamePlace(); });
+        btn (delPlaceBtn, "DELETE", "Delete the chosen folder / kit with its sounds (they go to the recycle bin)", Colour (0xffff2f6d), [this] { deletePlace(); });
+        btn (factoryBtn, "FACTORY SOUNDS", "The sounds that come with KEYS KILLA (the SOUND LIBRARY)", Colour (0xffff2f6d), [this] { if (onFactory) onFactory(); });
+        btn (pairBtn, "INTO PAIR", "This sound into PAIR YOUR OWN (next free slot) - breed it with others", Colour (0xff4d9dff), [this] { toPair(); });
+        btn (moveBtn, "MOVE TO ...", "Move this sound into another folder or sound kit", Colour (0xffffd23f), [this] { moveMenu(); });
+        btn (delBtn, "DELETE SOUND", "Delete this sound (Del) - it goes to the recycle bin", Colour (0xffff3b5c), [this] { deleteSound(); });
+        btn (showBtn, "SHOW IN EXPLORER", "Open it on your computer (add the KEYS KILLA folder to FL's browser once)", Colour (0xff9b4dff), [this] { placeDir().revealToUser(); });
         setWantsKeyboardFocus (true);
         setOpaque (true);
         reload();
@@ -1372,31 +1421,62 @@ public:
     void visibilityChanged() override { if (isVisible()) reload(); }
     void paint (Graphics& g) override
     {
-        g.fillAll (Colour (0xff12112a));
-        g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 8, 1.2f);
+        auto r = getLocalBounds().toFloat();
+        g.setGradientFill (ColourGradient (Colour (0xff17143c), 0, 0, Colour (0xff0c0b22), 0, r.getBottom(), false)); g.fillRoundedRectangle (r, 10);
+        g.setGradientFill (ColourGradient (Colour (0xffff8a3d), 0, 0, Colour (0xff22d3ee), r.getRight(), 0, false)); g.drawRoundedRectangle (r.reduced (1), 10, 1.4f);
         g.setColour (Colours::white); g.setFont (Font (FontOptions (24.0f, Font::bold)).withExtraKerningFactor (0.08f));
-        g.drawText ("MY SOUNDS", 20, 12, 300, 32, Justification::centredLeft);
+        g.drawText ("MY", 20, 12, 60, 32, Justification::centredLeft);
+        g.setGradientFill (ColourGradient (Colour (0xffff8a3d), 56, 0, Colour (0xffffd23f), 180, 0, false));
+        g.drawText ("SOUNDS", 56, 12, 160, 32, Justification::centredLeft);
+        // left column
+        const auto pl = placeList.getBounds().toFloat().expanded (4);
+        g.setColour (Colour (0xff100e26)); g.fillRoundedRectangle (pl, 8);
+        const auto sl = soundList.getBounds().toFloat().expanded (4);
+        g.setColour (Colour (0xff100e26)); g.fillRoundedRectangle (sl, 8);
+        // category filter chips
+        for (int i = 0; i < numChips(); ++i)
+        {
+            auto c = chipRect (i);
+            const String name = i == 0 ? String ("ALL") : kk::SoundKits::categories()[i - 1];
+            const Colour col = i == 0 ? Colour (0xffff2f6d) : soundCatColour (name);
+            const bool selc = i == catSel;
+            const int n = countOf (i);
+            if (selc) { g.setGradientFill (ColourGradient (col, c.getX(), 0, col.darker (0.4f), c.getRight(), 0, false)); g.fillRoundedRectangle (c, 7); }
+            else { g.setColour (col.withAlpha (n > 0 ? 0.18f : 0.06f)); g.fillRoundedRectangle (c, 7); g.setColour (col.withAlpha (n > 0 ? 0.7f : 0.25f)); g.drawRoundedRectangle (c, 7, 1.0f); }
+            g.setColour (selc ? Colours::white : n > 0 ? Colour (0xffeeeaff) : Colour (0xff6a6290)); g.setFont (Font (FontOptions (11.5f, Font::bold)));
+            g.drawFittedText (name.toUpperCase() + (n > 0 ? "  " + String (n) : String()), c.reduced (6, 0).toNearestInt(), Justification::centred, 1, 0.6f);
+        }
         g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
-        g.drawText ("YOUR FOLDERS", folderList.getX(), folderList.getY() - 18, 200, 16, Justification::centredLeft);
-        g.drawText (current.toUpperCase() + "  -  " + String (files.size()) + " SOUNDS", soundList.getX(), soundList.getY() - 18, 500, 16, Justification::centredLeft);
-        g.drawText ("CLICK = HEAR (AND PLAY ON THE KEYS)    DOUBLE-CLICK = INTO PAIR    DRAG = INTO FL STUDIO    DEL = DELETE",
-                    soundList.getX(), soundList.getBottom() + 6, soundList.getWidth(), 16, Justification::centredLeft);
-        g.setColour (lnf.skin->accent); g.drawText (note, 330, 20, 700, 20, Justification::centredLeft);
-        if (files.isEmpty())
+        g.drawText (placeTitle() + "  -  " + String (shown.size()) + " SOUNDS", soundList.getX(), soundList.getY() - 22, 600, 16, Justification::centredLeft);
+        g.drawText ("CLICK = HEAR + PLAY ON THE KEYS     DOUBLE-CLICK = INTO PAIR     DRAG = INTO FL STUDIO     DEL = DELETE",
+                    soundList.getX(), soundList.getBottom() + 8, soundList.getWidth(), 16, Justification::centredLeft);
+        g.setColour (Colour (0xff36ff6a)); g.setFont (Font (FontOptions (13.0f, Font::bold)));
+        g.drawText (note, 230, 18, getWidth() - 230 - 500, 20, Justification::centredLeft);
+        if (shown.isEmpty())
         {
             g.setColour (Colour (0xff7d77a8)); g.setFont (Font (FontOptions (16.0f)));
-            g.drawFittedText ("This folder is empty.\nUse SAVE TO FOLDER under PAIR children, VST A / B, CHOP slices or DIGGA.", soundList.getBounds().reduced (20), Justification::centred, 3);
+            g.drawFittedText (all.isEmpty() ? "Nothing here yet.\nUse SAVE TO under PAIR children, VST A / B, SAMPLER slices - into a folder or a SOUND KIT."
+                                            : "No sound matches.", soundList.getBounds().reduced (20), Justification::centred, 3);
         }
     }
     void resized() override
     {
         const int w = getWidth(), h = getHeight();
-        factoryBtn.setBounds (w - 200, 14, 184, 32);
-        folderList.setBounds (16, 74, 280, h - 74 - 60);
-        newBtn.setBounds (16, h - 50, 136, 34); renameBtn.setBounds (158, h - 50, 64, 34); delFolderBtn.setBounds (226, h - 50, 70, 34);
-        renameBtn.setButtonText ("REN."); delFolderBtn.setButtonText ("DEL.");
-        soundList.setBounds (312, 74, w - 312 - 16, h - 74 - 82);
-        pairBtn.setBounds (w - 16 - 3 * 150 - 12, h - 50, 150, 34); delBtn.setBounds (w - 16 - 2 * 150 - 6, h - 50, 150, 34); showBtn.setBounds (w - 16 - 150, h - 50, 150, 34);
+        factoryBtn.setBounds (w - 196, 14, 180, 32);
+        search.setBounds (w - 196 - 12 - 300, 14, 300, 32);
+        placeList.setBounds (20, 64, 270, h - 64 - 100);
+        newFolderBtn.setBounds (16, h - 84, 136, 32); newKitBtn.setBounds (158, h - 84, 136, 32);
+        renameBtn.setBounds (16, h - 46, 136, 32); delPlaceBtn.setBounds (158, h - 46, 136, 32);
+        const int x = 314;
+        chipArea = { x, 60, w - x - 16, 26 };
+        soundList.setBounds (x + 4, 122, w - x - 24, h - 122 - 92);
+        const int bw = 150;
+        showBtn.setBounds (w - 16 - bw, h - 46, bw, 32); delBtn.setBounds (showBtn.getX() - 8 - bw, h - 46, bw, 32);
+        moveBtn.setBounds (delBtn.getX() - 8 - bw, h - 46, bw, 32); pairBtn.setBounds (moveBtn.getX() - 8 - bw, h - 46, bw, 32);
+    }
+    void mouseDown (const MouseEvent& e) override
+    {
+        for (int i = 0; i < numChips(); ++i) if (chipRect (i).contains (e.position)) { catSel = i; filter(); return; }
     }
     bool keyPressed (const KeyPress& k) override
     {
@@ -1407,101 +1487,270 @@ public:
     bool shouldDropFilesWhenDraggedExternally (const DragAndDropTarget::SourceDetails& d, StringArray& out, bool& canMove) override
     {
         const int row = (int) d.description;
-        if (row < 0 || row >= files.size()) return false;
-        out.add (files[row].getFullPathName()); canMove = false;
+        if (row < 0 || row >= shown.size()) return false;
+        out.add (shown[row].getFullPathName()); canMove = false;
         return true;
     }
 private:
-    struct FolderModel : public ListBoxModel
+    struct Place { int type = 0; String name; };   // type 0 = all, 1 = folder, 2 = sound kit, -1 / -2 = section headers
+    struct PlaceModel : public ListBoxModel
     {
         MySoundsPage* page = nullptr;
-        int getNumRows() override { return page->folders.size(); }
+        int getNumRows() override { return (int) page->places.size(); }
         void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
         {
-            const bool sel = page->folders[row] == page->current;
-            if (sel) { g.setColour (page->lnf.skin->accent.withAlpha (0.35f)); g.fillRoundedRectangle (2, 2, (float) w - 4, (float) h - 4, 4); }
-            g.setColour (sel ? Colours::white : Colour (0xffc9ced6)); g.setFont (Font (FontOptions (14.0f, Font::bold)));
-            g.drawText (page->folders[row], 12, 0, w - 24, h, Justification::centredLeft);
+            if (! isPositiveAndBelow (row, (int) page->places.size())) return;
+            const auto& pl = page->places[(size_t) row];
+            if (pl.type < 0)
+            {
+                g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.5f, Font::bold)).withExtraKerningFactor (0.12f));
+                g.drawText (pl.type == -1 ? "MY FOLDERS" : "SOUND KITS", 10, 0, w - 20, h, Justification::bottomLeft);
+                return;
+            }
+            const bool sel = pl.type == page->place.type && pl.name == page->place.name;
+            const Colour col = pl.type == 0 ? Colour (0xffff2f6d) : pl.type == 1 ? Colour (0xffff8a3d) : Colour (0xff22d3ee);
+            auto r = Rectangle<float> (2, 2, (float) w - 4, (float) h - 4);
+            if (sel) { g.setGradientFill (ColourGradient (col.withAlpha (0.5f), r.getX(), 0, col.withAlpha (0.1f), r.getRight(), 0, false)); g.fillRoundedRectangle (r, 6); }
+            // icon: a folder or a kit box
+            auto ic = Rectangle<float> (10, (float) h * 0.5f - 8, 18, 16);
+            g.setColour (col);
+            if (pl.type == 2) { g.fillRoundedRectangle (ic, 3); g.setColour (Colour (0xff100e26)); g.fillRect (ic.reduced (4, 6)); }
+            else if (pl.type == 1) { g.fillRoundedRectangle (ic.withTrimmedTop (3), 3); g.fillRoundedRectangle (ic.withWidth (8).withHeight (5), 2); }
+            else { for (int k = 0; k < 3; ++k) g.fillRoundedRectangle (ic.getX(), ic.getY() + k * 6, ic.getWidth(), 3.5f, 1.5f); }
+            g.setColour (sel ? Colours::white : Colour (0xffd9d4f5)); g.setFont (Font (FontOptions (14.0f, Font::bold)));
+            g.drawFittedText (pl.type == 0 ? String ("ALL MY SOUNDS") : pl.name, 36, 0, w - 36 - 44, h, Justification::centredLeft, 1, 0.7f);
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f)));
+            g.drawText (String (page->countIn (pl)), w - 44, 0, 36, h, Justification::centredRight);
         }
-        void listBoxItemClicked (int row, const MouseEvent&) override { page->current = page->folders[row]; page->proc.lastFolder = page->current; page->reload(); }
-    } folderModel;
+        void listBoxItemClicked (int row, const MouseEvent&) override
+        {
+            if (! isPositiveAndBelow (row, (int) page->places.size()) || page->places[(size_t) row].type < 0) return;
+            page->place = page->places[(size_t) row];
+            if (page->place.type == 1) page->proc.lastFolder = page->place.name;
+            if (page->place.type == 2) page->proc.lastSoundKit = page->place.name;
+            page->sel = -1; page->reload();
+        }
+    } placeModel;
     struct SoundModel : public ListBoxModel
     {
         MySoundsPage* page = nullptr;
-        int getNumRows() override { return page->files.size(); }
+        int getNumRows() override { return page->shown.size(); }
         void paintListBoxItem (int row, Graphics& g, int w, int h, bool) override
         {
+            if (! isPositiveAndBelow (row, page->shown.size())) return;
+            const auto& f = page->shown[row];
+            const auto cat = page->catOf (f);
+            const Colour col = soundCatColour (cat);
             const bool sel = row == page->sel;
-            if (sel) { g.setColour (page->lnf.skin->accent.withAlpha (0.3f)); g.fillRect (0, 0, w, h); }
-            else if (row % 2) { g.setColour (Colour (0xff131130)); g.fillRect (0, 0, w, h); }
-            g.setColour (Colours::white.withAlpha (sel ? 1.0f : 0.85f)); g.setFont (Font (FontOptions (13.5f)));
-            g.drawText (page->files[row].getFileNameWithoutExtension(), 12, 0, w - 140, h, Justification::centredLeft);
-            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f)));
-            g.drawText (page->files[row].getLastModificationTime().formatted ("%d.%m.%Y"), w - 120, 0, 110, h, Justification::centredRight);
+            auto r = Rectangle<float> (2, 1, (float) w - 4, (float) h - 2);
+            g.setGradientFill (ColourGradient (col.withAlpha (sel ? 0.35f : row % 2 ? 0.07f : 0.11f), r.getX(), 0, Colour (0x00100e26), r.getRight() * 0.7f, 0, false));
+            g.fillRoundedRectangle (r, 6);
+            if (sel) { g.setColour (col); g.drawRoundedRectangle (r, 6, 1.4f); }
+            g.setColour (col); g.fillRoundedRectangle (r.getX(), r.getY() + 4, 4, r.getHeight() - 8, 2);
+            auto pill = Rectangle<float> (14, (float) h * 0.5f - 10, 120, 20);
+            g.setColour (col.withAlpha (0.22f)); g.fillRoundedRectangle (pill, 10);
+            g.setColour (col); g.drawRoundedRectangle (pill, 10, 1.0f);
+            g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawFittedText (cat.toUpperCase(), pill.reduced (6, 0).toNearestInt(), Justification::centred, 1, 0.6f);
+            g.setColour (Colours::white.withAlpha (sel ? 1.0f : 0.9f)); g.setFont (Font (FontOptions (15.0f, Font::bold)));
+            g.drawFittedText (f.getFileNameWithoutExtension(), 146, 0, w - 146 - 290, h, Justification::centredLeft, 1, 0.8f);
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f)));
+            g.drawText (page->placeOf (f), w - 284, 0, 180, h, Justification::centredRight);
+            g.drawText (f.getLastModificationTime().formatted ("%d.%m.%Y"), w - 96, 0, 86, h, Justification::centredRight);
         }
-        void listBoxItemClicked (int row, const MouseEvent&) override { page->sel = row; page->proc.auditionFile (page->files[row]); page->soundList.repaint(); page->grabKeyboardFocus(); }
+        void listBoxItemClicked (int row, const MouseEvent&) override
+        {
+            if (! isPositiveAndBelow (row, page->shown.size())) return;
+            page->sel = row; page->proc.auditionFile (page->shown[row]); page->soundList.repaint(); page->grabKeyboardFocus();
+        }
         void listBoxItemDoubleClicked (int row, const MouseEvent&) override { page->sel = row; page->toPair(); }
         var getDragSourceDescription (const SparseSet<int>& rows) override { return rows.isEmpty() ? var() : var (rows[0]); }
     } soundModel;
+
+    // ---- data
+    File placeDir() const
+    {
+        if (place.type == 1) return kk::Library::folder (place.name);
+        if (place.type == 2) return kk::SoundKits::kit (place.name);
+        return kk::Library::root().getParentDirectory();
+    }
+    String placeTitle() const { return place.type == 0 ? String ("ALL MY SOUNDS") : (place.type == 2 ? "SOUND KIT  " : "FOLDER  ") + place.name.toUpperCase(); }
+    bool inKit (const File& f) const { return f.isAChildOf (kk::SoundKits::root()); }
+    String catOf (const File& f) const
+    {
+        if (inKit (f) && kk::SoundKits::categories().contains (f.getParentDirectory().getFileName())) return f.getParentDirectory().getFileName();
+        return kk::SoundKits::categoryFor (f.getFileNameWithoutExtension());
+    }
+    String placeOf (const File& f) const
+    {
+        if (inKit (f)) { auto k = f.getParentDirectory(); while (k.getParentDirectory() != kk::SoundKits::root() && k != File()) k = k.getParentDirectory(); return "kit  " + k.getFileName(); }
+        return f.getParentDirectory().getFileName();
+    }
+    Array<File> filesIn (const Place& pl) const
+    {
+        Array<File> out;
+        if (pl.type == 1 || pl.type == 0) for (auto& fo : (pl.type == 1 ? StringArray { pl.name } : kk::Library::folders())) out.addArray (kk::Library::sounds (fo));
+        if (pl.type == 2 || pl.type == 0) for (auto& k : (pl.type == 2 ? StringArray { pl.name } : kk::SoundKits::kits())) out.addArray (kk::SoundKits::sounds (k));
+        return out;
+    }
+    int countIn (const Place& pl) const
+    {
+        if (pl.type == 1) return kk::Library::sounds (pl.name).size();
+        if (pl.type == 2) return kk::SoundKits::count (pl.name);
+        return totalCount;
+    }
+    int numChips() const { return kk::SoundKits::categories().size() + 1; }
+    Rectangle<float> chipRect (int i) const
+    {
+        const float w = (float) chipArea.getWidth() / (float) numChips();
+        return { (float) chipArea.getX() + w * (float) i + 2.0f, (float) chipArea.getY(), w - 4.0f, 28.0f };
+    }
+    int countOf (int chip) const
+    {
+        if (chip == 0) return all.size();
+        const auto c = kk::SoundKits::categories()[chip - 1];
+        int n = 0; for (auto& f : all) n += catOf (f) == c ? 1 : 0;
+        return n;
+    }
     void reload()
     {
-        folders = kk::Library::folders();
-        if (! folders.contains (current)) current = folders.contains (proc.lastFolder) ? proc.lastFolder : folders[0];
-        files = kk::Library::sounds (current);
-        sel = jlimit (-1, files.size() - 1, sel);
-        folderList.updateContent(); soundList.updateContent();
-        folderList.repaint(); soundList.repaint();
+        places.clear();
+        places.push_back ({ 0, {} });
+        places.push_back ({ -1, {} });
+        for (auto& f : kk::Library::folders()) places.push_back ({ 1, f });
+        places.push_back ({ -2, {} });
+        for (auto& k : kk::SoundKits::kits()) places.push_back ({ 2, k });
+        bool found = false; for (auto& pl : places) found |= pl.type == place.type && pl.name == place.name;
+        if (! found) place = { 0, {} };
+        totalCount = filesIn ({ 0, {} }).size();
+        all = filesIn (place);
+        filter();
+        placeList.updateContent(); placeList.repaint();
         sig = signature();
+    }
+    void filter()
+    {
+        shown.clear();
+        const auto q = search.getText().trim().toLowerCase();
+        const String c = catSel > 0 ? kk::SoundKits::categories()[catSel - 1] : String();
+        for (auto& f : all)
+            if ((q.isEmpty() || f.getFileNameWithoutExtension().toLowerCase().contains (q)) && (c.isEmpty() || catOf (f) == c)) shown.add (f);
+        sel = jlimit (-1, shown.size() - 1, sel);
+        soundList.updateContent(); soundList.repaint();
         repaint();
     }
-    int signature() const { return files.size() * 7919 + kk::Library::sounds (current).size() * 31 + kk::Library::folders().size(); }
+    int signature() const { return filesIn ({ 0, {} }).size() * 7919 + kk::Library::folders().size() * 31 + kk::SoundKits::kits().size(); }
     void timerCallback() override { if (isVisible() && signature() != sig) reload(); }   // sounds saved from other pages show up
+    File selected() const { return isPositiveAndBelow (sel, shown.size()) ? shown[sel] : File(); }
     void toPair()
     {
-        if (sel < 0 || sel >= files.size()) return;
+        const auto f = selected(); if (! f.existsAsFile()) return;
         int slot = 0; while (slot < kk::PairLab::maxParents && proc.pairParents[(size_t) slot] != nullptr) ++slot;
         if (slot >= kk::PairLab::maxParents) slot = 0;
-        if (proc.loadPairParent (slot, files[sel])) { note = files[sel].getFileNameWithoutExtension() + " -> PAIR, SOUND " + String (slot + 1); if (onPair) onPair(); }
+        if (proc.loadPairParent (slot, f)) { note = f.getFileNameWithoutExtension() + " -> PAIR, SOUND " + String (slot + 1); if (onPair) onPair(); }
         repaint();
     }
     void deleteSound()
     {
-        if (sel < 0 || sel >= files.size()) return;
-        kk::Library::deleteSound (files[sel]);
+        const auto f = selected(); if (! f.existsAsFile()) return;
+        kk::Library::deleteSound (f);
+        note = f.getFileNameWithoutExtension() + " deleted (recycle bin)";
         reload();
     }
-    void deleteFolder()
+    void moveMenu()
     {
-        const auto name = current;
-        AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, "DELETE FOLDER", "Delete the folder \"" + name + "\" and its " + String (files.size()) + " sounds?\n(They go to the recycle bin.)",
-                                      "DELETE", "Cancel", this, ModalCallbackFunction::create ([safe = Component::SafePointer<MySoundsPage> (this), name] (int r)
-                                      { if (safe != nullptr && r == 1) { kk::Library::deleteFolder (name); safe->current = {}; safe->reload(); } }));
+        const auto f = selected(); if (! f.existsAsFile()) { note = "pick a sound first"; repaint(); return; }
+        PopupMenu m, fm, km;
+        const auto folders = kk::Library::folders(); const auto kits = kk::SoundKits::kits();
+        for (int i = 0; i < folders.size(); ++i) fm.addItem (10 + i, folders[i]);
+        for (int i = 0; i < kits.size(); ++i) km.addItem (500 + i, kits[i] + "   (" + catOf (f) + ")");
+        m.addSubMenu ("MY FOLDERS", fm); m.addSubMenu ("SOUND KITS", km);
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&moveBtn), [safe = Component::SafePointer<MySoundsPage> (this), f, folders, kits] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            File dir = r >= 500 ? kk::SoundKits::kit (kits[r - 500]).getChildFile (safe->catOf (f)) : kk::Library::folder (folders[r - 10]);
+            dir.createDirectory();
+            const auto to = dir.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+            safe->note = f.moveFileTo (to) ? f.getFileNameWithoutExtension() + " -> " + (r >= 500 ? "kit " + kits[r - 500] : folders[r - 10]) : String ("could not move");
+            safe->reload();
+        });
     }
-    void renameFolder()
+    void newKit()
     {
-        auto* w = new AlertWindow ("RENAME FOLDER", "New name:", MessageBoxIconType::NoIcon);
-        w->addTextEditor ("name", current, "Folder");
+        auto* w = new AlertWindow ("NEW SOUND KIT", "Name of the new sound kit:", MessageBoxIconType::NoIcon);
+        w->addTextEditor ("name", "", "Kit");
+        w->addButton ("CREATE", 1, KeyPress (KeyPress::returnKey));
+        w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+        w->enterModalState (true, ModalCallbackFunction::create ([w, safe = Component::SafePointer<MySoundsPage> (this)] (int r)
+        {
+            const auto name = w->getTextEditorContents ("name").trim();
+            if (safe != nullptr && r == 1 && kk::SoundKits::createKit (name)) { safe->place = { 2, name }; safe->proc.lastSoundKit = name; safe->reload(); }
+        }), true);
+    }
+    void deletePlace()
+    {
+        if (place.type <= 0) { note = "pick a folder or a kit on the left"; repaint(); return; }
+        const auto pl = place;
+        AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, pl.type == 2 ? "DELETE SOUND KIT" : "DELETE FOLDER",
+                                      "Delete \"" + pl.name + "\" and its " + String (countIn (pl)) + " sounds?\n(They go to the recycle bin.)",
+                                      "DELETE", "Cancel", this, ModalCallbackFunction::create ([safe = Component::SafePointer<MySoundsPage> (this), pl] (int r)
+        {
+            if (safe == nullptr || r != 1) return;
+            if (pl.type == 2) kk::SoundKits::deleteKit (pl.name); else kk::Library::deleteFolder (pl.name);
+            safe->place = { 0, {} }; safe->reload();
+        }));
+    }
+    void renamePlace()
+    {
+        if (place.type <= 0) { note = "pick a folder or a kit on the left"; repaint(); return; }
+        auto* w = new AlertWindow (place.type == 2 ? "RENAME SOUND KIT" : "RENAME FOLDER", "New name:", MessageBoxIconType::NoIcon);
+        w->addTextEditor ("name", place.name, "Name");
         w->addButton ("RENAME", 1, KeyPress (KeyPress::returnKey));
         w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
-        w->enterModalState (true, ModalCallbackFunction::create ([w, safe = Component::SafePointer<MySoundsPage> (this), from = current] (int r)
+        w->enterModalState (true, ModalCallbackFunction::create ([w, safe = Component::SafePointer<MySoundsPage> (this), from = place] (int r)
         {
             const auto to = w->getTextEditorContents ("name").trim();
-            if (safe != nullptr && r == 1 && kk::Library::renameFolder (from, to)) { safe->current = to; safe->reload(); }
+            if (safe == nullptr || r != 1) return;
+            const bool ok = from.type == 2 ? kk::SoundKits::renameKit (from.name, to) : kk::Library::renameFolder (from.name, to);
+            if (ok) { safe->place = { from.type, to }; safe->reload(); }
         }), true);
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    ListBox folderList, soundList;
-    HotButton newBtn { lnf }, renameBtn { lnf }, delFolderBtn { lnf }, factoryBtn { lnf }, pairBtn { lnf }, delBtn { lnf }, showBtn { lnf };
-    StringArray folders;
-    Array<File> files;
-    String current, note;
-    int sel = -1, sig = 0;
+    ListBox placeList, soundList;
+    TextEditor search;
+    HotButton newFolderBtn { lnf }, newKitBtn { lnf }, renameBtn { lnf }, delPlaceBtn { lnf }, factoryBtn { lnf }, pairBtn { lnf }, moveBtn { lnf }, delBtn { lnf }, showBtn { lnf };
+    std::vector<Place> places;
+    Place place;
+    Array<File> all, shown;
+    Rectangle<int> chipArea;
+    String note;
+    int sel = -1, sig = 0, catSel = 0, totalCount = 0;
 };
 
-// ---------------- CHOP / SLICE: DIGGA's sample on a big waveform, movable slices, MPC pads, keys, drag out ----------------
-class ChopPanel : public Component, private Timer
+// ---------------- SAMPLER / CHOP (v0.32): your sample on a big waveform, movable slices, MPC pads, keys, drag out ----------------
+class ChopPanel : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
+    bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) return true; return false; }
+    void fileDragEnter (const StringArray&, int, int) override { dropHover = true; repaint(); }
+    void fileDragExit (const StringArray&) override { dropHover = false; repaint(); }
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        dropHover = false;
+        for (auto& x : files) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) { loadSample (File (x)); break; }
+        repaint();
+    }
+    void loadSample (const File& f)
+    {
+        note = proc.chopLoadFile (f) ? "loaded - cut at the hits. Pick another cut mode above, move the yellow markers, play the pads" : "could not read " + f.getFileName();
+        mode = 0; sel = 0; refresh();
+    }
+    void browse()
+    {
+        chooser = std::make_unique<FileChooser> ("Load a sample", File::getSpecialLocation (File::userMusicDirectory), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                              [safe = Component::SafePointer<ChopPanel> (this)] (const FileChooser& fc)
+                              { if (safe != nullptr && fc.getResult().existsAsFile()) safe->loadSample (fc.getResult()); });
+    }
     ChopPanel (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
         static const char* modes[] { "TRANSIENTS", "NOTES", "1/4", "1/8", "1/16", "8", "16" };
@@ -1530,7 +1779,8 @@ public:
             sl.setColour (Slider::trackColourId, lnf.skin->accent.withAlpha (0.45f));
             sl.setColour (Slider::textBoxTextColourId, Colours::white);
             sl.onValueChange = [this] { pushFx(); };
-            addAndMakeVisible (sl);
+            sl.updateText();
+            addChildComponent (sl);
         };
         bar (pitchSl, -24, 24, 1, [] (double v) { return "PITCH " + String (v > 0 ? "+" : "") + String ((int) v); }, "Pitch of this slice in semitones (double-click = 0)");
         bar (volSl, 0, 2, 0.01, [] (double v) { return "VOL " + String (roundToInt (v * 100)) + "%"; }, "Volume of this slice");
@@ -1539,7 +1789,7 @@ public:
         pitchSl.setDoubleClickReturnValue (true, 0); volSl.setDoubleClickReturnValue (true, 1); panSl.setDoubleClickReturnValue (true, 0); fadeSl.setDoubleClickReturnValue (true, 0.004);
         revBtn.setButtonText ("REVERSE"); revBtn.framed = true; revBtn.setTooltip ("Play this slice backwards");
         revBtn.onClick = [this] { revBtn.selected = ! revBtn.selected; revBtn.repaint(); pushFx(); proc.chopPad = sel; };
-        addAndMakeVisible (revBtn);
+        addChildComponent (revBtn);
         flipBtn.setButtonText ("FLIP IT"); flipBtn.framed = true;
         flipBtn.setTooltip ("A new trap pattern from your chops - then drag it into FL (FLIP MIDI)");
         flipBtn.onClick = [this] { flipSeed = (uint32_t) Random::getSystemRandom().nextInt (1 << 30); flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); note = "new flip ready - drag FLIP MIDI into FL"; repaint(); };
@@ -1556,7 +1806,7 @@ public:
             if (auto c = proc.chop.current()) for (int i = 0; i < c->numSlices(); ++i) all.push_back (sliceSound (i));
             saveToFolderMenu (proc, all, &bankAllBtn, [safe = Component::SafePointer<ChopPanel> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
         });
-        btn (backBtn, "BACK TO DIGGA", "Back to Digga Killa", [this] { if (onBack) onBack(); });
+        btn (backBtn, "LOAD SAMPLE", "Load a sample from your computer (or drag a WAV / MP3 from FL's browser onto the waveform)", [this] { browse(); });
         btn (pairBtn, "SLICE > PAIR", "This slice into PAIR YOUR OWN (next free slot)", [this] { note = proc.chopToPair (sel) ? "slice " + String (sel + 1) + " is in PAIR" : String(); repaint(); });
         btn (bankBtn, "SAVE SLICE", "This slice into one of your MY SOUNDS folders", [this]
         {
@@ -1571,8 +1821,7 @@ public:
         startTimerHz (30);
     }
     ~ChopPanel() override { stopTimer(); }
-    std::function<void()> onBack;
-    void visibilityChanged() override { if (isVisible()) { proc.chopFromDigga(); refresh(); } }
+    void visibilityChanged() override { if (isVisible()) refresh(); }
 
     void paint (Graphics& g) override
     {
@@ -1581,18 +1830,24 @@ public:
         g.setColour (Colour (0xff1a1838)); g.fillRect (0, 0, getWidth(), 64);
         g.setColour (s.accent); g.fillEllipse (22, 26, 10, 10);
         g.setColour (Colours::white); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.08f));
-        g.drawText ("CHOP / SLICE", 40, 12, 260, 40, Justification::centredLeft);
+        g.drawText ("SAMPLER", 40, 12, 260, 40, Justification::centredLeft);
         auto c = proc.chop.current();
         g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
         g.drawText (c != nullptr ? c->name.toUpperCase() + "   " + String (c->numSlices()) + " SLICES" : String(), 42, 44, 400, 16, Justification::centredLeft);
         // waveform with slices
         const auto w = wave.toFloat();
-        g.setColour (Colour (0xff0e0c22)); g.fillRoundedRectangle (w, 8);
-        g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (w, 8, 1.2f);
+        g.setGradientFill (ColourGradient (Colour (0xff1a1638), 0, w.getY(), Colour (0xff0b0a1c), 0, w.getBottom(), false)); g.fillRoundedRectangle (w, 8);
+        g.setGradientFill (ColourGradient (Colour (0xffffb020).withAlpha (dropHover ? 1.0f : 0.7f), w.getX(), 0, Colour (0xffff6a3d).withAlpha (dropHover ? 1.0f : 0.5f), w.getRight(), 0, false));
+        g.drawRoundedRectangle (w, 8, dropHover ? 3.0f : 1.6f);
         if (c == nullptr || c->src == nullptr)
         {
-            g.setColour (Colours::white.withAlpha (0.8f)); g.setFont (Font (FontOptions (24.0f, Font::bold)));
-            g.drawText ("LOAD A SAMPLE IN DIGGA FIRST", wave, Justification::centred);
+            g.setColour (Colours::white.withAlpha (0.9f)); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.08f));
+            g.drawText (dropHover ? "DROP IT" : "DROP A SAMPLE HERE", wave.withTrimmedBottom (40), Justification::centred);
+            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (14.0f)));
+            g.drawText ("a loop, a song, a vocal, a one-shot - WAV, MP3, FLAC, AIFF from FL's browser or a folder  -  or click LOAD SAMPLE",
+                        wave.withTrimmedTop (50), Justification::centred);
+            g.setColour (Colour (0xffffb020)); g.setFont (Font (FontOptions (13.0f, Font::bold)));
+            g.drawText (note, wave.withTrimmedTop (wave.getHeight() - 40), Justification::centred);
             return;
         }
         const int len = c->src->getNumSamples();
@@ -1715,6 +1970,11 @@ private:
     bool keysOn() const { return (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playChop; }
     void refresh()
     {
+        const bool has = proc.chop.current() != nullptr && proc.chop.current()->src != nullptr;   // slice controls only with a sample
+        for (Component* c : { (Component*) &pitchSl, (Component*) &volSl, (Component*) &panSl, (Component*) &fadeSl, (Component*) &revBtn,
+                              (Component*) &pairBtn, (Component*) &bankBtn, (Component*) &dragWav, (Component*) &dragMidi, (Component*) &flipBtn,
+                              (Component*) &dragFlip, (Component*) &bankAllBtn })
+            c->setVisible (has);
         peaks = proc.chop.overview (std::max (200, wave.getWidth() - 20));
         for (int i = 0; i < (int) modeBtns.size(); ++i) { modeBtns[(size_t) i]->selected = i == mode; modeBtns[(size_t) i]->repaint(); }
         keysBtn.setButtonText (keysOn() ? "KEYS PLAY THE CHOPS" : "PLAY CHOPS ON KEYS"); keysBtn.selected = keysOn(); keysBtn.repaint();
@@ -1755,6 +2015,8 @@ private:
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     std::vector<std::unique_ptr<HotButton>> modeBtns;
     HotButton keysBtn { lnf }, bankAllBtn { lnf }, backBtn { lnf }, pairBtn { lnf }, bankBtn { lnf };
+    std::unique_ptr<FileChooser> chooser;
+    bool dropHover = false;
     DragFileButton dragWav { "DRAG SLICE WAV", Colour (0xff36ff6a) }, dragMidi { "DRAG CHOP MIDI", Colour (0xff36ff6a) }, dragFlip { "DRAG FLIP MIDI", Colour (0xff36ff6a) };
     Slider pitchSl, volSl, panSl, fadeSl;
     HotButton revBtn { lnf }, flipBtn { lnf };
@@ -1772,6 +2034,7 @@ private:
         const auto f = c->fxOf (sel);
         loadingFx = true;
         pitchSl.setValue (f.semi, dontSendNotification); volSl.setValue (f.vol, dontSendNotification); panSl.setValue (f.pan, dontSendNotification); fadeSl.setValue (f.fade, dontSendNotification);
+        for (auto* sl : { &pitchSl, &volSl, &panSl, &fadeSl }) sl->updateText();
         revBtn.selected = f.rev; revBtn.repaint();
         loadingFx = false;
     }
@@ -1783,180 +2046,6 @@ private:
     bool wasPlaying = false;
 };
 
-// HALF / EFFECTOR / DIGGA: the original plugin (its own design and every function) inside KEYS KILLA.
-// A slim strip on top: what it does, ON / OFF (HALF, EFFECTOR - melodies only), KEYS -> DIGGA.
-class EmbeddedPage : public Component, private Timer
-{
-public:
-    static constexpr int kRail = 148;   // the left tiles stay visible
-    EmbeddedPage (KeysKillaProcessor& p, KKLookAndFeel& l, int moduleIndex, String t, String sub, const char* onParamId)
-        : proc (p), lnf (l), mod (moduleIndex), title (std::move (t)), subtitle (std::move (sub)), onId (onParamId)
-    {
-        if (onId != nullptr)
-        {
-            onBtn.framed = true;
-            onBtn.setTooltip (title + " on / off - it works on the melodies only (KEYS KILLA + DIGGA), never on drums");
-            onBtn.onClick = [this] { setParamFromUi (proc, onId, isOn() ? 0.0f : 1.0f); refresh(); };
-        }
-        if (mod == KeysKillaProcessor::modDigga)
-        {
-            pairBtn.framed = true; pairBtn.setButtonText ("PAIR THE\nONE-SHOTS");
-            pairBtn.setTooltip ("Send the one-shots DIGGA cut to PAIR YOUR OWN - breed them into new sounds and melody loops");
-            pairBtn.onClick = [this] { proc.pairFromDigga(); if (onPair) onPair(); };
-            addAndMakeVisible (pairBtn);
-            chopBtn.framed = true; chopBtn.setButtonText ("CHOP /\nSLICE");
-            chopBtn.setTooltip ("CHOP / SLICE the sample: move the cuts, MPC pads, play the chops on the keys, drag slices and the MIDI out");
-            chopBtn.onClick = [this] { showChop (! chopOn); };
-            addAndMakeVisible (chopBtn);
-            saveShotsBtn.framed = true; saveShotsBtn.setButtonText ("SAVE THE\nSHOTS");
-            saveShotsBtn.setTooltip ("Save DIGGA's one-shots into one of your MY SOUNDS folders");
-            saveShotsBtn.onClick = [this]
-            {
-                double rate = 44100.0;
-                std::vector<kk::PairPtr> all;
-                for (auto& [name, buf] : kkDiggaShots (proc.module (mod), rate, false))
-                    if (buf != nullptr && buf->getNumSamples() > 64) all.push_back (kk::PairLab::fromBuffer (*buf, rate, rate, "DIGGA " + name));
-                saveToFolderMenu (proc, all, &saveShotsBtn, [safe = Component::SafePointer<EmbeddedPage> (this)] (String msg)
-                { if (safe != nullptr) { safe->saveShotsBtn.setTooltip (msg); safe->saveNote = msg; safe->repaint(); } });
-            };
-            addAndMakeVisible (saveShotsBtn);
-            chop = std::make_unique<ChopPanel> (proc, lnf);
-            chop->onBack = [this] { showChop (false); };
-            addChildComponent (*chop);
-            keysBtn.framed = true;
-            keysBtn.setTooltip ("KEYS: your MIDI keyboard / FL piano roll plays DIGGA instead of the KEYS KILLA sound");
-            keysBtn.onClick = [this] { setParamFromUi (proc, ID::playMode, keysToDigga() ? 0.0f : 1.0f); refresh(); };
-            addAndMakeVisible (keysBtn);
-        }
-        tryCreateEditor();
-        setOpaque (true);
-        refresh();
-        startTimerHz (10);
-    }
-    ~EmbeddedPage() override { stopTimer(); releaseEditor(); }
-    std::function<void()> onPair;
-    void openChop() { showChop (true); }
-    void visibilityChanged() override { if (isVisible()) { wantSteal = true; tryCreateEditor (true); } }
-    void mouseUp (const MouseEvent& e) override
-    {
-        if (onId != nullptr && power.expanded (6).contains (e.getPosition())) { setParamFromUi (proc, onId, isOn() ? 0.0f : 1.0f); refresh(); repaint(); }
-    }
-    void paint (Graphics& g) override
-    {
-        const auto& s = *lnf.skin;
-        g.fillAll (Colour (0xff0f0e22));
-        // left rail behind the BREED LAB / FAMILY TREE / KILLA tiles
-        g.setColour (Colour (0xff12112a)); g.fillRect (0, 0, kRail, getHeight());
-        g.setColour (s.panelEdge.withAlpha (0.6f)); g.drawVerticalLine (kRail - 1, 0.0f, (float) getHeight());
-        g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (serif (22.0f, true, 0.25f));
-        g.drawFittedText ("KEYS\nKILLA", Rectangle<int> (0, 22, kRail, 60), Justification::centred, 2);
-        drawMaker (g, Rectangle<float> (0, 80, (float) kRail, 14), Justification::centred);
-        if (onId != nullptr)   // big power switch under the tiles
-        {
-            const auto pr = power.toFloat();
-            const bool on = isOn();
-            const Colour c = on ? Colour (0xff36ff6a) : Colour (0xffff3030);
-            g.setColour (c.withAlpha (on ? 0.25f : 0.12f)); g.fillEllipse (pr.expanded (10));
-            g.setGradientFill (ColourGradient (Colour (0xff2c2858), pr.getCentreX(), pr.getY(), Colour (0xff0a0918), pr.getCentreX(), pr.getBottom(), false));
-            g.fillEllipse (pr);
-            g.setColour (c); g.drawEllipse (pr.reduced (2), 3.0f);
-            const auto cc = pr.getCentre(); const float rr = pr.getWidth() * 0.22f;
-            Path arc; arc.addCentredArc (cc.x, cc.y, rr, rr, 0, 0.6f, MathConstants<float>::twoPi - 0.6f, true);
-            g.strokePath (arc, PathStrokeType (3.5f, PathStrokeType::curved, PathStrokeType::rounded));
-            g.drawLine (cc.x, cc.y - rr * 1.25f, cc.x, cc.y - rr * 0.2f, 3.5f);
-            g.setFont (Font (FontOptions (18.0f, Font::bold)).withExtraKerningFactor (0.15f));
-            g.drawText (on ? "ON" : "OFF", Rectangle<float> (0, pr.getBottom() + 8, (float) kRail, 24).toNearestInt(), Justification::centred);
-            g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f)));
-            g.drawFittedText (title + "\non the melodies", Rectangle<float> (4, pr.getBottom() + 32, (float) kRail - 8, 30).toNearestInt(), Justification::centred, 2);
-        }
-        if (editor == nullptr)
-        {
-            g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (18.0f, false, 0.2f));
-            g.drawText ("opening " + title + " ...", getLocalBounds(), Justification::centred);
-        }
-    }
-    void resized() override
-    {
-        const int w = getWidth();
-        juce::ignoreUnused (w);
-        power = { kRail / 2 - 44, getHeight() - 260, 88, 88 };
-        chopBtn.setBounds (8, getHeight() - 336, kRail - 16, 70);
-        if (chop) chop->setBounds (getLocalBounds().withTrimmedLeft (kRail));
-        keysBtn.setBounds (8, getHeight() - 260, kRail - 16, 70);
-        pairBtn.setBounds (8, getHeight() - 184, kRail - 16, 70);
-        saveShotsBtn.setBounds (8, getHeight() - 108, kRail - 16, 70);
-        if (editor != nullptr)
-        {
-            // the plugin keeps its own look and lays itself out for the bigger size (no transform: crisp, OpenGL-safe)
-            auto area = getLocalBounds().withTrimmedLeft (kRail).reduced (8);
-            const float sc = std::min ((float) area.getWidth() / (float) native.getWidth(), (float) area.getHeight() / (float) native.getHeight());
-            const int ew = roundToInt (native.getWidth() * sc), eh = roundToInt (native.getHeight() * sc);
-            placed = { area.getX() + (area.getWidth() - ew) / 2, area.getY(), ew, eh };
-            editor->setBounds (placed);
-        }
-    }
-private:
-    bool isOn() const { return onId != nullptr && proc.apvts.getRawParameterValue (onId)->load() > 0.5f; }
-    bool keysToDigga() const { return (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playDigga; }
-    void refresh()
-    {
-        onBtn.setButtonText (isOn() ? title + "  ON" : title + "  OFF"); onBtn.selected = isOn(); onBtn.repaint();
-        keysBtn.setButtonText (keysToDigga() ? "KEYS\nPLAY DIGGA" : "PLAY DIGGA\nON KEYS"); keysBtn.selected = keysToDigga(); keysBtn.repaint();
-        repaint (power.expanded (20).withWidth (kRail).withX (0).withHeight (160));
-        lastSig = (isOn() ? 1 : 0) + (keysToDigga() ? 2 : 0);
-    }
-    // the host can open a second KEYS KILLA window before closing the old one: wait until the plugin's
-    // previous editor is gone, then create ours (never two editors for one plugin)
-    // a plugin has one editor: if another KEYS KILLA window (FL keeps old ones alive) still holds it and is not
-    // on screen, it hands it over to the window you are looking at
-    static std::map<AudioProcessor*, EmbeddedPage*>& owners() { static std::map<AudioProcessor*, EmbeddedPage*> o; return o; }
-    void releaseEditor()
-    {
-        if (editor == nullptr) return;
-        if (auto* m = proc.module (mod); m != nullptr && owners()[m] == this) owners().erase (m);
-        removeChildComponent (editor.get()); editor.reset(); repaint();
-    }
-    void tryCreateEditor (bool steal = false)
-    {
-        auto* m = proc.module (mod);
-        if (m == nullptr || editor != nullptr) return;
-        if (m->getActiveEditor() != nullptr)
-        {
-            // the page you are looking at always wins: the other (older / hidden) window hands its editor over
-            auto it = owners().find (m);
-            if (! steal || it == owners().end() || it->second == this) return;
-            it->second->releaseEditor();
-            if (m->getActiveEditor() != nullptr) return;
-        }
-        editor.reset (m->createEditorIfNeeded());
-        if (editor != nullptr) { owners()[m] = this; addAndMakeVisible (*editor); editor->setVisible (! chopOn); native = editor->getBounds().withPosition (0, 0); resized(); if (chop) chop->toFront (false); repaint(); }
-    }
-    void timerCallback() override
-    {
-        if (editor == nullptr && isShowing()) tryCreateEditor (wantSteal);
-        wantSteal = false;
-        if (editor != nullptr && editor->getBounds() != placed) resized();   // the plugin changed its own size: fit it again
-        if ((isOn() ? 1 : 0) + (keysToDigga() ? 2 : 0) != lastSig) refresh();
-    }
-    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    int mod;
-    String title, subtitle;
-    const char* onId;
-    std::unique_ptr<AudioProcessorEditor> editor;
-    Rectangle<int> native, placed, power;
-    HotButton onBtn { lnf }, keysBtn { lnf }, pairBtn { lnf }, chopBtn { lnf }, saveShotsBtn { lnf };
-    String saveNote;
-    std::unique_ptr<ChopPanel> chop;
-    bool chopOn = false, wantSteal = false;
-    void showChop (bool on)
-    {
-        chopOn = on && chop != nullptr;
-        if (chop) { chop->setVisible (chopOn); if (chopOn) chop->toFront (false); }
-        if (editor) editor->setVisible (! chopOn);
-        chopBtn.selected = chopOn; chopBtn.repaint();
-    }
-    int lastSig = -1;
-};
 
 // ---------------- DRUM BOOST pages: 808 / SNARE-CLAP / HI-HAT, every one with its own trap look ----------------
 static void drawPeaks (Graphics& g, Rectangle<float> r, const std::vector<float>& pk, Colour c)
@@ -1986,14 +2075,14 @@ static const DrumTheme& drumTheme (int d)
           Colour (0xff1b1a3a), Colour (0xff0a0a1a), Colour (0xff1fe0ff), Colour (0xffff3fd2), Colour (0xffeef0f2), { "TRAP", "TRIPLET", "DRILL", "BUILD-UP" } },
         { "HI-HAT", "HAT FACTORY  -  DROP A HI-HAT, MAKE IT SHINE, TRAP ROLLS IN THE PIANO ROLL", "DROP YOUR HI-HAT HERE", "HI-HAT ROLLS",
           Colour (0xff1f1a3e), Colour (0xff0a0a1a), Colour (0xffffd23f), Colour (0xffb070ff), Colour (0xffeef0f2), { "ATLANTA", "TRIPLET", "DRILL", "CRAZY" } },
-        { "KICK", "KICK LAB  -  DROP A KICK, MAKE IT HIT, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR KICK HERE", "MY DRUM KIT",
-          Colour (0xff1d1a3c), Colour (0xff0a0a1a), Colour (0xffff3b30), Colour (0xffff9f0a), Colour (0xffeef0f2), { "", "", "", "" } },
-        { "OPEN HAT", "OPEN HAT  -  DROP AN OPEN HAT / CRASH, SHAPE ITS TAIL, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR OPEN HAT HERE", "MY DRUM KIT",
-          Colour (0xff1f1a3e), Colour (0xff0a0a1a), Colour (0xffffe066), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } },
-        { "PERC", "PERCUSSION  -  RIMS, TOMS, SHAKERS, BONGOS ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR PERC HERE", "MY DRUM KIT",
-          Colour (0xff1b1a3a), Colour (0xff0a0a1a), Colour (0xff30d158), Colour (0xffffd60a), Colour (0xffeef0f2), { "", "", "", "" } },
-        { "FX", "DRUM FX  -  RISERS, IMPACTS, VOX TAGS, REVERSES ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR FX HERE", "MY DRUM KIT",
-          Colour (0xff211a40), Colour (0xff0a0a1a), Colour (0xffbf5af2), Colour (0xff64d2ff), Colour (0xffeef0f2), { "", "", "", "" } } };
+        { "KICK", "KICK LAB  -  DROP A KICK, MAKE IT HIT, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR KICK HERE", "KICK PATTERNS",
+          Colour (0xff1d1a3c), Colour (0xff0a0a1a), Colour (0xffff3b30), Colour (0xffff9f0a), Colour (0xffeef0f2), { "TRAP", "DRILL", "BOUNCE", "HALF-TIME" } },
+        { "OPEN HAT", "OPEN HAT  -  DROP AN OPEN HAT / CRASH, SHAPE ITS TAIL, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR OPEN HAT HERE", "OPEN HAT PATTERNS",
+          Colour (0xff1f1a3e), Colour (0xff0a0a1a), Colour (0xffffe066), Colour (0xff64d2ff), Colour (0xffeef0f2), { "OFFBEAT", "SPARSE", "SYNCOPATED", "BUSY" } },
+        { "PERC", "PERCUSSION  -  RIMS, TOMS, SHAKERS, BONGOS ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR PERC HERE", "PERC PATTERNS",
+          Colour (0xff1b1a3a), Colour (0xff0a0a1a), Colour (0xff30d158), Colour (0xffffd60a), Colour (0xffeef0f2), { "RIMS", "TRIPLET", "BOUNCE", "SHAKER" } },
+        { "FX", "DRUM FX  -  RISERS, IMPACTS, VOX TAGS, REVERSES ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR FX HERE", "FX PATTERNS",
+          Colour (0xff211a40), Colour (0xff0a0a1a), Colour (0xffbf5af2), Colour (0xff64d2ff), Colour (0xffeef0f2), { "INTRO", "PHRASE", "RISER", "STUTTER" } } };
     return t[jlimit (0, kk::numDrumSlots - 1, d)];
 }
 
@@ -2324,7 +2413,7 @@ public:
             auto b = std::make_unique<HotButton> (lnf, names[i]);
             b->framed = true; b->selected = i == d; b->tint = drumTheme (i).accent;
             b->onClick = [this, i] { if (i != d && onSwitch) onSwitch (i); };
-            addAndMakeVisible (*b); switchBtns.push_back (std::move (b));
+            addChildComponent (*b); switchBtns.push_back (std::move (b));   // v0.32: the KIT STRIP pads switch drums
         }
 
         // PATTERN generator
@@ -2360,7 +2449,7 @@ public:
         density.onDragEnd = [this] { editor.remember(); proc.generatePattern (d, proc.patStyle[(size_t) d], proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); };
         addAndMakeVisible (density);
         btn (genBtn, "GENERATE", "A brand new " + th.patTitle + " pattern", [this] { editor.remember(); proc.generatePattern (d, proc.patStyle[(size_t) d], proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); });
-        btn (playPatBtn, "PLAY", "Hear the pattern on your drum (with FL playing it follows the song tempo)", [this] { proc.patPlay = proc.patPlay.load() == d ? -1 : d; refreshPattern(); });
+        btn (playPatBtn, "PLAY", "Hear the pattern on your drum (with FL playing it follows the song tempo)", [this] { proc.kitPlay = false; proc.patPlay = proc.patPlay.load() == d ? -1 : d; refreshPattern(); });
         btn (clearPatBtn, "CLEAR", "Empty pattern - draw your own", [this] { editor.remember(); proc.setPattern (d, {}, proc.patBars[(size_t) d]); editor.reload(); refreshPattern(); });
         btn (undoBtn, "UNDO", "Undo the last change (Ctrl+Z)", [this] { editor.undo(); });
         btn (redoBtn, "REDO", "Redo (Ctrl+Y)", [this] { editor.redo(); });
@@ -2372,6 +2461,8 @@ public:
             std::vector<int> all; for (int i = 0; i < kk::numDrumSlots; ++i) all.push_back (i);
             saveToKitMenu (proc, all, &saveAllBtn, [safe = Component::SafePointer<DrumPage> (this)] (String m) { if (safe != nullptr) { safe->kitNote = m; safe->repaint(); } });
         });
+        btn (playKitBtn, "PLAY KIT", "Every drum with a sound plays its pattern together - hear the whole beat (with FL playing it follows the song)",
+             [this] { proc.kitPlay = ! proc.kitPlay.load(); if (proc.kitPlay.load()) proc.patPlay = -1; refreshPattern(); repaint(); });
         btn (openKitBtn, "OPEN KITS FOLDER", "Your drum kits on the computer - add this folder to FL Studio's browser once", [this] { kk::Kits::kit (proc.lastKit).createDirectory(); kk::Kits::kit (proc.lastKit).revealToUser(); });
         btn (resetKnobsBtn, "RESET KNOBS", "All knobs of this drum back to their start values", [this]
         {
@@ -2429,6 +2520,30 @@ public:
         g.setColour (th.text); g.drawText (th.title, kRail + 22, 10, 600, 56, Justification::centredLeft);
         g.setColour (th.accent2); g.setFont (Font (FontOptions (12.5f, Font::bold)).withExtraKerningFactor (0.12f));
         g.drawText (th.sub, kRail + 24, 62, 1000, 18, Justification::centredLeft);
+        // KIT STRIP: the seven drums of your kit - click one to edit it
+        static const char* kitNames[] { "808", "SNARE / CLAP", "HI-HAT", "KICK", "OPEN HAT", "PERC", "FX" };
+        for (int i = 0; i < kk::numDrumSlots; ++i)
+        {
+            const auto c = kitPad (i).toFloat();
+            const auto& t = drumTheme (i);
+            auto smp = proc.drum (i).current();
+            const bool selPad = i == d;
+            if (selPad) { g.setColour (t.accent.withAlpha (0.28f)); g.fillRoundedRectangle (c.expanded (3), 11); }
+            g.setGradientFill (ColourGradient (selPad ? t.accent.withAlpha (0.35f) : Colour (0xff1c1940), c.getX(), c.getY(), Colour (0xff0e0c22), c.getRight(), c.getBottom(), false));
+            g.fillRoundedRectangle (c, 9);
+            g.setGradientFill (ColourGradient (t.accent, c.getX(), 0, t.accent2, c.getRight(), 0, false));
+            g.drawRoundedRectangle (c.reduced (0.5f), 9, selPad ? 2.2f : 1.0f);
+            g.setColour (selPad ? Colours::white : t.accent); g.setFont (Font (FontOptions (13.0f, Font::bold)).withExtraKerningFactor (0.08f));
+            g.drawText (kitNames[i], c.reduced (10, 6).withHeight (16).toNearestInt(), Justification::centredLeft);
+            if (smp != nullptr)
+            {
+                drawPeaks (g, c.reduced (10, 0).withTrimmedTop (24).withTrimmedBottom (18), smp->peaks, t.accent2.withAlpha (0.85f));
+                g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (10.5f)));
+                g.drawText (smp->name, c.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredLeft);
+            }
+            else { g.setColour (Colour (0xff7d77a8)); g.setFont (Font (FontOptions (11.0f))); g.drawText ("empty - drop a sound", c.withTrimmedTop (22).toNearestInt(), Justification::centred); }
+            if (proc.kitPlay.load() && smp != nullptr) { g.setColour (Colour (0xff36ff6a)); g.fillEllipse (c.getRight() - 16, c.getY() + 8, 8, 8); }
+        }
         // section panels (MPC style: dark inset plates with screws)
         for (auto r : { boostPanel, patPanel })
         {
@@ -2446,12 +2561,7 @@ public:
         // pattern title with an LED
         g.setColour (th.accent); g.fillEllipse ((float) patPanel.getX() + 22, (float) patPanel.getY() + 22, 10, 10);
         g.setColour (th.text); g.setFont (Font (FontOptions (22.0f, Font::bold)).withExtraKerningFactor (0.08f));
-        g.drawText (hasPattern() ? th.patTitle : "MY DRUM KIT", patPanel.getX() + 40, patPanel.getY() + 12, 300, 30, Justification::centredLeft);
-        if (! hasPattern())
-        {
-            paintKit (g);
-        }
-        else
+        g.drawText (th.patTitle, patPanel.getX() + 40, patPanel.getY() + 12, 300, 30, Justification::centredLeft);
         {
         g.setColour (th.text.withAlpha (0.7f)); g.setFont (Font (FontOptions (12.0f, Font::bold)).withExtraKerningFactor (0.15f));
         g.drawText ("STYLE", styleBtns.front()->getX(), styleBtns.front()->getY() - 18, 200, 16, Justification::centredLeft);
@@ -2473,21 +2583,24 @@ public:
     void resized() override
     {
         const int w = getWidth(), h = getHeight(), x0 = kRail + 14;
-        for (int i = 0; i < kk::numDrumSlots; ++i) switchBtns[(size_t) i]->setBounds (w - kk::numDrumSlots * 122 - 14 + i * 122, 20, 116, 40);
-        boostPanel = { x0, 88, w - x0 - 14, 372 };
-        art = { x0 + 26, 106, 222, 222 };
-        wave = { x0 + 290, 100, w - x0 - 290 - 30, 160 };
+        const int oy = 72;   // the KIT STRIP sits above the boost panel
+        playKitBtn.setBounds (w - 14 - 150, 22, 150, 40);
+        saveAllBtn.setBounds (playKitBtn.getX() - 10 - 180, 22, 180, 40);
+        openKitBtn.setBounds (saveAllBtn.getX() - 10 - 180, 22, 180, 40);
+        boostPanel = { x0, 88 + oy, w - x0 - 14, 372 };
+        art = { x0 + 26, 106 + oy, 222, 222 };
+        wave = { x0 + 290, 100 + oy, w - x0 - 290 - 30, 160 };
         int x = wave.getX();
         for (auto* b : { &loadBtn, &hitBtn, &keysBtn, &clearBtn })
         {
             const int bw = b == &keysBtn ? 270 : 120;
-            b->setBounds (x, 270, bw, 36); x += bw + 10;
-            if (b == &keysBtn) { dragWav.setBounds (x, 266, 190, 44); x += 200; }
+            b->setBounds (x, 270 + oy, bw, 36); x += bw + 10;
+            if (b == &keysBtn) { dragWav.setBounds (x, 266 + oy, 190, 44); x += 200; }
         }
-        for (int i = 0; i < 3; ++i) satBtns[(size_t) i]->setBounds (wave.getRight() - 3 * 106 - 8 + i * 106, 276, 100, 28);
+        for (int i = 0; i < 3; ++i) satBtns[(size_t) i]->setBounds (wave.getRight() - 3 * 106 - 8 + i * 106, 276 + oy, 100, 28);
         const int n = (int) knobs.size(), area = wave.getRight() - wave.getX(), kw = std::min (98, area / n);
-        for (int i = 0; i < n; ++i) knobs[(size_t) i]->setBounds (wave.getX() + i * (area / n) + (area / n - kw) / 2, 318, kw, kw + 22);
-        patPanel = { x0, 470, w - x0 - 14, h - 470 - 12 };
+        for (int i = 0; i < n; ++i) knobs[(size_t) i]->setBounds (wave.getX() + i * (area / n) + (area / n - kw) / 2, 318 + oy, kw, kw + 22);
+        patPanel = { x0, 470 + oy, w - x0 - 14, h - 470 - oy - 12 };
         const int py = patPanel.getY() + 82;
         int px = patPanel.getX() + 22;
         for (auto& b : styleBtns) { b->setBounds (px, py, 104, 32); px += 108; }
@@ -2504,24 +2617,14 @@ public:
         resetBtn.setBounds (right - 100, py, 100, 32);
         redoBtn.setBounds (right - 100 - 8 - 86, py, 86, 32);
         undoBtn.setBounds (right - 100 - 8 - 86 - 8 - 86, py, 86, 32);
-        resetKnobsBtn.setBounds (art.getX() + 21, 380, 180, 30);
-        kitBtn.setBounds (art.getX() + 21, 416, 180, 34);
-        if (! hasPattern())
-        {
-            saveAllBtn.setBounds (patPanel.getRight() - 18 - 200, patPanel.getY() + 16, 200, 40);
-            openKitBtn.setBounds (patPanel.getRight() - 18 - 200 - 10 - 190, patPanel.getY() + 16, 190, 40);
-        }
-        else
-        {   // on the pattern pages the kit buttons sit in the boost panel
-            saveAllBtn.setBounds (boostPanel.getX() + 12, boostPanel.getBottom() + 0, 0, 0);
-            openKitBtn.setBounds (boostPanel.getX() + 12, boostPanel.getBottom() + 0, 0, 0);
-        }
+        resetKnobsBtn.setBounds (art.getX() + 21, 380 + oy, 180, 30);
+        kitBtn.setBounds (art.getX() + 21, 416 + oy, 180, 34);
         for (Component* c : std::initializer_list<Component*> { &editor, &genBtn, &playPatBtn, &clearPatBtn, &undoBtn, &redoBtn, &resetBtn, &dragMidi, &density })
             c->setVisible (hasPattern());
         for (auto& b : styleBtns) b->setVisible (hasPattern());
         for (auto& b : barBtns) b->setVisible (hasPattern());
         for (auto& b : snapBtns) b->setVisible (hasPattern());
-        saveAllBtn.setVisible (! hasPattern()); openKitBtn.setVisible (! hasPattern());
+        saveAllBtn.setVisible (true); openKitBtn.setVisible (true);
         editor.setBounds (patPanel.getX() + 14, py + 44, patPanel.getWidth() - 28, patPanel.getBottom() - py - 44 - 14);
     }
     void mouseDown (const MouseEvent& e) override { dragFromWave = wave.contains (e.getPosition()); }
@@ -2533,6 +2636,13 @@ public:
     }
     void mouseUp (const MouseEvent& e) override
     {
+        for (int i = 0; i < kk::numDrumSlots; ++i)
+            if (kitPad (i).contains (e.getPosition()) && e.getDistanceFromDragStart() < 4)
+            {
+                if (i != d) { if (onSwitch) onSwitch (i); }
+                else proc.hitDrum (d);
+                return;
+            }
         if (art.contains (e.getPosition())) proc.hitDrum (d);
         else if (wave.contains (e.getPosition()) && ! proc.drum (d).hasSample() && e.getDistanceFromDragStart() < 4) browse();
     }
@@ -2605,6 +2715,7 @@ private:
         for (int i = 0; i < 4; ++i) { snapBtns[(size_t) i]->selected = i == snapSel; snapBtns[(size_t) i]->repaint(); }
         const bool playing = proc.patPlay.load() == d;
         playPatBtn.selected = playing; playPatBtn.setButtonText (playing ? "STOP" : "PLAY"); playPatBtn.repaint();
+        playKitBtn.selected = proc.kitPlay.load(); playKitBtn.setButtonText (proc.kitPlay.load() ? "STOP KIT" : "PLAY KIT"); playKitBtn.repaint();
         repaint (patPanel.withHeight (64));
     }
     void timerCallback() override
@@ -2620,7 +2731,7 @@ private:
         if (hit) { pulse = 1.0f; shake = { Random::getSystemRandom().nextFloat() * 2 - 1, Random::getSystemRandom().nextFloat() * 2 - 1 }; }
         else pulse *= 0.86f;
         if (s.get() != shown || ph >= 0 || pulse > 0.01f) { shown = s.get(); repaint (art.expanded (40)); repaint (wave); }
-        const float pb = proc.patPlay.load() == d ? proc.patBeat.load() : -1.0f;
+        const float pb = proc.patPlay.load() == d || proc.kitPlay.load() ? proc.patBeat.load() : -1.0f;
         if (pb != editor.playBeat) { editor.playBeat = pb; editor.repaint(); }
     }
     void drawArt (Graphics& g, Rectangle<int> r)
@@ -2759,9 +2870,14 @@ private:
     std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> atts;
     std::vector<std::unique_ptr<HotButton>> satBtns, switchBtns, styleBtns, barBtns, snapBtns;
     HotButton loadBtn { lnf }, hitBtn { lnf }, keysBtn { lnf }, dragBtn { lnf }, clearBtn { lnf }, genBtn { lnf }, playPatBtn { lnf }, clearPatBtn { lnf }, undoBtn { lnf }, redoBtn { lnf }, resetBtn { lnf }, resetKnobsBtn { lnf },
-              kitBtn { lnf }, saveAllBtn { lnf }, openKitBtn { lnf };
+              kitBtn { lnf }, saveAllBtn { lnf }, openKitBtn { lnf }, playKitBtn { lnf };
+    Rectangle<int> kitPad (int i) const
+    {
+        const int x0 = kRail + 14, w = getWidth() - x0 - 14, gap = 8, pw = (w - gap * (kk::numDrumSlots - 1)) / kk::numDrumSlots;
+        return { x0 + i * (pw + gap), 86, pw, 62 };
+    }
     String kitNote;
-    bool hasPattern() const { return d < 3; }   // 808 / snare / hats have pattern generators; kick, open hat, perc, FX show the kit
+    bool hasPattern() const { return true; }   // v0.32: every drum has its generator + piano roll
     Slider density;
     DragFileButton dragMidi { "DRAG MIDI TO FL", Colour (0xff36ff6a) }, dragWav { "DRAG WAV TO FL", Colour (0xff36ff6a) };
     PatternEditor editor;
@@ -2781,46 +2897,32 @@ private:
 // the hosted plugin's own editor in its own window (it looks exactly like itself)
 // the hosted plugin's editor shown INSIDE KEYS KILLA (over the whole window, BACK bar on top) - never a
 // separate desktop window, so nothing is left behind when FL Studio closes
-class VstOverlay : public Component
+// v0.32: a hosted plugin's own window opens as its own floating window at its real size - always fully visible
+// (a plugin's native view cannot be shrunk inside KEYS KILLA). It closes together with KEYS KILLA.
+class VstWindow : public DocumentWindow
 {
 public:
-    explicit VstOverlay (juce::AudioPluginInstance& p, KKLookAndFeel& l) : lnf (l)
+    VstWindow (juce::AudioPluginInstance& p, Component* near)
+        : DocumentWindow (p.getName() + "   -   pick a sound, then close this window: KEYS KILLA takes it", Colour (0xff15132e), DocumentWindow::closeButton)
     {
-        back.setButtonText ("BACK TO KEYS KILLA"); back.framed = true;
-        back.onClick = [this] { setVisible (false); if (onBack) onBack(); };
-        addAndMakeVisible (back);
-        title = p.getName();
+        setUsingNativeTitleBar (true);
         editor.reset (p.createEditorIfNeeded());
-        if (editor != nullptr) { native = editor->getBounds().withPosition (0, 0); addAndMakeVisible (*editor); }
-        setOpaque (true);
+        if (editor != nullptr) setContentNonOwned (editor.get(), true);
+        setResizable (false, false);
+        setAlwaysOnTop (true);
+        if (near != nullptr && near->isShowing())
+        {
+            const auto c = near->getScreenBounds().getCentre();
+            setTopLeftPosition (jmax (0, c.x - getWidth() / 2), jmax (0, c.y - getHeight() / 2));
+        }
+        else centreWithSize (getWidth(), getHeight());
     }
-    ~VstOverlay() override { if (editor != nullptr) { removeChildComponent (editor.get()); editor.reset(); } }
-    std::function<void()> onBack;   // PAIR FROM VST: the sound you changed in the plugin is taken again
+    ~VstWindow() override { clearContentComponent(); editor.reset(); }
+    std::function<void()> onBack;   // PAIR FROM VST: the sound you picked in the plugin is taken
     bool hasEditor() const { return editor != nullptr; }
-    void paint (Graphics& g) override
-    {
-        g.fillAll (Colour (0xff0e0c22));
-        g.setColour (Colour (0xff16152e)); g.fillRect (0, 0, getWidth(), 48);
-        g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (16.0f, Font::bold)).withExtraKerningFactor (0.1f));
-        g.drawText (title.toUpperCase() + "   -   choose a sound, then CAPTURE in PAIR FROM VST", 20, 0, getWidth() - 300, 48, Justification::centredLeft);
-    }
-    void resized() override
-    {
-        back.setBounds (getWidth() - 250, 8, 236, 32);
-        if (editor == nullptr) return;
-        auto area = getLocalBounds().withTrimmedTop (52).reduced (6);
-        const float sc = std::min (1.0f, std::min ((float) area.getWidth() / (float) std::max (1, native.getWidth()), (float) area.getHeight() / (float) std::max (1, native.getHeight())));
-        editor->setTransform (AffineTransform::scale (sc));
-        const int ew = roundToInt (native.getWidth() * sc), eh = roundToInt (native.getHeight() * sc);
-        editor->setBounds (native.withPosition (roundToInt ((area.getX() + (area.getWidth() - ew) / 2) / sc), roundToInt (area.getY() / sc)));
-        juce::ignoreUnused (eh);
-    }
+    void closeButtonPressed() override { setVisible (false); if (onBack) onBack(); }
 private:
-    KKLookAndFeel& lnf;
-    HotButton back { lnf };
     std::unique_ptr<AudioProcessorEditor> editor;
-    Rectangle<int> native;
-    String title;
 };
 
 // ---------------- PAIR FROM VST: one side (A or B) - a plugin and its sounds, in KEYS KILLA's own design ----------------
@@ -3025,12 +3127,12 @@ public:
         diceAll.setTooltip ("Dice: four random sounds from your HARVEST bank fly into the slots - then BREED");
         diceAll.onClick = [this] { for (int k = 0; k < kk::PairLab::maxParents; ++k) proc.pairDice (k); repaint(); };
         addAndMakeVisible (diceAll);
-        diggaBtn.setButtonText ("HARVEST DIGGA"); diggaBtn.framed = true;
-        diggaBtn.setTooltip ("Collect sounds from everything DIGGA KILLA cut (loops + one-shots)");
+        diggaBtn.setButtonText ("HARVEST SAMPLER"); diggaBtn.framed = true;
+        diggaBtn.setTooltip ("Collect sounds from the sample loaded in the SAMPLER");
         diggaBtn.onClick = [this]
         {
-            if (proc.harvestFromDigga() == 0)
-                AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "HARVEST", "DIGGA has nothing yet.\nOpen DIGGA KILLA, drop a sample or a song, then come back.");
+            if (proc.harvestFromChop() == 0)
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "HARVEST", "The SAMPLER is empty.\nOpen SAMPLER, drop a sample or a song, then come back.");
             repaint();
         };
         addAndMakeVisible (diggaBtn);
@@ -3341,7 +3443,7 @@ private:
         for (auto& sd : sides) if (sd) sd->setPlugins (proc.vstList, old2);
         repaint();
     }
-    // a plugin's own window, shown INSIDE KEYS KILLA (only for plugins that share no sound list)
+    // a plugin's own window (floating, full size)
     void openVstUi (int side)
     {
         auto* top = getTopLevelComponent();
@@ -3350,13 +3452,12 @@ private:
             if (vstWin != nullptr && vstWinSide != side) vstWin.reset();
             if (vstWin == nullptr && inst->hasEditor())
             {
-                vstWin = std::make_unique<VstOverlay> (*inst, lnf);
+                vstWin = std::make_unique<VstWindow> (*inst, top);
                 vstWinSide = side;
                 vstWin->onBack = [safe = Component::SafePointer<PairPage> (this), side]
                 { if (safe != nullptr && safe->sides[(size_t) side]) safe->sides[(size_t) side]->retake(); };
-                top->addChildComponent (*vstWin);
             }
-            if (vstWin != nullptr) { vstWin->setBounds (top->getLocalBounds()); vstWin->setVisible (true); vstWin->toFront (true); }
+            if (vstWin != nullptr) { vstWin->setVisible (true); vstWin->toFront (true); }
         }
     }
     // c = category; its column follows the display order (BASS KEYS PLUCK PAD STRINGS BRASS LEAD VOX DRUMS FX)
@@ -3414,7 +3515,7 @@ private:
     ComboBox vstBox, noteBox, shelfBox;
     HotButton folderBtn { lnf }, grabBtn { lnf };
     int grabNext = -1, grabTotal = 0, grabbed = 0;
-    std::unique_ptr<VstOverlay> vstWin;
+    std::unique_ptr<VstWindow> vstWin;
     int vstWinSide = -1;
     std::array<std::unique_ptr<VstSide>, 2> sides;
     String status;
@@ -3485,8 +3586,220 @@ private:
     bool hover = false, dragged = false, busy = false;
 };
 
-// left column: BREED LAB / FAMILY TREE, then the melody extras VOODOO KILLA / EFFECTOR KILLA / DIGGA KILLA
+// left column: BREED LAB / FAMILY TREE / PAIR / VST / MY SOUNDS, then STUDIO: SAMPLER / DRUM KIT / FX RACK
 // (-1 = a drum page of the bottom row is open)
+// a full page that also covers the strip under the left tiles (the tiles stay on top)
+class InsetPage : public Component
+{
+public:
+    InsetPage (std::unique_ptr<Component> c) : inner (std::move (c)) { addChildComponent (*inner); setOpaque (true); }   // shown with the page: its visibilityChanged refreshes it
+    void paint (Graphics& g) override { g.setGradientFill (ColourGradient (Colour (0xff15123a), 0, 0, Colour (0xff0a0920), 0, (float) getHeight(), false)); g.fillAll(); }
+    void resized() override { inner->setBounds (getLocalBounds().withTrimmedLeft (getWidth() * 140 / 1652)); }
+    void visibilityChanged() override { inner->setVisible (isVisible()); }
+    Component* page() const { return inner.get(); }
+private:
+    std::unique_ptr<Component> inner;
+};
+
+// ---------------- FX RACK (v0.32): KEYS KILLA's own effects on every melody (synth, PAIR, VST, SAMPLER) ----------------
+class RackKnob : public Slider
+{
+public:
+    RackKnob (std::atomic<float>& t, String name, double lo, double hi, double def, Colour a, Colour b)
+        : Slider (RotaryHorizontalVerticalDrag, NoTextBox), target (t), label (std::move (name)), ca (a), cb (b)
+    {
+        setRange (lo, hi, 0.0); setValue (t.load(), dontSendNotification);
+        setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
+        setDoubleClickReturnValue (true, def);
+        onValueChange = [this] { target = (float) getValue(); };
+    }
+    void sync() { setValue (target.load(), dontSendNotification); }
+    void paint (Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        auto lab = r.removeFromBottom (16);
+        const float rad = jmin (r.getWidth(), r.getHeight()) * 0.5f - 4;
+        const auto c = r.getCentre();
+        const auto rp = getRotaryParameters();
+        const float pos = (float) valueToProportionOfLength (getValue());
+        const float a0 = rp.startAngleRadians, a1 = rp.endAngleRadians, to = a0 + pos * (a1 - a0);
+        const bool bip = getMinimum() < 0;
+        const float from = bip ? (a0 + a1) * 0.5f : a0;
+        Path tr; tr.addCentredArc (c.x, c.y, rad, rad, 0, a0, a1, true);
+        g.setColour (Colour (0xff2a2650)); g.strokePath (tr, PathStrokeType (3.5f, PathStrokeType::curved, PathStrokeType::rounded));
+        if (std::abs (to - from) > 0.01f)
+        {
+            Path arc; arc.addCentredArc (c.x, c.y, rad, rad, 0, jmin (from, to), jmax (from, to), true);
+            g.setColour (ca.withAlpha (0.25f)); g.strokePath (arc, PathStrokeType (8.0f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setGradientFill (ColourGradient (ca, c.x - rad, c.y + rad, cb, c.x + rad, c.y - rad, false));
+            g.strokePath (arc, PathStrokeType (3.5f, PathStrokeType::curved, PathStrokeType::rounded));
+        }
+        const float cr = rad * 0.7f;
+        g.setGradientFill (ColourGradient (Colour (0xff3a3470), c.x, c.y - cr, Colour (0xff12102a), c.x, c.y + cr, false));
+        g.fillEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2);
+        g.setColour (Colours::white);
+        g.drawLine (c.x + std::sin (to) * cr * 0.25f, c.y - std::cos (to) * cr * 0.25f, c.x + std::sin (to) * cr * 0.85f, c.y - std::cos (to) * cr * 0.85f, 2.0f);
+        g.setColour (isMouseOverOrDragging() ? ca.brighter (0.4f) : Colour (0xffe6e3ff));
+        g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.08f));
+        const String txt = isMouseOverOrDragging() ? (bip ? String (getValue(), 1) + " dB" : String (roundToInt (getValue() * 100)) + " %") : label;
+        g.drawFittedText (txt, lab.toNearestInt(), Justification::centred, 1, 0.7f);
+    }
+    void mouseEnter (const MouseEvent& e) override { Slider::mouseEnter (e); repaint(); }
+    void mouseExit (const MouseEvent& e) override { Slider::mouseExit (e); repaint(); }
+private:
+    std::atomic<float>& target;
+    String label; Colour ca, cb;
+};
+
+class RackCard : public Component, public SettableTooltipClient
+{
+public:
+    RackCard (KeysKillaProcessor& p, int s) : proc (p), slot (s)
+    {
+        using namespace kk;
+        static const uint32 cols[numRackSlots][2] { { 0xffff5a1f, 0xffffc23d }, { 0xffa78bfa, 0xff6366f1 }, { 0xff22d3ee, 0xff4d7dff }, { 0xffff3fd2, 0xff9b4dff },
+                                                    { 0xff2ee6a6, 0xff22d3ee }, { 0xff7c4dff, 0xffff3fd2 }, { 0xffff2f6d, 0xffff8a3d }, { 0xff4dd2ff, 0xff9b4dff },
+                                                    { 0xff8b8bff, 0xffc77dff }, { 0xffffd23f, 0xffff8a3d }, { 0xff34d399, 0xff4dd2ff } };
+        ca = Colour (cols[s][0]); cb = Colour (cols[s][1]);
+        auto k = [this] (int v, const char* n, double lo, double hi, double def)
+        { knobs.push_back (std::make_unique<RackKnob> (proc.rack.v[(size_t) v], n, lo, hi, def, ca, cb)); addAndMakeVisible (*knobs.back()); };
+        static const char* tips[numRackSlots] {
+            "DRIVE: warm it up or smash it - SOFT, TAPE, HARD, BLOWN, FOLD", "LO-FI: fewer bits, old sampler grit",
+            "CHORUS: wide, moving stereo", "PHASER: sweeping, swirling", "FLANGER: jet sweep", "HALF-TIME: the melody at half speed, mixed in",
+            "STUTTER: a tempo-synced gate that chops the melody", "DELAY: tempo echoes", "REVERB: room, plate or huge cloud",
+            "EQ: more or less bass and air", "WIDTH: narrower or wider stereo" };
+        setTooltip (String (tips[s]) + "   (click the name = on / off)");
+        switch (s)
+        {
+            case rkDrive:   k (rvDrive, "DRIVE", 0, 1, 0.35); chips = { "SOFT", "TAPE", "HARD", "BLOWN", "FOLD" }; chipVal = rvDriveType; break;
+            case rkLofi:    k (rvCrush, "CRUSH", 0, 1, 0.3); break;
+            case rkChorus:  k (rvChorus, "AMOUNT", 0, 1, 0.4); break;
+            case rkPhaser:  k (rvPhaser, "AMOUNT", 0, 1, 0.4); break;
+            case rkFlanger: k (rvFlanger, "AMOUNT", 0, 1, 0.35); break;
+            case rkHalf:    k (rvHalf, "MIX", 0, 1, 0.3); break;
+            case rkGate:    k (rvGateDepth, "DEPTH", 0, 1, 0.8); chips = { "1/8", "1/16", "1/32" }; chipVal = rvGateRate; break;
+            case rkDelay:   k (rvDelayMix, "MIX", 0, 1, 0.25); k (rvDelayFb, "FEEDBACK", 0, 0.9, 0.35); chips = { "1/4", "1/8", "1/8D", "1/16", "1/4T" }; chipVal = rvDelayTime; break;
+            case rkReverb:  k (rvRevMix, "MIX", 0, 1, 0.3); k (rvRevSize, "SIZE", 0, 1, 0.6); chips = { "HALL", "PLATE", "CLOUD" }; chipVal = rvRevType; break;
+            case rkEq:      k (rvEqLow, "LOW", -12, 12, 0); k (rvEqHigh, "HIGH", -12, 12, 0); break;
+            default:        k (rvWidth, "WIDTH", 0, 1, 0.75); break;
+        }
+    }
+    void sync() { for (auto& kn : knobs) kn->sync(); repaint(); }
+    void paint (Graphics& g) override
+    {
+        const bool on = proc.rack.on[(size_t) slot].load();
+        auto r = getLocalBounds().toFloat().reduced (3);
+        if (on) { g.setColour (ca.withAlpha (0.22f)); g.fillRoundedRectangle (r.expanded (2), 12); }
+        g.setGradientFill (ColourGradient (on ? Colour (0xff1b1940).interpolatedWith (ca, 0.18f) : Colour (0xff17153a),
+                                           0, r.getY(), Colour (0xff0e0c22), 0, r.getBottom(), false));
+        g.fillRoundedRectangle (r, 10);
+        g.setGradientFill (ColourGradient (on ? ca : ca.withAlpha (0.35f), r.getX(), 0, on ? cb : cb.withAlpha (0.25f), r.getRight(), 0, false));
+        g.drawRoundedRectangle (r, 10, on ? 2.0f : 1.2f);
+        // header = power switch
+        auto h = head();
+        g.setColour (on ? ca : Colour (0xff4a4478)); g.fillEllipse (h.getX() + 4, h.getCentreY() - 6, 12, 12);
+        if (on) { g.setColour (ca.withAlpha (0.35f)); g.fillEllipse (h.getX(), h.getCentreY() - 10, 20, 20); }
+        g.setColour (on ? Colours::white : Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (15.0f, Font::bold)).withExtraKerningFactor (0.1f));
+        g.drawText (kk::rackSlotName (slot), h.withTrimmedLeft (26), Justification::centredLeft);
+        g.setFont (Font (FontOptions (10.5f, Font::bold))); g.setColour (on ? Colour (0xff36ff6a) : Colour (0xff6a6290));
+        g.drawText (on ? "ON" : "OFF", h, Justification::centredRight);
+        for (int i = 0; i < chips.size(); ++i)
+        {
+            auto cr = chipRect (i);
+            const bool sel = roundToInt (proc.rack.v[(size_t) chipVal].load()) == i;
+            if (sel) { g.setGradientFill (ColourGradient (ca, cr.getX(), 0, cb, cr.getRight(), 0, false)); g.fillRoundedRectangle (cr, 5); }
+            else { g.setColour (Colour (0xff17153a)); g.fillRoundedRectangle (cr, 5); g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (cr, 5, 1.0f); }
+            g.setColour (sel ? Colours::white : Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f, Font::bold)));
+            g.drawFittedText (chips[i], cr.toNearestInt(), Justification::centred, 1, 0.6f);
+        }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (12).withTrimmedTop (34);
+        if (! chips.isEmpty()) r.removeFromBottom (30);
+        const int n = (int) knobs.size(), w = jmin (110, r.getWidth() / jmax (1, n));
+        int x = r.getCentreX() - w * n / 2;
+        for (auto& kn : knobs) { kn->setBounds (x, r.getY(), w, r.getHeight()); x += w; }
+    }
+    void mouseDown (const MouseEvent& e) override
+    {
+        if (head().contains (e.position)) { auto& o = proc.rack.on[(size_t) slot]; o = ! o.load(); repaint(); if (onChange) onChange(); return; }
+        for (int i = 0; i < chips.size(); ++i)
+            if (chipRect (i).contains (e.position)) { proc.rack.v[(size_t) chipVal] = (float) i; repaint(); return; }
+    }
+    std::function<void()> onChange;
+private:
+    Rectangle<float> head() const { return { 14.0f, 10.0f, (float) getWidth() - 28.0f, 24.0f }; }
+    Rectangle<float> chipRect (int i) const
+    {
+        const float w = ((float) getWidth() - 24.0f) / (float) chips.size();
+        return { 12.0f + w * (float) i + 2.0f, (float) getHeight() - 36.0f, w - 4.0f, 22.0f };
+    }
+    KeysKillaProcessor& proc;
+    int slot;
+    Colour ca, cb;
+    std::vector<std::unique_ptr<RackKnob>> knobs;
+    StringArray chips;
+    int chipVal = 0;
+};
+
+class FxRackPage : public Component
+{
+public:
+    FxRackPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        for (int s = 0; s < kk::numRackSlots; ++s)
+        {
+            cards.push_back (std::make_unique<RackCard> (proc, s));
+            cards.back()->onChange = [this] { repaint(); };
+            addAndMakeVisible (*cards.back());
+        }
+        allOff.setButtonText ("ALL OFF"); allOff.framed = true; allOff.tint = Colour (0xffff2f6d);
+        allOff.setTooltip ("Switch every effect of the rack off");
+        allOff.onClick = [this] { for (auto& o : proc.rack.on) o = false; for (auto& c : cards) c->repaint(); repaint(); };
+        addAndMakeVisible (allOff);
+        reset.setButtonText ("RESET"); reset.framed = true; reset.tint = Colour (0xff22d3ee);
+        reset.setTooltip ("Every effect off, every knob back to its start");
+        reset.onClick = [this] { proc.rack.reset(); for (auto& c : cards) c->sync(); repaint(); };
+        addAndMakeVisible (reset);
+        setOpaque (true);
+    }
+    void visibilityChanged() override { if (isVisible()) for (auto& c : cards) c->sync(); }
+    void paint (Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setGradientFill (ColourGradient (Colour (0xff15123a), 0, 0, Colour (0xff0a0920), 0, r.getBottom(), false)); g.fillAll();
+        auto glow = [&] (Point<float> c, float rad, Colour col) { g.setGradientFill (ColourGradient (col.withAlpha (0.16f), c.x, c.y, col.withAlpha (0.0f), c.x + rad, c.y, true)); g.fillEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c)); };
+        glow ({ r.getWidth() * 0.2f, 40 }, 360, Colour (0xffff3fd2)); glow ({ r.getWidth() * 0.85f, r.getBottom() }, 380, Colour (0xff22d3ee));
+        kk::modern::waves (g, { r.getWidth() * 0.35f, 46.0f }, { r.getWidth(), 6.0f }, 20.0f, Colour (0xffff3fd2), Colour (0xff9b4dff), 5, 0.22f);
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (30.0f, Font::bold)).withExtraKerningFactor (0.06f));
+        g.drawText ("FX", 24, 10, 60, 40, Justification::centredLeft);
+        g.setGradientFill (ColourGradient (Colour (0xffff3fd2), 70, 0, Colour (0xff9b4dff), 200, 0, false));
+        g.drawText ("RACK", 70, 10, 160, 40, Justification::centredLeft);
+        int on = 0; for (auto& o : proc.rack.on) on += o.load() ? 1 : 0;
+        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (13.0f)));
+        g.drawText ("on every melody: the KEYS KILLA sound, PAIR, VST and SAMPLER  -  drums stay dry  -  it stays when you change sounds",
+                    200, 12, getWidth() - 460, 20, Justification::centredLeft);
+        g.setColour (on > 0 ? Colour (0xff36ff6a) : Colour (0xff6a6290)); g.setFont (Font (FontOptions (13.0f, Font::bold)));
+        g.drawText (String (on) + (on == 1 ? " EFFECT ON" : " EFFECTS ON") + "   -   click a name to switch it on / off", 200, 32, getWidth() - 460, 18, Justification::centredLeft);
+    }
+    void resized() override
+    {
+        reset.setBounds (getWidth() - 132, 14, 116, 36);
+        allOff.setBounds (getWidth() - 256, 14, 116, 36);
+        auto r = getLocalBounds().reduced (14).withTrimmedTop (56);
+        const int cols = 4, rows = 3, gap = 10;
+        const int cw = (r.getWidth() - gap * (cols - 1)) / cols, ch = (r.getHeight() - gap * (rows - 1)) / rows;
+        for (int i = 0; i < (int) cards.size(); ++i)
+            cards[(size_t) i]->setBounds (r.getX() + (i % cols) * (cw + gap), r.getY() + (i / cols) * (ch + gap), cw, ch);
+    }
+private:
+    KeysKillaProcessor& proc;
+    KKLookAndFeel& lnf;
+    std::vector<std::unique_ptr<RackCard>> cards;
+    HotButton allOff { lnf }, reset { lnf };
+};
+
 // left tiles: each one a small colour badge (its own two colours) with a white symbol
 static Colour tileCol (int k, int which)
 {
@@ -3495,9 +3808,9 @@ static Colour tileCol (int k, int which)
                                   { 0xff22d3ee, 0xff4d7dff },   // PAIR OWN     cyan -> blue
                                   { 0xff4d7dff, 0xff9b4dff },   // PAIR VST     blue -> violet
                                   { 0xffffb020, 0xffff6a3d },   // MY SOUNDS    gold -> orange
-                                  { 0xff7c4dff, 0xff2b2f9e },   // VOODOO       violet -> night
-                                  { 0xffff3fd2, 0xff9b4dff },   // EFFECTOR     magenta -> violet
-                                  { 0xff2ee6a6, 0xff1a9dff } }; // DIGGA        mint -> blue
+                                  { 0xff2ee6a6, 0xff1a9dff },   // SAMPLER      mint -> blue
+                                  { 0xffff5a1f, 0xffff2f6d },   // DRUM KIT     orange -> red
+                                  { 0xffff3fd2, 0xff9b4dff } }; // FX RACK      magenta -> violet
     return Colour (c[jlimit (0, 7, k)][jlimit (0, 1, which)]);
 }
 static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
@@ -3578,17 +3891,35 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             }
             break;
         }
-        case 5:   // VOODOO KILLA (half time): crescent moon and stars
+        case 5:   // SAMPLER / CHOP: a waveform with two cuts
         {
-            Path moon; moon.addEllipse (q.getX(), q.getY() + 1, w * 0.86f, w * 0.86f);
-            Path both (moon); both.addEllipse (q.getX() + w * 0.32f, q.getY() - w * 0.12f, w * 0.80f, w * 0.80f);
-            both.setUsingNonZeroWinding (false);
-            g.saveState(); g.reduceClipRegion (moon); g.fillPath (both); g.restoreState();
-            auto star = [&g] (float x, float y, float sr) { Path sp; sp.startNewSubPath (x, y - sr); sp.quadraticTo ({ x, y }, { x + sr, y }); sp.quadraticTo ({ x, y }, { x, y + sr }); sp.quadraticTo ({ x, y }, { x - sr, y }); sp.quadraticTo ({ x, y }, { x, y - sr }); g.fillPath (sp); };
-            star (q.getRight() - 1, q.getBottom() - 4, 3.4f); star (q.getRight() - 4, q.getY() + 3, 2.4f);
+            for (int i = 0; i <= 20; ++i)
+            {
+                const float x = q.getX() + w * (float) i / 20.0f;
+                const float h = w * 0.42f * std::abs (std::sin ((float) i * 0.9f)) * (0.4f + 0.6f * std::exp (-(float) (i % 7) * 0.35f));
+                g.fillRoundedRectangle (x - 0.8f, cy - h, 1.6f, h * 2, 0.8f);
+            }
+            g.setColour (Colours::white.withAlpha (0.9f));
+            for (float fx : { 0.33f, 0.66f })
+            {
+                const float x = q.getX() + w * fx;
+                g.drawLine (x, q.getY() - 2, x, q.getBottom() + 2, 1.4f);
+                Path t; t.addTriangle (x - 3, q.getY() - 2, x + 3, q.getY() - 2, x, q.getY() + 3); g.fillPath (t);
+            }
             break;
         }
-        case 6:   // EFFECTOR KILLA: a knob with its scale
+        case 6:   // DRUM KIT: six pads, two of them lit
+        {
+            const float pw = w * 0.28f, gp = w * 0.08f;
+            for (int i = 0; i < 6; ++i)
+            {
+                const auto pr = Rectangle<float> (q.getX() + (float) (i % 3) * (pw + gp), cy - pw - gp * 0.5f + (float) (i / 3) * (pw + gp), pw, pw);
+                if (i == 0 || i == 4) g.fillRoundedRectangle (pr, 2.0f);
+                else g.drawRoundedRectangle (pr, 2.0f, 1.3f);
+            }
+            break;
+        }
+        default:  // FX RACK: a knob with its scale
         {
             const float rr = w * 0.36f;
             g.drawEllipse (cx - rr, cy - rr + 1, rr * 2, rr * 2, 1.8f);
@@ -3602,26 +3933,13 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             }
             break;
         }
-        default:  // DIGGA KILLA: a record from the crate
-        {
-            const float rr = w * 0.50f;
-            g.drawEllipse (cx - rr, cy - rr, rr * 2, rr * 2, 1.8f);
-            g.setColour (Colours::white.withAlpha (0.45f));
-            g.drawEllipse (cx - rr * 0.72f, cy - rr * 0.72f, rr * 1.44f, rr * 1.44f, 1.0f);
-            g.setColour (Colours::white); g.fillEllipse (cx - rr * 0.36f, cy - rr * 0.36f, rr * 0.72f, rr * 0.72f);
-            g.setColour (tileCol (k, 1)); g.fillEllipse (cx - 1.5f, cy - 1.5f, 3, 3);
-            g.setColour (Colours::white);
-            p.addCentredArc (cx, cy, rr * 0.86f, rr * 0.86f, 0.0f, -0.9f, -0.2f, true);
-            g.strokePath (p, PathStrokeType (1.2f, PathStrokeType::curved, PathStrokeType::rounded));
-            break;
-        }
     }
 }
 
 class LabSwitch : public Component, public SettableTooltipClient, public FileDragAndDropTarget, private Timer
 {
 public:
-    // drag a sound (from DIGGA, FL's browser, a folder) onto the tiles: it lands in PAIR YOUR OWN - from any page
+    // drag a sound (from the SAMPLER, FL's browser, a folder) onto the tiles: it lands in PAIR YOUR OWN - from any page
     std::function<int (const File&)> onDropToPair;   // returns the slot (1..4) or 0
     bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) return true; return false; }
     void fileDragEnter (const StringArray&, int, int) override { dropHover = true; repaint(); }
@@ -3636,7 +3954,7 @@ public:
     }
     explicit LabSwitch (KKLookAndFeel& l) : lnf (l)
     {
-        setTooltip ("BREED LAB: 2 parents -> 6 sounds.  FAMILY TREE: sounds and melody loops.  VOODOO / EFFECTOR / DIGGA KILLA: extras for the melodies only.  TIP: drag any sound (a DIGGA shot too) onto these tiles = it goes into PAIR YOUR OWN.");
+        setTooltip ("BREED LAB: 2 parents -> 6 sounds.  FAMILY TREE: sounds and melody loops.  SAMPLER: chop your samples.  DRUM KIT: your drums and rolls.  FX RACK: effects on every melody.  TIP: drag any sound onto these tiles = it goes into PAIR YOUR OWN.");
     }
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
@@ -3645,7 +3963,7 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "VOODOO\nKILLA", "EFFECTOR\nKILLA", "DIGGA\nKILLA" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER\n/ CHOP", "DRUM\nKIT", "FX\nRACK" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -3665,7 +3983,7 @@ public:
             {
                 const auto lr = r.withY (r.getY() - 15).withHeight (13);
                 g.setColour (Colour (0xffc8c4e8)); g.setFont (serif (10.0f, true, 0.3f));
-                g.drawText ("FX RACK", lr.toNearestInt(), Justification::centred);
+                g.drawText ("STUDIO", lr.toNearestInt(), Justification::centred);
                 g.setGradientFill (ColourGradient (Colour (0x00ff3fd2), lr.getX(), 0, Colour (0xccff3fd2), lr.getCentreX() - 30, 0, false));
                 g.fillRect (lr.getX() + 4, lr.getCentreY(), lr.getWidth() * 0.5f - 34, 1.2f);
                 g.setGradientFill (ColourGradient (Colour (0xcc9b4dff), lr.getCentreX() + 30, 0, Colour (0x009b4dff), lr.getRight(), 0, false));
@@ -3695,7 +4013,7 @@ public:
             g.setColour (on ? Colours::white : Colour (0xffe6e3ff));
             g.setFont (serif (13.0f, true, 0.12f));
             g.drawFittedText (String (names[k]), r.withTrimmedLeft (bs + 14).toNearestInt(), Justification::centredLeft, 2);
-            if ((k == 5 || k == 6) && isOn && isOn (k))
+            if (k == 7 && isOn && isOn (k))   // FX RACK: lit when an effect is on
             {
                 g.setColour (Colour (0xff36ff6a)); g.fillEllipse (r.getRight() - 14, r.getY() + 6, 8, 8);
             }
@@ -3821,10 +4139,10 @@ public:
         labSwitch.onSwitch = [this] (int k)
         {
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
-            static constexpr int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabHalf, tabEffector, tabDigga };
+            const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
         };
-        labSwitch.isOn = [this] (int k) { return proc.apvts.getRawParameterValue (k == 5 ? ID::halfOn : ID::efxOn)->load() > 0.5f; };
+        labSwitch.isOn = [this] (int k) { return k == 7 && proc.rack.anyOn(); };
         labSwitch.onDropToPair = [this] (const File& f)
         {
             int slot = 0;
@@ -3907,11 +4225,6 @@ public:
         addMouseListener (&focusGrabber, true);   // a click anywhere in the plugin gives it the PC keyboard
         refreshState();
         startTimerHz (30);
-        // warm up the KILLA plugins in the background (one after another) - a click on their tile opens them at once
-        Component::SafePointer<MainPage> safe (this);
-        Timer::callAfterDelay (1200, [safe] { if (safe != nullptr) safe->module (tabDigga); });
-        Timer::callAfterDelay (1700, [safe] { if (safe != nullptr) safe->module (tabHalf); });
-        Timer::callAfterDelay (2200, [safe] { if (safe != nullptr) safe->module (tabEffector); });
     }
 
     ~MainPage() override
@@ -3977,18 +4290,18 @@ public:
         if (v >= 1 && v <= 8) { ensureAdvanced(); advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
         if (v == 9) openTab (tabBrowser);
         if (v == 10) openTab (tabParams);
-        if (v == 11) openTab (tabHalf);
+        if (v == 11) openTab (tabFxRack);
         if (v == 15) openTab (tab808);
         if (v == 16) openTab (tabHat);
-        if (v == 17) openTab (tabEffector);
-        if (v == 18) openTab (tabDigga);
+        if (v == 17) openTab (tabFxRack);
+        if (v == 18) openTab (tabSampler);
         if (v == 19) openTab (tabSnare);
-        if (v == 20) openTab (tabHalf);
+        if (v == 20) openTab (tabSampler);
         if (v == 22) openTab (tabVst);
         if (v == 24) openTab (tabSounds);
         if (v == 25) openTab (tabKick);
         if (v == 26) openTab (tabEdit);
-        if (v == 23) { openTab (tabDigga); if (auto* pg = dynamic_cast<EmbeddedPage*> (module (tabDigga))) pg->openChop(); }
+        if (v == 23) openTab (tabSampler);
         if (v == 21)
         {
             if (auto f = File::getSpecialLocation (File::tempDirectory).getChildFile ("kk_harvest_demo.wav"); f.existsAsFile())
@@ -4065,12 +4378,13 @@ public:
         if (soundEdit) soundEdit->setBounds (R (10, 8, 1662, 806));   // SOUND EDIT: everything above the keyboard, the tiles stay
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
-            if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst || i == tabSounds ? R (150, 96, 1662, 612) : R (0, 0, 1672, 941));   // the KILLA plugins and the drum pages get the whole window
+            if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
+                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
         labSwitch.setBounds (R (16, 100, 138, 600));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabHalf, tabEffector, tabDigga, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -4091,16 +4405,10 @@ private:
                     auto pg = std::make_unique<MySoundsPage> (proc, lnf);
                     pg->onFactory = [this] { openTab (tabBrowser); };
                     pg->onPair = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr) safe->openTab (tabPair); }); };
-                    m = std::move (pg); break;
+                    m = std::make_unique<InsetPage> (std::move (pg)); break;   // v0.33: MY SOUNDS gets the whole page
                 }
-                case tabHalf:     m = std::make_unique<EmbeddedPage> (proc, lnf, KeysKillaProcessor::modHalf, "HALF", "VOODOO KILLA  -  ON THE MELODIES ONLY (KEYS KILLA + DIGGA)", ID::halfOn); break;
-                case tabEffector: m = std::make_unique<EmbeddedPage> (proc, lnf, KeysKillaProcessor::modEffector, "EFFECTOR", "EFFECTOR KILLA  -  ON THE MELODIES ONLY (KEYS KILLA + DIGGA)", ID::efxOn); break;
-                default:
-                {
-                    auto pg = std::make_unique<EmbeddedPage> (proc, lnf, KeysKillaProcessor::modDigga, "DIGGA", "DIGGA KILLA  -  SAMPLE, CHOP, FLIP", nullptr);
-                    pg->onPair = [this] { openTab (tabPair); };
-                    m = std::move (pg); break;
-                }
+                case tabSampler:  m = std::make_unique<InsetPage> (std::make_unique<ChopPanel> (proc, lnf)); break;
+                default:          m = std::make_unique<InsetPage> (std::make_unique<FxRackPage> (proc, lnf)); break;
             }
             addChildComponent (*m); noFocus (*m); resized();
         }
@@ -4191,7 +4499,10 @@ private:
     {
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
-        const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabHalf ? 5 : openTabIndex == tabEffector ? 6 : openTabIndex == tabDigga ? 7 : -1;
+        const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabSampler ? 5
+                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : -1;
+        if (openTabIndex >= tab808 && openTabIndex < numTabs) lastDrum = openTabIndex - tab808;
+        else proc.kitPlay = false;   // PLAY KIT is a preview on the drum pages
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
         if (proc.loopPlaying())   // a loop belongs to the page that started it (FAMILY TREE / PAIR / BREED LAB)
         {
@@ -4663,7 +4974,8 @@ private:
     std::unique_ptr<FileChooser> chooser;
 
     bool isFav = false, modified = false, modifiedNow = false, lastBass = false;
-    int spaceStopped = 0;   // whose loop SPACE stopped last (2 PAIR, 3 BREED LAB)
+    int spaceStopped = 0;
+    int lastDrum = 0;       // DRUM KIT tile opens the drum you used last   // whose loop SPACE stopped last (2 PAIR, 3 BREED LAB)
     int warnHold = 0, lastIndex = -2, slowTick = 0, lastLab = -1, openTabIndex = -1, lastMutate = -1;
     float lastEra = -1;
     String lastName;

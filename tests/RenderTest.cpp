@@ -4,7 +4,6 @@
 // Offline render of every factory preset: checks for NaN/Inf, silence, DC and loudness spread.
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
-#include "../Source/plugins/digga/PluginProcessor.h"
 #include <cstdio>
 #include <set>
 
@@ -184,11 +183,9 @@ static int unitTests()
         }
         check (finite && late > 1.0e-3f, "16 kHz render stays finite and keeps sounding");
     }
-    // v0.17 modules: Voodoo Killa (HALF), Effector Killa (EFFECTOR), Digga Killa (DIGGA) inside KEYS KILLA
+    // v0.32: KEYS KILLA alone (VOODOO / EFFECTOR / DIGGA KILLA are separate plugins); old projects still load
     {
         KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);
-        check (p.module (KeysKillaProcessor::modHalf) != nullptr && p.module (KeysKillaProcessor::modEffector) != nullptr
-               && p.module (KeysKillaProcessor::modDigga) != nullptr, "the three KILLA plugins are inside");
         juce::AudioBuffer<float> b (2, 512);
         auto render = [&] (float& peak, double& energy)
         {
@@ -204,21 +201,13 @@ static int unitTests()
             return finite;
         };
         float pk; double dry, en;
-        check (render (pk, dry) && pk > 0.01f, "melody plays with the modules loaded");
-        set (p, ID::efxOn, 1);
-        check (render (pk, en) && pk > 0.001f && pk <= 1.0f, "EFFECTOR (Effector Killa) on the melody stays finite");
-        set (p, ID::efxOn, 0); set (p, ID::halfOn, 1);
-        check (render (pk, en) && pk <= 1.0f, "HALF (Voodoo Killa) on the melody stays finite");
-        set (p, ID::halfOn, 0);
-        set (p, ID::playMode, 1);
-        render (pk, en);
-        check (! p.playing[60].load(), "keys -> DIGGA: the synth stays silent");
-        set (p, ID::playMode, 0);
+        check (render (pk, dry) && pk > 0.01f, "melody plays");
+        set (p, ID::efxOn, 1); set (p, ID::halfOn, 1); set (p, ID::playMode, 1);   // an old project with HALF / EFFECTOR / DIGGA on
+        check (render (pk, en) && pk > 0.01f && pk <= 1.0f, "old project: the keys play the KEYS KILLA sound");
+        set (p, ID::efxOn, 0); set (p, ID::halfOn, 0); set (p, ID::playMode, 0);
         juce::MemoryBlock mb; p.getStateInformation (mb);
         KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
-        check (q.getLatencySamples() >= 0, "state with the three modules restores");
-        std::printf ("MODULES: latency HALF %d, EFFECTOR %d samples\n", p.module (KeysKillaProcessor::modHalf)->getLatencySamples(),
-                     p.module (KeysKillaProcessor::modEffector)->getLatencySamples());
+        check (q.getLatencySamples() == 0, "no latency, state restores");
         // ROLLS generator
         std::set<std::vector<int>> seen; bool inside = true;
         for (int sd = 1; sd <= 200; ++sd)
@@ -229,6 +218,27 @@ static int unitTests()
                 seen.insert (sig);
             }
         check (inside && seen.size() > 700, "ROLLS: a new pattern for (almost) every seed / style");
+        // v0.32: kick, open hat, perc and FX patterns - every drum page generates its own trap patterns
+        for (int kind = 0; kind < 4; ++kind)
+        {
+            std::set<std::vector<int>> seenK; bool inK = true; size_t hits = 0;
+            for (int sd = 1; sd <= 60; ++sd)
+                for (int st = 0; st < 4; ++st)
+                {
+                    const auto r = kind == 0 ? kk::makeKicks ((uint32_t) sd, st, 2, 0.6f) : kind == 1 ? kk::makeOpenHats ((uint32_t) sd, st, 2, 0.6f)
+                                 : kind == 2 ? kk::makePercs ((uint32_t) sd, st, 2, 0.6f) : kk::makeFxHits ((uint32_t) sd, st, 2, 0.6f);
+                    std::vector<int> sig; for (auto& h : r) { sig.push_back ((int) std::lround (h.beat * 96) * 100 + h.semi); inK &= h.beat >= 0 && h.beat + h.len <= 8.0 + 1e-9; }
+                    seenK.insert (sig); hits += r.size();
+                }
+            static const char* nm[] { "KICK", "OPEN HAT", "PERC", "FX" };
+            check (inK && hits > 0 && seenK.size() > (kind == 3 ? 4u : 60u), (juce::String (nm[kind]) + " patterns: varied, inside the bars").toRawUTF8());
+        }
+        {
+            KeysKillaProcessor kp; kp.prepareToPlay (44100, 512);
+            bool all = true;
+            for (int d = 0; d < kk::numDrumSlots; ++d) { kp.generatePattern (d, d % 4, 2, 0.6f); all &= ! kp.pattern (d).empty() && kp.exportPatternMidi (d).existsAsFile(); }
+            check (all, "DRUM KIT: all 7 drums generate a pattern and drag it out as MIDI");
+        }
         // v0.22 808 lines + snare rolls: trap styles, new for every seed, inside the bars
         for (int kind = 0; kind < 2; ++kind)
         {
@@ -307,12 +317,10 @@ static int unitTests()
         check (peak > 0.2f && p.patBeat.load() >= 0.0f, "PATTERN preview plays the 808");
         f.deleteFile();
     }
-    // DIGGA KILLA inside KEYS KILLA: a dropped sample is analysed and cut into loops / one-shots
+    // SAMPLER / CHOP: your sample is loaded, cut, played, dragged out, sent to PAIR and remembered
     {
         KeysKillaProcessor p; p.prepareToPlay (44100, 512);
-        auto* dg = dynamic_cast<digga::DiggaKillaProcessor*> (p.module (KeysKillaProcessor::modDigga));
-        check (dg != nullptr, "DIGGA module is Digga Killa");
-        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_digga_loop.wav");
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_sampler_loop.wav");
         {
             juce::AudioBuffer<float> b (2, 44100 * 8);
             juce::Random rnd (3);
@@ -329,24 +337,9 @@ static int unitTests()
             std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 2, 16, {}, 0));
             if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
         }
-        if (dg != nullptr)
         {
-            dg->getSampleStore().loadFile (f);
-            juce::AudioBuffer<float> b (2, 512);
-            const auto t0 = juce::Time::getMillisecondCounterHiRes();
-            while (juce::Time::getMillisecondCounterHiRes() - t0 < 60000.0)
-            {
-                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-                juce::MidiBuffer m; p.processBlock (b, m);
-                if (dg->getSampleStore().getStatus() == digga::SampleStore::Status::ready && ! dg->getEngine().getTree().isEmpty()) break;
-            }
-            const auto st = dg->getSampleStore().getStatus();
-            std::printf ("DIGGA: status %d, results %s after %.1f s\n", (int) st, dg->getEngine().getTree().isEmpty() ? "none" : "ready",
-                         (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
-            check (st == digga::SampleStore::Status::ready, "DIGGA loads a dropped sample");
-            check (! dg->getEngine().getTree().isEmpty(), "DIGGA makes loops / one-shots from it");
             // CHOP / SLICE: the sample in slices, pads, keys, drag out, PAIR
-            check (p.chopFromDigga() && p.chop.current() != nullptr && p.chop.current()->numSlices() >= 4, "CHOP: DIGGA's sample is cut at the hits");
+            check (p.chopLoadFile (f) && p.chop.current() != nullptr && p.chop.current()->numSlices() >= 4, "SAMPLER: your sample loads and is cut at the hits");
             p.chop.autoSlice (16);
             check (p.chop.current()->numSlices() == 16, "CHOP: 16 equal slices");
             auto mk = p.chop.current()->marks; mk[3] += 2000; p.chop.setMarks (mk);
@@ -371,6 +364,10 @@ static int unitTests()
             const auto ff = p.chop.flipMidi (140.0, 7);
             juce::MidiFile fm; juce::FileInputStream fis (ff);
             check (ff.existsAsFile() && fm.readFrom (fis) && fm.getTrack (0)->getNumEvents() > 8, "CHOP: FLIP makes a new MIDI pattern");
+            const int cuts = p.chop.current()->numSlices();
+            juce::MemoryBlock mb; p.getStateInformation (mb);
+            KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (q.chop.current() != nullptr && q.chop.current()->numSlices() == cuts, "SAMPLER: the project remembers your sample and your cuts");
         }
         f.deleteFile();
     }
@@ -554,6 +551,17 @@ static int unitTests()
         check (kk::Library::renameFolder (f1, f2) && kk::Library::sounds (f2).size() == 1, "MY SOUNDS: rename a folder (the sounds move with it)");
         check (kk::Library::deleteSound (kk::Library::sounds (f2)[0]) && kk::Library::sounds (f2).isEmpty(), "MY SOUNDS: delete a sound");
         check (kk::Library::deleteFolder (f2) && ! kk::Library::folders().contains (f2), "MY SOUNDS: delete a folder");
+        // SOUND KITS: a sound saved into a kit lands in the right category folder (by its name) or the one you pick
+        const juce::String kit = "KK TEST SOUND KIT";
+        kk::SoundKits::deleteKit (kit);
+        check (kk::SoundKits::createKit (kit) && kk::SoundKits::kits().contains (kit), "SOUND KITS: create a kit");
+        auto bass = kk::PairLab::fromBuffer (b, 44100.0, 44100.0, "Glide Reese Bass");
+        const auto kb = p.saveToSoundKit (bass, kit);
+        check (kb.existsAsFile() && kb.getParentDirectory().getFileName() == "Bass" && p.lastSoundKit == kit, "SOUND KITS: a bass lands in <kit>/Bass");
+        const auto kp = p.saveToSoundKit (snd, kit, "Pads");
+        check (kp.existsAsFile() && kp.getParentDirectory().getFileName() == "Pads" && kk::SoundKits::count (kit) == 2, "SOUND KITS: or in the category you pick");
+        check (kk::SoundKits::renameKit (kit, kit + " 2") && kk::SoundKits::count (kit + " 2") == 2, "SOUND KITS: rename a kit");
+        check (kk::SoundKits::deleteKit (kit + " 2") && ! kk::SoundKits::kits().contains (kit + " 2"), "SOUND KITS: delete a kit");
     }
     // DRUM KIT: seven drum slots, the boosted sound saved into a kit folder (808s / Kicks / ... like a bought kit)
     {

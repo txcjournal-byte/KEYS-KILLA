@@ -7,6 +7,7 @@
 #include "Presets.h"
 #include "Loops.h"
 #include "Chop.h"
+#include "MelodyRack.h"
 #include "Library.h"
 #include "World.h"
 #include "Rolls.h"
@@ -23,7 +24,7 @@ public:
     ~KeysKillaProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override { for (auto& m : modules) if (m) m->releaseResources(); }
+    void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -197,11 +198,7 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
     std::atomic<float> meterL { 0 }, meterR { 0 };
-    // ---- v0.17 modules: the other KILLA plugins inside KEYS KILLA, with their own design ----
-    // HALF = Voodoo Killa and EFFECTOR = Effector Killa process only the melodies (KEYS KILLA + DIGGA),
-    // DIGGA = Digga Killa (sampler). Drums never go through them.
-    enum Module { modHalf, modEffector, modDigga, numModules };
-    juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
+    // what the keys play (playDigga is kept only so old projects load; it now plays the KEYS KILLA sound)
     enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair, playVst, playChop, playKick, playOpenHat, playPerc, playDrumFx };
     static int modeOfDrum (int d) { return d < 3 ? play808 + d : playKick + (d - 3); }
     static int drumOfMode (int pm) { return pm >= play808 && pm <= playHat ? pm - play808 : pm >= playKick && pm <= playDrumFx ? 3 + pm - playKick : -1; }
@@ -213,11 +210,12 @@ public:
     juce::AudioBuffer<float> fxIn, extBuf;
     juce::MidiBuffer vstNoMidi;
     kk::WorldStage worldExt;                                     // SOUND WORLD for PAIR / VST / CHOP / input                               // FX INPUT (mixer insert) copy                             // UI pad -> audio thread
-    bool chopFromDigga();
+    bool chopLoadFile (const juce::File& f);                    // SAMPLER: load your sample (WAV / AIFF / FLAC / MP3)
+    juce::String chopFile;
+    kk::MelodyRack rack;                                        // FX RACK (message thread writes, audio reads)
     bool chopToPair (int slice, int slot = -1);
     bool chopToBank (int slice);
     void clearPairParent (int slot);
-    int  pairFromDigga();                                       // Digga's one-shots fill the empty slots; returns how many
     void pairBreed (bool newChildren = true);   // false: same children, only the flavour changes
     void selectPairKid (int i, bool audition);                  // the kid plays on the keys / in the loop
     void togglePairLoop (int i);                                // a new melody loop with this kid (host tempo)
@@ -229,7 +227,7 @@ public:
     std::atomic<int> pairVer { 0 };
     // HARVEST: sounds collected from your songs / samples (bank by character)
     void harvestFile (const juce::File& f);                    // runs in the background
-    int  harvestFromDigga();                                    // DIGGA's loops + one-shots; returns how many sources
+    int  harvestFromChop();                                     // the SAMPLER's sample -> sounds in the bank
     bool harvesting() const { return harvestJobs.load() > 0; }
     void bankToPair (int bankIndex, int slot = -1);             // -1 = first free slot
     void auditionBank (int bankIndex);
@@ -239,6 +237,8 @@ public:
     juce::String lastFolder { kk::Library::defaultFolder() }, lastKit { kk::Kits::defaultKit() };
     juce::File saveDrumToKit (int d, const juce::String& kit);   // the boosted drum into a drum kit folder
     juce::File saveToFolder (kk::PairPtr s, const juce::String& folder);
+    juce::File saveToSoundKit (kk::PairPtr s, const juce::String& kit, const juce::String& category = {});   // SOUND KITS
+    juce::String lastSoundKit { kk::SoundKits::defaultKit() };
     void auditionFile (const juce::File& f);                   // hear a sound file on the keys (PAIR player)
     static juce::File bankFolder();
     void loadSavedBank();
@@ -280,8 +280,9 @@ public:
     std::atomic<int> patPlay { -1 };                            // which drum's pattern plays (-1 = none)
     std::atomic<float> patBeat { -1.0f };
     std::atomic<int> patVer { 0 };
-    std::array<int, 3> patStyle { 0, 0, 0 }, patBars { 2, 2, 2 };
-    std::array<float, 3> patDensity { 0.5f, 0.5f, 0.5f };
+    std::array<int, kk::numDrumSlots> patStyle {}, patBars { 2, 2, 2, 2, 2, 2, 2 };
+    std::array<float, kk::numDrumSlots> patDensity { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f };
+    std::atomic<bool> kitPlay { false };                        // DRUM KIT: every drum with a sample plays its pattern together
     std::atomic<bool>  overload { false };
     std::atomic<float> guiPitch { 0 }, guiMod { 0 };   // from on-screen wheels
     std::array<std::atomic<bool>, 128> playing {};
@@ -312,15 +313,15 @@ private:
 
     kk::SynthEngine synth;
     std::unique_ptr<kk::FxRack> fxPtr { std::make_unique<kk::FxRack>() };
+    std::unique_ptr<kk::FxRack> rackFx { std::make_unique<kk::FxRack>() };   // FX RACK on the melody bus
+    std::vector<float> rackL, rackR, rackG;
+    int rackTail = 0;      // samples the rack keeps running after the last effect went off (echo / reverb tails)
+    double gatePhase = 0;
+    float gateEnv = 1.0f;
+    void processRack (juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps);
     // modules
-    std::array<std::unique_ptr<juce::AudioProcessor>, 3> modules;
-    juce::AudioBuffer<float> modBuf;                            // scratch: DIGGA output
-    juce::MidiBuffer modMidi, noMidi, keysForModules, vstMidi;
-    std::array<float, 2> modFade { 0, 0 };                      // HALF / EFFECTOR on-off crossfades
-    juce::AudioBuffer<float> modDry;
+    juce::MidiBuffer vstMidi;
     int modBlock = 0, lastPlayMode = 0, reportedLatency = 0;
-    void processModules (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& keysMidi, int n);
-    void runModule (int m, juce::AudioBuffer<float>& buffer, int n, juce::MidiBuffer& midi);
     kk::WorldStage worldStage;
     kk::PairLab pairPlayer;
     juce::ThreadPool harvestPool { 1 };
@@ -340,8 +341,8 @@ private:
     kk::BoostParams boostParams (int d) const;
     std::array<std::array<float, 2>, 2> clipDc {};
     mutable juce::SpinLock rollLock;
-    std::array<std::vector<kk::RollHit>, 3> patterns;
-    int patRunning = -1, pat808Off = -1, pat808Note = 60; bool patHostWas = false; double patOrigin = 0;
+    std::array<std::vector<kk::RollHit>, kk::numDrumSlots> patterns;
+    int patMaskWas = 0, pat808Off = -1, pat808Note = 60; bool patHostWas = false; double patOrigin = 0;
     void renderPatterns (int n, double beatPos, double bps, bool hostPlaying);
     kk::VoiceParams vp;
     kk::FxParams fp;

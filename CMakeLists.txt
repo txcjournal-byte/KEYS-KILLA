@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.31.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.33.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,34 +52,9 @@ juce_add_plugin(KeysKilla
 juce_add_binary_data(KeysKillaAssets SOURCES
     assets/lab_bg.jpg assets/lab_white.png assets/lab_black.png assets/lab_icons.png)
 
-# --- The other KILLA plugins, embedded with their own design and functions (v0.17) ---------
-# HALF = Voodoo Killa, EFFECTOR = Effector Killa, DIGGA = Digga Killa. Every plugin keeps its
-# sources untouched apart from renamed resource namespaces; each file gets its own include root.
-file(GLOB KK_VK_RES CONFIGURE_DEPENDS
-    assets/plugins/voodoo/Presets/*.json assets/plugins/voodoo/Photos/*.jpg assets/plugins/voodoo/Photos/*.png
-    assets/plugins/voodoo/Textures/*.png assets/plugins/voodoo/Textures/*.jpg assets/plugins/voodoo/Fonts/*.ttf
-    assets/plugins/voodoo/Fonts/*.otf assets/plugins/voodoo/Logo/*.png)
-juce_add_binary_data(KKVoodooData HEADER_NAME VKData.h NAMESPACE VKData SOURCES ${KK_VK_RES})
-juce_add_binary_data(KKEffectorData HEADER_NAME EKBinaryData.h NAMESPACE EKData SOURCES
-    assets/plugins/effector/Presets/factory.json assets/plugins/effector/Design/reference.png)
-juce_add_binary_data(KKDiggaData HEADER_NAME DGData.h NAMESPACE DGData SOURCES
-    assets/plugins/digga/fonts/ArchivoBlack-Regular.ttf assets/plugins/digga/fonts/BarlowCondensed-SemiBold.ttf
-    assets/plugins/digga/fonts/BarlowCondensed-Bold.ttf assets/plugins/digga/fonts/CourierPrime-Regular.ttf
-    assets/plugins/digga/fonts/CourierPrime-Bold.ttf assets/plugins/digga/skin/background.png
-    assets/plugins/digga/skin/drop_sample.png assets/plugins/digga/skin/kill_stamp.png
-    assets/plugins/digga/models/basic_pitch.bin)
-file(GLOB_RECURSE KK_VK_SRC CONFIGURE_DEPENDS Source/plugins/voodoo/*.cpp)
-file(GLOB_RECURSE KK_EK_SRC CONFIGURE_DEPENDS Source/plugins/effector/*.cpp)
-file(GLOB_RECURSE KK_DG_SRC CONFIGURE_DEPENDS Source/plugins/digga/*.cpp)
-set_source_files_properties(${KK_VK_SRC} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/voodoo"
-                                                    COMPILE_DEFINITIONS "KK_EMBEDDED=1")
-set_source_files_properties(${KK_EK_SRC} PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/effector"
-                                                    COMPILE_DEFINITIONS "KK_EMBEDDED=1")
-set_source_files_properties(${KK_DG_SRC} PROPERTIES
-    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga;${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga_third_party/signalsmith-stretch/include;${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga_third_party/signalsmith-linear/include"
-    COMPILE_DEFINITIONS "KK_EMBEDDED=1")
-set(KK_MODULE_SOURCES ${KK_VK_SRC} ${KK_EK_SRC} ${KK_DG_SRC})
-set(KK_MODULE_DATA KKVoodooData KKEffectorData KKDiggaData)
+# v0.32: VOODOO / EFFECTOR / DIGGA KILLA are separate plugins again (their sources stay in Source/plugins, not built here)
+set(KK_MODULE_SOURCES)
+set(KK_MODULE_DATA)
 
 target_sources(KeysKilla PRIVATE
     Source/PluginProcessor.cpp
@@ -122,7 +97,6 @@ if(KK_BUILD_TESTS)
     target_compile_definitions(KeysKillaTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_USE_FLAC=1 JUCE_PLUGINHOST_VST3=1 KK_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1
         JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1 JucePlugin_VersionString="${PROJECT_VERSION}")
-    set_source_files_properties(tests/RenderTest.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/Source/plugins/digga")
     # the tests keep several KEYS KILLA instances on the stack: Windows' default 1 MB stack is too small
     if (MSVC)
         target_link_options(KeysKillaTests PRIVATE /STACK:67108864)
