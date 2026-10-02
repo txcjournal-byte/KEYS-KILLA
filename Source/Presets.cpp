@@ -1215,17 +1215,17 @@ const std::vector<Preset>& factoryPresets()
 
 
         // ---- v0.8 basses: analog-style mono basses instead of 808s
-        const Vals moogB { { engine, VA }, { wave, 0.1f }, { filterType, 1 }, { cutoff, 700 }, { reso, 0.35f }, { fenv, 0.65f }, { fdecay, 0.35f },
+        const Vals ladderB { { engine, VA }, { wave, 0.1f }, { filterType, 1 }, { cutoff, 700 }, { reso, 0.35f }, { fenv, 0.65f }, { fdecay, 0.35f },
                            { fsustain, 0.2f }, { attack, 0.002f }, { decay, 0.8f }, { sustain, 0.8f }, { release, 0.15f }, { glide, 0.06f }, { drive, 0.15f } };
-        R (cBass, "Synth Bass", "Moog Bass", { 0, 3, 4 }, moogB);
-        R (cBass, "Synth Bass", "Round Moog Bass", { 1, 5 }, with (moogB, { { wave, 0.45f }, { cutoff, 500 }, { reso, 0.2f }, { fenv, 0.4f } }));
-        R (cBass, "Pluck Bass", "Moog Pluck Bass", { 2, 4 }, with (moogB, { { decay, 0.35f }, { sustain, 0 }, { fdecay, 0.18f }, { fenv, 0.8f }, { cutoff, 450 } }));
-        R (cBass, "Distorted", "Growl Moog", { 4, 5 }, with (moogB, { { unison, 2 }, { detune, 0.15f }, { drive, 0.5f }, { driveType, 3 }, { reso, 0.5f },
+        R (cBass, "Synth Bass", "Ladder Bass", { 0, 3, 4 }, ladderB);
+        R (cBass, "Synth Bass", "Round Ladder Bass", { 1, 5 }, with (ladderB, { { wave, 0.45f }, { cutoff, 500 }, { reso, 0.2f }, { fenv, 0.4f } }));
+        R (cBass, "Pluck Bass", "Ladder Pluck Bass", { 2, 4 }, with (ladderB, { { decay, 0.35f }, { sustain, 0 }, { fdecay, 0.18f }, { fenv, 0.8f }, { cutoff, 450 } }));
+        R (cBass, "Distorted", "Growl Ladder", { 4, 5 }, with (ladderB, { { unison, 2 }, { detune, 0.15f }, { drive, 0.5f }, { driveType, 3 }, { reso, 0.5f },
                                                                       { lfoFilter, 0.2f }, { lfoSync, 1 }, { lfoDiv, 4 } }));
-        R (cBass, "Synth Bass", "Acid Moog", { 1, 3 }, with (moogB, { { wave, 0.0f }, { reso, 0.7f }, { fenv, 0.9f }, { fdecay, 0.2f }, { cutoff, 400 }, { glide, 0.12f } }));
-        R (cBass, "Synth Bass", "Deep Saw Bass", { 0, 2 }, with (moogB, { { cutoff, 350 }, { reso, 0.1f }, { fenv, 0.3f }, { sub, 0.5f } }));
-        R (cBass, "Reese", "Moog Reese", { 3, 5 }, with (moogB, { { unison, 3 }, { detune, 0.35f }, { cutoff, 900 }, { fenv, 0.2f }, { sustain, 1 } }));
-        R (cBass, "Distorted", "Fuzz Bass", { 4, 5 }, with (moogB, { { wave, 0.5f }, { drive, 0.65f }, { driveType, 4 }, { cutoff, 1200 } }));
+        R (cBass, "Synth Bass", "Acid Ladder", { 1, 3 }, with (ladderB, { { wave, 0.0f }, { reso, 0.7f }, { fenv, 0.9f }, { fdecay, 0.2f }, { cutoff, 400 }, { glide, 0.12f } }));
+        R (cBass, "Synth Bass", "Deep Saw Bass", { 0, 2 }, with (ladderB, { { cutoff, 350 }, { reso, 0.1f }, { fenv, 0.3f }, { sub, 0.5f } }));
+        R (cBass, "Reese", "Ladder Reese", { 3, 5 }, with (ladderB, { { unison, 3 }, { detune, 0.35f }, { cutoff, 900 }, { fenv, 0.2f }, { sustain, 1 } }));
+        R (cBass, "Distorted", "Fuzz Bass", { 4, 5 }, with (ladderB, { { wave, 0.5f }, { drive, 0.65f }, { driveType, 4 }, { cutoff, 1200 } }));
         R (cBass, "Sub", "Square Sub Bass", { 3, 5 }, { { engine, VA }, { wave, 0.5f }, { filterType, 1 }, { cutoff, 600 }, { sustain, 1 }, { release, 0.15f } });
         R (cBass, "Pluck Bass", "Finger Bass", { 0, 3 }, { { engine, PL }, { wave, 0.35f }, { decay, 1.2f }, { sustain, 0 }, { release, 0.15f }, { body, 5 },
                                                           { bodyMix, 0.35f }, { cutoff, 1500 } });
@@ -1255,7 +1255,7 @@ const std::vector<Preset>& factoryPresets()
         // ---- first impression: trap essentials open the library
         {
             static const char* heroes[] { "Classic Trap Bell", "Classic Hard Horn Stab", "Classic Orchestra Brass Hit", "Classic Trap Staccato Violins",
-                                          "Classic Trap Flute Lead", "Classic Trap Piano Keys", "Anthem Lead", "Rage Anthem Lead", "Classic Moog Bass",
+                                          "Classic Trap Flute Lead", "Classic Trap Piano Keys", "Anthem Lead", "Rage Anthem Lead", "Classic Ladder Bass",
                                           "Atmos Plugg Pluck", "Classic Trap Bell Arp", "Classic Dark Trap Strings", "Classic Icy Trap Bell",
                                           "Rage Drill Horn Riff", "Classic Epic Stab Hit", "Classic Whistle Lead" };
             std::vector<Preset> front, rest;

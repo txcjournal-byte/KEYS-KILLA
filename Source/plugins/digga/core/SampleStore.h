@@ -40,6 +40,8 @@ public:
 
     Status getStatus() const noexcept { return status.load(); }
     Info getInfo() const;
+    /** KEYS KILLA CHOP: the decoded source sample (null while empty / loading). */
+    std::shared_ptr<const juce::AudioBuffer<float>> getOriginal (double& rate) const { const juce::ScopedLock sl (lock); rate = originalRate; return original; }
 
     static bool isSupportedFile (const juce::File& file);
     static juce::String getFileWildcard();

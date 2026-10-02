@@ -24,7 +24,12 @@ inline const char* harvestCatShort (int c)
     return n[std::clamp (c, 0, (int) numCats - 1)];
 }
 
-struct HarvestItem { PairPtr sound; int cat = catFx; float score = 0; bool saved = false; juce::String origin; };
+struct HarvestItem
+{
+    PairPtr sound; int cat = catFx; float score = 0; bool saved = false; juce::String origin;
+    juce::String file;                                                   // its WAV in Documents/KEYS KILLA/Bank (saved ones)
+    juce::int64 stamp = juce::Time::getHighResolutionTicks();            // newest first on the shelf
+};
 
 class Harvest
 {

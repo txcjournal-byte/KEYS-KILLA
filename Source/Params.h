@@ -183,9 +183,9 @@ inline constexpr int numModSlots = 8;
 
 namespace Choices
 {
-    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat", "Pair", "VST" };
+    inline const juce::StringArray playModes  { "Keys", "Digga", "808", "Snare / Clap", "Hi-Hat", "Pair", "VST", "Chop" };
     inline const juce::StringArray satModes   { "Tape", "Tube", "Fold" };
-    inline const juce::StringArray worlds     { "Off", "XV", "Moog", "Serum", "Zenology", "Omni", "Kontakt", "Diva", "Nexus" };
+    inline const juce::StringArray worlds     { "Off", "Rompler 90", "Fat Analog", "Glass Squash", "Hi-Fi Shine", "Organic", "Velocity Deep", "Drift Analog", "Mix Ready" };
     inline const juce::StringArray gates      { "Off", "1/8", "1/16", "1/8 Triplet", "Stutter A", "Stutter B" };
     inline const juce::StringArray clipModes  { "Off", "Soft", "Hard", "Modern" };
     inline const juce::StringArray rollStyles { "Classic", "Triplet", "Drill", "Crazy" };

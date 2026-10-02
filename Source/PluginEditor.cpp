@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include <numeric>
+#include <map>
 
 using namespace juce;
 
@@ -633,9 +634,17 @@ public:
             return;
         }
         const auto& c = kids[(size_t) index];
-        // waveform (mirrored bars)
+        // waveform (mirrored bars) - or, in LOOP mode, the child's melody loop
         const Rectangle<float> wv (14, 42, 126, 46);
         const Colour col = sel ? s.accent : Colour (0xffd8d2d2);
+        if (proc.mainLoopMode)
+        {
+            const bool playing = proc.loopIsChild (index);
+            drawLoopRoll (g, wv, proc.loopNotes (c.g), (float) proc.loopBars() * 4.0f, col, playing ? proc.loopBeat.load() : -1.0f);
+            g.setColour (playing ? s.accent : Colour (0xffd8d2d2)); g.setFont (serif (11.0f, true, 0.2f));
+            g.drawText (playing ? "LOOP PLAYING" : "LOOP", Rectangle<float> (14, 24, 126, 14), Justification::centredLeft);
+        }
+        else
         for (int b = 0; b < 64; ++b)
         {
             const float v = c.waveReady ? std::pow (c.wave[(size_t) b], 0.7f) : 0.04f;
@@ -659,7 +668,7 @@ public:
         if (index >= (int) proc.kids().size()) return;
         if (e.mods.isPopupMenu()) { if (onMenu) onMenu (index); return; }
         for (int st = 0; st < 5; ++st) if (starRect (st).expanded (3).contains (e.position)) { proc.rateChild (index, st + 1); repaint(); return; }
-        if (e.position.getDistanceFrom ({ 160.0f, 66.0f }) < 20.0f) proc.previewChild (index);   // play button
+        if (e.position.getDistanceFrom ({ 160.0f, 66.0f }) < 20.0f) { proc.playChild (index); repaint(); }   // play button (sound or loop)
         else proc.selectChild (index);
     }
 private:
@@ -1178,6 +1187,311 @@ protected:
     int lastSig = -1;
 };
 
+// drag a file out of KEYS KILLA (MIDI pattern / WAV) - looks like a button, works by dragging
+class DragFileButton : public Component, public SettableTooltipClient
+{
+public:
+    DragFileButton (String t, Colour c) : text (std::move (t)), col (c) { setMouseCursor (MouseCursor::DraggingHandCursor); }
+    std::function<File()> makeFile;
+    void paint (Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (1);
+        g.setColour (col.withAlpha (hover ? 0.32f : 0.18f)); g.fillRoundedRectangle (r, 6);
+        g.setColour (col); g.drawRoundedRectangle (r, 6, 1.6f);
+        // three grip lines: "grab me"
+        for (int k = 0; k < 3; ++k) g.fillRect (r.getX() + 12, r.getCentreY() - 6 + k * 5.0f, 14.0f, 2.0f);
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (14.0f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.drawText (text, r.withTrimmedLeft (30), Justification::centred);
+    }
+    void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
+    void mouseExit (const MouseEvent&) override { hover = false; repaint(); }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (fired || e.getDistanceFromDragStart() < 5 || ! makeFile) return;
+        fired = true;
+        const auto f = makeFile();
+        if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+    }
+    void mouseUp (const MouseEvent&) override { fired = false; }
+private:
+    String text; Colour col;
+    bool hover = false, fired = false;
+};
+
+// ---------------- CHOP / SLICE: DIGGA's sample on a big waveform, movable slices, MPC pads, keys, drag out ----------------
+class ChopPanel : public Component, private Timer
+{
+public:
+    ChopPanel (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        static const char* modes[] { "TRANSIENTS", "NOTES", "1/4", "1/8", "1/16", "8", "16" };
+        static const char* tips[] { "Cut at every hit - drums, chords", "Cut where the pitch moves - vocal chops, melodies",
+                                    "Cut on the project grid: 1/4 notes", "Cut on the project grid: 1/8 notes", "Cut on the project grid: 1/16 notes",
+                                    "8 equal slices", "16 equal slices" };
+        for (int i = 0; i < 7; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, modes[i]);
+            b->framed = true; b->setTooltip (tips[i]);
+            b->onClick = [this, i]
+            {
+                if (i == 0) proc.chop.autoSlice (0);
+                else if (i == 1) proc.chop.autoSlice (-1);
+                else if (i <= 4) proc.chop.autoSlice (1, proc.lastBpm.load(), i == 2 ? 4 : i == 3 ? 8 : 16);
+                else proc.chop.autoSlice (i == 5 ? 8 : 16);
+                mode = i; sel = 0; refresh();
+            };
+            addAndMakeVisible (*b); modeBtns.push_back (std::move (b));
+        }
+        // per slice: PITCH / REVERSE / VOLUME / PAN / FADE
+        auto bar = [this] (Slider& sl, double lo, double hi, double step, std::function<String (double)> txt, const String& tip)
+        {
+            sl.setSliderStyle (Slider::LinearBar); sl.setRange (lo, hi, step); sl.setTooltip (tip);
+            sl.textFromValueFunction = std::move (txt);
+            sl.setColour (Slider::trackColourId, lnf.skin->accent.withAlpha (0.45f));
+            sl.setColour (Slider::textBoxTextColourId, Colours::white);
+            sl.onValueChange = [this] { pushFx(); };
+            addAndMakeVisible (sl);
+        };
+        bar (pitchSl, -24, 24, 1, [] (double v) { return "PITCH " + String (v > 0 ? "+" : "") + String ((int) v); }, "Pitch of this slice in semitones (double-click = 0)");
+        bar (volSl, 0, 2, 0.01, [] (double v) { return "VOL " + String (roundToInt (v * 100)) + "%"; }, "Volume of this slice");
+        bar (panSl, -1, 1, 0.01, [] (double v) { return std::abs (v) < 0.01 ? String ("PAN C") : "PAN " + String (v < 0 ? "L" : "R") + String (roundToInt (std::abs (v) * 100)); }, "Pan of this slice");
+        bar (fadeSl, 0.001, 0.2, 0.001, [] (double v) { return "FADE " + String (roundToInt (v * 1000)) + " ms"; }, "Fade in / out - no clicks when you trigger fast");
+        pitchSl.setDoubleClickReturnValue (true, 0); volSl.setDoubleClickReturnValue (true, 1); panSl.setDoubleClickReturnValue (true, 0); fadeSl.setDoubleClickReturnValue (true, 0.004);
+        revBtn.setButtonText ("REVERSE"); revBtn.framed = true; revBtn.setTooltip ("Play this slice backwards");
+        revBtn.onClick = [this] { revBtn.selected = ! revBtn.selected; revBtn.repaint(); pushFx(); proc.chopPad = sel; };
+        addAndMakeVisible (revBtn);
+        flipBtn.setButtonText ("FLIP IT"); flipBtn.framed = true;
+        flipBtn.setTooltip ("A new trap pattern from your chops - then drag it into FL (FLIP MIDI)");
+        flipBtn.onClick = [this] { flipSeed = (uint32_t) Random::getSystemRandom().nextInt (1 << 30); flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); note = "new flip ready - drag FLIP MIDI into FL"; repaint(); };
+        addAndMakeVisible (flipBtn);
+        dragFlip.makeFile = [this] { if (! flipFile.existsAsFile()) flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); return flipFile; };
+        dragFlip.setTooltip ("Drag the FLIP pattern into FL as MIDI (put KEYS KILLA on PLAY CHOPS ON KEYS)");
+        addAndMakeVisible (dragFlip);
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (keysBtn, "", "KEYS: the keyboard / FL piano roll plays the slices - C5 = slice 1, C#5 = slice 2 ...",
+             [this] { setParamFromUi (proc, ID::playMode, keysOn() ? 0.0f : (float) KeysKillaProcessor::playChop); refresh(); });
+        btn (bankAllBtn, "ALL TO BANK", "Every slice into your sound bank (then pair them)", [this]
+        {
+            int n = 0; if (auto c = proc.chop.current()) for (int i = 0; i < c->numSlices(); ++i) n += proc.chopToBank (i) ? 1 : 0;
+            note = String (n) + " slices in the bank"; repaint();
+        });
+        btn (backBtn, "BACK TO DIGGA", "Back to Digga Killa", [this] { if (onBack) onBack(); });
+        btn (pairBtn, "SLICE > PAIR", "This slice into PAIR YOUR OWN (next free slot)", [this] { note = proc.chopToPair (sel) ? "slice " + String (sel + 1) + " is in PAIR" : String(); repaint(); });
+        btn (bankBtn, "SLICE > BANK", "This slice into your sound bank", [this] { note = proc.chopToBank (sel) ? "slice " + String (sel + 1) + " is in the bank" : String(); repaint(); });
+        dragWav.makeFile = [this] { return proc.chop.exportSlice (sel); };
+        dragWav.setTooltip ("Drag this slice into FL Studio (or onto the PAIR tile on the left)");
+        dragMidi.makeFile = [this] { return proc.chop.exportMidi (proc.lastBpm.load()); };
+        dragMidi.setTooltip ("Drag the chop pattern into FL: a MIDI clip that plays the slices in order - move the notes = flip the sample");
+        addAndMakeVisible (dragWav); addAndMakeVisible (dragMidi);
+        setOpaque (true);
+        startTimerHz (30);
+    }
+    ~ChopPanel() override { stopTimer(); }
+    std::function<void()> onBack;
+    void visibilityChanged() override { if (isVisible()) { proc.chopFromDigga(); refresh(); } }
+
+    void paint (Graphics& g) override
+    {
+        const auto& s = *lnf.skin;
+        g.fillAll (Colour (0xff111215));
+        g.setColour (Colour (0xff1a1b1f)); g.fillRect (0, 0, getWidth(), 64);
+        g.setColour (s.accent); g.fillEllipse (22, 26, 10, 10);
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.drawText ("CHOP / SLICE", 40, 12, 260, 40, Justification::centredLeft);
+        auto c = proc.chop.current();
+        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (12.0f, Font::bold)));
+        g.drawText (c != nullptr ? c->name.toUpperCase() + "   " + String (c->numSlices()) + " SLICES" : String(), 42, 44, 400, 16, Justification::centredLeft);
+        // waveform with slices
+        const auto w = wave.toFloat();
+        g.setColour (Colour (0xff0b0c0e)); g.fillRoundedRectangle (w, 8);
+        g.setColour (Colour (0xff3c4046)); g.drawRoundedRectangle (w, 8, 1.2f);
+        if (c == nullptr || c->src == nullptr)
+        {
+            g.setColour (Colours::white.withAlpha (0.8f)); g.setFont (Font (FontOptions (24.0f, Font::bold)));
+            g.drawText ("LOAD A SAMPLE IN DIGGA FIRST", wave, Justification::centred);
+            return;
+        }
+        const int len = c->src->getNumSamples();
+        auto xOf = [&] (int smp) { return w.getX() + 10 + (w.getWidth() - 20) * (float) smp / (float) std::max (1, len); };
+        for (int i = 0; i < c->numSlices(); ++i)
+        {
+            const float x0 = xOf (c->sliceStart (i)), x1 = xOf (c->sliceEnd (i));
+            g.setColour (i == sel ? s.accent.withAlpha (0.22f) : (i % 2 ? Colour (0xff17191c) : Colour (0xff121316)));
+            g.fillRect (x0, w.getY() + 2, x1 - x0, w.getHeight() - 4);
+        }
+        const float mid = w.getCentreY(), half = w.getHeight() * 0.42f;
+        for (int k = 0; k < (int) peaks.size(); ++k)
+        {
+            const float x = w.getX() + 10 + (w.getWidth() - 20) * (float) k / (float) peaks.size();
+            const int smp = (int) ((juce::int64) len * k / (juce::int64) peaks.size());
+            int si = 0; while (si + 1 < c->numSlices() && c->sliceStart (si + 1) <= smp) ++si;
+            g.setColour (si == sel ? s.accent : Colour (0xffc9ced6));
+            g.drawVerticalLine ((int) x, mid - peaks[(size_t) k] * half, mid + peaks[(size_t) k] * half);
+        }
+        for (int i = 0; i < c->numSlices(); ++i)
+        {
+            const float x = xOf (c->sliceStart (i));
+            g.setColour (i == hoverMark ? Colours::white : Colour (0xffffc23d));
+            g.fillRect (x - 1.0f, w.getY() + 2, i == 0 ? 1.0f : 2.0f, w.getHeight() - 4);
+            if (i > 0) { Path tri; tri.addTriangle (x - 7, w.getY() + 2, x + 7, w.getY() + 2, x, w.getY() + 12); g.fillPath (tri); }
+            g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+            g.drawText (String (i + 1) + "  " + MidiMessage::getMidiNoteName (kk::ChopLab::firstNote + i, true, true, 5), Rectangle<float> (x + 4, w.getBottom() - 18, 80, 14), Justification::centredLeft);
+        }
+        if (const float ph = proc.chop.playhead(); ph >= 0)
+        {
+            g.setColour (Colours::white); g.drawVerticalLine ((int) (w.getX() + 10 + (w.getWidth() - 20) * ph), w.getY(), w.getBottom());
+        }
+        g.setColour (Colour (0xff8a9099)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+        g.drawText ("CLICK = PLAY A SLICE   DRAG A YELLOW MARKER = MOVE IT   DOUBLE-CLICK = NEW CUT   RIGHT-CLICK A MARKER = REMOVE", wave.withY (wave.getBottom() + 4).withHeight (16), Justification::centredLeft);
+        // selected slice
+        g.setColour (Colours::white); g.setFont (Font (FontOptions (18.0f, Font::bold)));
+        if (sel < c->numSlices())
+            g.drawText ("SLICE " + String (sel + 1) + "  " + MidiMessage::getMidiNoteName (kk::ChopLab::firstNote + sel, true, true, 5) + "  "
+                        + String ((double) (c->sliceEnd (sel) - c->sliceStart (sel)) / c->rate, 2) + " s", selRow.withWidth (240), Justification::centredLeft);
+        g.setColour (s.accent); g.setFont (Font (FontOptions (13.0f, Font::bold)));
+        g.drawText (note, selRow.withY (selRow.getBottom() + 6).withHeight (18), Justification::centredLeft);
+        // MPC pads (16)
+        for (int i = 0; i < 16; ++i)
+        {
+            const auto r = pad (i).toFloat();
+            const bool has = i < c->numSlices();
+            const float lit = padLit[(size_t) i];
+            g.setColour (has ? Colour (0xff2a2c31).interpolatedWith (s.accent, 0.25f * (i == sel) + 0.6f * lit) : Colour (0xff17181b));
+            g.fillRoundedRectangle (r, 8);
+            g.setColour (has ? Colour (0xff4a4e55) : Colour (0xff24262a)); g.drawRoundedRectangle (r, 8, 1.4f);
+            if (! has) continue;
+            g.setColour (Colours::white.withAlpha (0.9f)); g.setFont (Font (FontOptions (15.0f, Font::bold)));
+            g.drawText (String (i + 1), r.reduced (10, 6).toNearestInt(), Justification::topLeft);
+            g.setColour (Colour (0xff9aa0a8)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+            g.drawText (MidiMessage::getMidiNoteName (kk::ChopLab::firstNote + i, true, true, 5), r.reduced (10, 6).toNearestInt(), Justification::topRight);
+        }
+    }
+    void resized() override
+    {
+        const int W = getWidth(), H = getHeight();
+        int x = 300;
+        for (int i = 0; i < (int) modeBtns.size(); ++i) { const int bw = i == 0 ? 116 : i == 1 ? 74 : 52; modeBtns[(size_t) i]->setBounds (x, 16, bw, 32); x += bw + 5; }
+        keysBtn.setBounds (x + 10, 14, 220, 36);
+        backBtn.setBounds (W - 196, 14, 182, 36);
+        bankAllBtn.setBounds (W - 196 - 146, 14, 136, 36);
+        wave = { 14, 78, W - 28, std::max (200, H - 78 - 360) };
+        selRow = { 18, wave.getBottom() + 26, W - 36, 40 };
+        int cx = selRow.getX() + 250;
+        revBtn.setBounds (cx, selRow.getY() + 2, 92, 34); cx += 100;
+        for (auto* sl : { &pitchSl, &volSl, &panSl, &fadeSl }) { sl->setBounds (cx, selRow.getY() + 2, 118, 34); cx += 124; }
+        dragWav.setBounds (W - 18 - 180, selRow.getY() - 4, 180, 46);
+        bankBtn.setBounds (dragWav.getX() - 136, selRow.getY(), 128, 38);
+        pairBtn.setBounds (bankBtn.getX() - 136, selRow.getY(), 128, 38);
+        padArea = { 14, selRow.getBottom() + 34, W - 28 - 210, H - selRow.getBottom() - 48 };
+        const int colX = padArea.getRight() + 12, colW = W - 14 - colX;
+        dragMidi.setBounds (colX, padArea.getY(), colW, 48);
+        flipBtn.setBounds (colX, padArea.getY() + 58, colW, 40);
+        dragFlip.setBounds (colX, padArea.getY() + 106, colW, 48);
+    }
+    void mouseMove (const MouseEvent& e) override
+    {
+        const int m = markAt (e.position);
+        if (m != hoverMark) { hoverMark = m; repaint (wave); }
+        setMouseCursor (m > 0 ? MouseCursor::LeftRightResizeCursor : MouseCursor::NormalCursor);
+    }
+    void mouseDown (const MouseEvent& e) override
+    {
+        dragMark = -1;
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
+        for (int i = 0; i < 16; ++i) if (i < c->numSlices() && pad (i).contains (e.getPosition())) { sel = i; loadFx(); proc.chopPad = i; repaint(); return; }
+        if (! wave.contains (e.getPosition())) return;
+        const int m = markAt (e.position);
+        if (m > 0 && e.mods.isPopupMenu()) { auto mk = c->marks; mk.erase (mk.begin() + m); proc.chop.setMarks (mk); refresh(); return; }
+        if (m > 0) { dragMark = m; return; }
+        const int smp = sampleAt (e.position.x);
+        if (e.getNumberOfClicks() > 1) { auto mk = c->marks; mk.push_back (smp); proc.chop.setMarks (mk); refresh(); return; }
+        int si = 0; while (si + 1 < c->numSlices() && c->sliceStart (si + 1) <= smp) ++si;
+        sel = si; loadFx(); proc.chopPad = si; repaint();
+    }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragMark <= 0) return;
+        auto c = proc.chop.current(); if (c == nullptr) return;
+        auto mk = c->marks;
+        if (dragMark >= (int) mk.size()) return;
+        const int lo = mk[(size_t) dragMark - 1] + (int) (c->rate * 0.02), hi = dragMark + 1 < (int) mk.size() ? mk[(size_t) dragMark + 1] - (int) (c->rate * 0.02) : c->src->getNumSamples() - (int) (c->rate * 0.02);
+        mk[(size_t) dragMark] = jlimit (lo, std::max (lo, hi), sampleAt (e.position.x));
+        proc.chop.setMarks (mk);
+        repaint (wave);
+    }
+    void mouseUp (const MouseEvent&) override { if (dragMark > 0) refresh(); dragMark = -1; }
+private:
+    bool keysOn() const { return (int) proc.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playChop; }
+    void refresh()
+    {
+        peaks = proc.chop.overview (std::max (200, wave.getWidth() - 20));
+        for (int i = 0; i < (int) modeBtns.size(); ++i) { modeBtns[(size_t) i]->selected = i == mode; modeBtns[(size_t) i]->repaint(); }
+        keysBtn.setButtonText (keysOn() ? "KEYS PLAY THE CHOPS" : "PLAY CHOPS ON KEYS"); keysBtn.selected = keysOn(); keysBtn.repaint();
+        if (auto c = proc.chop.current()) sel = jlimit (0, std::max (0, c->numSlices() - 1), sel);
+        loadFx();
+        repaint();
+    }
+    Rectangle<int> pad (int i) const
+    {
+        const int cols = 8, gap = 10;
+        const int pw = (padArea.getWidth() - gap * (cols - 1)) / cols, ph = (padArea.getHeight() - gap) / 2;
+        return { padArea.getX() + (i % cols) * (pw + gap), padArea.getY() + (i / cols) * (ph + gap), pw, ph };
+    }
+    int sampleAt (float x) const
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return 0;
+        const auto w = wave.toFloat();
+        return jlimit (0, c->src->getNumSamples() - 1, (int) ((x - w.getX() - 10) / (w.getWidth() - 20) * (float) c->src->getNumSamples()));
+    }
+    int markAt (Point<float> p) const
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr || ! wave.toFloat().contains (p)) return -1;
+        const auto w = wave.toFloat();
+        for (int i = 1; i < c->numSlices(); ++i)
+            if (std::abs (w.getX() + 10 + (w.getWidth() - 20) * (float) c->sliceStart (i) / (float) c->src->getNumSamples() - p.x) < 6.0f) return i;
+        return -1;
+    }
+    void timerCallback() override
+    {
+        if (! isVisible()) return;
+        if (const int h = proc.chop.lastHit.exchange (-1); h >= 0 && h < 16) padLit[(size_t) h] = 1.0f;
+        bool any = false;
+        for (auto& v : padLit) if (v > 0.01f) { v *= 0.85f; any = true; } else v = 0;
+        if (any) repaint (padArea);
+        if (proc.chop.playhead() >= 0 || wasPlaying) { wasPlaying = proc.chop.playhead() >= 0; repaint (wave); }
+        if (keysOn() != keysBtn.selected) refresh();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    std::vector<std::unique_ptr<HotButton>> modeBtns;
+    HotButton keysBtn { lnf }, bankAllBtn { lnf }, backBtn { lnf }, pairBtn { lnf }, bankBtn { lnf };
+    DragFileButton dragWav { "DRAG SLICE WAV", Colour (0xff36ff6a) }, dragMidi { "DRAG CHOP MIDI", Colour (0xff36ff6a) }, dragFlip { "DRAG FLIP MIDI", Colour (0xff36ff6a) };
+    Slider pitchSl, volSl, panSl, fadeSl;
+    HotButton revBtn { lnf }, flipBtn { lnf };
+    uint32_t flipSeed = 1; File flipFile;
+    bool loadingFx = false;
+    void pushFx()
+    {
+        if (loadingFx) return;
+        kk::SliceFx f; f.semi = (int) pitchSl.getValue(); f.rev = revBtn.selected; f.vol = (float) volSl.getValue(); f.pan = (float) panSl.getValue(); f.fade = (float) fadeSl.getValue();
+        proc.chop.setFx (sel, f);
+    }
+    void loadFx()
+    {
+        auto c = proc.chop.current(); if (c == nullptr) return;
+        const auto f = c->fxOf (sel);
+        loadingFx = true;
+        pitchSl.setValue (f.semi, dontSendNotification); volSl.setValue (f.vol, dontSendNotification); panSl.setValue (f.pan, dontSendNotification); fadeSl.setValue (f.fade, dontSendNotification);
+        revBtn.selected = f.rev; revBtn.repaint();
+        loadingFx = false;
+    }
+    Rectangle<int> wave, selRow, padArea;
+    std::vector<float> peaks;
+    std::array<float, 16> padLit {};
+    String note;
+    int sel = 0, mode = 0, dragMark = -1, hoverMark = -1;
+    bool wasPlaying = false;
+};
+
 // HALF / EFFECTOR / DIGGA: the original plugin (its own design and every function) inside KEYS KILLA.
 // A slim strip on top: what it does, ON / OFF (HALF, EFFECTOR - melodies only), KEYS -> DIGGA.
 class EmbeddedPage : public Component, private Timer
@@ -1199,6 +1513,13 @@ public:
             pairBtn.setTooltip ("Send the one-shots DIGGA cut to PAIR YOUR OWN - breed them into new sounds and melody loops");
             pairBtn.onClick = [this] { proc.pairFromDigga(); if (onPair) onPair(); };
             addAndMakeVisible (pairBtn);
+            chopBtn.framed = true; chopBtn.setButtonText ("CHOP /\nSLICE");
+            chopBtn.setTooltip ("CHOP / SLICE the sample: move the cuts, MPC pads, play the chops on the keys, drag slices and the MIDI out");
+            chopBtn.onClick = [this] { showChop (! chopOn); };
+            addAndMakeVisible (chopBtn);
+            chop = std::make_unique<ChopPanel> (proc, lnf);
+            chop->onBack = [this] { showChop (false); };
+            addChildComponent (*chop);
             keysBtn.framed = true;
             keysBtn.setTooltip ("KEYS: your MIDI keyboard / FL piano roll plays DIGGA instead of the KEYS KILLA sound");
             keysBtn.onClick = [this] { setParamFromUi (proc, ID::playMode, keysToDigga() ? 0.0f : 1.0f); refresh(); };
@@ -1209,8 +1530,9 @@ public:
         refresh();
         startTimerHz (5);
     }
-    ~EmbeddedPage() override { stopTimer(); editor.reset(); }
+    ~EmbeddedPage() override { stopTimer(); releaseEditor(); }
     std::function<void()> onPair;
+    void openChop() { showChop (true); }
     void mouseUp (const MouseEvent& e) override
     {
         if (onId != nullptr && power.expanded (6).contains (e.getPosition())) { setParamFromUi (proc, onId, isOn() ? 0.0f : 1.0f); refresh(); repaint(); }
@@ -1253,6 +1575,8 @@ public:
         const int w = getWidth();
         juce::ignoreUnused (w);
         power = { kRail / 2 - 44, getHeight() - 260, 88, 88 };
+        chopBtn.setBounds (8, getHeight() - 336, kRail - 16, 74);
+        if (chop) chop->setBounds (getLocalBounds().withTrimmedLeft (kRail));
         keysBtn.setBounds (8, getHeight() - 250, kRail - 16, 80);
         pairBtn.setBounds (8, getHeight() - 160, kRail - 16, 80);
         if (editor != nullptr)
@@ -1277,16 +1601,32 @@ private:
     }
     // the host can open a second KEYS KILLA window before closing the old one: wait until the plugin's
     // previous editor is gone, then create ours (never two editors for one plugin)
+    // a plugin has one editor: if another KEYS KILLA window (FL keeps old ones alive) still holds it and is not
+    // on screen, it hands it over to the window you are looking at
+    static std::map<AudioProcessor*, EmbeddedPage*>& owners() { static std::map<AudioProcessor*, EmbeddedPage*> o; return o; }
+    void releaseEditor()
+    {
+        if (editor == nullptr) return;
+        if (auto* m = proc.module (mod); m != nullptr && owners()[m] == this) owners().erase (m);
+        removeChildComponent (editor.get()); editor.reset(); repaint();
+    }
     void tryCreateEditor()
     {
         auto* m = proc.module (mod);
-        if (m == nullptr || editor != nullptr || m->getActiveEditor() != nullptr) return;
+        if (m == nullptr || editor != nullptr) return;
+        if (m->getActiveEditor() != nullptr)
+        {
+            auto it = owners().find (m);
+            if (it == owners().end() || it->second == this || ! isShowing() || it->second->isShowing()) return;
+            it->second->releaseEditor();
+            if (m->getActiveEditor() != nullptr) return;
+        }
         editor.reset (m->createEditorIfNeeded());
-        if (editor != nullptr) { addAndMakeVisible (*editor); native = editor->getBounds().withPosition (0, 0); resized(); repaint(); }
+        if (editor != nullptr) { owners()[m] = this; addAndMakeVisible (*editor); editor->setVisible (! chopOn); native = editor->getBounds().withPosition (0, 0); resized(); if (chop) chop->toFront (false); repaint(); }
     }
     void timerCallback() override
     {
-        if (editor == nullptr) tryCreateEditor();
+        if (editor == nullptr && isShowing()) tryCreateEditor();
         if (editor != nullptr && editor->getBounds() != placed) resized();   // the plugin changed its own size: fit it again
         if ((isOn() ? 1 : 0) + (keysToDigga() ? 2 : 0) != lastSig) refresh();
     }
@@ -1296,7 +1636,16 @@ private:
     const char* onId;
     std::unique_ptr<AudioProcessorEditor> editor;
     Rectangle<int> native, placed, power;
-    HotButton onBtn { lnf }, keysBtn { lnf }, pairBtn { lnf };
+    HotButton onBtn { lnf }, keysBtn { lnf }, pairBtn { lnf }, chopBtn { lnf };
+    std::unique_ptr<ChopPanel> chop;
+    bool chopOn = false;
+    void showChop (bool on)
+    {
+        chopOn = on && chop != nullptr;
+        if (chop) { chop->setVisible (chopOn); if (chopOn) chop->toFront (false); }
+        if (editor) editor->setVisible (! chopOn);
+        chopBtn.selected = chopOn; chopBtn.repaint();
+    }
     int lastSig = -1;
 };
 
@@ -1356,37 +1705,6 @@ private:
     const DrumTheme& th;
 };
 
-// drag a file out of KEYS KILLA (MIDI pattern / WAV) - looks like a button, works by dragging
-class DragFileButton : public Component, public SettableTooltipClient
-{
-public:
-    DragFileButton (String t, Colour c) : text (std::move (t)), col (c) { setMouseCursor (MouseCursor::DraggingHandCursor); }
-    std::function<File()> makeFile;
-    void paint (Graphics& g) override
-    {
-        auto r = getLocalBounds().toFloat().reduced (1);
-        g.setColour (col.withAlpha (hover ? 0.32f : 0.18f)); g.fillRoundedRectangle (r, 6);
-        g.setColour (col); g.drawRoundedRectangle (r, 6, 1.6f);
-        // three grip lines: "grab me"
-        for (int k = 0; k < 3; ++k) g.fillRect (r.getX() + 12, r.getCentreY() - 6 + k * 5.0f, 14.0f, 2.0f);
-        g.setColour (Colours::white); g.setFont (Font (FontOptions (14.0f, Font::bold)).withExtraKerningFactor (0.08f));
-        g.drawText (text, r.withTrimmedLeft (30), Justification::centred);
-    }
-    void mouseEnter (const MouseEvent&) override { hover = true; repaint(); }
-    void mouseExit (const MouseEvent&) override { hover = false; repaint(); }
-    void mouseDrag (const MouseEvent& e) override
-    {
-        if (fired || e.getDistanceFromDragStart() < 5 || ! makeFile) return;
-        fired = true;
-        const auto f = makeFile();
-        if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
-    }
-    void mouseUp (const MouseEvent&) override { fired = false; }
-private:
-    String text; Colour col;
-    bool hover = false, fired = false;
-};
-
 // ---------------- PIANO ROLL for the drum patterns (808 line / snare rolls / hi-hat rolls) ----------------
 // click = add, drag = move, drag the right edge = length, double-click / right-click = delete, bottom lane = velocity
 class PatternEditor : public Component
@@ -1397,11 +1715,26 @@ public:
         lo = d == 0 ? -12 : d == 1 ? -7 : -8;
         hi = d == 0 ? 12 : 12;
         if (d == 2) hi = 8;
-        reload();
+        setWantsKeyboardFocus (true);
+        reload(); setBaseline(); before = { pat, bars };
     }
     int stepsPerBeat = 4; bool triplet = false;
     std::function<void()> onEdit;
     void reload() { pat = proc.pattern (d); bars = proc.patBars[(size_t) d]; sel = -1; repaint(); }
+    // ---- UNDO / REDO / RESET (Ctrl+Z, Ctrl+Y) ----
+    struct State { std::vector<kk::RollHit> pat; int bars = 2; };
+    void remember()   // call BEFORE a change (generate, clear, an edit)
+    {
+        undoStack.push_back ({ proc.pattern (d), proc.patBars[(size_t) d] });
+        if (undoStack.size() > 100) undoStack.erase (undoStack.begin());
+        redoStack.clear();
+    }
+    void setBaseline() { baseline = { proc.pattern (d), proc.patBars[(size_t) d] }; }   // RESET goes back here (the last generated pattern)
+    bool undo() { return step (undoStack, redoStack); }
+    bool redo() { return step (redoStack, undoStack); }
+    void reset() { remember(); apply (baseline); }
+    bool canUndo() const { return ! undoStack.empty(); }
+    bool canRedo() const { return ! redoStack.empty(); }
     float playBeat = -1.0f;
 
     void paint (Graphics& g) override
@@ -1477,6 +1810,8 @@ public:
     {
         const auto p = e.position;
         mode = none;
+        grabKeyboardFocus();
+        before = { proc.pattern (d), bars };
         if (velLane().contains (p)) { mode = vel; setVel (p); return; }
         if (! grid().contains (p)) return;
         const int hit = noteAt (p);
@@ -1524,6 +1859,9 @@ public:
     }
     bool keyPressed (const KeyPress& k) override
     {
+        const bool cmd = k.getModifiers().isCommandDown() || k.getModifiers().isCtrlDown();
+        if (cmd && (k.getKeyCode() == 'Z' || k.getKeyCode() == 'z') && ! k.getModifiers().isShiftDown()) { undo(); return true; }
+        if (cmd && (k.getKeyCode() == 'Y' || k.getKeyCode() == 'y' || ((k.getKeyCode() == 'Z' || k.getKeyCode() == 'z') && k.getModifiers().isShiftDown()))) { redo(); return true; }
         if ((k == KeyPress::deleteKey || k == KeyPress::backspaceKey) && sel >= 0 && sel < (int) pat.size()) { pat.erase (pat.begin() + sel); sel = -1; commit(); return true; }
         return false;
     }
@@ -1565,10 +1903,39 @@ private:
         std::sort (pat.begin(), pat.end(), [] (const kk::RollHit& a, const kk::RollHit& b) { return a.beat < b.beat; });
         sel = -1;
         if (had) for (int i = 0; i < (int) pat.size(); ++i) if (pat[(size_t) i].beat == keep.beat && pat[(size_t) i].semi == keep.semi) { sel = i; break; }
+        if (before.pat.size() != pat.size() || ! same (before.pat, pat) || before.bars != bars)
+        {
+            undoStack.push_back (before); if (undoStack.size() > 100) undoStack.erase (undoStack.begin());
+            redoStack.clear();
+        }
+        before = { pat, bars };
         proc.setPattern (d, pat, bars);
         repaint();
         if (onEdit) onEdit();
     }
+    static bool same (const std::vector<kk::RollHit>& a, const std::vector<kk::RollHit>& b)
+    {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::abs (a[i].beat - b[i].beat) > 1.0e-9 || a[i].semi != b[i].semi || std::abs (a[i].len - b[i].len) > 1.0e-9 || std::abs (a[i].vel - b[i].vel) > 1.0e-6f) return false;
+        return true;
+    }
+    bool step (std::vector<State>& from, std::vector<State>& to)
+    {
+        if (from.empty()) return false;
+        to.push_back ({ proc.pattern (d), proc.patBars[(size_t) d] });
+        auto st = from.back(); from.pop_back();
+        apply (st);
+        return true;
+    }
+    void apply (const State& st)
+    {
+        proc.setPattern (d, st.pat, st.bars);
+        reload(); before = { pat, bars };
+        if (onEdit) onEdit();
+    }
+    std::vector<State> undoStack, redoStack;
+    State baseline, before;
     KeysKillaProcessor& proc;
     int d;
     const DrumTheme& th;
@@ -1632,7 +1999,7 @@ public:
         {
             auto b = std::make_unique<HotButton> (lnf, th.styles[i]);
             b->framed = true; b->setTooltip (th.patTitle + " style - click for a fresh one in this style");
-            b->onClick = [this, i] { proc.generatePattern (d, i, proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); };
+            b->onClick = [this, i] { editor.remember(); proc.generatePattern (d, i, proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); };
             addAndMakeVisible (*b); styleBtns.push_back (std::move (b));
         }
         static const int barsOf[] { 1, 2, 4 };
@@ -1640,7 +2007,7 @@ public:
         {
             auto b = std::make_unique<HotButton> (lnf, String (barsOf[i]) + (i == 0 ? " BAR" : " BARS"));
             b->framed = true; b->setTooltip ("Pattern length");
-            b->onClick = [this, i] { proc.generatePattern (d, proc.patStyle[(size_t) d], barsOf[i], (float) density.getValue()); afterGenerate(); };
+            b->onClick = [this, i] { editor.remember(); proc.generatePattern (d, proc.patStyle[(size_t) d], barsOf[i], (float) density.getValue()); afterGenerate(); };
             addAndMakeVisible (*b); barBtns.push_back (std::move (b));
         }
         static const char* snaps[] { "1/8", "1/16", "1/32", "1/16T" };
@@ -1657,11 +2024,20 @@ public:
         density.setRange (0.0, 1.0); density.setValue (proc.patDensity[(size_t) d], dontSendNotification);
         density.setColour (Slider::thumbColourId, th.accent); density.setColour (Slider::trackColourId, th.accent.withAlpha (0.5f));
         density.setTooltip ("How busy the pattern is (more rolls, more notes)");
-        density.onDragEnd = [this] { proc.generatePattern (d, proc.patStyle[(size_t) d], proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); };
+        density.onDragEnd = [this] { editor.remember(); proc.generatePattern (d, proc.patStyle[(size_t) d], proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); };
         addAndMakeVisible (density);
-        btn (genBtn, "GENERATE", "A brand new " + th.patTitle + " pattern", [this] { proc.generatePattern (d, proc.patStyle[(size_t) d], proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); });
+        btn (genBtn, "GENERATE", "A brand new " + th.patTitle + " pattern", [this] { editor.remember(); proc.generatePattern (d, proc.patStyle[(size_t) d], proc.patBars[(size_t) d], (float) density.getValue()); afterGenerate(); });
         btn (playPatBtn, "PLAY", "Hear the pattern on your drum (with FL playing it follows the song tempo)", [this] { proc.patPlay = proc.patPlay.load() == d ? -1 : d; refreshPattern(); });
-        btn (clearPatBtn, "CLEAR", "Empty pattern - draw your own", [this] { proc.setPattern (d, {}, proc.patBars[(size_t) d]); editor.reload(); });
+        btn (clearPatBtn, "CLEAR", "Empty pattern - draw your own", [this] { editor.remember(); proc.setPattern (d, {}, proc.patBars[(size_t) d]); editor.reload(); refreshPattern(); });
+        btn (undoBtn, "UNDO", "Undo the last change (Ctrl+Z)", [this] { editor.undo(); });
+        btn (redoBtn, "REDO", "Redo (Ctrl+Y)", [this] { editor.redo(); });
+        btn (resetBtn, "RESET", "Back to the pattern as it was generated", [this] { editor.reset(); });
+        btn (resetKnobsBtn, "RESET KNOBS", "All knobs of this drum back to their start values", [this]
+        {
+            for (int k = 0; k < ID::boostKnobs.size(); ++k)
+                if (auto* q = proc.apvts.getParameter (ID::boost (d, k))) { q->beginChangeGesture(); q->setValueNotifyingHost (q->getDefaultValue()); q->endChangeGesture(); }
+            refresh();
+        });
         dragMidi.makeFile = [this] { return proc.exportPatternMidi (d); };
         dragMidi.setTooltip ("Drag the pattern into FL Studio: a MIDI clip for your " + th.title + " channel");
         addAndMakeVisible (dragMidi);
@@ -1771,6 +2147,10 @@ public:
         clearPatBtn.setBounds (right - 190 - 10 - 90, patPanel.getY() + 20, 90, 40);
         playPatBtn.setBounds (right - 190 - 10 - 90 - 10 - 110, patPanel.getY() + 20, 110, 40);
         genBtn.setBounds (right - 190 - 10 - 90 - 10 - 110 - 10 - 150, patPanel.getY() + 20, 150, 40);
+        resetBtn.setBounds (right - 100, py, 100, 32);
+        redoBtn.setBounds (right - 100 - 8 - 86, py, 86, 32);
+        undoBtn.setBounds (right - 100 - 8 - 86 - 8 - 86, py, 86, 32);
+        resetKnobsBtn.setBounds (art.getX() + 21, 400, 180, 34);
         editor.setBounds (patPanel.getX() + 14, py + 44, patPanel.getWidth() - 28, patPanel.getBottom() - py - 44 - 14);
     }
     void mouseDown (const MouseEvent& e) override { dragFromWave = wave.contains (e.getPosition()); }
@@ -1811,7 +2191,7 @@ private:
         lastSig = sat * 7 + (keysOn() ? 1 : 0) + (has ? 2 : 0);
         repaint();
     }
-    void afterGenerate() { editor.reload(); refreshPattern(); }
+    void afterGenerate() { editor.reload(); editor.setBaseline(); refreshPattern(); }
     void refreshPattern()
     {
         for (int i = 0; i < 4; ++i) { styleBtns[(size_t) i]->selected = i == proc.patStyle[(size_t) d]; styleBtns[(size_t) i]->repaint(); }
@@ -1970,7 +2350,7 @@ private:
     std::vector<std::unique_ptr<ThemedKnob>> knobs;
     std::vector<std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment>> atts;
     std::vector<std::unique_ptr<HotButton>> satBtns, switchBtns, styleBtns, barBtns, snapBtns;
-    HotButton loadBtn { lnf }, hitBtn { lnf }, keysBtn { lnf }, dragBtn { lnf }, clearBtn { lnf }, genBtn { lnf }, playPatBtn { lnf }, clearPatBtn { lnf };
+    HotButton loadBtn { lnf }, hitBtn { lnf }, keysBtn { lnf }, dragBtn { lnf }, clearBtn { lnf }, genBtn { lnf }, playPatBtn { lnf }, clearPatBtn { lnf }, undoBtn { lnf }, redoBtn { lnf }, resetBtn { lnf }, resetKnobsBtn { lnf };
     Slider density;
     DragFileButton dragMidi { "DRAG MIDI TO FL", Colour (0xff36ff6a) };
     PatternEditor editor;
@@ -1997,23 +2377,48 @@ static void drawPeaks (Graphics& g, Rectangle<float> r, const std::vector<float>
     g.setColour (c); g.fillPath (p);
 }
 
-// the hosted VST's own editor in its own window (Nexus, Serum ... look exactly like themselves)
-class VstWindow : public DocumentWindow
+// the hosted plugin's own editor in its own window (it looks exactly like itself)
+// the hosted plugin's editor shown INSIDE KEYS KILLA (over the whole window, BACK bar on top) - never a
+// separate desktop window, so nothing is left behind when FL Studio closes
+class VstOverlay : public Component
 {
 public:
-    explicit VstWindow (juce::AudioPluginInstance& p)
-        : DocumentWindow (p.getName() + "  -  KEYS KILLA", Colour (0xff1c1d22), DocumentWindow::closeButton), plugin (p)
+    explicit VstOverlay (juce::AudioPluginInstance& p, KKLookAndFeel& l) : lnf (l)
     {
-        setUsingNativeTitleBar (true);
-        if (auto* ed = p.createEditorIfNeeded()) setContentOwned (ed, true);
-        setResizable (false, false);
-        centreWithSize (getWidth(), getHeight());
-        setAlwaysOnTop (true);
-        setVisible (true);
+        back.setButtonText ("BACK TO KEYS KILLA"); back.framed = true;
+        back.onClick = [this] { setVisible (false); };
+        addAndMakeVisible (back);
+        title = p.getName();
+        editor.reset (p.createEditorIfNeeded());
+        if (editor != nullptr) { native = editor->getBounds().withPosition (0, 0); addAndMakeVisible (*editor); }
+        setOpaque (true);
     }
-    void closeButtonPressed() override { setVisible (false); clearContentComponent(); }
+    ~VstOverlay() override { if (editor != nullptr) { removeChildComponent (editor.get()); editor.reset(); } }
+    bool hasEditor() const { return editor != nullptr; }
+    void paint (Graphics& g) override
+    {
+        g.fillAll (Colour (0xff0b0c0e));
+        g.setColour (Colour (0xff17181b)); g.fillRect (0, 0, getWidth(), 48);
+        g.setColour (Colours::white.withAlpha (0.85f)); g.setFont (Font (FontOptions (16.0f, Font::bold)).withExtraKerningFactor (0.1f));
+        g.drawText (title.toUpperCase() + "   -   choose a sound, then CAPTURE in PAIR FROM VST", 20, 0, getWidth() - 300, 48, Justification::centredLeft);
+    }
+    void resized() override
+    {
+        back.setBounds (getWidth() - 250, 8, 236, 32);
+        if (editor == nullptr) return;
+        auto area = getLocalBounds().withTrimmedTop (52).reduced (6);
+        const float sc = std::min (1.0f, std::min ((float) area.getWidth() / (float) std::max (1, native.getWidth()), (float) area.getHeight() / (float) std::max (1, native.getHeight())));
+        editor->setTransform (AffineTransform::scale (sc));
+        const int ew = roundToInt (native.getWidth() * sc), eh = roundToInt (native.getHeight() * sc);
+        editor->setBounds (native.withPosition (roundToInt ((area.getX() + (area.getWidth() - ew) / 2) / sc), roundToInt (area.getY() / sc)));
+        juce::ignoreUnused (eh);
+    }
 private:
-    juce::AudioPluginInstance& plugin;
+    KKLookAndFeel& lnf;
+    HotButton back { lnf };
+    std::unique_ptr<AudioProcessorEditor> editor;
+    Rectangle<int> native;
+    String title;
 };
 
 class PairPage : public Component, public FileDragAndDropTarget, private Timer
@@ -2028,18 +2433,32 @@ public:
         if (vstMode)
         {
             vstBox.setTextWhenNothingSelected ("choose an instrument ...");
-            vstBox.setTooltip ("Your installed VST3 instruments (Nexus, Serum 2, Zenology ...)");
+            vstBox.setTooltip ("The VST3 instruments installed on this computer - the same ones FL Studio uses");
             vstBox.onChange = [this]
             {
                 const int i = vstBox.getSelectedId() - 1;
                 if (i < 0 || i >= proc.vstList.size()) return;
                 vstWin.reset();
                 const auto err = proc.loadVst (proc.vstList[i]);
-                status = err.isEmpty() ? proc.vst.name() + " loaded - play it on the keys, pick a sound in its window, CAPTURE" : err;
-                if (err.isEmpty()) { setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst); openVstUi(); }
+                status = err.isEmpty() ? proc.vst.name() + " loaded - GRAB ALL ITS SOUNDS, or play it on the keys and CAPTURE" : err;
+                if (err.isEmpty()) setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst);
                 repaint();
             };
             addAndMakeVisible (vstBox);
+            folderBtn.setButtonText ("+ FOLDER"); folderBtn.framed = true;
+            folderBtn.setTooltip ("Your plugin is not in the list? Add the folder where it is installed (FL Studio: Options > Manage plugins shows the folders). VST3 plugins are supported.");
+            folderBtn.onClick = [this]
+            {
+                chooser = std::make_unique<FileChooser> ("Folder with your VST3 plugins", File::getSpecialLocation (File::globalApplicationsDirectory));
+                chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                                      [safe = Component::SafePointer<PairPage> (this)] (const FileChooser& fc)
+                                      {
+                                          if (safe == nullptr || ! fc.getResult().isDirectory()) return;
+                                          kk::VstHost::addUserFolder (fc.getResult());
+                                          safe->proc.vstList.clear(); safe->scanVsts();
+                                      });
+            };
+            addAndMakeVisible (folderBtn);
             uiBtn.setButtonText ("OPEN PLUGIN"); uiBtn.framed = true; uiBtn.onClick = [this] { openVstUi(); };
             capBtn.setButtonText ("CAPTURE"); capBtn.framed = true;
             capBtn.setTooltip ("Record the plugin's current sound (one note) into your bank");
@@ -2049,6 +2468,21 @@ public:
                 status = n.isNotEmpty() ? "captured: " + n : String ("nothing captured - load a plugin, choose a sound, try again");
                 repaint();
             };
+            grabBtn.setButtonText ("GRAB ALL ITS SOUNDS"); grabBtn.framed = true;
+            grabBtn.setTooltip ("KEYS KILLA steps through the plugin's own presets and records each one into your bank - no plugin window needed. Then pair them.");
+            grabBtn.onClick = [this]
+            {
+                if (grabNext >= 0) { grabNext = -1; status = "stopped - " + String (grabbed) + " sounds in the bank"; grabBtn.setButtonText ("GRAB ALL ITS SOUNDS"); repaint(); return; }
+                if (! proc.vst.loaded()) { status = "choose a plugin first"; repaint(); return; }
+                grabTotal = std::min (proc.vst.numPrograms(), 64);
+                if (grabTotal <= 1)
+                {
+                    status = proc.vst.name() + " does not share its preset list - OPEN PLUGIN once, choose a sound, CAPTURE";
+                    repaint(); return;
+                }
+                grabNext = 0; grabbed = 0; grabBtn.setButtonText ("STOP"); repaint();
+            };
+            addAndMakeVisible (grabBtn);
             keysBtn.setButtonText ("PLAY IT ON KEYS"); keysBtn.framed = true;
             keysBtn.onClick = [this] { setParamFromUi (proc, ID::playMode, (float) KeysKillaProcessor::playVst); repaint(); };
             for (int nt = 36; nt <= 84; ++nt) noteBox.addItem ("NOTE " + MidiMessage::getMidiNoteName (nt, true, true, 5), nt);
@@ -2067,7 +2501,7 @@ public:
         {
             auto b = std::make_unique<HotButton> (lnf, fl[i]);
             b->framed = true; b->setTooltip (String ("Children: ") + tips[i]);
-            b->onClick = [this, i] { proc.pairFlavor = i; repaint(); for (auto& x : flavorBtns) x->repaint(); };
+            b->onClick = [this, i] { proc.pairFlavor = i; if (! proc.pairKids.empty()) proc.pairBreed (false); repaint(); for (auto& x : flavorBtns) x->repaint(); };   // same children, new flavour - hear the difference
             addAndMakeVisible (*b); flavorBtns.push_back (std::move (b));
         }
         diceAll.setButtonText ("ROLL ALL 4"); diceAll.framed = true;
@@ -2086,7 +2520,7 @@ public:
         setOpaque (true);
         startTimerHz (20);
     }
-    ~PairPage() override { stopTimer(); vstWin.reset(); }
+    ~PairPage() override { stopTimer(); vstWin.reset(); }   // the hosted editor goes before the plugin
 
     bool isInterestedInFileDrag (const StringArray& files) override { for (auto& f : files) if (isAudio (f)) return true; return false; }
     void fileDragMove (const StringArray&, int x, int y) override { hoverSlot = slotAt ({ x, y }); dropHover = hoverSlot < 0; repaint(); }
@@ -2128,7 +2562,7 @@ public:
             g.setColour (Colours::white); g.setFont (serif (20.0f, true, 0.2f));
             g.drawText (vstPage ? "PAIR FROM VST" : "HARVEST", dz.withHeight (40).translated (0, 4).toNearestInt(), Justification::centred);
             g.setColour (Colour (0xffc9c0bd)); g.setFont (serif (12.5f, false, 0.08f));
-            if (vstPage) g.drawFittedText (status, dz.reduced (10).withTrimmedTop (128).toNearestInt(), Justification::centred, 2);
+            if (vstPage) g.drawFittedText (status, dz.reduced (6).withTrimmedTop (150).toNearestInt(), Justification::centred, 1);
             else g.drawFittedText (proc.harvesting() ? "listening ..." : "drop a song, a sample,\na vinyl rip - KEYS KILLA\npulls the sounds out", dz.reduced (10).withTrimmedTop (42).withHeight (60).toNearestInt(), Justification::centred, 3);
             for (int c = 0; c < kk::numCats; ++c)
             {
@@ -2153,7 +2587,7 @@ public:
             if (proc.bank.empty())
             {
                 g.setColour (Colour (0xff6a5c5c)); g.setFont (serif (13.0f, false, 0.1f));
-                g.drawFittedText ("your sound bank is empty - drop a song on HARVEST", bankArea().withTrimmedTop (60), Justification::centredTop, 2);
+                g.drawFittedText (vstPage ? "your sound bank is empty - choose a plugin, GRAB ALL ITS SOUNDS" : "your sound bank is empty - drop a song on HARVEST", bankArea().withTrimmedTop (60), Justification::centredTop, 2);
             }
         }
         // parents
@@ -2239,7 +2673,7 @@ public:
             g.drawText (looping ? "drag: MIDI" : "drag: WAV", r.reduced (10, 4).removeFromBottom (14).toNearestInt(), Justification::centredRight);
         }
         g.setColour (Colour (0xff9c9494)); g.setFont (serif (12.0f, false, 0.25f));
-        g.drawText ("BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
+        g.drawText ("BANK: CLICK = HEAR, DOUBLE-CLICK = INTO A SLOT, RIGHT-CLICK = DELETE.   CHILD: CLICK = PLAY ON KEYS, LOOP = TRAP MELODY, DRAG INTO FL = WAV / MIDI",
                     Rectangle<int> (20, getHeight() - 22, getWidth() - 40, 18), Justification::centred);
     }
     void resized() override
@@ -2250,8 +2684,9 @@ public:
         diggaBtn.setVisible (! vstPage);
         if (vstPage)
         {
-            vstBox.setBounds (28, 46, 260, 30); uiBtn.setBounds (296, 44, 134, 34);
+            vstBox.setBounds (28, 46, 182, 30); folderBtn.setBounds (214, 44, 76, 34); uiBtn.setBounds (296, 44, 134, 34);
             noteBox.setBounds (28, 86, 130, 30); capBtn.setBounds (166, 82, 120, 38); keysBtn.setBounds (296, 84, 134, 34);
+            grabBtn.setBounds (28, 126, 402, 30);
         }
         diceAll.setBounds (getWidth() - 214, 304, 200, 32);
     }
@@ -2283,7 +2718,36 @@ public:
     {
         if (dragDone) return;
         const auto pos = e.getPosition();
-        if (const int b = bankAt (pos); b >= 0) { armed = b; proc.auditionBank (b); repaint(); return; }
+        if (const int b = bankAt (pos); b >= 0)
+        {
+            if (e.mods.isPopupMenu())   // right-click a sound: where to, or delete it
+            {
+                PopupMenu m;
+                m.addItem (1, "Hear it");
+                for (int k = 0; k < kk::PairLab::maxParents; ++k) m.addItem (10 + k, "Into SOUND " + String (k + 1));
+                m.addSeparator();
+                m.addItem (2, "Delete from the bank");
+                m.showMenuAsync (PopupMenu::Options().withTargetComponent (this).withMousePosition(), [safe = Component::SafePointer<PairPage> (this), b] (int r)
+                {
+                    if (safe == nullptr || r == 0 || b >= (int) safe->proc.bank.size()) return;
+                    if (r == 1) safe->proc.auditionBank (b);
+                    else if (r == 2) { safe->proc.removeFromBank (b); safe->armed = -1; }
+                    else if (r >= 10) safe->proc.bankToPair (b, r - 10);
+                    safe->repaint();
+                });
+                return;
+            }
+            armed = b; proc.auditionBank (b); repaint(); return;
+        }
+        for (int c = 0; c < kk::numCats; ++c)   // click a shelf name: clear that shelf
+            if (bankCol (c).withHeight (20).contains (pos))
+            {
+                PopupMenu m;
+                m.addItem (1, "Clear " + String (kk::harvestCatShort (c)) + " (deletes its sounds from the bank)");
+                m.showMenuAsync (PopupMenu::Options().withTargetComponent (this).withMousePosition(), [safe = Component::SafePointer<PairPage> (this), c] (int r)
+                { if (safe != nullptr && r == 1) { safe->proc.clearShelf (c); safe->armed = -1; safe->repaint(); } });
+                return;
+            }
         if (! vstPage && dropZone().contains (pos) && ! diggaBtn.getBounds().contains (pos) && ! saveBtn.getBounds().contains (pos)) { browseHarvest(); return; }
         for (int k = 0; k < kk::PairLab::maxParents; ++k)
         {
@@ -2308,17 +2772,21 @@ private:
         if (proc.vstList.isEmpty()) proc.vstList = proc.vst.listInstalled();
         vstBox.clear (dontSendNotification);
         for (int i = 0; i < proc.vstList.size(); ++i) vstBox.addItem (kk::VstHost::displayName (proc.vstList[i]), i + 1);
-        status = proc.vstList.isEmpty() ? String ("no VST3 instruments found in the standard folders") : String (proc.vstList.size()) + " plugins found";
+        status = proc.vstList.isEmpty() ? String ("no VST3 plugins found - press + FOLDER and choose where yours are installed") : String (proc.vstList.size()) + " plugins found - missing one? + FOLDER";
         if (proc.vst.loaded()) status = proc.vst.name() + " loaded";
         repaint();
     }
     void openVstUi()
     {
-        if (auto* inst = proc.vst.instance())
+        auto* top = getTopLevelComponent();
+        if (auto* inst = proc.vst.instance(); inst != nullptr && top != nullptr)
         {
-            if (vstWin != nullptr && vstWin->getContentComponent() != nullptr) { vstWin->setVisible (true); vstWin->toFront (true); return; }
-            vstWin.reset();
-            if (inst->hasEditor()) vstWin = std::make_unique<VstWindow> (*inst);
+            if (vstWin == nullptr && inst->hasEditor())
+            {
+                vstWin = std::make_unique<VstOverlay> (*inst, lnf);
+                top->addChildComponent (*vstWin);
+            }
+            if (vstWin != nullptr) { vstWin->setBounds (top->getLocalBounds()); vstWin->setVisible (true); vstWin->toFront (true); }
         }
     }
     Rectangle<int> bankCol (int c) const { const auto b = bankArea(); const int w = (b.getWidth() - 7 * 6) / kk::numCats; return { b.getX() + c * (w + 6), b.getY(), w, b.getHeight() }; }
@@ -2349,6 +2817,21 @@ private:
     {
         if (! isVisible()) return;
         if (proc.harvesting()) repaint (dropZone());
+        if (grabNext >= 0)   // GRAB SOUNDS: one preset per tick, the UI stays alive
+        {
+            if (grabNext >= grabTotal || ! proc.vst.loaded())
+            {
+                grabNext = -1; grabBtn.setButtonText ("GRAB ALL ITS SOUNDS");
+                status = String (grabbed) + " sounds from " + proc.vst.name() + " in your bank - pair them below";
+            }
+            else
+            {
+                const auto n = proc.captureVstProgram (grabNext++, noteBox.getSelectedId());
+                if (n.isNotEmpty()) ++grabbed;
+                status = "grabbing " + String (grabNext) + " / " + String (grabTotal) + "   " + n;
+            }
+            repaint();
+        }
         if (breedBtn.flash > 0) { breedBtn.flash = std::max (0.0f, breedBtn.flash - 0.08f); breedBtn.repaint(); }
         const int v = proc.pairVer.load() * 3 + (proc.loopPlaying() ? 1 : 0) + (int) proc.bank.size() * 7919;
         if (v != lastVer) { lastVer = v; repaint(); }
@@ -2357,7 +2840,9 @@ private:
     TreeBreedButton breedBtn;
     HotButton diggaBtn { lnf }, diceAll { lnf }, saveBtn { lnf }, uiBtn { lnf }, capBtn { lnf }, keysBtn { lnf };
     ComboBox vstBox, noteBox;
-    std::unique_ptr<VstWindow> vstWin;
+    HotButton folderBtn { lnf }, grabBtn { lnf };
+    int grabNext = -1, grabTotal = 0, grabbed = 0;
+    std::unique_ptr<VstOverlay> vstWin;
     String status;
     bool vstPage = false;
     std::vector<std::unique_ptr<HotButton>> flavorBtns;
@@ -2427,12 +2912,25 @@ private:
 
 // left column: BREED LAB / FAMILY TREE, then the melody extras VOODOO KILLA / EFFECTOR KILLA / DIGGA KILLA
 // (-1 = a drum page of the bottom row is open)
-class LabSwitch : public Component, public SettableTooltipClient
+class LabSwitch : public Component, public SettableTooltipClient, public FileDragAndDropTarget, private Timer
 {
 public:
+    // drag a sound (from DIGGA, FL's browser, a folder) onto the tiles: it lands in PAIR YOUR OWN - from any page
+    std::function<int (const File&)> onDropToPair;   // returns the slot (1..4) or 0
+    bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) return true; return false; }
+    void fileDragEnter (const StringArray&, int, int) override { dropHover = true; repaint(); }
+    void fileDragExit (const StringArray&) override { dropHover = false; repaint(); }
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        dropHover = false;
+        int n = 0, last = 0;
+        for (auto& x : files) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg") && onDropToPair) if (const int sl = onDropToPair (File (x)); sl > 0) { ++n; last = sl; }
+        flashText = n > 1 ? String (n) + " SOUNDS\nIN PAIR" : n == 1 ? "IN PAIR\nSLOT " + String (last) : "COULD NOT\nREAD IT";
+        flash = 1.0f; startTimerHz (30); repaint();
+    }
     explicit LabSwitch (KKLookAndFeel& l) : lnf (l)
     {
-        setTooltip ("BREED LAB: 2 parents -> 6 sounds.  FAMILY TREE: sounds and melody loops.  VOODOO / EFFECTOR / DIGGA KILLA: extras for the melodies only.");
+        setTooltip ("BREED LAB: 2 parents -> 6 sounds.  FAMILY TREE: sounds and melody loops.  VOODOO / EFFECTOR / DIGGA KILLA: extras for the melodies only.  TIP: drag any sound (a DIGGA shot too) onto these tiles = it goes into PAIR YOUR OWN.");
     }
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
@@ -2447,7 +2945,15 @@ public:
         for (int k = 0; k < 7; ++k)
         {
             auto r = part (k);
-            const bool on = k == sel;
+            const bool on = k == sel || ((dropHover || flash > 0) && k == 2);
+            if (k == 2 && (dropHover || flash > 0))   // the PAIR tile becomes the drop target
+            {
+                g.setColour (s.accent.withAlpha (0.35f + 0.3f * flash)); g.fillRoundedRectangle (r.expanded (2), 7);
+                drawGlowFrame (g, r, s.accent, 6);
+                g.setColour (Colours::white); g.setFont (serif (14.0f, true, 0.2f));
+                g.drawFittedText (dropHover ? "DROP\n= PAIR" : flashText, r.toNearestInt(), Justification::centred, 2);
+                continue;
+            }
             if (k == 4)
             {
                 g.setColour (Colour (0xff9c9494)); g.setFont (serif (10.0f, false, 0.25f));
@@ -2479,7 +2985,11 @@ private:
         const float h = ((float) getHeight() - gap * 6 - extra) / 7.0f;
         return { 3.0f, (float) k * (h + gap) + (k >= 4 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
     }
+    void timerCallback() override { flash -= 0.012f; if (flash <= 0) { flash = 0; stopTimer(); } repaint (part (2).expanded (4).toNearestInt()); }
     KKLookAndFeel& lnf;
+    bool dropHover = false;
+    float flash = 0;
+    String flashText;
 };
 
 //==============================================================================
@@ -2502,7 +3012,7 @@ public:
         nameBtn.onClick = [this] { openTab (tabBrowser); }; nameBtn.setTooltip ("Click to browse and search all presets.");
         heartBtn.onClick = [this] { toggleFavourite(); }; heartBtn.setTooltip ("Add to favourites");
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
-        worldBtn.setTooltip ("SOUND WORLD: colour the whole sound like XV / Moog / Serum / Zenology / Omnisphere / Kontakt / Diva / Nexus.  TRANCE GATE and CLIPPER are here too.");
+        worldBtn.setTooltip ("SOUND WORLD: one click colours the whole sound (rompler, analog, glassy, hi-fi, organic ...).  TRANCE GATE and CLIPPER are here too.");
         addAndMakeVisible (worldBtn);
         moonBtn.onClick = [this] { openTab (tabSettings); }; moonBtn.setTooltip ("Settings: eco mode, window size");
         heartBtn.glyph = [this] (Graphics& g, Rectangle<float> hb, const Skin& s)
@@ -2568,6 +3078,13 @@ public:
             addAndMakeVisible (*b);
             mutateBtns.push_back (std::move (b));
         }
+        soundModeBtn.setButtonText ("SOUND"); loopModeBtn.setButtonText ("LOOP");
+        soundModeBtn.framed = loopModeBtn.framed = true; soundModeBtn.selected = true;
+        soundModeBtn.setTooltip ("Children play as SOUNDS (one note)");
+        loopModeBtn.setTooltip ("Children play as LOOPS: every child gets its own melody loop (host tempo) - drag it into FL as MIDI from the LOOP panel");
+        soundModeBtn.onClick = [this] { proc.mainLoopMode = false; if (proc.loopOwnerId() == 3) proc.stopLoop(); proc.touchLab(); };
+        loopModeBtn.onClick = [this] { proc.mainLoopMode = true; proc.touchLab(); const int c = std::max (0, proc.selectedChild()); if (! proc.kids().empty()) proc.playChild (c); };
+        addAndMakeVisible (soundModeBtn); addAndMakeVisible (loopModeBtn);
         treeBtn.onClick = [this] { openTab (tabTree); }; treeBtn.setTooltip ("FAMILY TREE: breed up to 4 sounds into new sounds or melody loops");
         labSwitch.onSwitch = [this] (int k)
         {
@@ -2576,6 +3093,13 @@ public:
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
         };
         labSwitch.isOn = [this] (int k) { return proc.apvts.getRawParameterValue (k == 4 ? ID::halfOn : ID::efxOn)->load() > 0.5f; };
+        labSwitch.onDropToPair = [this] (const File& f)
+        {
+            int slot = 0;
+            while (slot < (int) proc.pairParents.size() && proc.pairParents[(size_t) slot] != nullptr) ++slot;
+            if (slot >= (int) proc.pairParents.size()) slot = (dropRound++) % (int) proc.pairParents.size();   // all full: replace in turn
+            return proc.loadPairParent (slot, f) ? slot + 1 : 0;
+        };
         addAndMakeVisible (labSwitch);
         undoBtn.onClick = [this] { proc.undo(); refreshState(); }; undoBtn.setTooltip ("UNDO the last change of the sound");
         addAndMakeVisible (treeBtn); addAndMakeVisible (undoBtn);
@@ -2693,6 +3217,7 @@ public:
         if (v == 19) openTab (tabSnare);
         if (v == 20) openTab (tabHalf);
         if (v == 22) openTab (tabVst);
+        if (v == 23) { openTab (tabDigga); if (auto* pg = dynamic_cast<EmbeddedPage*> (module (tabDigga))) pg->openChop(); }
         if (v == 21)
         {
             if (auto f = File::getSpecialLocation (File::tempDirectory).getChildFile ("kk_harvest_demo.wav"); f.existsAsFile())
@@ -2738,6 +3263,7 @@ public:
         for (int i = 0; i < 6; ++i) genes[(size_t) i]->setBounds (gx[i] - 41, 556, 116, 33);
         const int mx[5][2] { { 1049, 1094 }, { 1095, 1142 }, { 1142, 1189 }, { 1189, 1236 }, { 1236, 1288 } };
         for (int i = 0; i < 5; ++i) mutateBtns[(size_t) i]->setBounds (R (mx[i][0], 555, mx[i][1], 595));
+        soundModeBtn.setBounds (R (142, 404, 216, 438)); loopModeBtn.setBounds (R (142, 446, 216, 480));
         treeBtn.setBounds (R (1300, 528, 1374, 604)); undoBtn.setBounds (R (1379, 528, 1442, 604));
 
         wildRail.setBounds (R (1466, 118, 1608, 392));
@@ -2763,7 +3289,7 @@ public:
 
         const auto panelArea = R (10, 8, 1662, 612);
         if (advanced) advanced->setBounds (R (150, 8, 1662, 612));   // the left switch stays visible
-        if (browser) browser->setBounds (panelArea);
+        if (browser) browser->setBounds (R (150, 8, 1662, 612));   // the left tiles never cover the preset names
         if (treePanel) treePanel->setBounds (R (150, 96, 1662, 612));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612) : R (0, 0, 1672, 941));   // the KILLA plugins and the drum pages get the whole window
@@ -2825,6 +3351,7 @@ private:
         browser->toggleFavourite = [this] (const String& n) { toggleFavouriteNamed (n); };
         browser->onChanged = [this] { refreshState(); };
         browser->onBred = [this] { labChanged(); };
+        browser->focusKeys = [] { Component::unfocusAllComponents(); };   // no text box holds the keys: FL's typing keyboard and your MIDI keys play the sound
         addChildComponent (*browser);
         noFocus (*browser);
         resized();
@@ -2876,7 +3403,13 @@ private:
         const bool treeOn = openTabIndex == tabTree;
         const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabHalf ? 4 : openTabIndex == tabEffector ? 5 : openTabIndex == tabDigga ? 6 : -1;
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
-        if (! treeOn && openTabIndex != tabPair && openTabIndex != tabVst && proc.loopPlaying()) proc.stopLoop();   // loops belong to the FAMILY TREE / PAIR
+        if (proc.loopPlaying())   // a loop belongs to the page that started it (FAMILY TREE / PAIR / BREED LAB)
+        {
+            const int owner = proc.loopOwnerId();
+            const bool keep = (owner == 1 && treeOn) || (owner == 2 && (openTabIndex == tabPair || openTabIndex == tabVst))
+                           || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0);
+            if (! keep) proc.stopLoop();
+        }
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }
     }
     void setScale (int pct)
@@ -3177,7 +3710,9 @@ private:
             parentA.repaint(); parentB.repaint();
             for (auto& c : childCards) c->repaint();
             for (auto& gsw : genes) gsw->repaint();
+            soundModeBtn.selected = ! proc.mainLoopMode; loopModeBtn.selected = proc.mainLoopMode; soundModeBtn.repaint(); loopModeBtn.repaint();
         }
+        if (proc.mainLoopMode && proc.loopPlaying() && proc.loopOwnerId() == 3) for (auto& c : childCards) c->repaint();   // loop playhead
         wildRail.repaint();
         updateTabs();
     }
@@ -3187,10 +3722,10 @@ private:
         auto val = [this] (const char* id) { return (int) proc.apvts.getRawParameterValue (id)->load(); };
         PopupMenu m;
         m.addSectionHeader ("SOUND WORLD  (the whole sound, one click)");
-        static const char* tips[] { "Off", "XV  -  90s Roland PCM: dry, hard mids, pizzicato / bells / rap piano", "MOOG  -  fat analog, driven ladder warmth, drift",
-                                    "SERUM  -  wavetable + OTT: squashed, glassy, aggressive", "ZENOLOGY  -  modern hi-fi shine + Juno chorus",
-                                    "OMNI  -  organic, breath / foley layer, wide shimmer", "KONTAKT  -  felt when soft, open and saturated when hard",
-                                    "DIVA  -  component analog: drive + per-side pitch drift", "NEXUS  -  mix-ready: glued, bright, finished" };
+        static const char* tips[] { "Off", "ROMPLER 90  -  dry, hard mids: pizzicato / bells / rap piano", "FAT ANALOG  -  driven ladder warmth, drift",
+                                    "GLASS SQUASH  -  multiband squash: glassy, aggressive", "HI-FI SHINE  -  modern shine + chorus",
+                                    "ORGANIC  -  breath / foley layer, wide shimmer", "VELOCITY DEEP  -  felt when soft, open and saturated when hard",
+                                    "DRIFT ANALOG  -  drive + per-side pitch drift", "MIX READY  -  glued, bright, finished" };
         for (int w = 0; w < 9; ++w) m.addItem (1 + w, tips[w], true, val (ID::world) == w);
         m.addSectionHeader ("TRANCE GATE  (in the song tempo)");
         for (int g = 0; g < Choices::gates.size(); ++g) m.addItem (20 + g, Choices::gates[g], true, val (ID::gate) == g);
@@ -3268,7 +3803,8 @@ private:
     std::vector<std::unique_ptr<ChildCard>> childCards;
     std::vector<std::unique_ptr<GeneSwitch>> genes;
     std::vector<std::unique_ptr<HotButton>> mutateBtns, tabs;
-    HotButton treeBtn { lnf }, undoBtn { lnf };
+    HotButton treeBtn { lnf }, undoBtn { lnf }, soundModeBtn { lnf }, loopModeBtn { lnf };
+    int dropRound = 0;
     WildRail wildRail;
     DragToDaw dragDaw;
     std::vector<std::unique_ptr<ImageKnob>> macros, sideKnobs;

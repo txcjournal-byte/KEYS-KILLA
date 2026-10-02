@@ -25,7 +25,7 @@ Všechny zvuky generuje plugin sám syntézou, žádné samply.
 
 ## SOUND WORLD (verze 0.16)
 
-Tlačítko **WORLD** v hlavičce: jedním klikem obarví celý zvuk jako XV (90s PCM), MOOG, SERUM (OTT), ZENOLOGY, OMNI, KONTAKT, DIVA nebo NEXUS - hlasitost zůstává stejná.
+Tlačítko **WORLD** v hlavičce: jedním klikem obarví celý zvuk (ROMPLER 90, FAT ANALOG, GLASS SQUASH, HI-FI SHINE, ORGANIC, VELOCITY DEEP, DRIFT ANALOG, MIX READY).
 Ve stejném menu **TRANCE GATE** (1/8, 1/16, triplety, stutter) a **CLIPPER** (Soft / Hard / Modern) na celý výstup.
 808: **SUB** (suboktáva fázově zamčená). ROLLS: humanizace ±1.5 dB, **AUTO-PAN** v tempu, de-resonátor 4 kHz.
 

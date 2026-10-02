@@ -13,3 +13,15 @@ std::vector<std::pair<juce::String, std::shared_ptr<const juce::AudioBuffer<floa
             out.push_back ({ n.displayName(), n.audio });
     return out;
 }
+
+std::shared_ptr<const juce::AudioBuffer<float>> kkDiggaSource (juce::AudioProcessor* p, double& rate)
+{
+    auto* d = dynamic_cast<digga::DiggaKillaProcessor*> (p);
+    if (d == nullptr) return {};
+    return d->getSampleStore().getOriginal (rate);
+}
+juce::String kkDiggaSourceName (juce::AudioProcessor* p)
+{
+    auto* d = dynamic_cast<digga::DiggaKillaProcessor*> (p);
+    return d != nullptr ? d->getSampleStore().getInfo().file.getFileNameWithoutExtension() : juce::String ("DIGGA");
+}

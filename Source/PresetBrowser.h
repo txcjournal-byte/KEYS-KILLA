@@ -4,6 +4,7 @@
 class PresetBrowser : public Component, private ListBoxModel
 {
 public:
+    std::function<void()> focusKeys;   // after a click: let the keys play, not type
     std::function<void()> onChanged;
     std::function<StringArray()> getFavourites;
     std::function<void (const String&)> toggleFavourite;
@@ -73,7 +74,7 @@ public:
         exclusiveOnly.setToggleState (exclusive, dontSendNotification);
         refresh();
         setVisible (true); toFront (true);
-        search.grabKeyboardFocus();
+        if (focusKeys) focusKeys();   // the computer keys play notes; click the search box to type
     }
 
     void paint (Graphics& g) override
@@ -215,6 +216,9 @@ private:
             return;
         }
         activate (row, false);
+        // hear it straight away, and keep the computer keys / MIDI keyboard playing it (not typing)
+        proc.previewNote = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f ? 36 : 60;
+        if (focusKeys) focusKeys();
     }
 
     void listBoxItemDoubleClicked (int row, const MouseEvent&) override { activate (row, true); }

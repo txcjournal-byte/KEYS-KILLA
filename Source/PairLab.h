@@ -106,6 +106,7 @@ public:
                 case 3: envSwap (A, B, kid->audio); how = "SHAPE"; break;               // B played with A's envelope
                 default: cross (B, A, kid->audio); how = "CROSS"; break;                // B's notes, A's colour
             }
+            colour (kid->audio, k, rng, rate, how);   // every child its own character (dark / bright / soft / punchy ...)
             int fl = flavor;
             if (fl == flavorAny) { const float x = rng.uni(); fl = x < 0.45f ? flavorClean : x < 0.65f ? flavorBit : x < 0.85f ? flavorAtmos : flavorAmbient; }
             if (fl == flavorBit) { bit (kid->audio, rng, rate); how += " + BIT"; }
@@ -313,10 +314,55 @@ private:
         }
     }
     // ---------------- flavours ----------------
+    // per child character so the six never sound alike: tone, attack and length differ
+    static void colour (juce::AudioBuffer<float>& a, int k, Rng& rng, double rate, juce::String& how)
+    {
+        const int n = a.getNumSamples();
+        if (n < 64) return;
+        switch (k % 6)
+        {
+            case 0: break;   // as bred
+            case 1:          // DARK: low-pass
+            {
+                OnePole lp[2]; for (auto& l : lp) l.setHz (700.0f + rng.uni() * 900.0f, (float) rate);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i) a.setSample (c, i, lp[c].lp (lp[c].lp (a.getSample (c, i)) * 0.5f + a.getSample (c, i) * 0.5f));
+                how += " DARK"; break;
+            }
+            case 2:          // BRIGHT: low cut + a little drive
+            {
+                OnePole lp[2]; for (auto& l : lp) l.setHz (350.0f + rng.uni() * 300.0f, (float) rate);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i) { const float x = a.getSample (c, i); a.setSample (c, i, std::tanh ((x - lp[c].lp (x)) * 2.2f)); }
+                how += " BRIGHT"; break;
+            }
+            case 3:          // SOFT: slow swell in
+            {
+                const int att = std::min (n / 2, (int) (rate * (0.08 + 0.15 * rng.uni())));
+                for (int c = 0; c < 2; ++c) a.applyGainRamp (c, 0, att, 0.0f, 1.0f);
+                how += " SOFT"; break;
+            }
+            case 4:          // PLUCK: short, snappy decay
+            {
+                const float tau = (float) rate * (0.12f + 0.15f * rng.uni());
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i) a.setSample (c, i, a.getSample (c, i) * std::exp (-(float) i / tau));
+                how += " PLUCK"; break;
+            }
+            default:         // WIDE + DRIVE: saturated, stereo detuned
+            {
+                DelayLine d; d.prepare ((int) (0.03 * rate) + 8);
+                for (int i = 0; i < n; ++i)
+                {
+                    d.push (a.getSample (1, i));
+                    a.setSample (0, i, std::tanh (a.getSample (0, i) * 2.5f));
+                    a.setSample (1, i, std::tanh (d.read ((float) (0.012 * rate)) * 2.5f));
+                }
+                how += " WIDE"; break;
+            }
+        }
+    }
     static void bit (juce::AudioBuffer<float>& a, Rng& rng, double rate)
     {
-        const float bits = 5.0f + rng.uni() * 5.0f, q = std::exp2 (bits - 1.0f);
-        const int hold = std::max (1, (int) (rate / (6000.0 + rng.uni() * 10000.0)));
+        const float bits = 3.5f + rng.uni() * 3.5f, q = std::exp2 (bits - 1.0f);   // really crunchy, clearly BIT
+        const int hold = std::max (1, (int) (rate / (3500.0 + rng.uni() * 6000.0)));
         for (int c = 0; c < 2; ++c)
         {
             float held = 0;

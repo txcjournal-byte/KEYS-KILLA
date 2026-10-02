@@ -5,10 +5,10 @@
 #include "DspUtil.h"
 
 // v0.16 SOUND WORLD: one click colours the whole KEYS KILLA sound like a classic instrument family,
-// plus the Nexus-style TRANCE GATE. Runs on the synth output before the FX rack, loudness-matched.
+// plus the TRANCE GATE. Runs on the synth output before the FX rack, loudness-matched.
 namespace kk
 {
-enum World { worldOff, worldXV, worldMoog, worldSerum, worldZen, worldOmni, worldKontakt, worldDiva, worldNexus, numWorlds };
+enum World { worldOff, worldRompler, worldFat, worldGlass, worldShine, worldOrganic, worldVelocity, worldDrift, worldMix, numWorlds };
 
 class WorldStage
 {
@@ -61,7 +61,7 @@ public:
 
     static const char* name (int w)
     {
-        static const char* n[] { "OFF", "XV", "MOOG", "SERUM", "ZENOLOGY", "OMNI", "KONTAKT", "DIVA", "NEXUS" };
+        static const char* n[] { "OFF", "ROMPLER 90", "FAT ANALOG", "GLASS SQUASH", "HI-FI SHINE", "ORGANIC", "VELOCITY DEEP", "DRIFT ANALOG", "MIX READY" };
         return n[std::clamp (w, 0, (int) numWorlds - 1)];
     }
 
@@ -89,20 +89,20 @@ private:
         auto& s = st[(size_t) c];
         switch (world)
         {
-            case worldXV:   // 90s PCM rompler: no sub mud, hard mids, squeezed
+            case worldRompler:   // 90s PCM rompler: no sub mud, hard mids, squeezed
             {
                 x -= onePole (s.hp1, x, 150.0f, sr); x -= onePole (s.hp2, x, 150.0f, sr);
                 SvfCoef pc; pc.set (4000.0f, 1.4f, sr); s.peak.tick (pc, x); x += s.peak.bp * 0.55f;
                 return comp (s.env, x * 1.4f, 0.18f, 4.0f, 2.0f, 60.0f);
             }
-            case worldMoog: // fat analog: warm low end, driven, a little darker
+            case worldFat: // fat analog: warm low end, driven, a little darker
             {
                 const float low = onePole (s.lp1, x, 160.0f, sr);
                 x += low * 0.6f;
                 x = std::tanh (x * 2.2f) / 2.2f * 1.6f;
                 return onePole (s.lp2, x, 8000.0f, sr);
             }
-            case worldSerum: // wavetable + OTT: three-band upward / downward squash, asymmetric grit
+            case worldGlass: // three-band upward / downward squash, asymmetric grit
             {
                 const float lo = onePole (s.lp1, x, 220.0f, sr), rest = x - lo;
                 const float mid = onePole (s.lp2, rest, 2500.0f, sr), hi = rest - mid;
@@ -117,18 +117,18 @@ private:
                 const float o = y - s.dcx + 0.995f * s.dc; s.dcx = y; s.dc = o;   // the asymmetry makes DC
                 return o;
             }
-            case worldZen:  // modern hi-fi: clean, shiny top
+            case worldShine:  // modern hi-fi: clean, shiny top
             {
                 const float hi = x - onePole (s.lp1, x, 7000.0f, sr);
                 return x + hi * 0.45f;
             }
-            case worldOmni: // organic / foley: breath noise that follows the note, soft top
+            case worldOrganic: // organic / foley: breath noise that follows the note, soft top
             {
                 const float e = follow (s.env, x, 5.0f, 200.0f);
                 SvfCoef nc; nc.set (5500.0f, 1.0f, sr); s.noiseBp.tick (nc, rng.bi());
                 return onePole (s.lp1, x, 11000.0f, sr) + s.noiseBp.bp * e * 0.35f;
             }
-            case worldKontakt: // deep multisample feel: soft = felt and dark, hard = open and saturated
+            case worldVelocity: // deep multisample feel: soft = felt and dark, hard = open and saturated
             {
                 const float e = follow (s.env, x, 4.0f, 150.0f);
                 const float bright = std::clamp (e * 3.0f, 0.0f, 1.0f);
@@ -136,12 +136,12 @@ private:
                 const float y = lowp + (x - lowp) * (0.25f + 0.75f * bright);
                 return y + (std::tanh (y * 2.0f) / 2.0f - y) * bright * 0.6f;
             }
-            case worldDiva: // component analog: pre-filter drive (the drift is in spatial())
+            case worldDrift: // component analog: pre-filter drive (the drift is in spatial())
             {
                 const float y = std::tanh (x * 1.8f) / 1.8f * 1.3f;
                 return onePole (s.lp1, y, 12000.0f, sr);
             }
-            case worldNexus: // mix-ready rompler: glued, bright, finished
+            case worldMix: // mix-ready rompler: glued, bright, finished
             {
                 float y = comp (s.env, x * 1.3f, 0.2f, 3.0f, 3.0f, 120.0f);
                 const float hi = y - onePole (s.lp1, y, 6000.0f, sr);
@@ -151,21 +151,21 @@ private:
         }
     }
 
-    // chorus (ZENOLOGY Juno, OMNI shimmer) and per-channel analog drift (DIVA, MOOG)
+    // chorus (HI-FI SHINE, ORGANIC shimmer) and per-channel analog drift (DRIFT, FAT ANALOG)
     void spatial (int world, float* x)
     {
-        const bool chorus = world == worldZen || world == worldOmni;
-        const bool drift = world == worldDiva || world == worldMoog;
+        const bool chorus = world == worldShine || world == worldOrganic;
+        const bool drift = world == worldDrift || world == worldFat;
         if (! chorus && ! drift) return;
         float rate = 0.5f, base = 3.5f, depth = 1.6f, mix = 0.5f;
-        if (world == worldOmni) { rate = 0.13f; base = 14.0f; depth = 5.0f; mix = 0.4f; }
+        if (world == worldOrganic) { rate = 0.13f; base = 14.0f; depth = 5.0f; mix = 0.4f; }
         if (drift)
         {
             // smoothed sample & hold wander: a few cents of pitch drift, different per side
             drPh += 0.35f / sr;
             if (drPh >= 1) { drPh -= 1; drA = drB; drB = rng.bi(); }
             drT = drA + (drB - drA) * (0.5f - 0.5f * std::cos (pi * drPh));
-            rate = 0; base = 3.0f; depth = world == worldDiva ? 1.4f : 0.8f; mix = 1.0f;
+            rate = 0; base = 3.0f; depth = world == worldDrift ? 1.4f : 0.8f; mix = 1.0f;
         }
         chPh += rate / sr; if (chPh >= 1) chPh -= 1;
         for (int c = 0; c < 2; ++c)
@@ -179,7 +179,7 @@ private:
 
     static bool gateOpen (int gate, double beat)
     {
-        // 16 steps per bar (1/16) - patterns in the spirit of the Nexus TranceGate
+        // 16 steps per bar (1/16) gate patterns
         static constexpr uint16_t pat[6] { 0xffff, 0x5555, 0xffff, 0x0000, 0xb6db, 0xed5a };
         const double b = std::max (0.0, beat);
         if (gate == 1) return std::fmod (b, 0.5) < 0.25;                     // 1/8

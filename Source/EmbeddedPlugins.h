@@ -10,3 +10,6 @@ juce::AudioProcessor* kkCreateDiggaKilla();      // DIGGA
 #include <vector>
 // PAIR YOUR OWN <- DIGGA: the one-shots (and KILL variations) Digga Killa cut from the sample
 std::vector<std::pair<juce::String, std::shared_ptr<const juce::AudioBuffer<float>>>> kkDiggaShots (juce::AudioProcessor* digga, double& rate, bool loopsToo);
+// CHOP: Digga Killa's decoded source sample and its file name
+std::shared_ptr<const juce::AudioBuffer<float>> kkDiggaSource (juce::AudioProcessor* digga, double& rate);
+juce::String kkDiggaSourceName (juce::AudioProcessor* digga);

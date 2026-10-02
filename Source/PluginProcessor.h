@@ -6,6 +6,7 @@
 #include "Fx.h"
 #include "Presets.h"
 #include "Loops.h"
+#include "Chop.h"
 #include "World.h"
 #include "Rolls.h"
 #include "DrumBoost.h"
@@ -144,6 +145,12 @@ public:
     void rateTreeResult (int i, int stars);
     void newMelody (int i);                           // LOOP: a new melody for this result, same sound
     bool loopIsTree (int i) const { return loopOn.load() && treeSel == i && loopOwner == 1; }
+    // BREED LAB (main page) SOUND / LOOP: in LOOP mode a child's play button plays its melody loop
+    bool mainLoopMode = false;
+    void playChild (int i);
+    bool loopIsChild (int i) const { return loopOn.load() && selChild == i && loopOwner == 3; }
+    int  loopOwnerId() const { return loopOwner; }
+    void touchLab() { ++labVer; }
 
     // ---------------- BREED LOOPS ----------------
     void toggleLoop();                                // play the current sound's loop (host tempo, bar synced)
@@ -193,12 +200,19 @@ public:
     // DIGGA = Digga Killa (sampler). Drums never go through them.
     enum Module { modHalf, modEffector, modDigga, numModules };
     juce::AudioProcessor* module (int m) const { return m >= 0 && m < numModules ? modules[(size_t) m].get() : nullptr; }
-    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair, playVst };
+    enum PlayMode { playKeys, playDigga, play808, playSnare, playHat, playPair, playVst, playChop };
     // PAIR YOUR OWN: your sounds (WAV / Digga one-shots) -> BREED -> 6 children -> keys + loops
     bool loadPairParent (int slot, const juce::File& f);
+    // CHOP / SLICE: DIGGA's sample cut into slices (pads, keys, drag out, to PAIR / bank)
+    kk::ChopLab chop;
+    std::atomic<int> chopPad { -1 };
+    juce::AudioBuffer<float> fxIn;                               // FX INPUT (mixer insert) copy                             // UI pad -> audio thread
+    bool chopFromDigga();
+    bool chopToPair (int slice, int slot = -1);
+    bool chopToBank (int slice);
     void clearPairParent (int slot);
     int  pairFromDigga();                                       // Digga's one-shots fill the empty slots; returns how many
-    void pairBreed();
+    void pairBreed (bool newChildren = true);   // false: same children, only the flavour changes
     void selectPairKid (int i, bool audition);                  // the kid plays on the keys / in the loop
     void togglePairLoop (int i);                                // a new melody loop with this kid (host tempo)
     juce::File exportPairKid (int i) const;
@@ -219,11 +233,15 @@ public:
     void loadSavedBank();
     int  saveBank();                                            // saves the unsaved (harvested) sounds; returns how many
     void addToBank (kk::PairPtr s, const juce::String& origin, bool save);
+    void removeFromBank (int i);                                // also deletes its WAV in the Bank folder
+    void clearShelf (int cat);
+    void sortBank();
     // PAIR FROM VST
     kk::VstHost vst;
     juce::StringArray vstList;                                  // installed instrument plugin files
     juce::String loadVst (const juce::String& id);
-    juce::String captureVst (int note);                         // records the plugin into the bank; returns the sound name
+    juce::String captureVst (int note);
+    juce::String captureVstProgram (int program, int note);   // GRAB SOUNDS: one of the plugin's presets into the bank                         // records the plugin into the bank; returns the sound name
     bool bankLoaded = false;
     juce::StringArray harvestedFrom;
     // DRUM BOOST (808 / SNARE-CLAP / HI-HAT): your drum WAV in, boosted WAV out

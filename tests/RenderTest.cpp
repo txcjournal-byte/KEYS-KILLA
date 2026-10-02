@@ -304,6 +304,32 @@ static int unitTests()
                          (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
             check (st == digga::SampleStore::Status::ready, "DIGGA loads a dropped sample");
             check (! dg->getEngine().getTree().isEmpty(), "DIGGA makes loops / one-shots from it");
+            // CHOP / SLICE: the sample in slices, pads, keys, drag out, PAIR
+            check (p.chopFromDigga() && p.chop.current() != nullptr && p.chop.current()->numSlices() >= 4, "CHOP: DIGGA's sample is cut at the hits");
+            p.chop.autoSlice (16);
+            check (p.chop.current()->numSlices() == 16, "CHOP: 16 equal slices");
+            auto mk = p.chop.current()->marks; mk[3] += 2000; p.chop.setMarks (mk);
+            check (p.chop.current()->marks[3] == mk[3], "CHOP: a moved cut stays where you put it");
+            set (p, ID::playMode, (float) KeysKillaProcessor::playChop);
+            juce::AudioBuffer<float> cb (2, 512); float cpk = 0;
+            for (int k = 0; k < 30; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, kk::ChopLab::firstNote + 2, (juce::uint8) 110), 0); p.processBlock (cb, m); cpk = std::max (cpk, cb.getMagnitude (0, 512)); }
+            check (cpk > 0.05f, "CHOP: the keys play the slices");
+            set (p, ID::playMode, 0);
+            const auto wf = p.chop.exportSlice (2), mf = p.chop.exportMidi (130.0);
+            check (wf.existsAsFile() && wf.getSize() > 1000 && mf.existsAsFile(), "CHOP: drag a slice as WAV and the chop as MIDI");
+            check (p.chopToPair (2, 3) && p.pairParents[3] != nullptr, "CHOP: a slice goes into PAIR");
+            kk::SliceFx fx; fx.semi = 12; fx.rev = true; fx.pan = -1.0f;
+            const int before = p.chop.slice (2).getNumSamples();
+            p.chop.setFx (2, fx);
+            const auto sb = p.chop.slice (2);
+            check (std::abs (sb.getNumSamples() - before / 2) < 4 && sb.getMagnitude (1, 0, sb.getNumSamples()) < 1.0e-4f, "CHOP: per-slice pitch +12 halves it, pan hard left");
+            p.chop.autoSlice (1, 120.0, 8);
+            check (p.chop.current()->numSlices() >= 4, "CHOP: 1/8 grid at the project tempo");
+            p.chop.autoSlice (-1);
+            check (p.chop.current()->numSlices() >= 2, "CHOP: NOTES mode cuts");
+            const auto ff = p.chop.flipMidi (140.0, 7);
+            juce::MidiFile fm; juce::FileInputStream fis (ff);
+            check (ff.existsAsFile() && fm.readFrom (fis) && fm.getTrack (0)->getNumEvents() > 8, "CHOP: FLIP makes a new MIDI pattern");
         }
         f.deleteFile();
     }
@@ -427,10 +453,58 @@ static int unitTests()
             juce::AudioBuffer<float> b (2, 512); float pk = 0;
             for (int k = 0; k < 60; ++k) { juce::MidiBuffer m; if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, 512)); }
             check (pk > 0.01f, "the keys play the hosted plugin");
+            // GRAB SOUNDS: the plugin's own presets, one by one, without its window
+            check (p.vst.numPrograms() > 10, "the hosted plugin shares its preset list");
+            const auto g5 = p.captureVstProgram (5, 60);
+            check (g5.contains (p.vst.programNameAt (5)) && g5.isNotEmpty(), "GRAB: a preset of the plugin lands in the bank by its name");
             // clean the test capture out of the user's bank folder
             for (auto& it : p.bank) if (it.saved && it.origin == p.vst.name()) for (auto& f : KeysKillaProcessor::bankFolder().findChildFiles (juce::File::findFiles, true, juce::File::createLegalFileName (it.sound->name).substring (0, 80) + "*.wav")) f.deleteFile();
         }
         else std::printf ("VST: (no built VST3 to host - skipped)\n");
+    }
+    // FAMILY TREE / BREED LAB pictures never go silent when the keys play PAIR / VST / drums
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        set (p, ID::playMode, (float) KeysKillaProcessor::playPair);
+        p.setAncestorCurrent (0); p.setAncestorPreset (1, 60);
+        p.treeBreed(); while (p.renderNextThumbnail()) {}
+        p.breed(); while (p.renderNextThumbnail()) {}
+        float mx = 0; for (auto& c : p.treeKids()) for (float v : c.wave) mx = std::max (mx, v);
+        check (mx > 0.5f, "waveform pictures are drawn even while the keys play PAIR");
+        // BREED LAB LOOP mode: the child's play button starts its loop, a second press stops it
+        set (p, ID::playMode, 0);
+        p.mainLoopMode = true; p.playChild (1);
+        check (p.loopIsChild (1) && p.loopPlaying(), "BREED LAB LOOP: a child plays its loop");
+        p.playChild (1);
+        check (! p.loopPlaying(), "BREED LAB LOOP: second press stops it");
+    }
+    // PAIR flavours change the children (same children, new flavour)
+    {
+        KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
+        p.pairDice (0); p.pairDice (1); p.pairFlavor = 1; p.pairBreed();
+        const auto clean = p.pairKids;
+        p.pairFlavor = 2; p.pairBreed (false);
+        int differ = 0;
+        for (size_t k = 0; k < clean.size() && k < p.pairKids.size(); ++k) differ += clean[k]->audio.getNumSamples() != p.pairKids[k]->audio.getNumSamples() || clean[k]->method != p.pairKids[k]->method;
+        check (differ == 6, "PAIR: a new flavour changes all six children");
+        std::set<juce::String> methods; for (auto& k : clean) methods.insert (k->method);
+        check (methods.size() >= 5, "PAIR: the six children are six different characters");
+    }
+    // KEYS KILLA sees the plugins FL Studio found (its plugin database), instruments first
+    {
+        const auto il = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Image-Line");
+        if (! il.exists())
+        {
+            auto fake = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_fake_plugins").getChildFile ("Fake Synth.vst3");
+            fake.createDirectory();
+            auto nfo = il.getChildFile ("FL Studio/Presets/Plugin database/Installed/Generators/VST3/Fake Synth.nfo");
+            nfo.getParentDirectory().createDirectory();
+            nfo.replaceWithText ("ps_file_name_0=Fake Synth\nps_file_filename_0=" + fake.getFullPathName() + "\n");
+            kk::VstHost h;
+            const auto list = h.listInstalled();
+            check (list.size() > 0 && list[0] == fake.getFullPathName(), "VST list includes FL Studio's plugin database, instruments first");
+            il.deleteRecursively(); fake.getParentDirectory().deleteRecursively();
+        }
     }
     // v0.16 SOUND WORLDS, TRANCE GATE, CLIPPER
     {
@@ -665,6 +739,7 @@ static int unitTests()
 
 int main (int argc, char** argv)
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);   // CI: every line reaches the log even if the process dies
     juce::ScopedJuceInitialiser_GUI init;
     const bool verbose = argc > 1 && juce::String (argv[1]) == "-v";
     KeysKillaProcessor p;
