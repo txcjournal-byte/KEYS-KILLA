@@ -4550,9 +4550,9 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 7;
-    // v0.36: EVOLVE / BREED LAB / FAMILY TREE / PAIR FROM VST / MY SOUNDS, STUDIO: SAMPLER / FX RACK (the ids stay as before)
-    static int tileId (int v) { static const int ids[numTiles] { 8, 0, 1, 3, 4, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static constexpr int numTiles = 6;
+    // v0.36: EVOLVE / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX RACK (the ids stay as before; PAIR FROM VST is off)
+    static int tileId (int v) { static const int ids[numTiles] { 8, 0, 1, 4, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
@@ -4573,7 +4573,7 @@ public:
                 g.drawFittedText (dropHover ? "DROP\n= PARENT" : flashText, r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
-            if (v == 5)
+            if (v == 4)
             {
                 const auto lr = r.withY (r.getY() - 15).withHeight (13);
                 g.setColour (TC (0xffc8c4e8)); g.setFont (serif (10.0f, true, 0.3f));
@@ -4621,7 +4621,7 @@ private:
     {
         const float gap = 5.0f, extra = 18.0f;
         const float h = ((float) getHeight() - gap * (numTiles - 1) - extra) / (float) numTiles;
-        return { 3.0f, (float) k * (h + gap) + (k >= 5 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
+        return { 3.0f, (float) k * (h + gap) + (k >= 4 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
     }
     void timerCallback() override { flash -= 0.012f; if (flash <= 0) { flash = 0; stopTimer(); } repaint (part (0).expanded (4).toNearestInt()); }
     KKLookAndFeel& lnf;
@@ -4642,7 +4642,7 @@ public:
     {
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn)
         { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
-        btn (studioBtn, "STUDIO", "The full studio: BREED LAB with two parents, FAMILY TREE, SAMPLER, VST, MY SOUNDS, FX RACK", [this] { if (onStudio) onStudio(); });
+        btn (studioBtn, "STUDIO", "The full studio: BREED LAB with two parents, FAMILY TREE, SAMPLER, MY SOUNDS, FX RACK", [this] { if (onStudio) onStudio(); });
         btn (themeBtn, "", "Day / night", [this] { if (onTheme) onTheme(); });
         themeBtn.glyph = [] (Graphics& g, Rectangle<float> r, const Skin&)
         {
