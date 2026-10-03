@@ -40,6 +40,11 @@ public:
     void setScalePct (int pct);
     void setFrame (bool on);
     void themeChanged() { frameImg = {}; repaint(); }
+    // v0.35 PAIR FROM VST: the plugin's own window opens INSIDE BREED LAB, fitted so all of it is visible
+    // (scaled down when the plugin can, or the BREED LAB window grows for it). false = it cannot fit: use a separate window.
+    bool showHostedEditor (juce::AudioPluginInstance& inst, const juce::String& title, std::function<void()> onTake, std::function<void()> onClosed);
+    void closeHostedEditor();
+    bool hostedEditorOpen() const { return hostedPanel != nullptr; }
 
 private:
     KeysKillaProcessor& proc;
@@ -48,4 +53,6 @@ private:
     bool fitted = false, frameOn = true;
     int lastPct = 85;
     juce::Image frameImg;   // the case, drawn once per theme / size (released with the editor)
+    std::unique_ptr<juce::Component> hostedPanel;
+    int pctBeforeHosted = -1;
 };

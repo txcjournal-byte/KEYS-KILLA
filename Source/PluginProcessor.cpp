@@ -1270,6 +1270,15 @@ juce::String KeysKillaProcessor::loadVstSide (int side, const juce::String& id)
     return err;
 }
 
+void KeysKillaProcessor::unloadVstSide (int side)
+{
+    side = juce::jlimit (0, 1, side);
+    host (side).unload();
+    vstSounds[(size_t) side].clear(); vstSel[(size_t) side] = -1; vstTakes[(size_t) side] = 0;
+    pairParents[(size_t) side] = nullptr; pairFiles[(size_t) side] = {};
+    ++pairVer;
+}
+
 bool KeysKillaProcessor::pickVstSound (int side, int index, int note)
 {
     side = juce::jlimit (0, 1, side);
@@ -1288,6 +1297,16 @@ bool KeysKillaProcessor::pickVstSound (int side, int index, int note)
     if (snd == nullptr) return false;
     pairParents[(size_t) side] = snd; pairFiles[(size_t) side] = {};
     vstSel[(size_t) side] = index;
+    if (index < 0)   // v0.35: a sound you TOOK from the plugin window joins this plugin's list (plugins without a sound list build one)
+        if (auto* inst = h.instance())
+        {
+            kk::VstHost::Sound took;
+            inst->getStateInformation (took.state);
+            const auto pn = h.programName();
+            took.name = "TAKE " + juce::String (++vstTakes[(size_t) side]) + (pn.isNotEmpty() ? "  " + pn : juce::String());
+            vstSounds[(size_t) side].push_back (std::move (took));
+            vstSel[(size_t) side] = (int) vstSounds[(size_t) side].size() - 1;
+        }
     pairPlayer.setSound (snd);   // hear it
     if (auto* q = apvts.getParameter (ID::playMode))
     {
@@ -2319,7 +2338,7 @@ juce::File KeysKillaProcessor::exportLoopMidi (const Genome& g) const
     juce::MidiMessageSequence seq;
     auto tempo = juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / bpm)); tempo.setTimeStamp (0); seq.addEvent (tempo);
     auto name = g.name.replace (juce::String::fromUTF8 ("\xc3\x97"), "x").replace (juce::String::fromUTF8 ("\xc2\xb7"), "-");
-    auto title = juce::MidiMessage::textMetaEvent (3, "KEYS KILLA loop"); title.setTimeStamp (0); seq.addEvent (title);
+    auto title = juce::MidiMessage::textMetaEvent (3, "BREED LAB loop"); title.setTimeStamp (0); seq.addEvent (title);
     for (auto& nt : notes)
     {
         seq.addEvent (juce::MidiMessage::noteOn (1, nt.note, (juce::uint8) 100), std::round (nt.start * ppq));
@@ -2977,7 +2996,7 @@ bool KeysKillaProcessor::exportPack (const juce::File& zipFile, const juce::Stri
     auto* info = new juce::DynamicObject();
     info->setProperty ("format", "KEYS KILLA pack"); info->setProperty ("version", 1);
     info->setProperty ("name", packName); info->setProperty ("author", "");
-    info->setProperty ("info", "Sounds made with KEYS KILLA");
+    info->setProperty ("info", "Sounds made with BREED LAB");
     const auto json = juce::JSON::toString (juce::var (info), false);
     auto tmp = juce::File::createTempFile ("json");
     tmp.replaceWithText (json);

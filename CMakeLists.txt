@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.34.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.35.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,7 +37,7 @@ juce_add_plugin(KeysKilla
     BUNDLE_ID com.808killa.keyskilla
     PLUGIN_MANUFACTURER_CODE ${KK_MANUFACTURER_CODE}
     PLUGIN_CODE ${KK_PLUGIN_CODE}
-    PRODUCT_NAME "KEYS KILLA"
+    PRODUCT_NAME "BREED LAB"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
@@ -96,7 +96,7 @@ if(KK_BUILD_TESTS)
         ${KK_MODULE_SOURCES})
     target_compile_definitions(KeysKillaTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_USE_FLAC=1 JUCE_PLUGINHOST_VST3=1 KK_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1
-        JucePlugin_Name="KEYS KILLA" JucePlugin_IsSynth=1 JucePlugin_VersionString="${PROJECT_VERSION}")
+        JucePlugin_Name="BREED LAB" JucePlugin_IsSynth=1 JucePlugin_VersionString="${PROJECT_VERSION}")
     # the tests keep several KEYS KILLA instances on the stack: Windows' default 1 MB stack is too small
     if (MSVC)
         target_link_options(KeysKillaTests PRIVATE /STACK:67108864)

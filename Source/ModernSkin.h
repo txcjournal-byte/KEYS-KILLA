@@ -215,7 +215,7 @@ inline Image makeBoard (bool night, uint32 seed)
     for (auto& p : parts)
     {
         if (p.kind == 0) chip (g, p.r, L, night, rnd, false, codes[rnd.nextInt (8)]);
-        else if (p.kind == 1) chip (g, p.r, L, night, rnd, true, p.r.getWidth() > 200 ? "KEYS KILLA  KK-1" : codes[rnd.nextInt (8)]);
+        else if (p.kind == 1) chip (g, p.r, L, night, rnd, true, p.r.getWidth() > 200 ? "BREED LAB  BL-1" : codes[rnd.nextInt (8)]);
         else if (p.kind == 2) capacitor (g, p.r.getCentre(), p.r.getWidth() * 0.5f, L, night);
         else smd (g, p.r.getCentre(), rnd.nextBool(), L, night);
     }
@@ -391,10 +391,10 @@ inline void wordmark (Graphics& g, Rectangle<float> r, float size)
 {
     const auto& t = theme();
     const auto f1 = font (size, false, 0.55f), f2 = font (size, true, 0.55f);
-    GlyphArrangement a; a.addLineOfText (f1, "KEYS", 0, 0);
+    GlyphArrangement a; a.addLineOfText (f1, "BREED", 0, 0);
     const float w1 = a.getBoundingBox (0, -1, true).getWidth();
-    g.setColour (t.text); g.setFont (f1); g.drawText ("KEYS", r, Justification::centredLeft);
-    g.setFont (f2); g.drawText ("KILLA", r.withTrimmedLeft (w1 + size * 0.7f), Justification::centredLeft);
+    g.setColour (t.text); g.setFont (f1); g.drawText ("BREED", r, Justification::centredLeft);
+    g.setFont (f2); g.drawText ("LAB", r.withTrimmedLeft (w1 + size * 0.7f), Justification::centredLeft);
 }
 
 //==============================================================================

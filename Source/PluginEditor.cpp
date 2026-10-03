@@ -225,8 +225,14 @@ static void pageBackdrop (Graphics& g, Component& c, float glass = 0.6f)
     Point<int> o;
     if (auto* ed = c.findParentComponentOfClass<AudioProcessorEditor>())
         if (auto* mp = ed->getChildComponent (0)) o = mp->getLocalPoint (&c, Point<int>());
-    const auto& img = labImages().page;
-    if (img.isValid()) g.drawImageAt (img, -o.x, -o.y); else g.fillAll (kk::theme().baseBottom);
+    // frosted: the board behind a page is blurred, so nothing behind it competes with the page
+    if (auto* bd = kk::modern::activeBackdrop(); bd != nullptr && bd->soft.isValid())
+    {
+        g.setImageResamplingQuality (Graphics::highResamplingQuality);
+        g.drawImage (bd->soft, Rectangle<float> ((float) -o.x, (float) -o.y, 1672.0f, 941.0f), RectanglePlacement::stretchToFit);
+    }
+    else if (const auto& img = labImages().page; img.isValid()) g.drawImageAt (img, -o.x, -o.y);
+    else g.fillAll (kk::theme().baseBottom);
     g.setColour (kk::theme().glass.withMultipliedAlpha (glass)); g.fillAll();
 }
 
@@ -1589,7 +1595,7 @@ protected:
     void setupKeysButton (HotButton& b, int mode, const String& what)
     {
         b.framed = true;
-        b.setTooltip ("KEYS: your MIDI keyboard / FL piano roll plays " + what + " instead of the KEYS KILLA sound. Tip: one KEYS KILLA per instrument in FL.");
+        b.setTooltip ("KEYS: your MIDI keyboard / FL piano roll plays " + what + " instead of the BREED LAB sound. Tip: one BREED LAB per instrument in FL.");
         b.onClick = [this, mode] { setParamFromUi (proc, ID::playMode, param (ID::playMode) == mode ? 0.0f : (float) mode); refresh(); };
         addAndMakeVisible (b);
     }
@@ -1775,11 +1781,11 @@ public:
         btn (newKitBtn, "+ SOUND KIT", "A new sound kit: a folder FL Studio can browse, your sounds sorted into Bass, Keys, Plucks, Pads ...", TC (0xff22d3ee), [this] { newKit(); });
         btn (renameBtn, "RENAME", "Rename the chosen folder / kit", TC (0xffaaa4cf), [this] { renamePlace(); });
         btn (delPlaceBtn, "DELETE", "Delete the chosen folder / kit with its sounds (they go to the recycle bin)", TC (0xffff2f6d), [this] { deletePlace(); });
-        btn (factoryBtn, "FACTORY SOUNDS", "The sounds that come with KEYS KILLA (the SOUND LIBRARY)", TC (0xffff2f6d), [this] { if (onFactory) onFactory(); });
+        btn (factoryBtn, "FACTORY SOUNDS", "The sounds that come with BREED LAB (the SOUND LIBRARY)", TC (0xffff2f6d), [this] { if (onFactory) onFactory(); });
         btn (pairBtn, "INTO BREED LAB", "This sound becomes a parent in BREED LAB (next free slot) - breed it", TC (0xff4d9dff), [this] { toPair(); });
         btn (moveBtn, "MOVE TO ...", "Move this sound into another folder or sound kit", TC (0xffffd23f), [this] { moveMenu(); });
         btn (delBtn, "DELETE SOUND", "Delete this sound (Del) - it goes to the recycle bin", TC (0xffff3b5c), [this] { deleteSound(); });
-        btn (showBtn, "SHOW IN EXPLORER", "Open it on your computer (add the KEYS KILLA folder to FL's browser once)", TC (0xff9b4dff), [this] { placeDir().revealToUser(); });
+        btn (showBtn, "SHOW IN EXPLORER", "Open it on your computer (add the Documents / KEYS KILLA folder to FL's browser once)", TC (0xff9b4dff), [this] { placeDir().revealToUser(); });
         setWantsKeyboardFocus (true);
         setOpaque (true);
         reload();
@@ -2163,7 +2169,7 @@ public:
         flipBtn.onClick = [this] { flipSeed = (uint32_t) Random::getSystemRandom().nextInt (1 << 30); flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); note = "new flip ready - drag FLIP MIDI into FL"; repaint(); };
         addAndMakeVisible (flipBtn);
         dragFlip.makeFile = [this] { if (! flipFile.existsAsFile()) flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); return flipFile; };
-        dragFlip.setTooltip ("Drag the FLIP pattern into FL as MIDI (put KEYS KILLA on PLAY CHOPS ON KEYS)");
+        dragFlip.setTooltip ("Drag the FLIP pattern into FL as MIDI (open the SAMPLER page: the keys play the chops)");
         addAndMakeVisible (dragFlip);
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (keysBtn, "", "KEYS: the keyboard / FL piano roll plays the slices - C5 = slice 1, C#5 = slice 2 ...",
@@ -3443,7 +3449,7 @@ class VstWindow : public DocumentWindow
 {
 public:
     VstWindow (juce::AudioPluginInstance& p, Component* near)
-        : DocumentWindow (p.getName() + "   -   pick a sound, then close this window: KEYS KILLA takes it", TC (0xff15132e), DocumentWindow::closeButton)
+        : DocumentWindow (p.getName() + "   -   pick a sound, then close this window: BREED LAB takes it", TC (0xff15132e), DocumentWindow::closeButton)
     {
         setUsingNativeTitleBar (true);
         editor.reset (p.createEditorIfNeeded());
@@ -3488,8 +3494,15 @@ public:
         {
             saveToFolderMenu (proc, { proc.pairParents[(size_t) side] }, &bankBtn, [safe = Component::SafePointer<VstSide> (this)] (String msg) { if (safe != nullptr) { safe->status = msg; safe->repaint(); } });
         });
-        btn (takeBtn, "TAKE CURRENT", "Take the sound the plugin plays right now (after you chose one in SHOW PLUGIN)", [this] { pick (-1); });
-        btn (showBtn, "SHOW PLUGIN", "Show the plugin inside KEYS KILLA: pick or tweak a sound there - BACK takes it into KEYS KILLA", [this] { if (onShowPlugin) onShowPlugin (side); });
+        btn (takeBtn, "TAKE THIS SOUND", "Take the sound the plugin plays right now - it joins the list below", [this] { pick (-1); });
+        btn (removeBtn, "REMOVE", "Remove this plugin from side " + String (s == 0 ? "A" : "B") + " (0, 1 or 2 plugins - your choice)", [this]
+        {
+            if (onShowPlugin) onShowPlugin (-1 - side);   // its window closes first
+            proc.unloadVstSide (side);
+            pluginBox.setSelectedId (0, dontSendNotification); search.clear(); status = {}; filter(); repaint();
+            if (onChanged) onChanged();
+        });
+        btn (showBtn, "SHOW PLUGIN", "Show the plugin inside BREED LAB: pick a sound there, then TAKE THIS SOUND", [this] { if (onShowPlugin) onShowPlugin (side); });
         btn (keysBtn, "PLAY", "The keys play this plugin (on this page the keys always play a VST - choose which one)", [this] { proc.vstKeys = side; refreshButtons(); });
     }
     std::function<void (int)> onShowPlugin;
@@ -3523,7 +3536,7 @@ public:
         g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (11.5f)));
         const auto& h = proc.host (side);
         String info = ! h.loaded() ? String ("choose a plugin")
-                    : proc.vstSounds[(size_t) side].empty() ? String ("this plugin shares no sound list: SHOW PLUGIN, pick a sound, TAKE CURRENT")
+                    : proc.vstSounds[(size_t) side].empty() ? String ("This plugin keeps its sounds in its own window: SHOW PLUGIN, pick a sound there, TAKE THIS SOUND - every take joins this list")
                     : String ((int) proc.vstSounds[(size_t) side].size()) + " sounds - click one = hear it and use it";
         if (status.isNotEmpty()) info = status;
         g.drawFittedText (info, statusArea, Justification::centredLeft, 2);
@@ -3540,6 +3553,7 @@ public:
         auto top = r.removeFromTop (34);
         top.removeFromLeft (44);
         keysBtn.setBounds (top.removeFromRight (70)); top.removeFromRight (6);
+        removeBtn.setBounds (top.removeFromRight (84)); top.removeFromRight (6);
         showBtn.setBounds (top.removeFromRight (120)); top.removeFromRight (6);
         pluginBox.setBounds (top);
         r.removeFromTop (6);
@@ -3549,7 +3563,7 @@ public:
         prevBtn.setBounds (bottom.removeFromLeft (36)); bottom.removeFromLeft (4);
         nextBtn.setBounds (bottom.removeFromLeft (36)); bottom.removeFromLeft (8);
         bankBtn.setBounds (bottom.removeFromRight (130)); bottom.removeFromRight (6);
-        takeBtn.setBounds (bottom.removeFromRight (124));
+        takeBtn.setBounds (bottom.removeFromRight (150));
         soundArea = bottom.withTrimmedLeft (4);
         statusArea = r.removeFromBottom (30);
         list.setBounds (r);
@@ -3611,7 +3625,7 @@ private:
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf; int side;
     ComboBox pluginBox; TextEditor search; ListBox list;
-    HotButton prevBtn { lnf }, nextBtn { lnf }, bankBtn { lnf }, takeBtn { lnf }, showBtn { lnf }, keysBtn { lnf };
+    HotButton prevBtn { lnf }, nextBtn { lnf }, bankBtn { lnf }, takeBtn { lnf }, showBtn { lnf }, keysBtn { lnf }, removeBtn { lnf };
     std::vector<int> shown;
     String status;
     Rectangle<int> soundArea, statusArea;
@@ -3632,7 +3646,7 @@ public:
             for (int k = 0; k < 2; ++k)
             {
                 sides[(size_t) k] = std::make_unique<VstSide> (proc, lnf, k);
-                sides[(size_t) k]->onShowPlugin = [this] (int sd) { if (sd < 0) { if (vstWin != nullptr && vstWinSide == -1 - sd) vstWin.reset(); } else openVstUi (sd); };
+                sides[(size_t) k]->onShowPlugin = [this] (int sd) { if (sd < 0) { if (vstWinSide == -1 - sd) closeVstUi(); } else openVstUi (sd); };
                 sides[(size_t) k]->onChanged = [this] { repaint(); };
                 sides[(size_t) k]->onAddFolder = [this]
                 {
@@ -3689,7 +3703,7 @@ public:
     ~PairPage() override { stopTimer(); vstWin.reset(); }   // the hosted editor goes before the plugin
     void visibilityChanged() override
     {
-        if (! isVisible()) return;
+        if (! isVisible()) { if (vstPage) closeVstUi(); return; }   // the plugin window belongs to this page
         proc.pairUse = vstPage ? 2 : kk::PairLab::maxParents;
         for (auto& sd : sides) if (sd) sd->refreshButtons();
     }
@@ -3736,7 +3750,7 @@ public:
             g.drawText (vstPage ? "PAIR FROM VST" : "HARVEST", dz.withHeight (40).translated (0, 4).toNearestInt(), Justification::centred);
             g.setColour (TC (0xffc9c0bd)); g.setFont (serif (12.5f, false, 0.08f));
             if (vstPage) g.drawFittedText (status, dz.reduced (6).withTrimmedTop (150).toNearestInt(), Justification::centred, 1);
-            else g.drawFittedText (proc.harvesting() ? "listening ..." : "drop a song, a sample,\na vinyl rip - KEYS KILLA\npulls the sounds out", dz.reduced (10).withTrimmedTop (42).withHeight (60).toNearestInt(), Justification::centred, 3);
+            else g.drawFittedText (proc.harvesting() ? "listening ..." : "drop a song, a sample,\na vinyl rip - BREED LAB\npulls the sounds out", dz.reduced (10).withTrimmedTop (42).withHeight (60).toNearestInt(), Justification::centred, 3);
             for (int c = 0; c < kk::numCats; ++c)
             {
                 const auto col = bankCol (c).toFloat();
@@ -3996,6 +4010,16 @@ private:
         auto* top = getTopLevelComponent();
         if (auto* inst = proc.host (side).instance(); inst != nullptr && top != nullptr)
         {
+            // v0.35: inside BREED LAB first (fitted, all of it visible) - a separate window only when it cannot fit
+            if (auto* ed = findParentComponentOfClass<KeysKillaEditor>())
+            {
+                vstWin.reset();
+                auto safe = Component::SafePointer<PairPage> (this);
+                if (ed->showHostedEditor (*inst, String (side == 0 ? "A  " : "B  ") + proc.host (side).name(),
+                                          [safe, side] { if (safe != nullptr && safe->sides[(size_t) side]) safe->sides[(size_t) side]->retake(); },
+                                          [safe] { if (safe != nullptr) safe->repaint(); }))
+                { vstWinSide = side; return; }
+            }
             if (vstWin != nullptr && vstWinSide != side) vstWin.reset();
             if (vstWin == nullptr && inst->hasEditor())
             {
@@ -4006,6 +4030,11 @@ private:
             }
             if (vstWin != nullptr) { vstWin->setVisible (true); vstWin->toFront (true); }
         }
+    }
+    void closeVstUi()
+    {
+        vstWin.reset();
+        if (auto* ed = findParentComponentOfClass<KeysKillaEditor>()) ed->closeHostedEditor();
     }
     // c = category; its column follows the display order (BASS KEYS PLUCK PAD STRINGS BRASS LEAD VOX DRUMS FX)
     Rectangle<int> bankCol (int c) const { const auto b = bankArea(); const int w = (b.getWidth() - (kk::numCats - 1) * 6) / kk::numCats; const int col = kk::harvestColumnOf (c); return { b.getX() + col * (w + 6), b.getY(), w, b.getHeight() }; }
@@ -4330,7 +4359,7 @@ public:
         g.drawText ("RACK", 70, 10, 160, 40, Justification::centredLeft);
         int on = 0; for (auto& o : proc.rack.on) on += o.load() ? 1 : 0;
         g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (13.0f)));
-        g.drawText ("on every melody: the KEYS KILLA sound, PAIR, VST and SAMPLER  -  drums stay dry  -  it stays when you change sounds",
+        g.drawText ("on every melody: the BREED LAB sound, VST and SAMPLER  -  drums stay dry  -  it stays when you change sounds",
                     200, 12, getWidth() - 460, 20, Justification::centredLeft);
         g.setColour (on > 0 ? TC (0xff36ff6a) : TC (0xff6a6290)); g.setFont (Font (FontOptions (13.0f, Font::bold)));
         g.drawText (String (on) + (on == 1 ? " EFFECT ON" : " EFFECTS ON") + "   -   click a name to switch it on / off", 200, 32, getWidth() - 460, 18, Justification::centredLeft);
@@ -5760,7 +5789,7 @@ int KeysKillaEditor::fitScale() const
     return jlimit (40, 100, (int) std::floor (std::min (byW, byH) * 100.0));
 }
 
-KeysKillaEditor::~KeysKillaEditor() = default;
+KeysKillaEditor::~KeysKillaEditor() { closeHostedEditor(); }
 
 void KeysKillaEditor::showView (int v) { page->showView (v); }
 
@@ -5781,6 +5810,102 @@ void KeysKillaEditor::parentHierarchyChanged()
         if (peer->getCurrentRenderingEngine() != 0)
             peer->setCurrentRenderingEngine (0);
    #endif
+}
+
+// the hosted plugin window inside BREED LAB: our header (name, TAKE THIS SOUND, CLOSE) above the plugin's own editor
+class HostedVstPanel : public Component, private ComponentListener
+{
+public:
+    HostedVstPanel (AudioPluginInstance& inst, const String& t) : title (t)
+    {
+        editor.reset (inst.createEditorIfNeeded());
+        if (editor != nullptr) { addAndMakeVisible (*editor); editor->addComponentListener (this); }
+        auto setup = [this] (TextButton& b, const String& txt) { b.setButtonText (txt); addAndMakeVisible (b); };
+        setup (takeBtn, "TAKE THIS SOUND"); setup (closeBtn, "CLOSE");
+        takeBtn.onClick = [this] { if (onTake) onTake(); };
+        closeBtn.onClick = [this] { if (onClose) onClose(); };
+        setOpaque (true);
+    }
+    ~HostedVstPanel() override { if (editor != nullptr) editor->removeComponentListener (this); editor.reset(); }
+    std::function<void()> onTake, onClose, onEditorResized;
+    bool ok() const { return editor != nullptr; }
+    static constexpr int header = 46, margin = 8;
+    Rectangle<int> wanted() const { return editor != nullptr ? Rectangle<int> (editor->getWidth() + margin * 2, editor->getHeight() + header + margin) : Rectangle<int>(); }
+    // try to make the plugin fit in w x h (plugins that support it scale their own window)
+    void fitTo (int w, int h)
+    {
+        if (editor == nullptr) return;
+        const float sx = (float) (w - margin * 2) / (float) editor->getWidth(), sy = (float) (h - header - margin) / (float) editor->getHeight();
+        if (const float f = std::min (sx, sy); f < 1.0f) editor->setScaleFactor (jmax (0.4f, f));
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        g.fillAll (t.night ? Colour (0xff0d0f12) : Colour (0xffdfe2e6));
+        g.setColour (t.text); g.setFont (kk::modern::font (16.0f, true, 0.12f));
+        g.drawText (title, Rectangle<int> (16, 0, getWidth() / 2, header), Justification::centredLeft);
+        g.setColour (t.dim); g.setFont (kk::modern::font (11.5f, false, 0.08f));
+        g.drawText ("pick a sound in the plugin  ->  TAKE THIS SOUND  (it joins the list)", Rectangle<int> (16, 0, getWidth() - 360, header).withTrimmedLeft (getWidth() / 4), Justification::centred);
+        g.setColour (t.accent.withAlpha (0.6f)); g.drawHorizontalLine (header - 1, 0, (float) getWidth());
+    }
+    void resized() override
+    {
+        closeBtn.setBounds (getWidth() - 110, 8, 96, header - 16);
+        takeBtn.setBounds (closeBtn.getX() - 190, 8, 180, header - 16);
+        if (editor != nullptr) editor->setTopLeftPosition (jmax (margin, (getWidth() - editor->getWidth()) / 2), header + jmax (0, (getHeight() - header - editor->getHeight()) / 2));
+    }
+private:
+    void componentMovedOrResized (Component& c, bool, bool wasResized) override { if (&c == editor.get() && wasResized) { resized(); if (onEditorResized) onEditorResized(); } }
+    std::unique_ptr<AudioProcessorEditor> editor;
+    TextButton takeBtn, closeBtn;
+    String title;
+};
+
+bool KeysKillaEditor::showHostedEditor (AudioPluginInstance& inst, const String& title, std::function<void()> onTake, std::function<void()> onClosed)
+{
+    closeHostedEditor();
+    if (! inst.hasEditor()) return false;
+    auto panel = std::make_unique<HostedVstPanel> (inst, title);
+    if (! panel->ok()) return false;
+    auto* p = panel.get();
+    // the area under the header and right of the tiles, in real pixels (the plugin window itself is never scaled by us)
+    auto area = [this]
+    {
+        const float s = (float) getWidth() / (float) outerW();
+        const int x = roundToInt ((float) (frame() + 150) * s), y = roundToInt ((float) (frame() + 96) * s);
+        return Rectangle<int> (x, y, getWidth() - x - roundToInt ((float) frame() * s) - 4, getHeight() - y - roundToInt ((float) frame() * s) - 4);
+    };
+    auto a = area();
+    if (p->wanted().getWidth() > a.getWidth() || p->wanted().getHeight() > a.getHeight())
+    {
+        p->fitTo (a.getWidth(), a.getHeight());   // plugins that can scale themselves
+        if (p->wanted().getWidth() > a.getWidth() || p->wanted().getHeight() > a.getHeight())
+        {
+            // still too big: BREED LAB grows (as far as the screen allows) while the plugin is shown
+            pctBeforeHosted = lastPct;
+            const float needX = (float) p->wanted().getWidth() / (float) a.getWidth(), needY = (float) p->wanted().getHeight() / (float) a.getHeight();
+            const int want = (int) std::ceil ((float) lastPct * std::max (needX, needY)) + 1;
+            setScalePct (jmin (100, jmin (want, fitScale() + 15)));
+            a = area();
+            if (p->wanted().getWidth() > a.getWidth() || p->wanted().getHeight() > a.getHeight()) { panel.reset(); if (pctBeforeHosted > 0) setScalePct (pctBeforeHosted); pctBeforeHosted = -1; return false; }
+        }
+    }
+    p->onTake = std::move (onTake);
+    p->onClose = [this, onClosed] { closeHostedEditor(); if (onClosed) onClosed(); };
+    p->onEditorResized = [this, area] { if (hostedPanel != nullptr) hostedPanel->setBounds (area()); };
+    hostedPanel = std::move (panel);
+    addAndMakeVisible (*hostedPanel);
+    hostedPanel->setBounds (a);
+    hostedPanel->toFront (false);
+    return true;
+}
+
+void KeysKillaEditor::closeHostedEditor()
+{
+    if (hostedPanel == nullptr) return;
+    auto old = std::move (hostedPanel);   // the plugin's editor goes first, our window size comes back after
+    old.reset();
+    if (pctBeforeHosted > 0) { setScalePct (pctBeforeHosted); pctBeforeHosted = -1; }
 }
 
 void KeysKillaEditor::setScalePct (int pct)

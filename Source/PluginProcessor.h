@@ -32,7 +32,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "KEYS KILLA"; }
+    const juce::String getName() const override { return "BREED LAB"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -292,7 +292,8 @@ public:
     kk::VstHost vst, vstB;                                       // PAIR FROM VST: plugin A (left) and B (right)
     kk::VstHost& host (int side) { return side == 1 ? vstB : vst; }
     std::array<std::vector<kk::VstHost::Sound>, 2> vstSounds;     // their sounds, read without their windows
-    std::array<int, 2> vstSel { -1, -1 };
+    std::array<int, 2> vstSel { -1, -1 }, vstTakes { 0, 0 };
+    void unloadVstSide (int side);                              // REMOVE the plugin of side A / B
     std::atomic<int> vstKeys { 0 };
     int pairUse = 4;                                            // BREED uses the first N sounds (PAIR FROM VST: A + B = 2)                             // the keys play A (0) or B (1)
     juce::String loadVstSide (int side, const juce::String& id);

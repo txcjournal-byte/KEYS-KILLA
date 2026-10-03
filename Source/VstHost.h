@@ -82,10 +82,10 @@ public:
             paths.removeNonExistentPaths();
             auto ids = f->searchPathsForPlugins (paths, true, false);
             for (auto& id : ids)
-                if (! id.containsIgnoreCase ("KEYS KILLA")) all.addIfNotAlreadyThere (id);   // never itself
+                if (! id.containsIgnoreCase ("KEYS KILLA") && ! id.containsIgnoreCase ("BREED LAB")) all.addIfNotAlreadyThere (id);   // never itself
         }
         for (auto& fl : flStudioPlugins (false))
-            if (! fl.containsIgnoreCase ("KEYS KILLA")) all.addIfNotAlreadyThere (fl);
+            if (! fl.containsIgnoreCase ("KEYS KILLA") && ! fl.containsIgnoreCase ("BREED LAB")) all.addIfNotAlreadyThere (fl);
         all.sort (true);
         // FL Studio's instruments (generators) first, effects after
         const auto gens = flStudioPlugins (true);
@@ -103,7 +103,7 @@ public:
         juce::StringArray out, have;
         for (auto& l : loadable) have.add (displayName (l));
         for (auto& f : flStudioPlugins (false, true))
-            if (! have.contains (displayName (f), true) && ! out.contains (displayName (f), true) && ! f.containsIgnoreCase ("KEYS KILLA")) out.add (displayName (f));
+            if (! have.contains (displayName (f), true) && ! out.contains (displayName (f), true) && ! f.containsIgnoreCase ("KEYS KILLA") && ! f.containsIgnoreCase ("BREED LAB")) out.add (displayName (f));
         out.sort (true);
         return out;
     }
@@ -158,7 +158,7 @@ public:
     juce::AudioPluginInstance* instance() const { return plugin.get(); }
 
     // ---- the plugin's sounds, read without opening its window: its own preset list + .vstpreset files on disk ----
-    struct Sound { juce::String name; int program = -1; juce::File file; };
+    struct Sound { juce::String name; int program = -1; juce::File file; juce::MemoryBlock state; };   // state: a sound you TOOK from the plugin window
     std::vector<Sound> sounds() const
     {
         std::vector<Sound> out;
@@ -184,6 +184,7 @@ public:
     {
         if (plugin == nullptr) return false;
         if (snd.program >= 0) { setProgram (snd.program); return true; }
+        if (snd.state.getSize() > 0) { const juce::SpinLock::ScopedLockType l (lock); plugin->setStateInformation (snd.state.getData(), (int) snd.state.getSize()); return true; }
         juce::MemoryBlock mb;
         if (! snd.file.loadFileAsData (mb)) return false;
         const juce::SpinLock::ScopedLockType l (lock);
@@ -208,7 +209,8 @@ public:
             if (! r.isDirectory()) continue;
             for (const auto& vendor : juce::RangedDirectoryIterator (r, false, "*", juce::File::findDirectories))
                 for (const auto& pl : juce::RangedDirectoryIterator (vendor.getFile(), false, "*", juce::File::findDirectories))
-                    if (pl.getFile().getFileName().equalsIgnoreCase (desc.name))
+                    if (pl.getFile().getFileName().equalsIgnoreCase (desc.name) || pl.getFile().getFileName().containsIgnoreCase (desc.name)
+                        || (pl.getFile().getFileName().length() > 3 && desc.name.containsIgnoreCase (pl.getFile().getFileName())))
                         for (const auto& f : juce::RangedDirectoryIterator (pl.getFile(), true, "*.vstpreset", juce::File::findFiles))
                         {
                             out.add (f.getFile());

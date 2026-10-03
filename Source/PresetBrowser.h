@@ -264,6 +264,7 @@ private:
         auto pill = Rectangle<float> (44, (float) h * 0.5f - 11, 150, 22);
         g.setColour (col.withAlpha (0.22f)); g.fillRoundedRectangle (pill, 11);
         g.setColour (col); g.drawRoundedRectangle (pill, 11, 1.0f);
+        if (! kk::theme().night) g.setColour (col.darker (0.6f));   // day: dark text on the light pill
         g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.06f));
         g.drawFittedText (tag, pill.reduced (8, 0).toNearestInt(), Justification::centred, 1, 0.6f);
         // name, NEW badge, tags
@@ -284,7 +285,7 @@ private:
         const String packTag = pr ? String ("FACTORY") : packSound ? e.pack.toUpperCase() : String ("MY SOUNDS");
         auto pt = Rectangle<float> ((float) w - 136, (float) h * 0.5f - 10, 124, 20);
         g.setColour (TC (0xffff8a3d).withAlpha (pr ? 0.35f : 0.8f)); g.drawRoundedRectangle (pt, 10, 1.0f);
-        g.setColour (TC (0xffff8a3d).withAlpha (pr ? 0.6f : 1.0f)); g.setFont (Font (FontOptions (10.5f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.setColour ((kk::theme().night ? kk::theme().accent : kk::theme().accentDeep.darker (0.2f)).withAlpha (pr ? 0.7f : 1.0f)); g.setFont (Font (FontOptions (10.5f, Font::bold)).withExtraKerningFactor (0.08f));
         g.drawFittedText (packTag, pt.reduced (8, 0).toNearestInt(), Justification::centred, 1, 0.6f);
     }
 
