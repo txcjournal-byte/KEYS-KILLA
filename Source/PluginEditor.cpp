@@ -255,9 +255,8 @@ static void drawMaker (Graphics& g, Rectangle<float> r, Justification j)
 }
 static void drawGlowFrame (Graphics& g, Rectangle<float> r, Colour accent, float corner = 5.0f)
 {
-    g.setColour (accent.withAlpha (0.18f)); g.drawRoundedRectangle (r.expanded (3), corner + 3, 6.0f);
-    g.setColour (accent.withAlpha (0.35f)); g.drawRoundedRectangle (r.expanded (1), corner + 1, 3.0f);
-    g.setColour (accent); g.drawRoundedRectangle (r, corner, 1.8f);
+    g.setColour (accent.withAlpha (0.14f)); g.drawRoundedRectangle (r.expanded (1.5f), corner + 1.5f, 3.0f);   // v0.34: a quiet frame
+    g.setColour (accent); g.drawRoundedRectangle (r, corner, 1.4f);
 }
 
 static int iconOfCategory (int cat)
@@ -4091,7 +4090,7 @@ static Colour tileCol (int k, int which)
                                   { 0xff2ee6a6, 0xff1a9dff },   // SAMPLER      mint -> blue
                                   { 0xffff5a1f, 0xffff2f6d },   // DRUM KIT     orange -> red
                                   { 0xffff3fd2, 0xff9b4dff } }; // FX RACK      magenta -> violet
-    return Colour (c[jlimit (0, 7, k)][jlimit (0, 1, which)]);
+    return TC (c[jlimit (0, 7, k)][jlimit (0, 1, which)]);   // v0.34: theme colours
 }
 static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
 {
@@ -4271,11 +4270,9 @@ public:
             {
                 const bool drop = k == 2 && (dropHover || flash > 0);
                 const auto c1 = drop ? s.accent : tileCol (k, 0), c2 = drop ? s.accent : tileCol (k, 1);
-                drawGlowFrame (g, r, c1, 8);
-                g.setGradientFill (ColourGradient (c1.withAlpha (0.42f), r.getX(), r.getY(), c2.withAlpha (0.16f), r.getRight(), r.getBottom(), false));
+                g.setGradientFill (ColourGradient (c1.withAlpha (0.16f), r.getX(), r.getY(), c2.withAlpha (0.05f), r.getRight(), r.getBottom(), false));
                 g.fillRoundedRectangle (r, 8);
-                g.setGradientFill (ColourGradient (c1, r.getX(), r.getY(), c2, r.getRight(), r.getBottom(), false));
-                g.drawRoundedRectangle (r, 8, 1.6f);
+                g.setColour (c1); g.drawRoundedRectangle (r.reduced (0.5f), 8, 1.4f);
             }
             else
             {
