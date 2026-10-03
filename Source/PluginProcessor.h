@@ -15,6 +15,7 @@
 #include "PairLab.h"
 #include "Harvest.h"
 #include "VstHost.h"
+#include "TrapDrums.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -140,6 +141,9 @@ public:
         Genome g;                    // synth sound (bank seeds); g.loop = its melody
         kk::PairPtr audio;           // audio sound (WAV seeds and their family)
         FxGenome fx;                 // v0.38 IDEA: its effect chain (sound + melody + FX evolve together)
+        kk::BeatGenes beat;          // v0.39 TRACK: its beat (kick / snare / hats) - the idea is a whole 4-bar track
+        bool picked = false;         // you chose it (the MAP shows your way)
+        juce::String file;           // an audio node kept as a WAV (POCKET / WORLD files)
         int parent = -1, gen = 0;
         std::vector<int> kids;
         std::array<float, 64> wave {}; bool waveReady = false;
@@ -153,6 +157,28 @@ public:
     void evoApplyIdea (int node);                                // its effects onto the FX rack (IDEA MODE)
     juce::File evoExportIdea (int node);                         // the whole idea as a loop WAV (bars at the project tempo)
     juce::AudioBuffer<float> renderIdea (int node, double rate);
+    // v0.39 LAYERS: what the next children change - ALL, only the SOUND, only the MELODY, only the FX, only the BEAT
+    enum { layerAll, layerSound, layerMelody, layerFx, layerBeat };
+    int evoLayer = layerAll;
+    std::atomic<bool> evoBeat { true };                          // the beat plays with the ideas (IDEA MODE)
+    void setBeat (const kk::BeatGenes& b);                       // the drums the loop plays (message thread)
+    juce::File evoExportPart (int node, int part);               // 0 melody, 1 bass, 2 beat - MIDI, C minor, project tempo
+    // POCKET: keep ideas from any tree; drop one onto a bubble = a cross between two trees
+    std::vector<EvoNode> pocket;
+    void evoPocketAdd (int node);
+    void evoPocketRemove (int i);
+    void evoSeedNode (const EvoNode& n);                        // a pocket idea starts a new tree
+    void evoAuditionNode (const EvoNode& n, bool preview = true);
+    void evoCross (const EvoNode& a, int target);                // a hybrid of a and the target node: it becomes the middle
+    // ALIVE: the middle idea slowly changes by itself while it plays; CATCH = this moment becomes the middle
+    bool evoAliveStep (float amount);
+    void evoCatch();
+    Genome evoLive; bool evoLiveValid = false; int aliveCount = 0;
+    // the tree as a file (a WORLD) - and inside the project
+    juce::ValueTree evoToTree (bool withAudioFiles);
+    void evoFromTree (const juce::ValueTree& et);
+    bool evoSaveWorld (const juce::File& f);
+    bool evoLoadWorld (const juce::File& f);
     // MY TASTE: what you pick / save / drag is learned (kept in Documents/KEYS KILLA/taste.txt, it grows with you)
     static constexpr int tasteDims = 22;                         // 8 sound + 11 effects + 3 melody
     struct Taste { std::array<float, tasteDims> like {}, dislike {}; float nLike = 0, nDislike = 0; };
@@ -259,6 +285,7 @@ public:
     juce::AudioBuffer<float> renderSound (int note, int presetIndex);   // offline, 44.1 kHz
     juce::String pairDice (int slot);          // DRAG TO DAW: the current sound as a one-shot WAV
     Genome currentGenome() const { return genomeFromCurrent(); }
+    Genome genomeFromCurrentPublic() const { return genomeFromCurrent(); }
     std::atomic<float> loopBeat { -1.0f };            // playhead in beats (UI), -1 = stopped
     std::atomic<double> lastBpm { 140.0 };
 
@@ -476,6 +503,9 @@ private:
     int modBlock = 0, lastPlayMode = 0, reportedLatency = 0;
     kk::WorldStage worldStage;
     kk::PairLab pairPlayer;
+    kk::TrapDrums trapDrums;                                     // v0.39: the beat of an EVOLVE idea
+    juce::SpinLock beatLock; std::vector<kk::BeatHit> beatSeq; std::atomic<bool> beatSet { false };
+    double beatLastB = -1.0;
     std::unique_ptr<kk::FxRack> extFx { std::make_unique<kk::FxRack>() };   // v0.37: the knobs / SAMPLE EDIT on your sounds
     std::vector<float> extL, extR, extG;
     int extTail = 0;

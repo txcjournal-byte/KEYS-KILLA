@@ -174,6 +174,7 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fxIn.setSize (2, std::max (64, samplesPerBlock) * 2);
     extBuf.setSize (2, std::max (64, samplesPerBlock) * 2);
     worldExt.prepare (sampleRate);
+    trapDrums.prepare (sampleRate); beatLastB = -1.0;
     extFx = std::make_unique<kk::FxRack>(); extFx->prepare (sampleRate, kChunk);
     extL.assign (kChunk, 0.0f); extR.assign (kChunk, 0.0f); extG.assign (kChunk, 0.0f); extTail = 0; extLpHz = extHpHz = -1;
     for (auto& f : extLp) f.reset();
@@ -684,6 +685,17 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     processMidi (midi, processedMidi, n, beatPos, bpm);
     lastBpm = bpm;
     renderLoop (processedMidi, n, beatPos, bps, hostPlaying);
+    if (evoBeat.load() && beatSet.load() && evoActive && evoIdea && loopOn.load() && loopRunning && bps > 0.0)   // v0.39: the idea's beat, in time with its melody
+    {
+        const juce::SpinLock::ScopedTryLockType bl (beatLock);
+        if (bl.isLocked() && ! beatSeq.empty())
+        {
+            const double len = loopLenBeats, b0 = beatPos - loopOrigin, b1 = b0 + bps * n;
+            for (auto& h : beatSeq)
+                for (double tt = h.beat + std::ceil ((b0 - h.beat) / len) * len; tt < b1; tt += len)
+                    trapDrums.hit (h.drum, h.vel, juce::jlimit (0, n - 1, (int) ((tt - b0) / bps)));
+        }
+    }
     renderPatterns (n, beatPos, bps, hostPlaying);
     // PAIR FROM VST: keys and loop notes play the hosted plugin
     if ((int) raw[(size_t) I.playMode]->load() == playVst) { vstMidi.addEvents (processedMidi, 0, n, 0); processedMidi.clear(); }
@@ -819,6 +831,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
     processRack (buffer, n, beatPos, bps);   // FX RACK: the whole melody bus (synth, PAIR, VST, SAMPLER)
     processStepFx (buffer, n, beatPos, bps); // v0.37 STEP FX: effects in time on the melody bus
+    if (buffer.getNumChannels() > 1) trapDrums.render (buffer.getWritePointer (0), buffer.getWritePointer (1), n, 0.7f);   // v0.39: the idea's beat stays dry
     // DRUM BOOST: the drums play after the melody effects - the FX RACK never touches them
     if (buffer.getNumChannels() > 1)
         for (int d = 0; d < kk::numDrumSlots; ++d)
@@ -1954,7 +1967,7 @@ void KeysKillaProcessor::evoSeedPreset (int idx)
     auto g = genomeFromPreset (idx);
     if (! g.valid()) return;
     evoReset();
-    EvoNode n; n.g = g; n.name = g.name; n.fx = fxCurrent(); evo.push_back (n);
+    EvoNode n; n.g = g; n.name = g.name; n.fx = fxCurrent(); n.beat = kk::beatFromSeed ((uint32_t) juce::Time::getMillisecondCounter()); n.picked = true; evo.push_back (n);
     evoFocus (0);
 }
 
@@ -1963,7 +1976,7 @@ void KeysKillaProcessor::evoSeedCurrent()
     auto g = genomeFromCurrent();
     if (! g.valid()) return;
     evoReset();
-    EvoNode n; n.g = g; n.name = g.name; n.fx = fxCurrent(); evo.push_back (n);
+    EvoNode n; n.g = g; n.name = g.name; n.fx = fxCurrent(); n.beat = kk::beatFromSeed ((uint32_t) juce::Time::getMillisecondCounter()); n.picked = true; evo.push_back (n);
     evoFocus (0);
 }
 
@@ -1972,7 +1985,7 @@ bool KeysKillaProcessor::evoSeedFromFile (const juce::File& f)
     auto snd = kk::PairLab::fromFile (f, sr > 0 ? sr : 44100.0);
     if (snd == nullptr) return false;
     evoReset();
-    EvoNode n; n.audio = snd; n.name = snd->name; n.fx = fxCurrent(); evo.push_back (n);
+    EvoNode n; n.audio = snd; n.name = snd->name; n.fx = fxCurrent(); n.beat = kk::beatFromSeed ((uint32_t) juce::Time::getMillisecondCounter()); n.picked = true; evo.push_back (n);
     evoSeedFile = f.getFullPathName();
     evoFocus (0);
     return true;
@@ -2034,18 +2047,38 @@ void KeysKillaProcessor::evoGrow (int node, bool reroll)
     int parentFx = 0; for (auto o : parent.fx.on) parentFx += o ? 1 : 0;
     const auto parentLoop = parent.g.loop.valid ? parent.g.loop : kk::loopFromSeed ((uint32_t) parent.name.hashCode());
     std::vector<EvoNode> cand;
+    // v0.39 LAYERS: ALL changes everything a little; one layer changes only that, but more
+    const int layer = evoLayer;
+    const bool chSound = layer == layerAll || layer == layerSound, chMel = layer == layerAll || layer == layerMelody;
+    const bool chFx = layer == layerAll || layer == layerFx, chBeat = layer == layerAll || layer == layerBeat;
+    const float wildL = layer == layerAll ? wild : juce::jlimit (0.0f, 1.0f, wild + 0.3f);
+    const auto parentBeat = parent.beat.valid ? parent.beat : kk::beatFromSeed ((uint32_t) parent.name.hashCode());
     auto finishCandidate = [&] (EvoNode& n, int k, uint32_t seed)
     {
-        n.parent = node; n.gen = parent.gen + 1;
+        n.parent = node; n.gen = parent.gen + 1; n.picked = false; n.file.clear();
         n.name = evoName (parent, k % 6, seed);
         if (! n.isAudio()) n.g.name = n.name;
-        // IDEA: the melody and the effects are inherited too
-        n.g.loop = evoMutateLoop (parentLoop, seed * 7u + 3u, wild);
-        if (parentFx > 0) n.fx = k % 6 == 0 ? parent.fx : fxMutate (parent.fx, juce::jlimit (0.0f, 1.0f, wild * 0.8f + (k % 6 >= 4 ? 0.25f : 0.0f)), seed * 13u + 1u);
-        else if (k % 6 >= 2 || wild > 0.6f) n.fx = fxSurprise (seed * 17u + 5u);
-        n.fx.name = n.fx.name.isEmpty() ? juce::String() : n.fx.name;
+        // IDEA: the melody, the effects and the beat are inherited too
+        n.g.loop = chMel ? evoMutateLoop (parentLoop, seed * 7u + 3u, wildL) : parentLoop;
+        n.fx = parent.fx;
+        if (chFx)
+        {
+            if (parentFx > 0) n.fx = (k % 6 == 0 && layer == layerAll) ? parent.fx : fxMutate (parent.fx, juce::jlimit (0.0f, 1.0f, wildL * 0.8f + (k % 6 >= 4 ? 0.25f : 0.0f)), seed * 13u + 1u);
+            else if (k % 6 >= 2 || wildL > 0.6f || layer == layerFx) n.fx = fxSurprise (seed * 17u + 5u);
+        }
+        n.beat = chBeat ? kk::mutateBeat (parentBeat, seed * 19u + 7u, wildL) : parentBeat;
     };
-    if (! parent.isAudio())
+    if (! chSound)   // the sound stays - only the melody / effects / beat change
+    {
+        for (int k = 0; k < (useTaste ? 18 : 6); ++k)
+        {
+            EvoNode n; n.g = parent.g; n.audio = parent.audio; n.wave = parent.wave; n.waveReady = parent.waveReady;
+            n.g.gen = parent.g.gen + 1;
+            finishCandidate (n, k, kk::hash32 (base + (uint32_t) k * 7919u));
+            cand.push_back (n);
+        }
+    }
+    else if (! parent.isAudio())
     {
         const float keepWild = breedWild;
         const int count = useTaste ? 18 : 6;
@@ -2146,6 +2179,7 @@ void KeysKillaProcessor::evoPick (int node)
 {
     if (! juce::isPositiveAndBelow (node, (int) evo.size())) return;
     tasteLearn (evo[(size_t) node], 1.0f);
+    evo[(size_t) node].picked = true;
     const int pa = evo[(size_t) node].parent;
     if (juce::isPositiveAndBelow (pa, (int) evo.size()) && pa == evoCenter)   // the ones you passed by: a little less of them
         for (int k : evo[(size_t) pa].kids) if (k != node && juce::isPositiveAndBelow (k, (int) evo.size())) tasteLearn (evo[(size_t) k], -0.2f);
@@ -2304,6 +2338,8 @@ juce::AudioBuffer<float> KeysKillaProcessor::renderIdea (int node, double rate)
     r.curLoop = n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode());
     r.rebuildLoopSeq();
     r.loopOwner = 0; r.loopOn = true;
+    r.evoActive = true; r.evoIdea = true; r.evoBeat = evoBeat.load();
+    r.setBeat (n.beat.valid ? n.beat : kk::beatFromSeed ((uint32_t) n.name.hashCode()));
     const int body = (int) std::round (rate * 60.0 / head.bpm * 4.0 * r.loopBarsN), total = body + (int) (rate * 2.0);
     out.setSize (2, total); out.clear();
     juce::AudioBuffer<float> buf (2, block);
@@ -2317,7 +2353,7 @@ juce::AudioBuffer<float> KeysKillaProcessor::renderIdea (int node, double rate)
         for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, buf, c, 0, len);
     }
     // the renderer goes back to its quiet self (it also draws the waveforms)
-    r.loopOn = false; r.rack.reset(); r.setPlayHead (nullptr); r.pairPlayer.setSound (nullptr); r.setPlayMode (playKeys); r.loopBarsN = 8;
+    r.loopOn = false; r.rack.reset(); r.setPlayHead (nullptr); r.evoActive = false; r.beatSet = false; r.trapDrums.allOff(); r.pairPlayer.setSound (nullptr); r.setPlayMode (playKeys); r.loopBarsN = 8;
     const float pk = out.getMagnitude (0, total);
     if (pk > 0.98f) out.applyGain (0.95f / pk);
     const int fade = (int) (rate * 0.5);
@@ -2340,24 +2376,28 @@ juce::File KeysKillaProcessor::evoExportIdea (int node)
 void KeysKillaProcessor::evoAudition (int node, bool preview)
 {
     if (! juce::isPositiveAndBelow (node, (int) evo.size())) return;
-    const auto& n = evo[(size_t) node];
-    if (n.isAudio())
-    {
-        useSample (n.audio, preview);
-        setCurrentLoop (n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode()));
-    }
+    const auto n = evo[(size_t) node];
+    evoAuditionNode (n, preview);
+}
+
+void KeysKillaProcessor::evoAuditionNode (const EvoNode& n, bool preview)
+{
+    const auto loop = n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode());
+    if (n.isAudio()) useSample (n.audio, preview);
     else
     {
         applyGenome (n.g, true);
-        setCurrentLoop (n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode()));
         if (preview) previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
     }
+    setCurrentLoop (loop);
+    if (evoIdea) setBeat (n.beat.valid ? n.beat : kk::beatFromSeed ((uint32_t) n.name.hashCode()));
 }
 
 void KeysKillaProcessor::evoFocus (int node)
 {
     if (! juce::isPositiveAndBelow (node, (int) evo.size())) return;
     evoCenter = node;
+    evoLiveValid = false;
     evoGrow (node, false);
     evoAudition (node);
     if (evoIdea) evoApplyIdea (node);
@@ -3345,22 +3385,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
         state.setProperty ("chopMarks", mk.joinIntoString (","), nullptr);
     }
     for (int k = 0; k < 2; ++k) state.setProperty ("labWav" + juce::String (k), labWav[(size_t) k] ? labWavFile[(size_t) k] : juce::String(), nullptr);
-    {   // v0.36 EVOLVE: the tree of bank sounds (a WAV seed comes back from its file)
-        juce::ValueTree et ("EVOLVE");
-        et.setProperty ("center", evoCenter, nullptr); et.setProperty ("wild", evoWild, nullptr); et.setProperty ("file", evoSeedFile, nullptr);
-        et.setProperty ("idea", evoIdea, nullptr); et.setProperty ("taste", evoTasteAmt, nullptr);
-        if (evoSeedFile.isEmpty())
-            for (size_t i = 0; i < evo.size() && i < 400; ++i)
-            {
-                const auto& n = evo[i];
-                juce::ValueTree t ("N");
-                t.setProperty ("p", n.parent, nullptr); t.setProperty ("gen", n.gen, nullptr); t.setProperty ("name", n.name, nullptr);
-                t.setProperty ("cat", n.g.cat, nullptr); t.setProperty ("v", floatsToString (n.g.v), nullptr); t.setProperty ("loop", loopToString (n.g.loop), nullptr);
-                { juce::StringArray fx; for (auto o : n.fx.on) fx.add (o ? "1" : "0"); for (auto x : n.fx.v) fx.add (juce::String (x, 4)); t.setProperty ("fx", fx.joinIntoString (","), nullptr); }
-                et.appendChild (t, nullptr);
-            }
-        state.appendChild (et, nullptr);
-    }
+    state.appendChild (evoToTree (false), nullptr);   // v0.36 EVOLVE (a WAV seed comes back from its file) + v0.39 POCKET
     {   // v0.37: SAMPLE EDIT, STEP FX, MONO pads and the sample on the keys (kept as a file, so FL's notes play it after a reload)
         juce::StringArray se; for (auto& v : sampleEdit) se.add (juce::String (v.load(), 4));
         state.setProperty ("sampleEdit", se.joinIntoString (","), nullptr);
@@ -3404,38 +3429,9 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                 chopChoke = (bool) vt.getProperty ("choke", true);
             }
             {   // v0.36 EVOLVE
-                evo.clear(); evoCenter = -1; evoSeedFile.clear();
                 const auto et = vt.getChildWithName ("EVOLVE");
-                if (et.isValid())
-                {
-                    evoWild = (float) et.getProperty ("wild", 0.35f);
-                    evoIdea = (bool) et.getProperty ("idea", true); evoTasteAmt = (float) et.getProperty ("taste", 0.5f);
-                    if (const juce::File ef (et.getProperty ("file", "").toString()); ef.existsAsFile()) { evoSeedFromFile (ef); }
-                    else
-                    {
-                        for (int i = 0; i < et.getNumChildren(); ++i)
-                        {
-                            const auto t = et.getChild (i);
-                            EvoNode n; n.parent = t.getProperty ("p", -1); n.gen = t.getProperty ("gen", 0); n.name = t.getProperty ("name").toString();
-                            n.g.name = n.name; n.g.cat = t.getProperty ("cat", -1); n.g.v = stringToFloats (t.getProperty ("v").toString());
-                            n.g.loop = loopFromString (t.getProperty ("loop").toString());
-                            {
-                                const auto fx = juce::StringArray::fromTokens (t.getProperty ("fx").toString(), ",", "");
-                                if (fx.size() == kk::numRackSlots + kk::numRackValues)
-                                {
-                                    for (int k = 0; k < kk::numRackSlots; ++k) n.fx.on[(size_t) k] = fx[k] == "1";
-                                    for (int k = 0; k < kk::numRackValues; ++k) n.fx.v[(size_t) k] = fx[kk::numRackSlots + k].getFloatValue();
-                                }
-                            }
-                            if (n.g.v.size() != params.size()) { evo.clear(); break; }
-                            evo.push_back (n);
-                        }
-                        for (int i = 0; i < (int) evo.size(); ++i) if (const int pp = evo[(size_t) i].parent; juce::isPositiveAndBelow (pp, (int) evo.size())) evo[(size_t) pp].kids.push_back (i);
-                        evoCenter = juce::jlimit (-1, (int) evo.size() - 1, (int) et.getProperty ("center", -1));
-                    }
-                    vt.removeChild (et, nullptr);
-                }
-                ++evoVer;
+                evoFromTree (et);
+                if (et.isValid()) vt.removeChild (et, nullptr);
             }
             for (int k = 0; k < 2; ++k)   // v0.35: your own sounds in PARENT A / B
             {
@@ -4326,4 +4322,304 @@ juce::File KeysKillaProcessor::flipWavFile (int node)
 juce::File KeysKillaProcessor::sessionDir() const
 {
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Session Sounds");
+}
+
+//==============================================================================
+// v0.39 EVOLVE: BEAT, POCKET + crosses between trees, ALIVE / CATCH, WORLDS
+void KeysKillaProcessor::setBeat (const kk::BeatGenes& b)
+{
+    auto seq = kk::beatHits (b, loopBarsN);
+    { const juce::SpinLock::ScopedLockType sl (beatLock); beatSeq.swap (seq); }
+    beatSet = true;
+}
+
+juce::File KeysKillaProcessor::evoExportPart (int node, int part)
+{
+    if (! juce::isPositiveAndBelow (node, (int) evo.size())) return {};
+    const auto& n = evo[(size_t) node];
+    tasteLearn (n, 0.5f);
+    const double bpm = lastBpm.load();
+    const int ppq = 960;
+    juce::MidiMessageSequence seq;
+    auto tempo = juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / bpm)); tempo.setTimeStamp (0); seq.addEvent (tempo);
+    static const char* partName[] { "Melody", "Bass", "Beat" };
+    part = juce::jlimit (0, 2, part);
+    if (part < 2)
+    {
+        Genome g = n.g; if (! g.loop.valid) g.loop = kk::loopFromSeed ((uint32_t) n.name.hashCode());
+        for (auto& nt : loopNotes (g))
+        {
+            if (nt.low != (part == 1)) continue;
+            seq.addEvent (juce::MidiMessage::noteOn (1, nt.note, (juce::uint8) (nt.low ? 100 : 92)), std::round (nt.start * ppq));
+            seq.addEvent (juce::MidiMessage::noteOff (1, nt.note), std::round ((nt.start + nt.len) * ppq));
+        }
+    }
+    else
+    {
+        static const int gm[] { 36, 38, 42, 46 };
+        for (auto& h : kk::beatHits (n.beat.valid ? n.beat : kk::beatFromSeed ((uint32_t) n.name.hashCode()), loopBarsN))
+        {
+            const int note = gm[juce::jlimit (0, 3, h.drum)];
+            seq.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) juce::jlimit (1, 127, (int) (h.vel * 120))), std::round (h.beat * ppq));
+            seq.addEvent (juce::MidiMessage::noteOff (1, note), std::round ((h.beat + 0.1) * ppq));
+        }
+    }
+    seq.updateMatchedPairs();
+    juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq); mf.addTrack (seq);
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("EVOLVE Ideas");
+    dir.createDirectory();
+    auto f = dir.getChildFile (juce::File::createLegalFileName (juce::String (partName[part]) + " - " + n.name + " - C MIN " + juce::String (juce::roundToInt (bpm)) + "BPM") + ".mid");
+    f.deleteFile();
+    if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
+    return f;
+}
+
+void KeysKillaProcessor::evoPocketAdd (int node)
+{
+    if (! juce::isPositiveAndBelow (node, (int) evo.size())) return;
+    auto n = evo[(size_t) node];
+    n.parent = -1; n.kids.clear();
+    if (n.isAudio() && n.file.isEmpty())
+    {
+        auto f = sessionDir().getChildFile (juce::File::createLegalFileName (n.name).substring (0, 60) + " pocket " + juce::String ((juce::int64) juce::Time::currentTimeMillis() % 1000000) + ".wav");
+        if (writeWavFile (n.audio->audio, sr > 0 ? sr : 44100.0, f)) n.file = f.getFullPathName();
+    }
+    for (auto& p : pocket) if (p.name == n.name) return;   // already in
+    pocket.push_back (n);
+    if (pocket.size() > 8) pocket.erase (pocket.begin());
+    tasteLearn (n, 0.6f);
+    ++evoVer;
+}
+
+void KeysKillaProcessor::evoSeedNode (const EvoNode& src)
+{
+    auto n = src; n.parent = -1; n.kids.clear(); n.gen = 0; n.picked = true;
+    const auto keepPocket = pocket;
+    evoReset();
+    pocket = keepPocket;
+    if (n.isAudio() && n.file.isNotEmpty()) evoSeedFile = n.file;
+    evo.push_back (n);
+    evoFocus (0);
+}
+
+void KeysKillaProcessor::evoPocketRemove (int i)
+{
+    if (! juce::isPositiveAndBelow (i, (int) pocket.size())) return;
+    pocket.erase (pocket.begin() + i);
+    ++evoVer;
+}
+
+void KeysKillaProcessor::evoCross (const EvoNode& a, int target)
+{
+    if (! juce::isPositiveAndBelow (target, (int) evo.size())) return;
+    const auto b = evo[(size_t) target];
+    const uint32_t seed = kk::hash32 ((uint32_t) juce::Time::getMillisecondCounter() * 2246822519u + (uint32_t) target);
+    juce::Random rnd ((juce::int64) seed);
+    EvoNode n;
+    if (! a.isAudio() && ! b.isAudio() && a.g.v.size() == b.g.v.size())
+    {
+        const float keep = breedWild; breedWild = 0.4f;
+        auto c = makeChildOf (a.g, b.g, 2, seed, nullptr, false);
+        breedWild = keep;
+        n.g = c.g; n.g.cat = b.g.cat;
+    }
+    else   // sound x your sound: the audio engine breeds them
+    {
+        const double rate = sr > 0 ? sr : 44100.0;
+        auto asAudio = [&] (const EvoNode& x) { return x.isAudio() ? x.audio : kk::PairLab::fromBuffer (renderGenomeAudio (x.g, rate, 2.4), rate, rate, x.name); };
+        auto kids = kk::PairLab::breed ({ asAudio (a), asAudio (b) }, seed, kk::flavorClean, rate);
+        if (kids.empty()) return;
+        n.audio = kids[(size_t) rnd.nextInt ((int) kids.size())];
+        n.waveReady = true;
+        for (int k = 0; k < 64 && ! n.audio->peaks.empty(); ++k) n.wave[(size_t) k] = n.audio->peaks[(size_t) (k * (int) n.audio->peaks.size() / 64)];
+    }
+    const auto la = a.g.loop.valid ? a.g.loop : kk::loopFromSeed ((uint32_t) a.name.hashCode());
+    const auto lb = b.g.loop.valid ? b.g.loop : kk::loopFromSeed ((uint32_t) b.name.hashCode());
+    n.g.loop = kk::crossLoops (la, lb, seed, 0.5f, 0.15f); n.g.loop.key = 0;
+    n.fx = rnd.nextBool() ? a.fx : b.fx;
+    for (int s = 0; s < kk::numRackSlots; ++s) n.fx.on[(size_t) s] = (a.fx.on[(size_t) s] || b.fx.on[(size_t) s]) && rnd.nextFloat() < 0.6f;
+    n.beat = kk::crossBeat (a.beat.valid ? a.beat : kk::beatFromSeed ((uint32_t) a.name.hashCode()), b.beat.valid ? b.beat : kk::beatFromSeed ((uint32_t) b.name.hashCode()), seed);
+    n.parent = target; n.gen = b.gen + 1; n.picked = true;
+    n.name = a.name.upToFirstOccurrenceOf (" ", false, false) + " x " + b.name.upToFirstOccurrenceOf (" ", false, false) + " " + juce::String (n.gen) + ".x";
+    if (! n.isAudio()) n.g.name = n.name;
+    tasteLearn (a, 0.4f); tasteLearn (b, 0.4f);
+    evo.push_back (n);   // a hybrid hangs on the tree (the MAP shows it), it is not one of the six children
+    evoFocus ((int) evo.size() - 1);
+}
+
+bool KeysKillaProcessor::evoAliveStep (float amount)
+{
+    if (! juce::isPositiveAndBelow (evoCenter, (int) evo.size())) return false;
+    const auto& c = evo[(size_t) evoCenter];
+    amount = juce::jlimit (0.0f, 1.0f, amount);
+    const uint32_t seed = kk::hash32 ((uint32_t) juce::Time::getMillisecondCounter() + (uint32_t) (aliveCount * 7919));
+    ++aliveCount;
+    if (! c.isAudio())
+    {
+        if (! evoLiveValid) { evoLive = c.g; evoLiveValid = true; }
+        const float keep = breedWild; breedWild = 0.04f + 0.14f * amount;
+        auto step = makeChildOf (evoLive, evoLive, 0, seed, nullptr, false);
+        breedWild = keep;
+        // drift, never jump: half way from where it is to the new one
+        for (size_t i = 0; i < evoLive.v.size() && i < step.g.v.size(); ++i)
+            if (geneOfParam[i] >= 0 && ! discrete[i]) evoLive.v[i] += (step.g.v[i] - evoLive.v[i]) * 0.5f;
+        applyGenome (evoLive, false);
+    }
+    if (evoIdea && aliveCount % 3 == 0) fxApply (fxMutate (fxCurrent(), 0.1f + 0.2f * amount, seed * 3u));
+    if (aliveCount % 4 == 0)   // the melody breathes: a new variation now and then
+    {
+        auto l = curLoop; kk::Rng r; r.seed (seed);
+        l.g[kk::loopVariation] = kk::randomGene (kk::loopVariation, r);
+        if (r.uni() < amount * 0.5f) l.g[kk::loopRhythm] = kk::randomGene (kk::loopRhythm, r);
+        setCurrentLoop (l);
+    }
+    return true;
+}
+
+void KeysKillaProcessor::evoCatch()
+{
+    if (! juce::isPositiveAndBelow (evoCenter, (int) evo.size())) return;
+    const auto c = evo[(size_t) evoCenter];
+    EvoNode n = c;
+    n.kids.clear(); n.parent = evoCenter; n.gen = c.gen + 1; n.picked = true; n.file.clear();
+    if (! c.isAudio()) { n.g = evoLiveValid ? evoLive : genomeFromCurrent(); n.g.cat = c.g.cat; }
+    n.fx = fxCurrent(); n.g.loop = curLoop;
+    n.name = "Caught " + c.name.upToFirstOccurrenceOf (" ", false, false) + " " + juce::String (n.gen) + "." + juce::String (aliveCount % 100);
+    if (! n.isAudio()) n.g.name = n.name;
+    n.waveReady = c.isAudio();
+    tasteLearn (n, 0.8f);
+    evo.push_back (n);
+    evoLiveValid = false;
+    evoFocus ((int) evo.size() - 1);
+}
+
+static juce::String fxToString (const KeysKillaProcessor::FxGenome& fx)
+{
+    juce::StringArray a; for (auto o : fx.on) a.add (o ? "1" : "0"); for (auto x : fx.v) a.add (juce::String (x, 4));
+    return a.joinIntoString (",");
+}
+static void fxFromString (KeysKillaProcessor::FxGenome& fx, const juce::String& s)
+{
+    const auto a = juce::StringArray::fromTokens (s, ",", "");
+    if (a.size() != kk::numRackSlots + kk::numRackValues) return;
+    for (int k = 0; k < kk::numRackSlots; ++k) fx.on[(size_t) k] = a[k] == "1";
+    for (int k = 0; k < kk::numRackValues; ++k) fx.v[(size_t) k] = a[kk::numRackSlots + k].getFloatValue();
+}
+static juce::String beatToString (const kk::BeatGenes& b)
+{
+    return b.valid ? juce::String ((juce::int64) b.kick) + "," + juce::String ((juce::int64) b.hat) + "," + juce::String (b.density, 3) + "," + juce::String (b.rolls, 3) : juce::String();
+}
+static kk::BeatGenes beatFromString (const juce::String& s)
+{
+    kk::BeatGenes b; const auto a = juce::StringArray::fromTokens (s, ",", "");
+    if (a.size() != 4) return b;
+    b.kick = (uint32_t) a[0].getLargeIntValue(); b.hat = (uint32_t) a[1].getLargeIntValue(); b.density = a[2].getFloatValue(); b.rolls = a[3].getFloatValue(); b.valid = true;
+    return b;
+}
+
+juce::ValueTree KeysKillaProcessor::evoToTree (bool withAudioFiles)
+{
+    juce::ValueTree et ("EVOLVE");
+    et.setProperty ("center", evoCenter, nullptr); et.setProperty ("wild", evoWild, nullptr);
+    et.setProperty ("file", withAudioFiles ? juce::String() : evoSeedFile, nullptr);
+    et.setProperty ("idea", evoIdea, nullptr); et.setProperty ("taste", evoTasteAmt, nullptr); et.setProperty ("layer", evoLayer, nullptr);
+    et.setProperty ("beatOn", evoBeat.load(), nullptr);
+    const double rate = sr > 0 ? sr : 44100.0;
+    auto nodeTree = [&] (EvoNode& n, const char* tag)
+    {
+        juce::ValueTree t (tag);
+        t.setProperty ("p", n.parent, nullptr); t.setProperty ("gen", n.gen, nullptr); t.setProperty ("name", n.name, nullptr);
+        t.setProperty ("cat", n.g.cat, nullptr); t.setProperty ("v", floatsToString (n.g.v), nullptr); t.setProperty ("loop", loopToString (n.g.loop), nullptr);
+        t.setProperty ("fx", fxToString (n.fx), nullptr); t.setProperty ("beat", beatToString (n.beat), nullptr); t.setProperty ("picked", n.picked, nullptr);
+        if (n.isAudio())
+        {
+            if (n.file.isEmpty() || ! juce::File (n.file).existsAsFile())
+            {
+                auto f = sessionDir().getChildFile (juce::File::createLegalFileName (n.name).substring (0, 60) + " " + juce::String::toHexString ((juce::int64) n.audio->audio.getNumSamples() * 131 + n.gen) + ".wav");
+                if (f.existsAsFile() || writeWavFile (n.audio->audio, rate, f)) n.file = f.getFullPathName();
+            }
+            t.setProperty ("audio", n.file, nullptr);
+        }
+        return t;
+    };
+    if (withAudioFiles || evoSeedFile.isEmpty())
+        for (size_t i = 0; i < evo.size() && i < 600; ++i)
+        {
+            if (evo[i].isAudio() && ! withAudioFiles) continue;
+            et.appendChild (nodeTree (evo[i], "N"), nullptr);
+        }
+    juce::ValueTree pk ("POCKET");
+    for (auto& n : pocket) pk.appendChild (nodeTree (n, "P"), nullptr);
+    et.appendChild (pk, nullptr);
+    return et;
+}
+
+void KeysKillaProcessor::evoFromTree (const juce::ValueTree& et)
+{
+    evo.clear(); evoCenter = -1; evoSeedFile.clear(); pocket.clear(); evoLiveValid = false;
+    if (! et.isValid()) { ++evoVer; return; }
+    evoWild = (float) et.getProperty ("wild", 0.35f);
+    evoIdea = (bool) et.getProperty ("idea", true); evoTasteAmt = (float) et.getProperty ("taste", 0.5f);
+    evoLayer = juce::jlimit (0, (int) layerBeat, (int) et.getProperty ("layer", 0)); evoBeat = (bool) et.getProperty ("beatOn", true);
+    const double rate = sr > 0 ? sr : 44100.0;
+    auto readNode = [&] (const juce::ValueTree& t, EvoNode& n)
+    {
+        n.parent = t.getProperty ("p", -1); n.gen = t.getProperty ("gen", 0); n.name = t.getProperty ("name").toString();
+        n.g.name = n.name; n.g.cat = t.getProperty ("cat", -1); n.g.v = stringToFloats (t.getProperty ("v").toString());
+        n.g.loop = loopFromString (t.getProperty ("loop").toString());
+        fxFromString (n.fx, t.getProperty ("fx").toString());
+        n.beat = beatFromString (t.getProperty ("beat").toString());
+        n.picked = (bool) t.getProperty ("picked", false);
+        if (const juce::String af = t.getProperty ("audio", "").toString(); af.isNotEmpty())
+        {
+            if (auto snd = kk::PairLab::fromFile (juce::File (af), rate))
+            {
+                n.audio = snd; n.file = af; n.waveReady = true;
+                for (int k = 0; k < 64 && ! snd->peaks.empty(); ++k) n.wave[(size_t) k] = snd->peaks[(size_t) (k * (int) snd->peaks.size() / 64)];
+                return true;
+            }
+            return false;
+        }
+        return n.g.v.size() == params.size();
+    };
+    if (const juce::File ef (et.getProperty ("file", "").toString()); ef.existsAsFile()) evoSeedFromFile (ef);
+    else
+    {
+        bool ok = true;
+        for (int i = 0; i < et.getNumChildren() && ok; ++i)
+        {
+            const auto t = et.getChild (i);
+            if (! t.hasType ("N")) continue;
+            EvoNode n;
+            if (! readNode (t, n)) { ok = false; break; }
+            evo.push_back (n);
+        }
+        if (! ok) evo.clear();
+        for (int i = 0; i < (int) evo.size(); ++i)
+            if (const int pp = evo[(size_t) i].parent; juce::isPositiveAndBelow (pp, (int) evo.size()) && pp != i)
+            {
+                const auto& nm = evo[(size_t) i].name;   // hybrids / caught moments hang on the tree but are not among the six
+                if (! nm.contains (" x ") && ! nm.startsWith ("Caught ")) evo[(size_t) pp].kids.push_back (i);
+            }
+        evoCenter = juce::jlimit (-1, (int) evo.size() - 1, (int) et.getProperty ("center", -1));
+    }
+    const auto pk = et.getChildWithName ("POCKET");
+    for (int i = 0; i < pk.getNumChildren(); ++i) { EvoNode n; if (readNode (pk.getChild (i), n)) { n.parent = -1; pocket.push_back (n); } }
+    ++evoVer;
+}
+
+bool KeysKillaProcessor::evoSaveWorld (const juce::File& f)
+{
+    auto t = evoToTree (true);
+    if (auto xml = t.createXml()) return xml->writeTo (f);
+    return false;
+}
+
+bool KeysKillaProcessor::evoLoadWorld (const juce::File& f)
+{
+    auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! xml->hasTagName ("EVOLVE")) return false;
+    evoFromTree (juce::ValueTree::fromXml (*xml));
+    if (juce::isPositiveAndBelow (evoCenter, (int) evo.size())) { evoAudition (evoCenter, false); if (evoIdea) evoApplyIdea (evoCenter); }
+    return ! evo.empty();
 }

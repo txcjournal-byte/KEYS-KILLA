@@ -732,6 +732,70 @@ static int unitTests()
         auto tf = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("taste.txt");
         if (keepTaste.isEmpty()) tf.deleteFile(); else tf.replaceWithText (keepTaste);
     }
+    // v0.39 EVOLVE: LAYERS, BEAT, POCKET + crosses, ALIVE / CATCH, MAP data, WORLDS
+    {
+        KeysKillaProcessor p; p.setCurrentProgram (0); p.prepareToPlay (44100, 512);
+        const auto tf = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("taste.txt");
+        const auto keepTaste = tf.loadFileAsString();
+        p.tasteLoaded = true; p.taste = {}; p.evoTasteAmt = 0.0f;
+        p.evoSeedPreset (20);
+        const auto c = p.evo[(size_t) p.evoCenter];
+        // only the MELODY: same sound, same effects, other melodies
+        p.evoLayer = KeysKillaProcessor::layerMelody; p.evoGrow (p.evoCenter, true);
+        int sameSound = 0, otherMel = 0, sameFx = 0;
+        for (int k : p.evo[(size_t) p.evoCenter].kids) { const auto& n = p.evo[(size_t) k]; sameSound += n.g.v == c.g.v; otherMel += ! (n.g.loop == c.g.loop); sameFx += n.fx.on == c.fx.on; }
+        check (sameSound == 6 && otherMel >= 5 && sameFx == 6, "v0.39 LAYERS: MELODY changes only the melodies");
+        p.evoLayer = KeysKillaProcessor::layerBeat; p.evoGrow (p.evoCenter, true);
+        int otherBeat = 0; for (int k : p.evo[(size_t) p.evoCenter].kids) otherBeat += p.evo[(size_t) k].beat.kick != c.beat.kick || p.evo[(size_t) k].beat.hat != c.beat.hat;
+        check (otherBeat >= 5, "v0.39 LAYERS: BEAT changes the beats");
+        p.evoLayer = KeysKillaProcessor::layerAll; p.evoGrow (p.evoCenter, true);
+        // the beat: hits on every bar, plays with the idea, exports as MIDI
+        const auto hits = kk::beatHits (kk::beatFromSeed (77), 4);
+        int kicks = 0, snares = 0, hats = 0; for (auto& h : hits) { kicks += h.drum == 0; snares += h.drum == 1; hats += h.drum == 2; }
+        check (kicks >= 4 && snares >= 4 && hats >= 32, "v0.39 BEAT: kicks, snares on 3, hats with rolls");
+        p.evoActive = true; p.evoIdea = true; p.evoBeat = true;
+        p.evoAudition (p.evoCenter, false); p.toggleLoop();
+        juce::AudioBuffer<float> b (2, 512); float pk = 0; bool fin = true;
+        for (int i = 0; i < 300; ++i) { juce::MidiBuffer m; p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, 512)); for (int s2 = 0; s2 < 512; ++s2) fin &= std::isfinite (b.getSample (0, s2)); }
+        p.stopLoop();
+        check (fin && pk > 0.05f && pk <= 1.0f, "v0.39 BEAT: the idea plays with its beat, clean");
+        for (int part = 0; part < 3; ++part)
+        {
+            const auto f = p.evoExportPart (p.evoCenter, part);
+            juce::MidiFile mf; juce::FileInputStream in (f);
+            const bool ok = f.existsAsFile() && in.openedOk() && mf.readFrom (in) && mf.getNumTracks() == 1 && mf.getTrack (0)->getNumEvents() > 4;
+            check (ok, part == 0 ? "v0.39 TRACK: MELODY drags out" : part == 1 ? "v0.39 TRACK: BASS drags out" : "v0.39 TRACK: BEAT drags out");
+        }
+        // POCKET + a cross between two trees
+        p.evoPocketAdd (p.evo[(size_t) p.evoCenter].kids[2]);
+        check (p.pocket.size() == 1, "v0.39 POCKET keeps an idea");
+        p.evoSeedPreset (300);   // another tree
+        check (p.pocket.size() == 1, "v0.39 POCKET stays when a new tree starts");
+        const int before = (int) p.evo.size();
+        p.evoCross (p.pocket[0], p.evoCenter);
+        check ((int) p.evo.size() > before && p.evo[(size_t) p.evoCenter].name.contains (" x ") && p.evo[(size_t) p.evoCenter].kids.size() == 6, "v0.39 CROSS: two trees make a hybrid that grows");
+        // ALIVE drifts the sound a little, CATCH keeps the moment
+        const auto v0 = p.genomeFromCurrentPublic();
+        for (int i = 0; i < 6; ++i) p.evoAliveStep (0.6f);
+        const auto v1 = p.genomeFromCurrentPublic();
+        float moved = 0; for (size_t i = 0; i < v0.v.size(); ++i) moved += std::abs (v0.v[i] - v1.v[i]);
+        check (moved > 0.01f, "v0.39 ALIVE: the idea changes by itself");
+        const int caughtFrom = p.evoCenter;
+        p.evoCatch();
+        check (p.evo[(size_t) p.evoCenter].parent == caughtFrom && p.evo[(size_t) p.evoCenter].name.startsWith ("Caught"), "v0.39 CATCH: the moment becomes the middle");
+        // WORLD file round trip (and the project keeps the POCKET)
+        auto wf = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_world.evolve");
+        check (p.evoSaveWorld (wf), "v0.39 WORLD saves");
+        KeysKillaProcessor q; q.prepareToPlay (44100, 512);
+        check (q.evoLoadWorld (wf) && q.evo.size() == p.evo.size() && q.evoCenter == p.evoCenter && q.pocket.size() == 1, "v0.39 WORLD opens with every idea, the middle and the POCKET");
+        bool beatsSame = true; for (size_t i = 0; i < p.evo.size() && i < q.evo.size(); ++i) beatsSame &= p.evo[i].beat.kick == q.evo[i].beat.kick && p.evo[i].picked == q.evo[i].picked;
+        check (beatsSame, "v0.39 WORLD keeps the beats and your way");
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (r2.pocket.size() == 1 && r2.evo.size() == p.evo.size(), "v0.39: the project keeps the tree and the POCKET");
+        wf.deleteFile();
+        if (keepTaste.isEmpty()) tf.deleteFile(); else tf.replaceWithText (keepTaste);
+    }
     // PAIR flavours change the children (same children, new flavour)
     {
         KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);

@@ -5370,6 +5370,120 @@ private:
 // Hover = hear it (the keys play it).  Click = it becomes the middle and the next generation grows.
 // Drag from the middle towards a child = blend the two live.  SAFE <-> WILD = how far the children may wander.
 // Every bubble: SAVE, drag WAV, drag MELODY.  The path you took stays on top - click any step to go back.
+//==============================================================================
+// v0.39 MAP: the whole family of ideas you grew - every generation a column, your way lit up.
+// Click a dot = back to that idea.  Wheel = zoom, drag = move.
+class EvoMapView : public Component
+{
+public:
+    explicit EvoMapView (KeysKillaProcessor& p) : proc (p) {}
+    std::function<void()> onClose;
+    void build()
+    {
+        const int n = (int) proc.evo.size();
+        pos.assign ((size_t) n, { 0.0f, 0.0f });
+        // depth-first leaf order: each node sits in the middle of its children
+        std::vector<std::vector<int>> kids ((size_t) n);
+        std::vector<int> roots;
+        for (int i = 0; i < n; ++i)
+        {
+            const int pa = proc.evo[(size_t) i].parent;
+            if (isPositiveAndBelow (pa, n) && pa != i) kids[(size_t) pa].push_back (i); else roots.push_back (i);
+        }
+        float leaf = 0;
+        std::function<float (int, int)> place = [&] (int i, int depth) -> float
+        {
+            float y;
+            if (kids[(size_t) i].empty() || depth > 200) y = leaf++;
+            else { float sum = 0; for (int k : kids[(size_t) i]) sum += place (k, depth + 1); y = sum / (float) kids[(size_t) i].size(); }
+            pos[(size_t) i] = { (float) proc.evo[(size_t) i].gen, y };
+            return y;
+        };
+        for (int r : roots) place (r, 0);
+        maxGen = 1; for (auto& pp : pos) maxGen = std::max (maxGen, (int) pp.x);
+        leaves = std::max (1.0f, leaf);
+        zoom = 1.0f; pan = {};
+        repaint();
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        g.setColour (t.night ? Colour (0xff0d0f12) : Colour (0xffe9ecef)); g.fillRoundedRectangle (getLocalBounds().toFloat(), 18);
+        g.setColour (t.accent.withAlpha (0.5f)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1), 18, 1.2f);
+        g.setColour (t.text); g.setFont (kk::modern::font (13.0f, true, 0.2f));
+        g.drawText ("CLOSE  X", closeRect(), Justification::centred);
+        g.setColour (t.text); g.setFont (kk::modern::font (22.0f, true, 0.2f));
+        g.drawText ("MAP", 28, 14, 200, 32, Justification::centredLeft);
+        g.setColour (t.dim); g.setFont (kk::modern::font (12.5f, true, 0.06f));
+        g.drawText (String ((int) proc.evo.size()) + " ideas, " + String (maxGen) + " generations   -   click a dot = go back there   -   wheel = zoom, drag = move",
+                    110, 18, getWidth() - 260, 24, Justification::centredLeft);
+        const int n = (int) proc.evo.size();
+        if (n == 0) return;
+        std::vector<bool> onPath ((size_t) n, false);
+        for (int i : proc.evoPath()) if (isPositiveAndBelow (i, n)) onPath[(size_t) i] = true;
+        for (int i = 0; i < n; ++i)
+        {
+            const int pa = proc.evo[(size_t) i].parent;
+            if (! isPositiveAndBelow (pa, n)) continue;
+            g.setColour (onPath[(size_t) i] ? t.accent : t.text.withAlpha (proc.evo[(size_t) i].picked ? 0.45f : 0.15f));
+            g.drawLine (Line<float> (screen (pa), screen (i)), onPath[(size_t) i] ? 2.4f : 1.0f);
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            const auto c = screen (i);
+            if (! getLocalBounds().toFloat().expanded (20).contains (c)) continue;
+            const auto& e = proc.evo[(size_t) i];
+            const bool centre = i == proc.evoCenter, hot = i == hovered;
+            const float r = (centre ? 9.0f : e.picked ? 6.5f : 4.0f) * std::sqrt (zoom);
+            g.setColour (centre ? t.accent : e.picked ? t.accent.withAlpha (0.75f) : t.text.withAlpha (0.4f));
+            g.fillEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c));
+            if (hot || centre || (e.picked && zoom > 1.6f))
+            {
+                g.setColour (t.text); g.setFont (kk::modern::font (11.5f, true, 0.04f));
+                g.drawText (e.name, Rectangle<float> (c.x + r + 4, c.y - 8, 200, 16), Justification::centredLeft);
+            }
+        }
+    }
+    void mouseMove (const MouseEvent& e) override { const int h = nodeAt (e.position); if (h != hovered) { hovered = h; repaint(); } }
+    void mouseDown (const MouseEvent& e) override { panStart = pan; }
+    void mouseDrag (const MouseEvent& e) override { pan = panStart + e.getOffsetFromDragStart().toFloat(); repaint(); }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (e.mouseWasDraggedSinceMouseDown()) return;
+        if (closeRect().contains (e.position)) { setVisible (false); if (onClose) onClose(); return; }
+        const int h = nodeAt (e.position);
+        if (h >= 0) { proc.evoFocus (h); if (onClose) onClose(); }
+    }
+    Rectangle<float> closeRect() const { return { (float) getWidth() - 130.0f, 14.0f, 110.0f, 30.0f }; }
+    void mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w) override
+    {
+        const float old = zoom;
+        zoom = jlimit (0.3f, 6.0f, zoom * (w.deltaY > 0 ? 1.15f : 1.0f / 1.15f));
+        const auto m = e.position - Point<float> (60.0f, 70.0f);
+        pan = m - (m - pan) * (zoom / old);
+        repaint();
+    }
+private:
+    Point<float> screen (int i) const
+    {
+        const float w = (float) getWidth() - 140.0f, h = (float) getHeight() - 110.0f;
+        const auto& p = pos[(size_t) i];
+        const float x = 60.0f + w * p.x / (float) std::max (1, maxGen), y = 70.0f + h * (p.y + 0.5f) / leaves;
+        return { 60.0f + (x - 60.0f) * zoom + pan.x, 70.0f + (y - 70.0f) * zoom + pan.y };
+    }
+    int nodeAt (Point<float> p) const
+    {
+        int best = -1; float bd = 12.0f;
+        for (int i = 0; i < (int) pos.size() && i < (int) proc.evo.size(); ++i) { const float d = p.getDistanceFrom (screen (i)); if (d < bd) { bd = d; best = i; } }
+        return best;
+    }
+    KeysKillaProcessor& proc;
+    std::vector<Point<float>> pos;
+    int maxGen = 1, hovered = -1;
+    float leaves = 1, zoom = 1;
+    Point<float> pan, panStart;
+};
+
 class EvolvePage : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -5401,8 +5515,70 @@ public:
         { if (proc.loopPlaying()) proc.stopLoop(); else { proc.evoAudition (proc.evoCenter, false); proc.toggleLoop(); } repaint(); });
         btn (newMelodyBtn, "NEW", "Another melody for the middle sound", [this]
         { if (isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size())) { proc.evoNewMelody (proc.evoCenter); repaint(); } });
+        // v0.39 LAYERS: what the next children change
+        static const char* layerNames[] { "ALL", "SOUND", "MELODY", "FX", "BEAT" };
+        static const char* layerTips[] { "The children change everything a little: sound, melody, effects and beat",
+                                         "Only the SOUND changes - the melody, effects and beat stay",
+                                         "Only the MELODY changes - same sound, new tunes",
+                                         "Only the EFFECTS change - same sound and melody",
+                                         "Only the BEAT changes - new kicks and hat rolls under the same idea" };
+        for (int i = 0; i < 5; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, layerNames[i]); b->framed = true; b->setTooltip (String (layerTips[i]) + "  (then EVOLVE AGAIN or click a bubble)");
+            b->onClick = [this, i] { proc.evoLayer = i; refreshLayers(); if (proc.evoCenter >= 0) { proc.evoGrow (proc.evoCenter, true); startAnim(); } };
+            addAndMakeVisible (*b); layerBtns.push_back (std::move (b));
+        }
+        btn (drumsBtn, "DRUMS", "The beat plays with the ideas (IDEA MODE) - drag BEAT for its MIDI", [this] { proc.evoBeat = ! proc.evoBeat.load(); refreshLayers(); });
+        // v0.39 ALIVE / CATCH / MAP / WORLD
+        btn (aliveBtn, "ALIVE", "ALIVE: the middle idea slowly changes by itself while it plays (WILD = how fast). When you like the moment: CATCH", [this]
+        { alive = ! alive; aliveBtn.selected = alive; aliveBtn.repaint(); if (alive && ! proc.loopPlaying()) { proc.evoAudition (proc.evoCenter, false); if (proc.evoIdea) proc.evoApplyIdea (proc.evoCenter); proc.toggleLoop(); } });
+        btn (catchBtn, "CATCH", "Keep this moment: what you hear right now becomes the middle idea (and grows)", [this] { proc.evoCatch(); alive = false; aliveBtn.selected = false; aliveBtn.repaint(); startAnim(); });
+        btn (mapBtn, "MAP", "The whole family you grew - click any idea to go back to it", [this] { showMap (! map.isVisible()); });
+        btn (worldBtn, "WORLD", "Save this whole world of ideas to a file - or open one", [this] { worldMenu(); });
+        addChildComponent (map);
+        map.onClose = [this] { showMap (false); startAnim(); };
+        melodyBtn.setButtonText (proc.evoIdea ? "PLAY IDEA" : "PLAY MELODY");
+        partMel.makeFile = [this] { return proc.evoExportPart (proc.evoCenter, 0); };
+        partMel.setTooltip ("The MELODY as MIDI (C minor, project tempo)");
+        partBass.makeFile = [this] { return proc.evoExportPart (proc.evoCenter, 1); };
+        partBass.setTooltip ("The BASS line as MIDI (C minor) - the same idea, its low notes");
+        partBeat.makeFile = [this] { return proc.evoExportPart (proc.evoCenter, 2); };
+        partBeat.setTooltip ("The BEAT as MIDI: kick C3 (36), snare D3 (38), hat F#3 (42), open hat A#3 (46) - put your drum kit on it in FL");
+        addAndMakeVisible (partMel); addAndMakeVisible (partBass); addAndMakeVisible (partBeat);
+        dragMidi.setVisible (false);
+        refreshLayers();
         setWantsKeyboardFocus (false);
         startTimerHz (30);
+    }
+    void refreshLayers()
+    {
+        for (int i = 0; i < (int) layerBtns.size(); ++i) { layerBtns[(size_t) i]->selected = proc.evoLayer == i; layerBtns[(size_t) i]->repaint(); }
+        drumsBtn.selected = proc.evoBeat.load(); drumsBtn.setButtonText (proc.evoBeat.load() ? "DRUMS ON" : "DRUMS OFF"); drumsBtn.repaint();
+    }
+    void showMap (bool on)
+    {
+        if (on) { map.setBounds (getLocalBounds().reduced (16).withTrimmedTop (80).withTrimmedBottom (84)); map.build(); map.toFront (false); }
+        map.setVisible (on);
+        mapBtn.selected = on; mapBtn.repaint();
+    }
+    void worldMenu()
+    {
+        PopupMenu m;
+        m.addItem (1, "Save this world (all ideas, your path, the POCKET)...", ! proc.evo.empty());
+        m.addItem (2, "Open a world...");
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&worldBtn), [this, safe = SafePointer<EvolvePage> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            auto dir = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Worlds");
+            dir.createDirectory();
+            chooser = std::make_unique<FileChooser> (r == 1 ? "Save the world" : "Open a world", dir, "*.evolve");
+            if (r == 1)
+                chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting, [this, safe] (const FileChooser& fc)
+                { if (safe != nullptr && fc.getResult() != File()) proc.evoSaveWorld (fc.getResult().withFileExtension ("evolve")); });
+            else
+                chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this, safe] (const FileChooser& fc)
+                { if (safe != nullptr && fc.getResult().existsAsFile() && proc.evoLoadWorld (fc.getResult())) startAnim(); });
+        });
     }
     std::function<void()> onStudio, onTheme, onPickSeed, onChanged;
     std::function<void (int)> onSavePreset;   // node -> save as preset (the page asks for a name)
@@ -5428,13 +5604,13 @@ public:
         kk::modern::plate (g, { 12, 12, (float) getWidth() - 24, 70 }, 18.0f);
         kk::modern::wordmark (g, { 40, 22, 420, 44 }, 34.0f);
         g.setColour (t.text.withAlpha (0.85f)); g.setFont (kk::modern::font (16.5f, true, 0.06f));
-        g.drawText (proc.evo.empty() ? "drop any sound  -  or pick a seed from the bank" : "hover = hear it     click = it grows     drag from the middle = blend",
+        g.drawText (proc.evo.empty() ? "drop any sound  -  or pick a seed from the bank" : "hover = hear   click = grow   drag onto a bubble = cross",
                     Rectangle<float> (420, 26, (float) getWidth() - 420 - 500, 36), Justification::centredLeft);
         // bottom bar
         kk::modern::plate (g, bottomBar().toFloat(), 18.0f);
         drawWild (g);
         paintMelody (g);
-        if (proc.evo.empty()) { paintEmpty (g); return; }
+        if (proc.evo.empty()) { paintEmpty (g); paintPocket (g); return; }
 
         const auto path = proc.evoPath();
         paintPath (g, path);
@@ -5472,7 +5648,24 @@ public:
         }
         drawBubble (g, c, centrePos(), centreR, true, {});
         // actions under the hovered bubble
-        if (isPositiveAndBelow (hovered, (int) proc.evo.size()) && hovered != c) drawActions (g, hovered);
+        if (isPositiveAndBelow (hovered, (int) proc.evo.size()) && hovered != c && carry < 0 && carryPocket < 0) drawActions (g, hovered);
+        if (alive)
+        {
+            const float pulse = 0.5f + 0.5f * std::sin ((float) Time::getMillisecondCounter() * 0.004f);
+            g.setColour (t.accent.withAlpha (0.25f + 0.35f * pulse)); g.drawEllipse (Rectangle<float> (centreR * 2.0f + 18, centreR * 2.0f + 18).withCentre (centrePos()), 2.5f);
+            g.setColour (kk::accentText()); g.setFont (kk::modern::font (11.0f, true, 0.3f));
+            g.drawText ("ALIVE", Rectangle<float> (100, 16).withCentre (centrePos().translated (0, -centreR - 22)), Justification::centred);
+        }
+        paintPocket (g);
+        if ((carry >= 0 || carryPocket >= 0) && carryAt.x > 0)   // carrying a bubble
+        {
+            g.setColour (t.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (60, 60).withCentre (carryAt));
+            g.setColour (t.accent); g.drawEllipse (Rectangle<float> (60, 60).withCentre (carryAt), 2.0f);
+            const int tgt = nodeAt (carryAt);
+            g.setColour (t.text); g.setFont (kk::modern::font (12.0f, true, 0.1f));
+            g.drawText (pocketArea().contains (carryAt) ? "KEEP IN POCKET" : tgt >= 0 && tgt != carry ? "DROP = CROSS THEM" : "drop onto a bubble",
+                        Rectangle<float> (220, 18).withCentre (carryAt.translated (0, -44)), Justification::centred);
+        }
         if (dropHot)
         {
             g.setColour (t.accent.withAlpha (0.12f)); g.fillRect (getLocalBounds());
@@ -5488,10 +5681,15 @@ public:
         const int h = nodeAt (e.position);
         const int pa = actionAt (e.position);
         if (h != hovered && pa < 0) { hovered = h; hoverSince = Time::getMillisecondCounter(); auditioned = false; repaint(); }
+        const int ph = pocketAt (e.position) < (int) proc.pocket.size() ? pocketAt (e.position) : -1;
+        if (ph != pocketHover) { pocketHover = ph; pocketSince = Time::getMillisecondCounter(); pocketHeard = false; repaint(); }
     }
-    void mouseExit (const MouseEvent&) override { hovered = -1; hoverSince = Time::getMillisecondCounter(); repaint(); }
+    void mouseExit (const MouseEvent&) override { hovered = -1; pocketHover = -1; hoverSince = Time::getMillisecondCounter(); repaint(); }
     void mouseDown (const MouseEvent& e) override
     {
+        carry = -1; carryPocket = -1; carryAt = {};
+        const int pk = pocketAt (e.position);
+        downPocket = pk >= 0 && pk < (int) proc.pocket.size() ? pk : -1;
         downNode = nodeAt (e.position); downAction = actionAt (e.position); dragFired = false;
         if (wildRect().expanded (6, 8).contains (e.position)) { draggingWild = true; setWild (e.position.x); }
         else if (tasteRect().expanded (6, 8).contains (e.position)) { draggingTaste = true; setTaste (e.position.x); }
@@ -5500,6 +5698,9 @@ public:
     {
         if (draggingWild) { setWild (e.position.x); return; }
         if (draggingTaste) { setTaste (e.position.x); return; }
+        // v0.39: carry a pocket idea or a bubble (not the middle) - onto another bubble = a cross, onto the POCKET = keep it
+        if (downPocket >= 0 && e.getDistanceFromDragStart() > 8) { carryPocket = downPocket; carryAt = e.position; repaint(); return; }
+        if (downAction < 0 && downNode >= 0 && downNode != proc.evoCenter && e.getDistanceFromDragStart() > 10) { carry = downNode; carryAt = e.position; repaint(); return; }
         if (downAction >= 0 && ! dragFired && e.getDistanceFromDragStart() > 6)   // drag WAV / MELODY out of a bubble
         {
             dragFired = true;
@@ -5511,7 +5712,8 @@ public:
             }
             return;
         }
-        // drag from the middle towards a child = blend
+        // drag from the middle towards a child = blend (onto the POCKET = keep the middle)
+        if (downNode == proc.evoCenter && downNode >= 0 && pocketArea().contains (e.position)) { carry = downNode; carryAt = e.position; morphKid = -1; repaint(); return; }
         if (downNode == proc.evoCenter && downNode >= 0 && e.getDistanceFromDragStart() > 12)
         {
             const auto& kids = proc.evo[(size_t) proc.evoCenter].kids;
@@ -5535,6 +5737,24 @@ public:
     {
         if (draggingWild) { draggingWild = false; return; }
         if (draggingTaste) { draggingTaste = false; return; }
+        if (carry >= 0 || carryPocket >= 0)
+        {
+            const int tgt = nodeAt (e.position);
+            if (pocketArea().contains (e.position) && carry >= 0) proc.evoPocketAdd (carry);
+            else if (tgt >= 0 && tgt != carry)
+            {
+                const auto src = carry >= 0 ? proc.evo[(size_t) carry] : proc.pocket[(size_t) carryPocket];
+                proc.evoCross (src, tgt); startAnim();
+            }
+            carry = -1; carryPocket = -1; carryAt = {}; repaint(); return;
+        }
+        if (downPocket >= 0 && ! e.mouseWasDraggedSinceMouseDown())
+        {
+            if (e.mods.isPopupMenu()) { pocketMenu (downPocket); return; }
+            proc.evoAuditionNode (proc.pocket[(size_t) downPocket]);
+            if (proc.evoIdea) proc.fxApply (proc.pocket[(size_t) downPocket].fx);
+            return;
+        }
         if (morphKid >= 0)
         {
             const auto& kids = proc.evo[(size_t) proc.evoCenter].kids;
@@ -5559,6 +5779,26 @@ public:
         if (proc.loopPlaying()) proc.stopLoop();
         else if (proc.evoCenter >= 0) { proc.evoAudition (proc.evoCenter); if (proc.evoIdea) { proc.evoApplyIdea (proc.evoCenter); proc.toggleLoop(); } }
     }
+    void pocketMenu (int i)
+    {
+        PopupMenu m;
+        m.addSectionHeader (proc.pocket[(size_t) i].name);
+        m.addItem (1, "Hear it");
+        m.addItem (2, "Cross it with the middle idea");
+        m.addItem (3, "Start a new tree from it");
+        m.addSeparator();
+        m.addItem (4, "Take it out of the POCKET");
+        m.showMenuAsync (PopupMenu::Options(), [this, i, safe = SafePointer<EvolvePage> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0 || ! isPositiveAndBelow (i, (int) proc.pocket.size())) return;
+            const auto n = proc.pocket[(size_t) i];
+            if (r == 1) proc.evoAuditionNode (n);
+            if (r == 2 && proc.evoCenter >= 0) { proc.evoCross (n, proc.evoCenter); startAnim(); }
+            if (r == 3) { proc.evoSeedNode (n); startAnim(); }
+            if (r == 4) proc.evoPocketRemove (i);
+            repaint();
+        });
+    }
     void refreshIdeaBtn()
     {
         ideaBtn.setButtonText (proc.evoIdea ? "IDEA: SOUND + MELODY + FX" : "SOUND ONLY");
@@ -5572,6 +5812,7 @@ public:
     }
     void showDebugMorph (int kidIndex, float t) { morphKid = kidIndex; morphT = t; animStart = 0; wasEmpty = proc.evo.empty(); layoutButtons(); repaint(); }
     void refreshLayout() { wasEmpty = proc.evo.empty(); layoutButtons(); repaint(); }
+    void debugMap() { showMap (true); }
 
 private:
     // ---- geometry (design pixels)
@@ -5643,14 +5884,14 @@ private:
     Rectangle<float> pathDot (int i, int n) const
     {
         ignoreUnused (n);
-        return { 40.0f + (float) i * 30.0f, 100.0f, 18.0f, 18.0f };
+        return { 40.0f + (float) i * 30.0f, 146.0f, 18.0f, 18.0f };
     }
     void paintPath (Graphics& g, const std::vector<int>& path)
     {
         const auto& t = kk::theme();
         if (path.empty()) return;
         g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.2f));
-        g.drawText ("YOUR PATH", Rectangle<float> (40, 122, 200, 16), Justification::centredLeft);
+        g.drawText ("YOUR PATH", Rectangle<float> (40, 168, 200, 16), Justification::centredLeft);
         for (int i = 0; i < (int) path.size(); ++i)
         {
             const auto r = pathDot (i, (int) path.size());
@@ -5664,7 +5905,7 @@ private:
                 if (path[(size_t) i] == hovered && hovered != proc.evoCenter)
                 {
                     g.setColour (t.text); g.setFont (kk::modern::font (11.0f, true, 0.06f));
-                    g.drawText (proc.evo[(size_t) hovered].name + "  - click = back here", Rectangle<float> (40, 140, 500, 16), Justification::centredLeft);
+                    g.drawText (proc.evo[(size_t) hovered].name + "  - click = back here", Rectangle<float> (40, 186, 500, 16), Justification::centredLeft);
                 }
     }
     void drawBubble (Graphics& g, int node, Point<float> c, float r, bool isCentre, const String& tag)
@@ -5772,6 +6013,14 @@ private:
         studioBtn.setBounds (W - 92 - 132, 26, 124, 42);
         ideaBtn.setBounds (studioBtn.getX() - 262, 26, 254, 42);
         refreshIdeaBtn();
+        {
+            int lx = 40;
+            for (auto& lb : layerBtns) { lb->setBounds (lx, 96, lb.get() == layerBtns[2].get() ? 88 : 70, 32); lx += lb->getWidth() + 5; }
+            drumsBtn.setBounds (lx + 10, 96, 104, 32);
+            const int rx = W - 176;
+            aliveBtn.setBounds (rx, 110, 150, 40); catchBtn.setBounds (rx, 156, 150, 40);
+            mapBtn.setBounds (rx, 230, 150, 40); worldBtn.setBounds (rx, 276, 150, 40);
+        }
         const auto b = bottomBar();
         int x = b.getX() + 540;
         againBtn.setBounds (x, b.getY() + 18, 146, 40); x += 152;
@@ -5780,7 +6029,9 @@ private:
         dragWav.setBounds (x, b.getY() + 16, 140, 44); x += 148;
         melodyBtn.setBounds (x, b.getY() + 18, 130, 40); x += 136;
         newMelodyBtn.setBounds (x, b.getY() + 18, 56, 40); x += 62;
-        dragMidi.setBounds (x, b.getY() + 16, 120, 44); x += 128;
+        partMel.setBounds (x, b.getY() + 16, 76, 44); x += 80;
+        partBass.setBounds (x, b.getY() + 16, 76, 44); x += 80;
+        partBeat.setBounds (x, b.getY() + 16, 76, 44); x += 82;
         melodyRoll = { (float) x, (float) b.getY() + 10, (float) (b.getRight() - 12 - x), (float) b.getHeight() - 20 };
         const auto c = centrePos();
         bankBtn.setBounds ((int) c.x - 330, (int) c.y + 190, 210, 42);
@@ -5791,6 +6042,9 @@ private:
         for (auto* bt : { &againBtn, &saveBtn }) bt->setVisible (! empty);
         dragWav.setVisible (! empty); dragMidi.setVisible (! empty);
         melodyBtn.setVisible (! empty); newMelodyBtn.setVisible (! empty);
+        for (auto* c : { (Component*) &partMel, (Component*) &partBass, (Component*) &partBeat, (Component*) &aliveBtn, (Component*) &catchBtn, (Component*) &mapBtn, (Component*) &drumsBtn }) c->setVisible (! empty);
+        for (auto& lb : layerBtns) lb->setVisible (! empty);
+        dragMidi.setVisible (false);
     }
     void timerCallback() override
     {
@@ -5811,7 +6065,23 @@ private:
         { proc.evoAudition (proc.evoCenter, false); if (proc.evoIdea) proc.evoApplyIdea (proc.evoCenter); lastHeard = proc.evoCenter; }
         const bool empty = proc.evo.empty();
         if (empty != wasEmpty) { wasEmpty = empty; layoutButtons(); }
-        melodyBtn.setButtonText (proc.loopPlaying() ? "STOP MELODY" : "PLAY MELODY");
+        melodyBtn.setButtonText (proc.loopPlaying() ? "STOP" : proc.evoIdea ? "PLAY IDEA" : "PLAY MELODY");
+        if (pocketHover >= 0 && ! pocketHeard && now - pocketSince > 280 && isPositiveAndBelow (pocketHover, (int) proc.pocket.size()) && carry < 0 && carryPocket < 0)
+        {
+            pocketHeard = true;
+            const auto& pn = proc.pocket[(size_t) pocketHover];
+            proc.evoAuditionNode (pn, ! proc.evoIdea);
+            if (proc.evoIdea) { proc.fxApply (pn.fx); if (! proc.loopPlaying()) proc.toggleLoop(); }
+            lastHeard = -2;
+        }
+        if (pocketHover < 0 && lastHeard == -2 && hovered < 0 && now - pocketSince > 400)
+        { proc.evoAudition (proc.evoCenter, false); if (proc.evoIdea) proc.evoApplyIdea (proc.evoCenter); lastHeard = proc.evoCenter; }
+        if (alive)   // ALIVE: a small step every 1.6 s (faster when WILD)
+        {
+            const uint32 every = (uint32) (2200 - 1400 * proc.evoWild);
+            if (now - lastAlive > every && hovered < 0) { lastAlive = now; proc.evoAliveStep (proc.evoWild); }
+            repaint (Rectangle<float> (centreR * 2.0f + 60, centreR * 2.0f + 80).withCentre (centrePos()).toNearestInt());
+        }
         if (proc.loopPlaying()) repaint (melodyRoll.toNearestInt().expanded (2));
         if (proc.evoVer.load() != lastVer || animStart != 0 || empty)
         {
@@ -5867,6 +6137,7 @@ private:
         m.addItem (3, "Save...");
         m.addItem (4, "To STUDIO as PARENT A", ! n.isAudio());
         m.addItem (5, "To STUDIO as PARENT B", ! n.isAudio());
+        m.addItem (7, "Keep in the POCKET");
         m.addSeparator();
         m.addItem (6, "Not my taste (fewer like this)", node != proc.evoCenter);
         m.showMenuAsync (PopupMenu::Options(), [this, node, safe = SafePointer<EvolvePage> (this)] (int r)
@@ -5877,6 +6148,7 @@ private:
             if (r == 3) saveMenu (node, nullptr);
             if (r == 4 || r == 5) { auto g = proc.evo[(size_t) node].g; g.name = proc.evo[(size_t) node].name; proc.setParentGenome (r - 4, g); }
             if (r == 6) { proc.evoNotMyTaste (node); hovered = -1; repaint(); }
+            if (r == 7) { proc.evoPocketAdd (node); repaint(); }
         });
     }
 
@@ -5913,6 +6185,48 @@ private:
     float morphT = 0.0f;
     bool auditioned = false, dropHot = false, dragFired = false, draggingWild = false, draggingTaste = false, wasEmpty = true;
     HotButton ideaBtn { lnf };
+    std::vector<std::unique_ptr<HotButton>> layerBtns;
+    HotButton drumsBtn { lnf }, aliveBtn { lnf }, catchBtn { lnf }, mapBtn { lnf }, worldBtn { lnf };
+    DragFileButton partMel { "MEL", TC (0xff36ff6a) }, partBass { "BASS", TC (0xff36ff6a) }, partBeat { "BEAT", TC (0xff36ff6a) };
+    EvoMapView map { proc };
+    bool alive = false; uint32 lastAlive = 0;
+    // POCKET + carrying a bubble (drop it onto another = a cross, onto the POCKET = keep it)
+    int carry = -1, carryPocket = -1, pocketHover = -1, downPocket = -1; Point<float> carryAt;
+    uint32 pocketSince = 0; bool pocketHeard = false;
+    static constexpr int pocketSlots = 8;
+    Rectangle<float> pocketSlot (int i) const { return { 46.0f, 240.0f + (float) i * 56.0f, 48.0f, 48.0f }; }
+    Rectangle<float> pocketArea() const { return { 30.0f, 214.0f, 80.0f, 26.0f + pocketSlots * 56.0f }; }
+    int pocketAt (Point<float> p) const { for (int i = 0; i < pocketSlots; ++i) if (pocketSlot (i).expanded (4).contains (p)) return i; return -1; }
+    void paintPocket (Graphics& g)
+    {
+        const auto& t = kk::theme();
+        g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.25f));
+        g.drawText ("POCKET", Rectangle<float> (20, 216, 100, 16), Justification::centred);
+        for (int i = 0; i < pocketSlots; ++i)
+        {
+            const auto r = pocketSlot (i);
+            if (i < (int) proc.pocket.size())
+            {
+                const auto& n = proc.pocket[(size_t) i];
+                g.setColour (t.night ? Colour (0xd8262a31) : Colour (0xe6ffffff)); g.fillEllipse (r);
+                float pk = 0.0001f; for (auto v : n.wave) pk = std::max (pk, v);
+                for (int b = 0; b < 64; b += 2)
+                {
+                    const float h = (n.waveReady ? std::pow (n.wave[(size_t) b] / pk, 0.7f) : 0.15f) * r.getHeight() * 0.22f;
+                    g.setColour (t.accent.withAlpha (0.85f)); g.fillRect (r.getX() + 8 + (r.getWidth() - 16) * (float) b / 64.0f, r.getCentreY() - h, 1.2f, h * 2);
+                }
+                g.setColour (i == pocketHover ? t.accent : t.text.withAlpha (0.35f)); g.drawEllipse (r, i == pocketHover ? 2.0f : 1.2f);
+                if (i == pocketHover) { g.setColour (t.text); g.setFont (kk::modern::font (11.5f, true, 0.04f)); g.drawText (n.name, Rectangle<float> (r.getRight() + 8, r.getCentreY() - 8, 260, 16), Justification::centredLeft); }
+            }
+            else
+            {
+                Path c; c.addEllipse (r.reduced (4)); Path d; const float dl[] { 4.0f, 4.0f };
+                PathStrokeType (1.0f).createDashedStroke (d, c, dl, 2);
+                g.setColour (t.text.withAlpha (carry >= 0 ? 0.6f : 0.2f)); g.fillPath (d);
+            }
+        }
+        if (proc.pocket.empty()) { g.setColour (t.dim.withAlpha (0.8f)); g.setFont (kk::modern::font (9.5f, true, 0.05f)); g.drawFittedText ("drag a\nbubble\nhere", pocketSlot (0).toNearestInt(), Justification::centred, 3, 0.8f); }
+    }
 };
 
 //==============================================================================
@@ -6225,18 +6539,19 @@ public:
     // tests / screenshots: 0 main, 1..8 advanced tab, 9 browser, 10 movement, 11 808
     void showView (int v)
     {
-        showEvolve (v >= 32 && v <= 35);
-        if (v == 32 || v == 33 || v == 35)   // EVOLVE: a seed, a few generations, the kids (32 hover, 33 blend, 35 night look = same)
+        showEvolve ((v >= 32 && v <= 35) || v == 40);
+        if (v == 32 || v == 33 || v == 35 || v == 40)   // EVOLVE: a seed, a few generations, the kids (32 hover, 33 blend, 35 night look = same)
         {
             proc.evoSeedPreset (0);
             proc.evoFocus (proc.evo[0].kids[2]);
             proc.evoFocus (proc.evo[(size_t) proc.evoCenter].kids[4]);
             for (int i = 0; i < 30; ++i) proc.renderNextThumbnail();
-            if (v == 32) evolve->showDebugHover (1);
+            if (v == 32) { proc.evoPocketAdd (proc.evo[(size_t) proc.evoCenter].kids[1]); proc.evoPocketAdd (proc.evo[(size_t) proc.evoCenter].kids[3]); evolve->showDebugHover (1); }
+            if (v == 40) { for (int k = 0; k < 4; ++k) proc.evoFocus (proc.evo[(size_t) proc.evoCenter].kids[(size_t) (k % 6)]); evolve->debugMap(); }
             if (v == 33) evolve->showDebugMorph (0, 0.55f);
         }
         if (v == 34) proc.evoReset();
-        if (v >= 32 && v <= 35) evolve->refreshLayout();
+        if ((v >= 32 && v <= 35) || v == 40) evolve->refreshLayout();
         if (v >= 1 && v <= 8) { ensureAdvanced(); advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
         if (v == 9) openTab (tabBrowser);
         if (v == 10) openTab (tabParams);
