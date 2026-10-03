@@ -676,7 +676,7 @@ public:
         }
         g.setColour (th.text);
         g.setFont (serif (27.0f, false, 0.02f));
-        g.drawFittedText (proc.labParentName (slot), Rectangle<int> (64, 176, getWidth() - 128, 32), Justification::centred, 1, 0.85f);
+        g.drawFittedText (proc.labParentName (slot), Rectangle<int> (64, 176, getWidth() - 84, 32), Justification::centred, 1, 0.6f);
         const auto& pg = proc.parent (slot);
         String tags = wav ? String ("YOUR SOUND") : pg.cat >= 0 ? categoryNames()[pg.cat] : String ("USER");
         if (! wav && pg.gen > 0) tags << "  .  GEN " << pg.gen;
