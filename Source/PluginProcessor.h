@@ -130,6 +130,41 @@ public:
     void labBreedAudio();                                      // 6 kids from the two parents as audio
     void auditionParent (int slot);                            // click = hear the parent (and play it on the keys)
     void auditionAncestor (int slot);
+
+    // ---------------- v0.36 EVOLVE: one seed, a living tree of sounds ----------------
+    // The seed (a bank sound, the current sound or any WAV) sits in the middle; 6 children grow around it. Click one: it
+    // becomes the middle and the next generation grows. SAFE <-> WILD decides how far they may wander.
+    struct EvoNode
+    {
+        Genome g;                    // synth sound (bank seeds)
+        kk::PairPtr audio;           // audio sound (WAV seeds and their family)
+        int parent = -1, gen = 0;
+        std::vector<int> kids;
+        std::array<float, 64> wave {}; bool waveReady = false;
+        juce::String name;
+        bool isAudio() const { return audio != nullptr; }
+    };
+    std::vector<EvoNode> evo;
+    int evoCenter = -1;
+    float evoWild = 0.35f;
+    std::atomic<int> evoVer { 0 };
+    juce::String evoSeedFile;                                  // a WAV seed (kept with the project)
+    bool evoActive = false;                                     // the EVOLVE page is open (the keys play its sound)
+    void applyGenomePublic (const Genome& g) { applyGenome (g, true); }
+    void evoReset();
+    void evoSeedPreset (int idx);
+    void evoSeedCurrent();
+    bool evoSeedFromFile (const juce::File& f);
+    void evoSeedRandom();
+    void evoGrow (int node, bool reroll);                       // 6 new children of this node
+    void evoFocus (int node);                                   // the node becomes the middle (its kids grow), the keys play it
+    void evoAudition (int node, bool preview = true);           // hear it - the keys play it, the middle stays
+    void evoMorph (int a, int b, float t);                      // live blend between two bank-family sounds
+    kk::PairPtr evoAsSound (int node);
+    juce::File evoExportWav (int node);
+    juce::File evoExportMidi (int node);
+    std::vector<int> evoPath() const;                           // seed ... middle
+    juce::String evoName (const EvoNode& parent, int k, uint32_t seed) const;
     kk::PairPtr childAsSound (int i);                          // a bank child rendered as a sound (save / drag)
     juce::File exportChildWav (int i);
     void genomeParentSet (int slot);

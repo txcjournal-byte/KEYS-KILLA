@@ -586,6 +586,49 @@ static int unitTests()
         check (kk::SoundKits::renameKit (kit, kit + " 2") && kk::SoundKits::count (kit + " 2") == 2, "SOUND KITS: rename a kit");
         check (kk::SoundKits::deleteKit (kit + " 2") && ! kk::SoundKits::kits().contains (kit + " 2"), "SOUND KITS: delete a kit");
     }
+    // v0.36 EVOLVE: seed -> 6 children -> grow from any of them, SAFE vs WILD, audio seeds, blend, export, project
+    {
+        KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
+        p.evoSeedPreset (0);
+        check (p.evo.size() == 7 && p.evoCenter == 0 && p.evo[0].kids.size() == 6, "EVOLVE: a seed grows 6 children");
+        const int k3 = p.evo[0].kids[3];
+        p.evoFocus (k3);
+        check (p.evoCenter == k3 && p.evo[(size_t) k3].kids.size() == 6 && p.evoPath().size() == 2, "EVOLVE: click a child - it becomes the middle and grows");
+        auto dist = [&] (float wild)
+        {
+            p.evoWild = wild; p.evoSeedPreset (5);
+            double d = 0;
+            for (int k : p.evo[0].kids) for (size_t i = 0; i < p.evo[0].g.v.size(); ++i) d += std::abs (p.evo[(size_t) k].g.v[i] - p.evo[0].g.v[i]);
+            return d;
+        };
+        double safe = 0, wild = 0; for (int r = 0; r < 3; ++r) { safe += dist (0.0f); wild += dist (1.0f); }
+        check (wild > safe * 1.3, "EVOLVE: WILD children wander further than SAFE ones");
+        std::set<juce::String> names; for (auto& n : p.evo) names.insert (n.name);
+        check (names.size() == p.evo.size(), "EVOLVE: every child has its own name");
+        const auto wf = p.evoExportWav (p.evo[0].kids[0]), mf = p.evoExportMidi (p.evo[0].kids[0]);
+        check (wf.existsAsFile() && wf.getSize() > 2000 && mf.existsAsFile(), "EVOLVE: drag a child as WAV and as a melody");
+        const float before = p.apvts.getParameter (ID::cutoff)->getValue();
+        p.evoMorph (0, p.evo[0].kids[5], 1.0f);
+        const float after = p.apvts.getParameter (ID::cutoff)->getValue();
+        check (std::abs (after - p.evo[(size_t) p.evo[0].kids[5]].g.v[(size_t) p.apvts.getParameter (ID::cutoff)->getParameterIndex()]) < 1.0e-3f || before != after, "EVOLVE: blend moves the sound to the child");
+        // the tree comes back with the project
+        p.evoFocus (p.evo[0].kids[1]);
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q (false); q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (q.evo.size() == p.evo.size() && q.evoCenter == p.evoCenter && q.evo[(size_t) q.evoCenter].name == p.evo[(size_t) p.evoCenter].name, "EVOLVE: the tree is saved with the project");
+        // an audio seed (your WAV)
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_evo_seed.wav");
+        {
+            juce::AudioBuffer<float> b (2, 44100);
+            for (int i = 0; i < b.getNumSamples(); ++i) { const float x = 0.5f * std::sin ((float) i * 0.0627f) * std::exp (-(float) i / 12000.0f); b.setSample (0, i, x); b.setSample (1, i, x); }
+            f.deleteFile(); juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 2, 16, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        check (p.evoSeedFromFile (f) && p.evo[0].isAudio() && p.evo[0].kids.size() == 6 && p.evo[(size_t) p.evo[0].kids[0]].isAudio(), "EVOLVE: your WAV is a seed - 6 audio children");
+        p.evoFocus (p.evo[0].kids[2]);
+        check (p.evo[(size_t) p.evoCenter].kids.size() == 6, "EVOLVE: audio children grow too");
+    }
     // v0.34 NAMES: no genre / city words, unique names and IDs, old names still find their sound
     {
         const auto& ps = factoryPresets();

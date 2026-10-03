@@ -4497,6 +4497,19 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             }
             break;
         }
+        case 8:   // EVOLVE: a seed with six children around it
+        {
+            const float rr = w * 0.42f;
+            g.fillEllipse (cx - 3.5f, cy - 3.5f, 7, 7);
+            for (int i = 0; i < 6; ++i)
+            {
+                const float a = MathConstants<float>::twoPi * (float) i / 6.0f;
+                const Point<float> pt (cx + std::cos (a) * rr, cy + std::sin (a) * rr);
+                g.drawLine (cx, cy, pt.x, pt.y, 1.0f);
+                g.fillEllipse (pt.x - 2.2f, pt.y - 2.2f, 4.4f, 4.4f);
+            }
+            break;
+        }
         default:  // FX RACK: a knob with its scale
         {
             const float rr = w * 0.36f;
@@ -4537,13 +4550,13 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 6;
-    // v0.35 BREED LAB: BREED LAB / FAMILY TREE / PAIR FROM VST / MY SOUNDS, STUDIO: SAMPLER / FX RACK (the ids stay as before)
-    static int tileId (int v) { static const int ids[numTiles] { 0, 1, 3, 4, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static constexpr int numTiles = 7;
+    // v0.36: EVOLVE / BREED LAB / FAMILY TREE / PAIR FROM VST / MY SOUNDS, STUDIO: SAMPLER / FX RACK (the ids stay as before)
+    static int tileId (int v) { static const int ids[numTiles] { 8, 0, 1, 3, 4, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER\n/ CHOP", "DRUM\nKIT", "FX\nRACK" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER\n/ CHOP", "DRUM\nKIT", "FX\nRACK", "EVOLVE" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -4560,7 +4573,7 @@ public:
                 g.drawFittedText (dropHover ? "DROP\n= PARENT" : flashText, r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
-            if (v == 4)
+            if (v == 5)
             {
                 const auto lr = r.withY (r.getY() - 15).withHeight (13);
                 g.setColour (TC (0xffc8c4e8)); g.setFont (serif (10.0f, true, 0.3f));
@@ -4608,13 +4621,481 @@ private:
     {
         const float gap = 5.0f, extra = 18.0f;
         const float h = ((float) getHeight() - gap * (numTiles - 1) - extra) / (float) numTiles;
-        return { 3.0f, (float) k * (h + gap) + (k >= 4 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
+        return { 3.0f, (float) k * (h + gap) + (k >= 5 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
     }
     void timerCallback() override { flash -= 0.012f; if (flash <= 0) { flash = 0; stopTimer(); } repaint (part (0).expanded (4).toNearestInt()); }
     KKLookAndFeel& lnf;
     bool dropHover = false;
     float flash = 0;
     String flashText;
+};
+
+//==============================================================================
+// v0.36 EVOLVE: the whole plugin on one screen. A seed in the middle, its six children around it as glass bubbles.
+// Hover = hear it (the keys play it).  Click = it becomes the middle and the next generation grows.
+// Drag from the middle towards a child = blend the two live.  SAFE <-> WILD = how far the children may wander.
+// Every bubble: SAVE, drag WAV, drag MELODY.  The path you took stays on top - click any step to go back.
+class EvolvePage : public Component, public FileDragAndDropTarget, private Timer
+{
+public:
+    EvolvePage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn)
+        { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (studioBtn, "STUDIO", "The full studio: BREED LAB with two parents, FAMILY TREE, SAMPLER, VST, MY SOUNDS, FX RACK", [this] { if (onStudio) onStudio(); });
+        btn (themeBtn, "", "Day / night", [this] { if (onTheme) onTheme(); });
+        themeBtn.glyph = [] (Graphics& g, Rectangle<float> r, const Skin&)
+        {
+            const auto& t = kk::theme(); const auto c = r.getCentre();
+            if (t.night) kk::modern::sun (g, c, t.text.withAlpha (0.9f)); else kk::modern::moon (g, c, t.text.withAlpha (0.85f), t.night ? Colour (0xff1d2026) : Colour (0xffeef0f2));
+        };
+        btn (seedBtn, "NEW SEED", "Start a new tree: a sound from the bank, a surprise, the current sound - or drop any WAV onto the page", [this] { seedMenu (&seedBtn); });
+        btn (againBtn, "EVOLVE AGAIN", "Six new children of the middle sound", [this] { if (proc.evoCenter >= 0) { proc.evoGrow (proc.evoCenter, true); startAnim(); } });
+        btn (saveBtn, "SAVE", "Keep the middle sound: as a preset, or as a sound in your folders / kits", [this] { saveMenu (proc.evoCenter, &saveBtn); });
+        btn (bankBtn, "PICK FROM THE BANK", "Choose the seed from the sound library", [this] { if (onPickSeed) onPickSeed(); });
+        btn (diceBtn, "SURPRISE ME", "A random seed from the bank", [this] { proc.evoSeedRandom(); startAnim(); });
+        btn (currentBtn, "USE THE CURRENT SOUND", "The sound on the keys right now becomes the seed", [this] { proc.evoSeedCurrent(); startAnim(); });
+        dragWav.makeFile = [this] { return proc.evoExportWav (proc.evoCenter); };
+        dragWav.setTooltip ("Drag the middle sound into FL Studio as a WAV");
+        dragMidi.makeFile = [this] { return proc.evoExportMidi (proc.evoCenter); };
+        dragMidi.setTooltip ("Drag a melody for the middle sound into FL Studio (MIDI)");
+        addAndMakeVisible (dragWav); addAndMakeVisible (dragMidi);
+        setWantsKeyboardFocus (false);
+        startTimerHz (30);
+    }
+    std::function<void()> onStudio, onTheme, onPickSeed, onChanged;
+    std::function<void (int)> onSavePreset;   // node -> save as preset (the page asks for a name)
+
+    // ---- FileDragAndDropTarget: any sound becomes the seed
+    bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) return true; return false; }
+    void fileDragEnter (const StringArray&, int, int) override { dropHot = true; repaint(); }
+    void fileDragExit (const StringArray&) override { dropHot = false; repaint(); }
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        dropHot = false;
+        for (auto& x : files) if (proc.evoSeedFromFile (File (x))) { startAnim(); break; }
+        repaint();
+    }
+
+    void visibilityChanged() override { proc.evoActive = isVisible(); if (isVisible()) { layoutButtons(); repaint(); } }
+
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        pageBackdrop (g, *this, 0.7f);
+        // header
+        kk::modern::plate (g, { 12, 12, (float) getWidth() - 24, 70 }, 18.0f);
+        kk::modern::wordmark (g, { 40, 22, 420, 44 }, 32.0f);
+        g.setColour (t.accent); g.setFont (kk::modern::font (13.0f, true, 0.5f));
+        g.drawText ("EVOLVE", Rectangle<float> (392, 30, 160, 30), Justification::centredLeft);
+        g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.14f));
+        g.drawText (proc.evo.empty() ? "drop a sound  -  or pick a seed" : "hover = hear   click = grow   drag from the middle = blend",
+                    Rectangle<float> (560, 30, 600, 30), Justification::centredLeft);
+        // bottom bar
+        kk::modern::plate (g, bottomBar().toFloat(), 18.0f);
+        drawWild (g);
+        if (proc.evo.empty()) { paintEmpty (g); return; }
+
+        const auto path = proc.evoPath();
+        paintPath (g, path);
+        const int c = proc.evoCenter;
+        if (! isPositiveAndBelow (c, (int) proc.evo.size())) return;
+        const auto& centre = proc.evo[(size_t) c];
+        const float a = anim();
+        // links
+        if (centre.parent >= 0)
+        {
+            g.setColour (t.accent.withAlpha (0.35f)); g.drawLine (Line<float> (parentPos(), centrePos()), 1.4f);
+        }
+        for (int k = 0; k < (int) centre.kids.size(); ++k)
+        {
+            const auto kp = kidPos (k, a);
+            ColourGradient lg (t.accent.withAlpha (0.55f), centrePos().x, centrePos().y, t.accent.withAlpha (0.12f), kp.x, kp.y, false);
+            g.setGradientFill (lg); g.drawLine (Line<float> (centrePos(), kp), 1.6f);
+        }
+        // morph line
+        if (morphKid >= 0 && isPositiveAndBelow (morphKid, (int) centre.kids.size()))
+        {
+            const auto kp = kidPos (morphKid, 1.0f);
+            const auto m = centrePos() + (kp - centrePos()) * morphT;
+            g.setColour (t.accent); g.drawLine (Line<float> (centrePos(), m), 4.0f);
+            g.setColour (t.accent.withAlpha (0.25f)); g.fillEllipse (Rectangle<float> (40, 40).withCentre (m));
+            g.setColour (Colours::white); g.fillEllipse (Rectangle<float> (12, 12).withCentre (m));
+            g.setColour (t.text); g.setFont (kk::modern::font (12.0f, true, 0.1f));
+            g.drawText ("BLEND " + String (roundToInt (morphT * 100)) + "%", Rectangle<float> (120, 20).withCentre (m.translated (0, -30)), Justification::centred);
+        }
+        if (centre.parent >= 0) drawBubble (g, centre.parent, parentPos(), 50.0f, false, "BACK");
+        for (int k = 0; k < (int) centre.kids.size(); ++k)
+        {
+            const float s = 0.35f + 0.65f * a;
+            drawBubble (g, centre.kids[(size_t) k], kidPos (k, a), kidR * s, false, {});
+        }
+        drawBubble (g, c, centrePos(), centreR, true, {});
+        // actions under the hovered bubble
+        if (isPositiveAndBelow (hovered, (int) proc.evo.size()) && hovered != c) drawActions (g, hovered);
+        if (dropHot)
+        {
+            g.setColour (t.accent.withAlpha (0.12f)); g.fillRect (getLocalBounds());
+            g.setColour (t.accent); g.setFont (kk::modern::font (28.0f, true, 0.2f));
+            g.drawText ("DROP = A NEW SEED", getLocalBounds(), Justification::centred);
+        }
+    }
+    void resized() override { layoutButtons(); }
+
+    // ---- mouse
+    void mouseMove (const MouseEvent& e) override
+    {
+        const int h = nodeAt (e.position);
+        const int pa = actionAt (e.position);
+        if (h != hovered && pa < 0) { hovered = h; hoverSince = Time::getMillisecondCounter(); auditioned = false; repaint(); }
+    }
+    void mouseExit (const MouseEvent&) override { hovered = -1; hoverSince = Time::getMillisecondCounter(); repaint(); }
+    void mouseDown (const MouseEvent& e) override
+    {
+        downNode = nodeAt (e.position); downAction = actionAt (e.position); dragFired = false;
+        if (wildRect().expanded (6).contains (e.position)) { draggingWild = true; setWild (e.position.x); }
+    }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (draggingWild) { setWild (e.position.x); return; }
+        if (downAction >= 0 && ! dragFired && e.getDistanceFromDragStart() > 6)   // drag WAV / MELODY out of a bubble
+        {
+            dragFired = true;
+            const int node = actionNode, kind = downAction;
+            if (kind == 1 || kind == 2)
+            {
+                const auto f = kind == 1 ? proc.evoExportWav (node) : proc.evoExportMidi (node);
+                if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+            }
+            return;
+        }
+        // drag from the middle towards a child = blend
+        if (downNode == proc.evoCenter && downNode >= 0 && e.getDistanceFromDragStart() > 12)
+        {
+            const auto& kids = proc.evo[(size_t) proc.evoCenter].kids;
+            if (kids.empty() || proc.evo[(size_t) proc.evoCenter].isAudio()) return;
+            const auto d = e.position - centrePos();
+            int best = 0; float bestDot = -1e9f;
+            for (int k = 0; k < (int) kids.size(); ++k)
+            {
+                const auto v = kidPos (k, 1.0f) - centrePos();
+                const float dot = (v.x * d.x + v.y * d.y) / std::max (1.0f, v.getDistanceFromOrigin());
+                if (dot > bestDot) { bestDot = dot; best = k; }
+            }
+            const auto v = kidPos (best, 1.0f) - centrePos();
+            morphKid = best; morphT = jlimit (0.0f, 1.0f, bestDot / std::max (1.0f, v.getDistanceFromOrigin()));
+            const auto now = Time::getMillisecondCounter();
+            if (now - lastMorph > 60) { lastMorph = now; proc.evoMorph (proc.evoCenter, kids[(size_t) best], morphT); }
+            repaint();
+        }
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (draggingWild) { draggingWild = false; return; }
+        if (morphKid >= 0)
+        {
+            const auto& kids = proc.evo[(size_t) proc.evoCenter].kids;
+            const int target = isPositiveAndBelow (morphKid, (int) kids.size()) ? kids[(size_t) morphKid] : -1;
+            const bool onKid = target >= 0 && e.position.getDistanceFrom (kidPos (morphKid, 1.0f)) < kidR;
+            morphKid = -1;
+            if (onKid) { proc.evoFocus (target); startAnim(); }
+            else proc.evoAudition (proc.evoCenter, false);   // let go: back to the middle sound
+            repaint(); return;
+        }
+        if (dragFired || e.mouseWasDraggedSinceMouseDown()) return;
+        if (downAction == 0) { saveMenu (actionNode, nullptr); return; }
+        const int n = nodeAt (e.position);
+        if (n < 0) return;
+        if (e.mods.isPopupMenu()) { nodeMenu (n); return; }
+        if (n == proc.evoCenter) { proc.evoAudition (n); return; }
+        proc.evoFocus (n); startAnim();
+        if (onChanged) onChanged();
+    }
+    void spacePressed() { if (proc.loopPlaying()) proc.stopLoop(); else if (proc.evoCenter >= 0) proc.evoAudition (proc.evoCenter); }
+    void showDebugHover (int kidIndex)   // snapshots
+    {
+        if (proc.evoCenter >= 0 && isPositiveAndBelow (kidIndex, (int) proc.evo[(size_t) proc.evoCenter].kids.size()))
+            hovered = proc.evo[(size_t) proc.evoCenter].kids[(size_t) kidIndex];
+        animStart = 0; wasEmpty = proc.evo.empty(); layoutButtons(); repaint();
+    }
+    void showDebugMorph (int kidIndex, float t) { morphKid = kidIndex; morphT = t; animStart = 0; wasEmpty = proc.evo.empty(); layoutButtons(); repaint(); }
+    void refreshLayout() { wasEmpty = proc.evo.empty(); layoutButtons(); repaint(); }
+
+private:
+    // ---- geometry (design pixels)
+    Point<float> centrePos() const { return { (float) getWidth() * 0.5f + 40.0f, 400.0f }; }
+    Point<float> parentPos() const { return { 250.0f, 330.0f }; }
+    Point<float> kidPos (int k, float a) const
+    {
+        const float ang = MathConstants<float>::twoPi * (float) k / 6.0f - MathConstants<float>::halfPi + 0.52f;
+        const auto c = centrePos();
+        const float r = ringR * a;
+        return { c.x + std::cos (ang) * r * 1.18f, c.y + std::sin (ang) * r };
+    }
+    Rectangle<int> bottomBar() const { return { 12, getHeight() - 84, getWidth() - 24, 76 }; }
+    Rectangle<float> wildRect() const { const auto b = bottomBar(); return { (float) b.getX() + 120, (float) b.getCentreY() - 6, 300, 12 }; }
+    static constexpr float centreR = 104.0f, kidR = 64.0f, ringR = 245.0f;
+    float anim() const
+    {
+        if (animStart == 0) return 1.0f;
+        const float x = jlimit (0.0f, 1.0f, (float) (Time::getMillisecondCounter() - animStart) / 420.0f);
+        return 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x);
+    }
+    void startAnim() { animStart = Time::getMillisecondCounter(); hovered = -1; wasEmpty = proc.evo.empty(); layoutButtons(); repaint(); if (onChanged) onChanged(); }
+
+    int nodeAt (Point<float> p) const
+    {
+        if (proc.evoCenter < 0 || proc.evoCenter >= (int) proc.evo.size()) return -1;
+        const auto& c = proc.evo[(size_t) proc.evoCenter];
+        if (p.getDistanceFrom (centrePos()) < centreR) return proc.evoCenter;
+        for (int k = 0; k < (int) c.kids.size(); ++k) if (p.getDistanceFrom (kidPos (k, 1.0f)) < kidR) return c.kids[(size_t) k];
+        if (c.parent >= 0 && p.getDistanceFrom (parentPos()) < 50.0f) return c.parent;
+        const auto path = proc.evoPath();
+        for (int i = 0; i < (int) path.size(); ++i) if (pathDot (i, (int) path.size()).expanded (4).contains (p)) return path[(size_t) i];
+        return -1;
+    }
+    Point<float> posOf (int node) const
+    {
+        if (node == proc.evoCenter) return centrePos();
+        const auto& c = proc.evo[(size_t) proc.evoCenter];
+        for (int k = 0; k < (int) c.kids.size(); ++k) if (c.kids[(size_t) k] == node) return kidPos (k, 1.0f);
+        if (node == c.parent) return parentPos();
+        return { -1000, -1000 };
+    }
+    // SAVE / WAV / MIDI pills under the hovered bubble (0 / 1 / 2)
+    Rectangle<float> actionRect (int node, int i) const
+    {
+        const auto p = posOf (node);
+        const float r = node == proc.evoCenter ? centreR : kidR;
+        return { p.x - 78.0f + (float) i * 54.0f, p.y + r + 34.0f, 50.0f, 22.0f };
+    }
+    int actionAt (Point<float> p)
+    {
+        if (! isPositiveAndBelow (hovered, (int) proc.evo.size()) || hovered == proc.evoCenter) return -1;
+        for (int i = 0; i < 3; ++i) if (actionRect (hovered, i).expanded (3).contains (p)) { actionNode = hovered; return i; }
+        return -1;
+    }
+    void drawActions (Graphics& g, int node)
+    {
+        const auto& t = kk::theme();
+        static const char* names[] { "SAVE", "WAV", "MIDI" };
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto r = actionRect (node, i);
+            g.setColour (t.glass.withMultipliedAlpha (1.4f)); g.fillRoundedRectangle (r, 11);
+            g.setColour (t.accent); g.drawRoundedRectangle (r, 11, 1.2f);
+            g.setFont (kk::modern::font (10.5f, true, 0.12f)); g.drawText (names[i], r, Justification::centred);
+        }
+    }
+    Rectangle<float> pathDot (int i, int n) const
+    {
+        ignoreUnused (n);
+        return { 40.0f + (float) i * 30.0f, 100.0f, 18.0f, 18.0f };
+    }
+    void paintPath (Graphics& g, const std::vector<int>& path)
+    {
+        const auto& t = kk::theme();
+        if (path.empty()) return;
+        g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.2f));
+        g.drawText ("YOUR PATH", Rectangle<float> (40, 122, 200, 16), Justification::centredLeft);
+        for (int i = 0; i < (int) path.size(); ++i)
+        {
+            const auto r = pathDot (i, (int) path.size());
+            if (i > 0) { g.setColour (t.accent.withAlpha (0.4f)); g.drawLine (r.getX() - 12, r.getCentreY(), r.getX(), r.getCentreY(), 1.2f); }
+            const bool last = i == (int) path.size() - 1;
+            g.setColour (last ? t.accent : t.text.withAlpha (path[(size_t) i] == hovered ? 0.9f : 0.45f));
+            if (last) g.fillEllipse (r); else g.drawEllipse (r.reduced (1), 1.4f);
+        }
+        if (isPositiveAndBelow (hovered, (int) proc.evo.size()))
+            for (int i = 0; i < (int) path.size(); ++i)
+                if (path[(size_t) i] == hovered && hovered != proc.evoCenter)
+                {
+                    g.setColour (t.text); g.setFont (kk::modern::font (11.0f, true, 0.06f));
+                    g.drawText (proc.evo[(size_t) hovered].name + "  - click = back here", Rectangle<float> (40, 140, 500, 16), Justification::centredLeft);
+                }
+    }
+    void drawBubble (Graphics& g, int node, Point<float> c, float r, bool isCentre, const String& tag)
+    {
+        const auto& t = kk::theme();
+        const auto& n = proc.evo[(size_t) node];
+        const bool hot = node == hovered;
+        const Colour ring = n.isAudio() ? t.accent : streamColour (n.g.cat);
+        // shadow, glass sphere, highlight
+        g.setColour (Colours::black.withAlpha (t.night ? 0.45f : 0.16f)); g.fillEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c.translated (6, 12)));
+        g.setGradientFill (ColourGradient (t.night ? Colour (0xd8262a31) : Colour (0xe6ffffff), c.x - r * 0.4f, c.y - r * 0.6f,
+                                           t.night ? Colour (0xd0101215) : Colour (0xd6d9dde2), c.x + r * 0.5f, c.y + r, true));
+        g.fillEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c));
+        if (isCentre || hot)
+        {
+            g.setGradientFill (ColourGradient (t.accent.withAlpha (isCentre ? 0.28f : 0.18f), c.x, c.y, t.accent.withAlpha (0.0f), c.x + r * 1.4f, c.y, true));
+            g.fillEllipse (Rectangle<float> (r * 2.8f, r * 2.8f).withCentre (c));
+        }
+        // waveform inside
+        const float ww = r * 1.3f, wh = r * 0.62f;
+        float peak = 0.0001f; for (auto v : n.wave) peak = std::max (peak, v);
+        for (int b = 0; b < 64; ++b)
+        {
+            const float v = n.waveReady ? std::pow (n.wave[(size_t) b] / peak, 0.7f) : 0.05f + 0.04f * std::sin ((float) b * 0.6f + (float) Time::getMillisecondCounter() * 0.01f);
+            const float h = std::max (1.0f, v * wh * 0.5f);
+            const float x = c.x - ww * 0.5f + ww * (float) b / 64.0f;
+            g.setColour ((isCentre ? t.accent : t.text.withAlpha (0.8f)).interpolatedWith (ring, (float) b / 140.0f).withAlpha (0.9f));
+            g.fillRect (x, c.y - h - r * 0.08f, std::max (1.0f, ww / 90.0f), h * 2.0f);
+        }
+        // rim: category colour, amber on hover / middle
+        g.setColour (isCentre ? t.accent : hot ? t.accent.withAlpha (0.9f) : ring.withAlpha (0.75f));
+        g.drawEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c).reduced (0.5f), isCentre ? 2.4f : hot ? 2.0f : 1.4f);
+        g.setColour (Colours::white.withAlpha (t.night ? 0.12f : 0.7f));
+        Path refl; refl.addCentredArc (c.x, c.y, r * 0.86f, r * 0.86f, 0, -2.4f, -1.0f, true);
+        g.strokePath (refl, PathStrokeType (r * 0.06f, PathStrokeType::curved, PathStrokeType::rounded));
+        // name
+        g.setColour (t.text); g.setFont (kk::modern::font (isCentre ? 17.0f : 12.5f, true, 0.04f));
+        g.drawFittedText (n.name, Rectangle<int> ((int) (c.x - r * 1.5f), (int) (c.y + r + 6), (int) (r * 3.0f), isCentre ? 24 : 30), Justification::centredTop, 2, 0.75f);
+        if (isCentre)
+        {
+            g.setColour (t.accent); g.setFont (kk::modern::font (11.0f, true, 0.3f));
+            g.drawText ("GEN " + String (n.gen) + (n.isAudio() ? "  .  YOUR SOUND" : ""), Rectangle<float> (c.x - 100, c.y + r * 0.42f, 200, 16), Justification::centred);
+        }
+        if (tag.isNotEmpty())
+        {
+            g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.3f));
+            g.drawText (tag, Rectangle<float> (c.x - 60, c.y - r - 18, 120, 14), Justification::centred);
+        }
+    }
+    void paintEmpty (Graphics& g)
+    {
+        const auto& t = kk::theme();
+        const auto c = centrePos();
+        Path circ; circ.addEllipse (Rectangle<float> (300, 300).withCentre (c));
+        Path dashed; const float dl[] { 9.0f, 7.0f };
+        PathStrokeType (1.6f).createDashedStroke (dashed, circ, dl, 2);
+        const float pulse = 0.5f + 0.5f * std::sin ((float) Time::getMillisecondCounter() * 0.003f);
+        g.setGradientFill (ColourGradient (t.accent.withAlpha (0.10f + 0.08f * pulse), c.x, c.y, t.accent.withAlpha (0.0f), c.x + 240, c.y, true));
+        g.fillEllipse (Rectangle<float> (480, 480).withCentre (c));
+        g.setColour (t.accent.withAlpha (0.8f)); g.fillPath (dashed);
+        g.setColour (t.text); g.setFont (kk::modern::font (24.0f, true, 0.18f));
+        g.drawText ("DROP ANY SOUND HERE", Rectangle<float> (600, 40).withCentre (c.translated (0, -26)), Justification::centred);
+        g.setColour (t.dim); g.setFont (kk::modern::font (13.0f, false, 0.08f));
+        g.drawText ("a WAV, a vocal, a loop, a one-shot - it becomes the seed of a new family of sounds", Rectangle<float> (700, 20).withCentre (c.translated (0, 8)), Justification::centred);
+    }
+    void drawWild (Graphics& g)
+    {
+        const auto& t = kk::theme();
+        const auto r = wildRect();
+        g.setColour (t.text); g.setFont (kk::modern::font (12.0f, true, 0.2f));
+        g.drawText ("SAFE", Rectangle<float> (r.getX() - 70, r.getY() - 8, 60, 28), Justification::centredRight);
+        g.drawText ("WILD", Rectangle<float> (r.getRight() + 10, r.getY() - 8, 60, 28), Justification::centredLeft);
+        kk::modern::well (g, r, 6.0f);
+        const float x = r.getX() + r.getWidth() * proc.evoWild;
+        g.setGradientFill (ColourGradient (t.accent.withAlpha (0.3f), r.getX(), 0, t.accent, x, 0, false));
+        g.fillRoundedRectangle (r.withRight (x), 6.0f);
+        g.setColour (t.night ? Colour (0xffe8eaed) : Colours::white); g.fillEllipse (Rectangle<float> (22, 22).withCentre ({ x, r.getCentreY() }));
+        g.setColour (t.accent); g.drawEllipse (Rectangle<float> (22, 22).withCentre ({ x, r.getCentreY() }), 1.6f);
+    }
+    void setWild (float x) { const auto r = wildRect(); proc.evoWild = jlimit (0.0f, 1.0f, (x - r.getX()) / r.getWidth()); repaint (bottomBar()); }
+    void layoutButtons()
+    {
+        const int W = getWidth();
+        themeBtn.setBounds (W - 92, 24, 56, 46);
+        studioBtn.setBounds (W - 92 - 132, 26, 124, 42);
+        const auto b = bottomBar();
+        int x = b.getX() + 520;
+        againBtn.setBounds (x, b.getY() + 18, 150, 40); x += 160;
+        seedBtn.setBounds (x, b.getY() + 18, 120, 40); x += 150;
+        saveBtn.setBounds (x, b.getY() + 18, 100, 40); x += 110;
+        dragWav.setBounds (x, b.getY() + 16, 170, 44); x += 180;
+        dragMidi.setBounds (x, b.getY() + 16, 190, 44);
+        const auto c = centrePos();
+        bankBtn.setBounds ((int) c.x - 330, (int) c.y + 190, 210, 42);
+        diceBtn.setBounds ((int) c.x - 105, (int) c.y + 190, 210, 42);
+        currentBtn.setBounds ((int) c.x + 120, (int) c.y + 190, 230, 42);
+        const bool empty = proc.evo.empty();
+        for (auto* bt : { &bankBtn, &diceBtn, &currentBtn }) bt->setVisible (empty);
+        for (auto* bt : { &againBtn, &saveBtn }) bt->setVisible (! empty);
+        dragWav.setVisible (! empty); dragMidi.setVisible (! empty);
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        // hover long enough = hear it (the keys play it); leave = back to the middle
+        const auto now = Time::getMillisecondCounter();
+        if (hovered >= 0 && hovered != proc.evoCenter && ! auditioned && now - hoverSince > 260 && morphKid < 0)
+        { auditioned = true; proc.evoAudition (hovered); lastHeard = hovered; }
+        if (hovered < 0 && lastHeard >= 0 && lastHeard != proc.evoCenter && now - hoverSince > 400 && morphKid < 0)
+        { proc.evoAudition (proc.evoCenter, false); lastHeard = proc.evoCenter; }
+        const bool empty = proc.evo.empty();
+        if (empty != wasEmpty) { wasEmpty = empty; layoutButtons(); }
+        if (proc.evoVer.load() != lastVer || animStart != 0 || empty)
+        {
+            lastVer = proc.evoVer.load();
+            if (animStart != 0 && now - animStart > 450) animStart = 0;
+            repaint();
+        }
+    }
+    void seedMenu (Component* from)
+    {
+        PopupMenu m;
+        m.addItem (1, "A sound from the bank...");
+        m.addItem (2, "Surprise me (random seed)");
+        m.addItem (3, "The current sound");
+        m.addItem (4, "Your own sound (WAV, MP3 ...)...");
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (from), [this, safe = SafePointer<EvolvePage> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1 && onPickSeed) onPickSeed();
+            if (r == 2) { proc.evoSeedRandom(); startAnim(); }
+            if (r == 3) { proc.evoSeedCurrent(); startAnim(); }
+            if (r == 4)
+            {
+                chooser = std::make_unique<FileChooser> ("Your sound as the seed", File::getSpecialLocation (File::userMusicDirectory), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this, safe] (const FileChooser& fc)
+                { if (safe != nullptr && fc.getResult().existsAsFile() && proc.evoSeedFromFile (fc.getResult())) startAnim(); });
+            }
+        });
+    }
+    void saveMenu (int node, Component* from)
+    {
+        if (! isPositiveAndBelow (node, (int) proc.evo.size())) return;
+        const bool audio = proc.evo[(size_t) node].isAudio();
+        PopupMenu m;
+        m.addSectionHeader ("SAVE  " + proc.evo[(size_t) node].name);
+        m.addItem (1, "As a PRESET (in the sound library)...", ! audio);
+        m.addItem (2, "As a SOUND into a folder / sound kit (WAV)...");
+        auto opts = from != nullptr ? PopupMenu::Options().withTargetComponent (from) : PopupMenu::Options();
+        m.showMenuAsync (opts, [this, node, from, safe = SafePointer<EvolvePage> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1 && onSavePreset) onSavePreset (node);
+            if (r == 2) if (auto snd = proc.evoAsSound (node)) saveToFolderMenu (proc, { snd }, from != nullptr ? from : (Component*) this, [] (String) {});
+        });
+    }
+    void nodeMenu (int node)
+    {
+        const auto& n = proc.evo[(size_t) node];
+        PopupMenu m;
+        m.addSectionHeader (n.name);
+        m.addItem (1, "Make it the middle (grow from it)");
+        m.addItem (2, "Hear it");
+        m.addItem (3, "Save...");
+        m.addItem (4, "To STUDIO as PARENT A", ! n.isAudio());
+        m.addItem (5, "To STUDIO as PARENT B", ! n.isAudio());
+        m.showMenuAsync (PopupMenu::Options(), [this, node, safe = SafePointer<EvolvePage> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1) { proc.evoFocus (node); startAnim(); }
+            if (r == 2) proc.evoAudition (node);
+            if (r == 3) saveMenu (node, nullptr);
+            if (r == 4 || r == 5) { auto g = proc.evo[(size_t) node].g; g.name = proc.evo[(size_t) node].name; proc.setParentGenome (r - 4, g); }
+        });
+    }
+
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton studioBtn { lnf }, themeBtn { lnf }, seedBtn { lnf }, againBtn { lnf }, saveBtn { lnf }, bankBtn { lnf }, diceBtn { lnf }, currentBtn { lnf };
+    DragFileButton dragWav { "DRAG WAV", TC (0xff36ff6a) }, dragMidi { "DRAG MELODY", TC (0xff36ff6a) };
+    std::unique_ptr<FileChooser> chooser;
+    int hovered = -1, lastHeard = -1, downNode = -1, downAction = -1, actionNode = -1, morphKid = -1, lastVer = -1;
+    uint32 hoverSince = 0, animStart = 0, lastMorph = 0;
+    float morphT = 0.0f;
+    bool auditioned = false, dropHot = false, dragFired = false, draggingWild = false, wasEmpty = true;
 };
 
 //==============================================================================
@@ -4742,6 +5223,7 @@ public:
         treeBtn.onClick = [this] { openTab (tabTree); }; treeBtn.setTooltip ("FAMILY TREE: breed up to 4 sounds into new sounds or melody loops");
         labSwitch.onSwitch = [this] (int k)
         {
+            if (k == 8) { showEvolve (true); return; }
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
             const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
@@ -4824,9 +5306,30 @@ public:
         addAndMakeVisible (pitchWheel); addAndMakeVisible (modWheel);
         addAndMakeVisible (keyboard);
 
+        // v0.36 EVOLVE: the first thing you see (STUDIO = everything else)
+        evolve = std::make_unique<EvolvePage> (proc, lnf);
+        evolve->onStudio = [this] { showEvolve (false); };
+        evolve->onTheme = [this] { setTheme (1 - kk::themeIndex()); };
+        evolve->onPickSeed = [this]
+        {
+            ensureBrowser(); hidePanels();
+            browser->open (-1, -1, false, [this] (int idx) { if (idx >= 0) proc.evoSeedPreset (idx); else proc.evoSeedCurrent(); if (evolve) evolve->repaint(); }, "CHOOSE THE SEED");
+            browser->toFront (false);
+        };
+        evolve->onSavePreset = [this] (int node)
+        {
+            if (! isPositiveAndBelow (node, (int) proc.evo.size()) || proc.evo[(size_t) node].isAudio()) return;
+            auto g = proc.evo[(size_t) node].g; g.name = proc.evo[(size_t) node].name;
+            proc.applyGenomePublic (g);
+            savePresetAs();
+        };
+        evolve->onChanged = [this] { refreshState(); };
+        addChildComponent (*evolve);
+
         setSize (KeysKillaEditor::designW, KeysKillaEditor::designH);
         noFocus (*this);
         applyKeyMode();
+        showEvolve (settings->getBoolValue ("evolveOpen", true));
         focusGrabber.page = this;
         addMouseListener (&focusGrabber, true);   // a click anywhere in the plugin gives it the PC keyboard
         refreshState();
@@ -4905,6 +5408,18 @@ public:
     // tests / screenshots: 0 main, 1..8 advanced tab, 9 browser, 10 movement, 11 808
     void showView (int v)
     {
+        showEvolve (v >= 32 && v <= 35);
+        if (v == 32 || v == 33 || v == 35)   // EVOLVE: a seed, a few generations, the kids (32 hover, 33 blend, 35 night look = same)
+        {
+            proc.evoSeedPreset (0);
+            proc.evoFocus (proc.evo[0].kids[2]);
+            proc.evoFocus (proc.evo[(size_t) proc.evoCenter].kids[4]);
+            for (int i = 0; i < 30; ++i) proc.renderNextThumbnail();
+            if (v == 32) evolve->showDebugHover (1);
+            if (v == 33) evolve->showDebugMorph (0, 0.55f);
+        }
+        if (v == 34) proc.evoReset();
+        if (v >= 32 && v <= 35) evolve->refreshLayout();
         if (v >= 1 && v <= 8) { ensureAdvanced(); advanced->showTab (v - 1); advanced->setVisible (true); advanced->toFront (false); }
         if (v == 9) openTab (tabBrowser);
         if (v == 10) openTab (tabParams);
@@ -5069,6 +5584,7 @@ public:
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
                                                                  : i == tabSampler || i == tabFxRack || i == tabSounds ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
         labSwitch.setBounds (R (16, 100, 138, 600));
+        if (evolve != nullptr) evolve->setBounds (R (0, 0, 1672, 806));
     }
 
 private:
@@ -5668,11 +6184,24 @@ private:
     std::array<std::unique_ptr<Component>, numPages> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
+    std::unique_ptr<EvolvePage> evolve;
+    bool evolveOpen() const { return evolve != nullptr && evolve->isVisible(); }
+    void showEvolve (bool on)
+    {
+        if (evolve == nullptr) return;
+        if (on) { hidePanels(); openTabIndex = -1; updateTabs(); }
+        evolve->setVisible (on);
+        if (on) evolve->toFront (false);
+        settings->setValue ("evolveOpen", on);
+        lastKeysPage = -99;   // the keys follow the page
+    }
 
     // v0.35 BREED LAB: no "KEYS PLAY ..." switches any more - the page you are on is what the PC keys, your MIDI
     // keyboard and FL's piano roll play (BREED LAB / TREE / EDIT = the BREED LAB sound, SAMPLER = the chops, VST = the VST)
     int pageKeysMode() const
     {
+        if (evolveOpen() && ! isPanelVisible())
+            return isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size()) && proc.evo[(size_t) proc.evoCenter].isAudio() ? KeysKillaProcessor::playPair : KeysKillaProcessor::playKeys;
         if (! isPanelVisible() && openTabIndex < 0) return proc.labAudioMode() ? KeysKillaProcessor::playPair : KeysKillaProcessor::playKeys;
         switch (openTabIndex)
         {
@@ -5688,7 +6217,7 @@ private:
     void syncKeysToPage()
     {
         const int want = pageKeysMode();
-        const int page = isPanelVisible() ? openTabIndex : -1;
+        const int page = isPanelVisible() ? openTabIndex : evolveOpen() ? -50 - (proc.evoCenter >= 0 && proc.evoCenter < (int) proc.evo.size() && proc.evo[(size_t) proc.evoCenter].isAudio() ? 1 : 0) : -1;
         if (page == lastKeysPage && want == lastKeysMode) return;
         lastKeysPage = page; lastKeysMode = want;
         if (want < 0) return;
@@ -5702,6 +6231,7 @@ private:
 
     void spaceAction()
     {
+        if (evolveOpen() && ! isPanelVisible()) { evolve->spacePressed(); return; }
         if (openTabIndex == tabSampler && isPanelVisible())   // v0.35: SAMPLER - stop / play the part
         {
             std::function<ChopPanel* (Component*)> find = [&find] (Component* c) -> ChopPanel*
