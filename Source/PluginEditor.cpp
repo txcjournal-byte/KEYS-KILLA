@@ -4645,6 +4645,7 @@ public:
         for (auto& m : modules) m.reset();
         for (int i = 0; i < (int) tabs.size() && i < numTabs; ++i) tabs[(size_t) i]->tint = drumTheme (i).accent;
         if (open >= 0) openTab (open);
+        if (auto* ed = findParentComponentOfClass<KeysKillaEditor>()) ed->themeChanged();
         sendLookAndFeelChange();
         std::function<void (Component&)> all = [&all] (Component& c) { c.repaint(); for (auto* ch : c.getChildren()) all (*ch); };
         all (*this);
@@ -4843,8 +4844,7 @@ private:
         settings->setValue ("labScale18", pct);
         if (auto* ed = findParentComponentOfClass<KeysKillaEditor>())
         {
-            pct = jmin (pct, ed->fitScale());
-            ed->setSize (KeysKillaEditor::designW * pct / 100, KeysKillaEditor::designH * pct / 100);
+            ed->setScalePct (jmin (pct, ed->fitScale()));
         }
     }
 
@@ -5055,6 +5055,7 @@ private:
         m.addSeparator();
         m.addItem (24, "Settings: window size, eco mode...");
         m.addItem (25, kk::themeIndex() == 0 ? "Switch to NIGHT (dark glass)" : "Switch to GLASS (day)");
+        if (auto* ed = findParentComponentOfClass<KeysKillaEditor>()) m.addItem (26, "Metal case around the plugin", true, ed->frame() > 0);
         m.addItem (15, "ADVANCED page...");
         m.addItem (16, "Eco mode (lower CPU)", true, proc.eco.load());
         m.addItem (18, "PANIC (all notes off)");
@@ -5083,6 +5084,7 @@ private:
                 case 15: hidePanels(); ensureAdvanced(); advanced->setVisible (true); advanced->toFront (false); break;
                 case 24: openTab (tabSettings); break;
                 case 25: setTheme (1 - kk::themeIndex()); break;
+                case 26: if (auto* ed = findParentComponentOfClass<KeysKillaEditor>()) ed->setFrame (ed->frame() == 0); break;
                 case 16: proc.eco = ! proc.eco.load(); break;
                 case 18: proc.panic(); break;
                 case 19: settings->setValue ("keysToPlugin", ! keysToPlugin()); applyKeyMode(); break;
@@ -5333,13 +5335,12 @@ KeysKillaEditor::KeysKillaEditor (KeysKillaProcessor& p) : AudioProcessorEditor 
     setWantsKeyboardFocus (false);
     setMouseClickGrabsKeyboardFocus (false);
     kk::themeIndex() = jlimit (0, 1, openSettings()->getIntValue ("theme", 0));   // v0.34: GLASS (day) / NIGHT, remembered
+    frameOn = openSettings()->getBoolValue ("frame", true);
     page = std::make_unique<MainPage> (p);
     addAndMakeVisible (*page);
     setResizable (true, true);
-    setResizeLimits (designW * 2 / 5, designH * 2 / 5, designW, designH);
-    if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) designW / designH);
-    const int pct = jmin (page->preferredScale(), fitScale());
-    setSize (designW * pct / 100, designH * pct / 100);
+    setOpaque (true);
+    setScalePct (jmin (page->preferredScale(), fitScale()));
 }
 
 // v0.31: the window always fits the screen - the host puts its own toolbars above and its browser beside the plugin
@@ -5349,8 +5350,8 @@ int KeysKillaEditor::fitScale() const
     const Displays::Display* d = isShowing() ? displays.getDisplayForRect (getScreenBounds()) : displays.getPrimaryDisplay();
     if (d == nullptr) return 85;
     const auto area = d->userArea;   // logical pixels: Windows display scaling is already taken into account
-    const double byW = (area.getWidth() * 0.78) / designW;
-    const double byH = (area.getHeight() - 190.0) / designH;
+    const double byW = (area.getWidth() * 0.78) / outerW();
+    const double byH = (area.getHeight() - 190.0) / outerH();
     return jlimit (40, 100, (int) std::floor (std::min (byW, byH) * 100.0));
 }
 
@@ -5366,9 +5367,9 @@ void KeysKillaEditor::parentHierarchyChanged()
     {
         fitted = true;
         const int fit = fitScale();
-        if (getWidth() > designW * fit / 100 + 2)
+        if (getWidth() > outerW() * fit / 100 + 2)
             MessageManager::callAsync ([safe = Component::SafePointer<KeysKillaEditor> (this), fit]
-            { if (safe != nullptr) safe->setSize (designW * fit / 100, designH * fit / 100); });
+            { if (safe != nullptr) safe->setScalePct (fit); });
     }
    #if JUCE_WINDOWS
     if (auto* peer = getPeer())
@@ -5377,8 +5378,118 @@ void KeysKillaEditor::parentHierarchyChanged()
    #endif
 }
 
+void KeysKillaEditor::setScalePct (int pct)
+{
+    lastPct = pct;
+    setResizeLimits (outerW() * 2 / 5, outerH() * 2 / 5, outerW(), outerH());
+    if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) outerW() / outerH());
+    setSize (outerW() * pct / 100, outerH() * pct / 100);
+}
+
+void KeysKillaEditor::setFrame (bool on)
+{
+    if (on == frameOn) return;
+    const int pct = jmax (40, (int) std::round ((double) getWidth() * 100.0 / outerW()));
+    frameOn = on; frameImg = {};
+    openSettings()->setValue ("frame", on);
+    setScalePct (jmin (pct, fitScale()));
+    resized(); repaint();
+}
+
 void KeysKillaEditor::resized()
 {
-    page->setTransform (AffineTransform::scale ((float) getWidth() / designW));
+    const float s = (float) getWidth() / (float) outerW();
+    page->setTransform (AffineTransform::scale (s).translated ((float) frame() * s, (float) frame() * s));
     page->setBounds (0, 0, designW, designH);
+}
+
+// v0.34 THE CASE: a thin milled-metal frame with chamfered corners, corner bumpers, grip grooves on the sides and
+// one amber status light - the glass display sits inside it. Light aluminium by day, dark anodised metal at night.
+void KeysKillaEditor::paint (Graphics& g)
+{
+    if (frame() == 0) { g.fillAll (Colours::black); return; }
+    const int W = outerW(), H = outerH();
+    if (! frameImg.isValid() || frameImg.getWidth() != getWidth() || frameImg.getHeight() != getHeight())
+    {
+        frameImg = Image (Image::ARGB, getWidth(), getHeight(), true);
+        Graphics fg (frameImg);
+        fg.addTransform (AffineTransform::scale ((float) getWidth() / (float) W));
+        const auto& t = kk::theme();
+        const bool night = t.night;
+        const float F = (float) frame(), ch = 46.0f;
+        auto chamfered = [] (Rectangle<float> r, float c)
+        {
+            Path p;
+            p.startNewSubPath (r.getX() + c, r.getY()); p.lineTo (r.getRight() - c, r.getY()); p.lineTo (r.getRight(), r.getY() + c);
+            p.lineTo (r.getRight(), r.getBottom() - c); p.lineTo (r.getRight() - c, r.getBottom()); p.lineTo (r.getX() + c, r.getBottom());
+            p.lineTo (r.getX(), r.getBottom() - c); p.lineTo (r.getX(), r.getY() + c); p.closeSubPath();
+            return p;
+        };
+        const Rectangle<float> outer (0, 0, (float) W, (float) H);
+        const Colour mTop = night ? Colour (0xff474c54) : Colour (0xffeef0f2), mBot = night ? Colour (0xff15171a) : Colour (0xff9aa0a8);
+        // body of the case
+        auto body = chamfered (outer, ch);
+        fg.setGradientFill (ColourGradient (mTop, 0, 0, mBot, 0, (float) H, false)); fg.fillPath (body);
+        // brushed metal
+        Random rnd (11);
+        {
+            Graphics::ScopedSaveState ss (fg);
+            fg.reduceClipRegion (body);
+            for (float y = 0; y < (float) H; y += 1.5f)
+            { fg.setColour ((rnd.nextBool() ? Colours::white : Colours::black).withAlpha (rnd.nextFloat() * (night ? 0.05f : 0.06f))); fg.drawHorizontalLine ((int) y, 0, (float) W); }
+            // light catching the top-left
+            fg.setGradientFill (ColourGradient (Colours::white.withAlpha (night ? 0.10f : 0.35f), 0, 0, Colours::white.withAlpha (0.0f), (float) W * 0.35f, (float) H * 0.6f, false));
+            fg.fillPath (body);
+        }
+        // outer bevel: bright upper edge, dark lower edge
+        fg.setGradientFill (ColourGradient (Colours::white.withAlpha (night ? 0.35f : 0.95f), 0, 0, Colours::black.withAlpha (night ? 0.8f : 0.35f), 0, (float) H, false));
+        fg.strokePath (chamfered (outer.reduced (0.8f), ch - 0.4f), PathStrokeType (1.6f));
+        fg.setColour (Colours::white.withAlpha (night ? 0.06f : 0.25f));
+        fg.strokePath (chamfered (outer.reduced (4.0f), ch - 2.0f), PathStrokeType (1.0f));
+        auto softShadowPath = [night] (Graphics& gg, const Path& p)
+        { for (int k = 1; k <= 3; ++k) { gg.setColour (Colours::black.withAlpha (night ? 0.18f : 0.08f)); gg.fillPath (p, AffineTransform::translation (0.0f, (float) k * 1.2f)); } };
+        // corner bumpers: darker pieces over the chamfers
+        const Colour bump = night ? Colour (0xff0e1012) : Colour (0xff4a5058);
+        for (int k = 0; k < 4; ++k)
+        {
+            const bool right = k % 2 == 1, bottom = k >= 2;
+            const float x0 = right ? (float) W : 0.0f, y0 = bottom ? (float) H : 0.0f, sx = right ? -1.0f : 1.0f, sy = bottom ? -1.0f : 1.0f;
+            Path b;
+            const float d = F * 0.78f, L = ch + 90.0f;
+            b.startNewSubPath (x0 + sx * ch, y0); b.lineTo (x0 + sx * L, y0); b.lineTo (x0 + sx * (L - 10), y0 + sy * d);
+            b.lineTo (x0 + sx * (d + 12), y0 + sy * d); b.lineTo (x0 + sx * d, y0 + sy * (d + 12));
+            b.lineTo (x0 + sx * d, y0 + sy * (L - 10)); b.lineTo (x0, y0 + sy * L); b.lineTo (x0, y0 + sy * ch); b.closeSubPath();
+            softShadowPath (fg, b);
+            fg.setGradientFill (ColourGradient (bump.brighter (0.35f), x0, y0, bump, x0 + sx * 40, y0 + sy * 40, false)); fg.fillPath (b);
+            fg.setColour (Colours::white.withAlpha (night ? 0.10f : 0.30f)); fg.strokePath (b, PathStrokeType (0.8f));
+        }
+        // grips on the sides: a raised dark block with grooves
+        for (int side = 0; side < 2; ++side)
+        {
+            const float x = side == 0 ? F * 0.5f : (float) W - F * 0.5f;
+            const Rectangle<float> blk (x - F * 0.36f, (float) H * 0.5f - 90.0f, F * 0.72f, 180.0f);
+            fg.setColour (Colours::black.withAlpha (night ? 0.6f : 0.3f)); fg.fillRoundedRectangle (blk.translated (1.5f, 3.0f), 6.0f);
+            fg.setGradientFill (ColourGradient (bump.brighter (0.4f), blk.getX(), blk.getY(), bump, blk.getRight(), blk.getBottom(), false)); fg.fillRoundedRectangle (blk, 6.0f);
+            fg.setColour (Colours::white.withAlpha (night ? 0.12f : 0.35f)); fg.drawRoundedRectangle (blk.reduced (0.5f), 6.0f, 0.8f);
+            for (int i = 0; i < 8; ++i)
+            {
+                const float y = (float) H * 0.5f - 70.0f + (float) i * 18.0f;
+                const Rectangle<float> gr (x - F * 0.22f, y, F * 0.44f, 7.0f);
+                fg.setColour (Colours::black.withAlpha (night ? 0.7f : 0.35f)); fg.fillRoundedRectangle (gr, 2.5f);
+                fg.setColour (Colours::white.withAlpha (night ? 0.12f : 0.6f)); fg.drawLine (gr.getX() + 1.5f, gr.getBottom() + 0.6f, gr.getRight() - 1.5f, gr.getBottom() + 0.6f, 0.8f);
+            }
+        }
+        // the recess the glass sits in
+        const auto inner = Rectangle<float> (F, F, (float) designW, (float) designH);
+        fg.setColour (Colours::black.withAlpha (night ? 0.9f : 0.45f)); fg.drawRoundedRectangle (inner.expanded (1.5f), 6.0f, 3.0f);
+        fg.setColour (Colours::white.withAlpha (night ? 0.10f : 0.7f)); fg.drawRoundedRectangle (inner.expanded (3.5f), 7.0f, 1.0f);
+        // amber status light, bottom centre
+        const Rectangle<float> led ((float) W * 0.5f - 22.0f, (float) H - F * 0.5f - 1.5f, 44.0f, 3.0f);
+        fg.setGradientFill (ColourGradient (t.accent.withAlpha (0.45f), led.getCentreX(), led.getCentreY(), t.accent.withAlpha (0.0f), led.getCentreX() + 40, led.getCentreY(), true));
+        fg.fillEllipse (led.expanded (24, 8));
+        fg.setColour (t.accent); fg.fillRoundedRectangle (led, 1.5f);
+        fg.setColour (Colours::white.withAlpha (0.6f)); fg.fillRoundedRectangle (led.reduced (8, 1), 0.5f);
+    }
+    g.fillAll (kk::theme().night ? Colour (0xff050607) : Colour (0xff5d636b));   // behind the chamfers (host background)
+    g.drawImageAt (frameImg, 0, 0);
 }

@@ -27,16 +27,25 @@ public:
     explicit KeysKillaEditor (KeysKillaProcessor&);
     ~KeysKillaEditor() override;
     void resized() override;
-    void paint (juce::Graphics&) override {}
+    void paint (juce::Graphics&) override;
     void parentHierarchyChanged() override;
     void showView (int v);   // 0 main, 1..8 advanced tabs, 9 preset browser
 
     static constexpr int designW = 1672, designH = 941;   // = BREED LAB design size
     int fitScale() const;   // largest size in % that fits the screen under the host's toolbars
+    // v0.34: the plugin sits in a thin metal case (frame) - it can be switched off in MENU
+    int frame() const { return frameOn ? 26 : 0; }
+    int outerW() const { return designW + 2 * frame(); }
+    int outerH() const { return designH + 2 * frame(); }
+    void setScalePct (int pct);
+    void setFrame (bool on);
+    void themeChanged() { frameImg = {}; repaint(); }
 
 private:
     KeysKillaProcessor& proc;
     std::unique_ptr<MainPage> page;
     juce::TooltipWindow tooltips { this, 600 };
-    bool fitted = false;
+    bool fitted = false, frameOn = true;
+    int lastPct = 85;
+    juce::Image frameImg;   // the case, drawn once per theme / size (released with the editor)
 };
