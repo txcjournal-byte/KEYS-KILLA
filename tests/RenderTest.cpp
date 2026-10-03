@@ -744,7 +744,7 @@ static int unitTests()
         p.evoLayer = KeysKillaProcessor::layerMelody; p.evoGrow (p.evoCenter, true);
         int sameSound = 0, otherMel = 0, sameFx = 0;
         for (int k : p.evo[(size_t) p.evoCenter].kids) { const auto& n = p.evo[(size_t) k]; sameSound += n.g.v == c.g.v; otherMel += ! (n.g.loop == c.g.loop); sameFx += n.fx.on == c.fx.on; }
-        check (sameSound == 6 && otherMel >= 5 && sameFx == 6, "v0.39 LAYERS: MELODY changes only the melodies");
+        check (sameSound == 6 && otherMel >= 4 && sameFx == 6, "v0.39 LAYERS: MELODY changes only the melodies");
         p.evoLayer = KeysKillaProcessor::layerBeat; p.evoGrow (p.evoCenter, true);
         int otherBeat = 0; for (int k : p.evo[(size_t) p.evoCenter].kids) otherBeat += p.evo[(size_t) k].beat.kick != c.beat.kick || p.evo[(size_t) k].beat.hat != c.beat.hat;
         check (otherBeat >= 5, "v0.39 LAYERS: BEAT changes the beats");

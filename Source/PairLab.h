@@ -174,7 +174,16 @@ public:
         const float atkStep = 1.0f / (std::max (0.0015f, shAttack.load()) * (float) rate);   // 1.5 ms minimum: no click, the attack stays sharp
         const double tuneMul = std::exp2 (shTune.load() / 12.0);
         const bool rev = shRev.load();
-        const double startAt = juce::jlimit (0.0, 0.95, (double) shStart.load()) * total;
+        // REVERSE starts where the sound is still audible (not in the silent end of a long tail)
+        double audibleEnd = total;
+        if (rev && ! s.peaks.empty())
+        {
+            float mx = 0; for (auto v : s.peaks) mx = std::max (mx, v);
+            int last = (int) s.peaks.size() - 1;
+            while (last > 0 && s.peaks[(size_t) last] < mx * 0.06f) --last;
+            audibleEnd = std::min ((double) total, (double) (last + 1) * total / (double) s.peaks.size());
+        }
+        const double startAt = juce::jlimit (0.0, 0.95, (double) shStart.load()) * total + (rev ? (double) total - audibleEnd : 0.0);
         auto run = [&] (Voice& v)
         {
             if (! v.active) return;

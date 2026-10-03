@@ -3830,7 +3830,15 @@ juce::AudioBuffer<float> KeysKillaProcessor::renderEditedSample (kk::PairPtr s)
     // shape: start, reverse, tune, attack
     juce::AudioBuffer<float> a (2, s->audio.getNumSamples());
     for (int c = 0; c < 2; ++c) a.copyFrom (c, 0, s->audio, std::min (c, s->audio.getNumChannels() - 1), 0, a.getNumSamples());
-    if (se (seReverse) > 0.5f) a.reverse (0, a.getNumSamples());
+    if (se (seReverse) > 0.5f)
+    {
+        a.reverse (0, a.getNumSamples());
+        // the reversed sound starts where it gets audible (a long quiet tail would only be silence first)
+        const float pk = a.getMagnitude (0, a.getNumSamples());
+        int first = 0;
+        while (first < a.getNumSamples() - 64 && std::abs (a.getSample (0, first)) < pk * 0.02f && std::abs (a.getSample (1, first)) < pk * 0.02f) ++first;
+        if (first > 0) { juce::AudioBuffer<float> t (2, a.getNumSamples() - first); for (int c = 0; c < 2; ++c) t.copyFrom (c, 0, a, c, first, t.getNumSamples()); a = std::move (t); }
+    }
     const int st = (int) (juce::jlimit (0.0f, 0.95f, se (seStart)) * (float) a.getNumSamples());
     const double ratio = std::exp2 ((se (seTune) + se (seFine) / 100.0f) / 12.0);
     const int srcLen = a.getNumSamples() - st, len = std::max (8, (int) std::floor ((srcLen - 4) / ratio));

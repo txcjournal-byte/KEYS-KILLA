@@ -312,12 +312,22 @@ public:
         const float pChange = kill ? 0.72f : 0.34f;
         enum { keep, reverse, stutter, tape, octDown, octUp, filter, gate };
         const int xf = std::max (16, (int) (rate * 0.003));
+        // exactly a share of the pieces change (MUTATE about a third, KILL most) - never "nothing happened"
+        const int pieces = std::max (1, (len + piece - 1) / piece);
+        std::vector<bool> change ((size_t) pieces, false);
+        {
+            std::vector<int> order ((size_t) pieces);
+            for (int i = 0; i < pieces; ++i) order[(size_t) i] = i;
+            for (int i = pieces - 1; i > 0; --i) std::swap (order[(size_t) i], order[(size_t) rnd.nextInt (i + 1)]);
+            const int count = std::max (1, (int) std::round ((float) pieces * pChange));
+            for (int i = 0; i < count && i < pieces; ++i) change[(size_t) order[(size_t) i]] = true;
+        }
         for (int p0 = 0; p0 < len; p0 += piece)
         {
             const int n = std::min (piece, len - p0);
             if (n < 64) break;
             int mv = keep;
-            if (rnd.nextFloat() < pChange)
+            if (change[(size_t) (p0 / piece)])
             {
                 static const int mild[] { reverse, stutter, filter, gate, reverse, stutter };
                 static const int wild[] { reverse, stutter, tape, octDown, octUp, filter, gate, stutter, reverse, tape };
