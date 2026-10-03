@@ -7,19 +7,19 @@ namespace kkedit
 {
 // each section wears its own two neon colours
 struct Hue { Colour a, b; };
-inline Hue hueOsc()    { return { Colour (0xffff2f6d), Colour (0xffff8a3d) }; }
-inline Hue hueLfo()    { return { Colour (0xff9b4dff), Colour (0xffff3fd2) }; }
-inline Hue huePitch()  { return { Colour (0xff22d3ee), Colour (0xff4d7dff) }; }
-inline Hue hueFilter() { return { Colour (0xff2ee6a6), Colour (0xff22d3ee) }; }
-inline Hue hueAmp()    { return { Colour (0xffffb020), Colour (0xffff6a3d) }; }
-inline Hue hueFx()     { return { Colour (0xffff3fd2), Colour (0xff9b4dff) }; }
+inline Hue hueOsc()    { return { TC (0xffff2f6d), TC (0xffff8a3d) }; }
+inline Hue hueLfo()    { return { TC (0xff9b4dff), TC (0xffff3fd2) }; }
+inline Hue huePitch()  { return { TC (0xff22d3ee), TC (0xff4d7dff) }; }
+inline Hue hueFilter() { return { TC (0xff2ee6a6), TC (0xff22d3ee) }; }
+inline Hue hueAmp()    { return { TC (0xffffb020), TC (0xffff6a3d) }; }
+inline Hue hueFx()     { return { TC (0xffff3fd2), TC (0xff9b4dff) }; }
 // every control scales with the page (1512 design units wide)
 inline float pageScale (const Component& c) { return jmax (0.45f, (float) c.getParentWidth() / 1652.0f); }
 
 inline void panel (Graphics& g, Rectangle<float> r, Hue h, float k)
 {
     for (int i = 3; i >= 1; --i) { g.setColour (h.a.withAlpha (0.045f * (float) i)); g.drawRoundedRectangle (r.expanded ((float) (4 - i) * 2.0f * k), 12 * k, 2.0f * k); }
-    g.setGradientFill (ColourGradient (Colour (0xff1b1940), 0, r.getY(), Colour (0xff100e26), 0, r.getBottom(), false));
+    g.setGradientFill (ColourGradient (TC (0xff1b1940), 0, r.getY(), TC (0xff100e26), 0, r.getBottom(), false));
     g.fillRoundedRectangle (r, 10 * k);
     g.setGradientFill (ColourGradient (h.a, r.getX(), r.getY(), h.b.withAlpha (0.7f), r.getRight(), r.getBottom(), false));
     g.drawRoundedRectangle (r.reduced (0.6f), 10 * k, 1.6f * k);
@@ -32,16 +32,16 @@ inline void title (Graphics& g, Rectangle<float> r, const String& name, const St
     const float w = ga.getBoundingBox (0, -1, true).getWidth() + 22 * k;
     auto chip = Rectangle<float> (r.getX() + 12 * k, r.getY() + 10 * k, w, 22 * k);
     g.setGradientFill (ColourGradient (h.a, chip.getX(), 0, h.b, chip.getRight(), 0, false)); g.fillRoundedRectangle (chip, 6 * k);
-    g.setColour (Colours::white); g.setFont (f); g.drawText (name, chip, Justification::centred);
+    g.setColour (TC (0xffffffff)); g.setFont (f); g.drawText (name, chip, Justification::centred);
     if (sub.isNotEmpty())
     {
-        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (12.0f * k)).withExtraKerningFactor (0.1f));
+        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (12.0f * k)).withExtraKerningFactor (0.1f));
         g.drawText (sub, Rectangle<float> (chip.getRight() + 10 * k, chip.getY(), 300 * k, chip.getHeight()), Justification::centredLeft);
     }
 }
 inline void screen (Graphics& g, Rectangle<float> r, Hue h, float k, int vx = 8, int vy = 4)
 {
-    g.setColour (Colour (0xff0b0a1c)); g.fillRoundedRectangle (r, 6 * k);
+    g.setColour (TC (0xff0b0a1c)); g.fillRoundedRectangle (r, 6 * k);
     g.setColour (h.a.withAlpha (0.08f));
     for (int i = 1; i < vx; ++i) g.drawVerticalLine ((int) (r.getX() + r.getWidth() * (float) i / (float) vx), r.getY() + 2, r.getBottom() - 2);
     for (int i = 1; i < vy; ++i) g.drawHorizontalLine ((int) (r.getY() + r.getHeight() * (float) i / (float) vy), r.getX() + 2, r.getRight() - 2);
@@ -63,7 +63,7 @@ inline void handle (Graphics& g, Point<float> c, Hue h, float k, bool hot)
 {
     const float r = (hot ? 7.0f : 5.5f) * k;
     g.setColour (h.a.withAlpha (0.35f)); g.fillEllipse (c.x - r * 1.8f, c.y - r * 1.8f, r * 3.6f, r * 3.6f);
-    g.setColour (Colours::white); g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
+    g.setColour (TC (0xffffffff)); g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
     g.setColour (h.a); g.drawEllipse (c.x - r, c.y - r, r * 2, r * 2, 2.0f * k);
 }
 
@@ -98,7 +98,7 @@ public:
         const bool bip = getMinimum() < 0 && getMaximum() > 0;
         const float from = bip ? (a0 + a1) * 0.5f : a0, to = a0 + pos * (a1 - a0);
         Path track; track.addCentredArc (c.x, c.y, rad, rad, 0, a0, a1, true);
-        g.setColour (Colour (0xff2a2650)); g.strokePath (track, PathStrokeType (4.0f * k, PathStrokeType::curved, PathStrokeType::rounded));
+        g.setColour (TC (0xff2a2650)); g.strokePath (track, PathStrokeType (4.0f * k, PathStrokeType::curved, PathStrokeType::rounded));
         if (std::abs (to - from) > 0.01f)
         {
             Path arc; arc.addCentredArc (c.x, c.y, rad, rad, 0, jmin (from, to), jmax (from, to), true);
@@ -107,14 +107,14 @@ public:
             g.strokePath (arc, PathStrokeType (4.0f * k, PathStrokeType::curved, PathStrokeType::rounded));
         }
         const float cr = rad * 0.72f;
-        g.setGradientFill (ColourGradient (Colour (0xff3a3470), c.x, c.y - cr, Colour (0xff12102a), c.x, c.y + cr, false));
+        g.setGradientFill (ColourGradient (TC (0xff3a3470), c.x, c.y - cr, TC (0xff12102a), c.x, c.y + cr, false));
         g.fillEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2);
-        g.setColour (Colour (0xff4a4478)); g.drawEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2, 1.0f);
+        g.setColour (TC (0xff4a4478)); g.drawEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2, 1.0f);
         const float pa = to;
-        g.setColour (Colours::white);
+        g.setColour (TC (0xffffffff));
         g.drawLine (c.x + std::sin (pa) * cr * 0.25f, c.y - std::cos (pa) * cr * 0.25f, c.x + std::sin (pa) * cr * 0.85f, c.y - std::cos (pa) * cr * 0.85f, 2.2f * k);
         const bool showVal = isMouseButtonDown() || isMouseOver();
-        g.setColour (showVal ? hue.a.brighter (0.4f) : Colour (0xffe6e3ff));
+        g.setColour (showVal ? hue.a.brighter (0.4f) : TC (0xffe6e3ff));
         g.setFont (Font (FontOptions (11.5f * k, Font::bold)).withExtraKerningFactor (0.08f));
         g.drawFittedText (showVal && param != nullptr ? param->getCurrentValueAsText() : label, lab.toNearestInt(), Justification::centred, 1, 0.7f);
     }
@@ -161,10 +161,10 @@ public:
             }
             else
             {
-                g.setColour (i == hot ? Colour (0xff2a2654) : Colour (0xff17153a)); g.fillRoundedRectangle (r, 5 * k);
-                g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r, 5 * k, 1.0f);
+                g.setColour (i == hot ? TC (0xff2a2654) : TC (0xff17153a)); g.fillRoundedRectangle (r, 5 * k);
+                g.setColour (TC (0xff3a3264)); g.drawRoundedRectangle (r, 5 * k, 1.0f);
             }
-            g.setColour (on ? Colours::white : Colour (0xffc8c4e8));
+            g.setColour (on ? TC (0xffffffff) : TC (0xffc8c4e8));
             g.setFont (Font (FontOptions (jmin (12.0f * k, r.getHeight() * 0.55f), Font::bold)).withExtraKerningFactor (0.06f));
             g.drawFittedText (items[i], r.reduced (3 * k, 0).toNearestInt(), Justification::centred, 1, 0.6f);
         }
@@ -213,8 +213,8 @@ public:
         {
             auto r = Rectangle<float> ((float) i * w, 0, w, (float) getHeight()).reduced (2 * k, 0);
             if (i == sel) { g.setGradientFill (ColourGradient (hue.a, r.getX(), 0, hue.b, r.getRight(), 0, false)); g.fillRoundedRectangle (r, 6 * k); }
-            else { g.setColour (Colour (0xff17153a)); g.fillRoundedRectangle (r, 6 * k); g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r, 6 * k, 1.0f); }
-            g.setColour (i == sel ? Colours::white : Colour (0xffc8c4e8));
+            else { g.setColour (TC (0xff17153a)); g.fillRoundedRectangle (r, 6 * k); g.setColour (TC (0xff3a3264)); g.drawRoundedRectangle (r, 6 * k, 1.0f); }
+            g.setColour (i == sel ? TC (0xffffffff) : TC (0xffc8c4e8));
             g.setFont (Font (FontOptions (12.0f * k, Font::bold)).withExtraKerningFactor (0.1f));
             g.drawText (names[i], r, Justification::centred);
         }
@@ -307,7 +307,7 @@ public:
             if (u == 0) curve (g, p, hue, r, k());
             else { g.setColour (hue.b.withAlpha (0.28f)); g.strokePath (p, PathStrokeType (1.4f * k())); }
         }
-        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (11.0f * k(), Font::bold)).withExtraKerningFactor (0.1f));
+        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (11.0f * k(), Font::bold)).withExtraKerningFactor (0.1f));
         g.drawText (Choices::engines[eng].toUpperCase() + (uni > 1 ? "  x" + String (uni) : String()), r.removeFromTop (14 * k()), Justification::topRight);
         g.drawText ("drag up/down = WAVE", r.removeFromBottom (14 * k()), Justification::bottomRight);
     }
@@ -351,7 +351,7 @@ public:
         const float x = (float) std::fmod (phase, 1.0);
         const auto pt = p.getPointAlongPath (p.getLength() * x);
         handle (g, pt, hue, k(), false);
-        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (11.0f * k(), Font::bold)).withExtraKerningFactor (0.1f));
+        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (11.0f * k(), Font::bold)).withExtraKerningFactor (0.1f));
         g.drawText (sync ? "SYNC  " + Choices::lfoDivs[(int) v (which == 0 ? ID::lfoDiv : ID::lfo2Div)] : String (rate, 2) + " Hz", r.removeFromTop (14 * k()), Justification::topRight);
     }
 private:
@@ -390,7 +390,7 @@ public:
         curve (g, p, hue, r, k(), r.getBottom());
         const int show[] { 0, 1, 3 };
         for (int i : show) handle (g, pts[(size_t) i], hue, k(), i == drag || i == hot);
-        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f * k(), Font::bold)).withExtraKerningFactor (0.1f));
+        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f * k(), Font::bold)).withExtraKerningFactor (0.1f));
         g.drawText ("A " + text (ia) + "   D " + text (id_) + "   S " + String (roundToInt (s * 100)) + "%   R " + text (ir), r.removeFromTop (14 * k()), Justification::topRight);
     }
     void mouseMove (const MouseEvent& e) override { const int h = near (e.position); if (h != hot) { hot = h; repaint(); } }
@@ -478,10 +478,10 @@ public:
             const Point<float> pt (r.getX() + r.getWidth() * x, Y (mag (hzOf (x))));
             if (i == 0) p.startNewSubPath (pt); else p.lineTo (pt);
         }
-        g.setColour (Colour (0xffc8c4e8).withAlpha (0.25f)); g.drawHorizontalLine ((int) Y (1.0f), r.getX(), r.getRight());
+        g.setColour (TC (0xffc8c4e8).withAlpha (0.25f)); g.drawHorizontalLine ((int) Y (1.0f), r.getX(), r.getRight());
         curve (g, p, hue, r, k(), r.getBottom());
         handle (g, dot(), hue, k(), drag == 0 || hot == 0);
-        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f * k(), Font::bold)).withExtraKerningFactor (0.1f));
+        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f * k(), Font::bold)).withExtraKerningFactor (0.1f));
         auto* c = proc.apvts.getParameter (ID::cutoff);
         g.drawText (Choices::filters[(int) v (ID::filterType)].toUpperCase() + "   " + (c ? c->getCurrentValueAsText() : String()) + "   RES " + String (roundToInt (v (ID::reso) * 100)) + "%",
                     r.removeFromTop (14 * k()), Justification::topRight);
@@ -537,9 +537,9 @@ public:
             const Point<float> pt (r.getX() + r.getWidth() * t, mid - jlimit (-1.1f, 1.1f, st / 12.0f) * span);
             if (i == 0) p.startNewSubPath (pt); else p.lineTo (pt);
         }
-        g.setColour (Colour (0xffc8c4e8).withAlpha (0.25f)); g.drawHorizontalLine ((int) mid, r.getX(), r.getRight());
+        g.setColour (TC (0xffc8c4e8).withAlpha (0.25f)); g.drawHorizontalLine ((int) mid, r.getX(), r.getRight());
         curve (g, p, hue, r, k());
-        g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f * k(), Font::bold)).withExtraKerningFactor (0.1f));
+        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (10.5f * k(), Font::bold)).withExtraKerningFactor (0.1f));
         g.drawText ("+12", r.removeFromTop (14 * k()), Justification::topLeft);
         g.drawText ("-12", r.removeFromBottom (14 * k()), Justification::bottomLeft);
     }
@@ -664,10 +664,10 @@ public:
         // ---- header
         auto hb = [this] (HotButton& b, const String& t, const String& tip, Colour tint, std::function<void()> f)
         { b.setButtonText (t); b.framed = true; b.tint = tint; b.setTooltip (tip); b.onClick = std::move (f); addAndMakeVisible (b); };
-        hb (closeBtn, "CLOSE", "Back to BREED LAB", Colour (0xffff2f6d), [this] { if (onClose) onClose(); });
-        hb (saveBtn, "SAVE", "Save this sound as your preset", Colour (0xffffb020), [this] { if (onSave) onSave(); });
-        hb (resetBtn, "RESET", "Put every control on this page back to how the sound was loaded", Colour (0xff22d3ee), [this] { proc.resetParams (allIds()); repaint(); });
-        hb (synthBtn, "PLAY THIS SOUND", "The keys play a sample sound now (PAIR / VST / DIGGA / drums). Click: the keys play this synth sound again.", Colour (0xff36ff6a),
+        hb (closeBtn, "CLOSE", "Back to BREED LAB", TC (0xffff2f6d), [this] { if (onClose) onClose(); });
+        hb (saveBtn, "SAVE", "Save this sound as your preset", TC (0xffffb020), [this] { if (onSave) onSave(); });
+        hb (resetBtn, "RESET", "Put every control on this page back to how the sound was loaded", TC (0xff22d3ee), [this] { proc.resetParams (allIds()); repaint(); });
+        hb (synthBtn, "PLAY THIS SOUND", "The keys play a sample sound now (PAIR / VST / DIGGA / drums). Click: the keys play this synth sound again.", TC (0xff36ff6a),
             [this] { if (auto* rp = proc.apvts.getParameter (ID::playMode)) { rp->beginChangeGesture(); rp->setValueNotifyingHost (rp->convertTo0to1 (0.0f)); rp->endChangeGesture(); } });
         addChildComponent (synthBtn);
 
@@ -679,23 +679,26 @@ public:
     void paint (Graphics& g) override
     {
         const float k = kf();
-        g.setGradientFill (ColourGradient (Colour (0xff15123a), 0, 0, Colour (0xff0a0920), 0, (float) getHeight(), false));
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 12 * k);
-        // soft colour glows behind the panels
-        auto glow = [&] (Point<float> c, float r, Colour col) { g.setGradientFill (ColourGradient (col.withAlpha (0.16f), c.x, c.y, col.withAlpha (0.0f), c.x + r, c.y, true)); g.fillEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c)); };
+        {
+            Graphics::ScopedSaveState ss (g);
+            Path clip; clip.addRoundedRectangle (getLocalBounds().toFloat(), 12 * k); g.reduceClipRegion (clip);
+            pageBackdrop (g, *this, 0.75f);
+        }
+        // v0.34: no coloured glows (calm)
+        auto glow = [] (Point<float>, float, Colour) {};
         glow (U (300, 200), 420 * k, hueOsc().a); glow (U (1200, 200), 380 * k, hueLfo().a); glow (U (760, 480), 380 * k, hueFilter().a); glow (U (1300, 700), 320 * k, hueFx().a);
         kk::modern::waves (g, U (320, 34), U (1512, 6), 22 * k, hueOsc().a, hueLfo().b, 5, 0.22f);
 
         // header
-        g.setColour (Colours::white); g.setFont (Font (FontOptions (30.0f * k, Font::bold)).withExtraKerningFactor (0.06f));
+        g.setColour (TC (0xffffffff)); g.setFont (Font (FontOptions (30.0f * k, Font::bold)).withExtraKerningFactor (0.06f));
         g.drawText ("SOUND", UR (16, 6, 130, 46), Justification::centredLeft);
         g.setGradientFill (ColourGradient (hueOsc().a, U (128, 0).x, 0, hueLfo().b, U (220, 0).x, 0, false));
         g.drawText ("EDIT", UR (128, 6, 120, 46), Justification::centredLeft);
-        g.setColour (Colour (0xffe6e3ff)); g.setFont (Font (FontOptions (17.0f * k)));
+        g.setColour (TC (0xffe6e3ff)); g.setFont (Font (FontOptions (17.0f * k)));
         g.drawFittedText (proc.currentName(), UR (232, 10, 520, 38).toNearestInt(), Justification::centredLeft, 1);
         if (samplePlays)
         {
-            g.setColour (Colour (0xff36ff6a)); g.setFont (Font (FontOptions (11.5f * k, Font::bold)));
+            g.setColour (TC (0xff36ff6a)); g.setFont (Font (FontOptions (11.5f * k, Font::bold)));
             g.drawFittedText ("THE KEYS PLAY A SAMPLE SOUND NOW - EDIT CHANGES THIS SYNTH SOUND", UR (232, 40, 560, 16).toNearestInt(), Justification::centredLeft, 1);
         }
 
@@ -707,7 +710,7 @@ public:
         panel (g, UR (rFx), hueFx(), k);         title (g, UR (rFx), "FX", "PICK AN EFFECT - THE LIT ONES ARE ON", hueFx(), k);
         if (lfoTabs.sel == 1)
         {
-            g.setColour (Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (12.0f * k)));
+            g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (12.0f * k)));
             g.drawFittedText ("LFO 2 has no fixed target: in the MOD MATRIX pick \"LFO 2\" as a source and what it should move.",
                               UR (rLfo.getX() + 300, rLfo.getBottom() - 92, rLfo.getWidth() - 320, 40).toNearestInt(), Justification::centredLeft, 2);
         }
@@ -721,12 +724,12 @@ public:
                 g.setColour (hueFx().a.withAlpha (0.3f)); g.fillRoundedRectangle (r.expanded (2 * k), 8 * k);
                 g.setGradientFill (ColourGradient (hueFx().a, r.getX(), 0, hueFx().b, r.getRight(), 0, false)); g.fillRoundedRectangle (r, 6 * k);
             }
-            else { g.setColour (Colour (0xff17153a)); g.fillRoundedRectangle (r, 6 * k); g.setColour (Colour (0xff3a3264)); g.drawRoundedRectangle (r, 6 * k, 1.0f); }
-            g.setColour (on ? Colour (0xff36ff6a) : Colour (0xff3a3264)); g.fillEllipse (r.getX() + 8 * k, r.getCentreY() - 3.5f * k, 7 * k, 7 * k);
-            g.setColour (sel ? Colours::white : Colour (0xffc8c4e8)); g.setFont (Font (FontOptions (11.5f * k, Font::bold)).withExtraKerningFactor (0.06f));
+            else { g.setColour (TC (0xff17153a)); g.fillRoundedRectangle (r, 6 * k); g.setColour (TC (0xff3a3264)); g.drawRoundedRectangle (r, 6 * k, 1.0f); }
+            g.setColour (on ? TC (0xff36ff6a) : TC (0xff3a3264)); g.fillEllipse (r.getX() + 8 * k, r.getCentreY() - 3.5f * k, 7 * k, 7 * k);
+            g.setColour (sel ? TC (0xffffffff) : TC (0xffc8c4e8)); g.setFont (Font (FontOptions (11.5f * k, Font::bold)).withExtraKerningFactor (0.06f));
             g.drawFittedText (fxNames[i], r.withTrimmedLeft (18 * k).toNearestInt(), Justification::centred, 1, 0.7f);
         }
-        g.setColour (Colour (0xff3a3264)); g.drawVerticalLine ((int) U (rFx.getRight() - 230, 0).x, U (0, rFx.getY() + 46).y, U (0, rFx.getBottom() - 12).y);
+        g.setColour (TC (0xff3a3264)); g.drawVerticalLine ((int) U (rFx.getRight() - 230, 0).x, U (0, rFx.getY() + 46).y, U (0, rFx.getBottom() - 12).y);
     }
 
     void resized() override

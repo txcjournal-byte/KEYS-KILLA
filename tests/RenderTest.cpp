@@ -1208,7 +1208,8 @@ int main (int argc, char** argv)
     if (argc > 3 && juce::String (argv[1]) == "-shot")   // -shot <out.png> <skin 0|1> : GUI snapshot
     {
         juce::PropertiesFile::Options o; o.applicationName = "KEYS KILLA"; o.filenameSuffix = "settings"; o.folderName = "KEYS KILLA";
-        juce::PropertiesFile (o).setValue ("skin", juce::String (argv[3]).getIntValue());
+        const juce::String th (argv[3]);   // glass | night (old: a number)
+        juce::PropertiesFile (o).setValue ("theme", th.containsIgnoreCase ("night") || th == "1" ? 1 : 0);
         juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());

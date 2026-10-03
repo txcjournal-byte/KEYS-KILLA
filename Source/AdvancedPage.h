@@ -91,7 +91,7 @@ public:
     {
         const auto& s = *lnf.skin;
         auto r = getLocalBounds().toFloat();
-        g.setColour (s.dark ? Colour (0xff0a0808) : Colour (0xffdde1e5));
+        g.setColour (TC (0xff0a0808));
         g.fillRoundedRectangle (r, 5);
         g.setColour (s.panelEdge); g.drawRoundedRectangle (r.reduced (0.5f), 5, 1);
         g.setColour (s.textDim); g.setFont (serif (16.0f, false, 0.2f));
@@ -278,7 +278,7 @@ public:
         {
             auto r = rowRect (i).toFloat();
             const bool active = dragging && i == dragRow;
-            g.setColour (active ? s.accent.withAlpha (0.3f) : (s.dark ? Colour (0xff141010) : Colour (0xffe8ebee)));
+            g.setColour (active ? s.accent.withAlpha (0.3f) : (TC (0xff141010)));
             g.fillRoundedRectangle (r.reduced (1), 3);
             g.setColour (active ? s.accent : s.panelEdge); g.drawRoundedRectangle (r.reduced (1), 3, 1);
             g.setColour (s.text); g.setFont (serif (12.0f, false, 0.1f));
@@ -379,7 +379,7 @@ public:
     SettingsView (KeysKillaProcessor& p, int skinIndex) : proc (p)
     {
         eco.setButtonText ("ECO MODE: fewer unison voices, no oversampling, slower modulation (saves CPU)");
-        eco.setColour (ToggleButton::textColourId, Colour (0xffe6e0dc));
+        eco.setColour (ToggleButton::textColourId, TC (0xffe6e0dc));
         eco.setToggleState (proc.eco.load(), dontSendNotification);
         eco.onClick = [this] { proc.eco = eco.getToggleState(); };
         skin.addItem ("CHROME (light)", 1); skin.addItem ("BLOOD (dark)", 2);
@@ -459,7 +459,7 @@ public:
     void showTab (int i) { tabs.setCurrentTabIndex (i); }
     void paint (Graphics& g) override
     {
-        g.fillAll ((lnf.skin->dark ? Colour (0xf5080606) : Colour (0xf5dfe3e8)));
+        g.fillAll ((TC (0xf5080606)));
         drawPanel (g, getLocalBounds().toFloat().reduced (10), *lnf.skin, "ADVANCED");
     }
     void resized() override

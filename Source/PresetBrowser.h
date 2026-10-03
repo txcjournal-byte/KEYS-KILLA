@@ -7,7 +7,7 @@ inline Colour categoryColour (int cat)
     static const uint32 c[] { 0xffff5d8f, 0xffff8a3d, 0xff7cdcff, 0xffffd23f, 0xffffb86b, 0xffe0a060, 0xffc77dff, 0xffffc23d, 0xfff0a6ff, 0xff6ee7b7,
                               0xffff3b5c, 0xff8b8bff, 0xff4dd2ff, 0xff3d8bff, 0xff3d5bff, 0xffa78bfa, 0xff34d399, 0xffff3fd2,
                               0xfff59e0b, 0xff22e07a, 0xff2dd4bf, 0xffff6b4a, 0xffa3e635, 0xff9b4dff };
-    return isPositiveAndBelow (cat, (int) (sizeof (c) / sizeof (c[0]))) ? Colour (c[cat]) : Colour (0xffff2f6d);
+    return isPositiveAndBelow (cat, (int) (sizeof (c) / sizeof (c[0]))) ? Colour (c[cat]).withMultipliedSaturation (0.55f).withMultipliedBrightness (kk::theme().night ? 0.95f : 0.8f) : TC (0xffff2f6d);   // v0.34: calm category colours
 }
 
 class PresetBrowser : public Component, public FileDragAndDropTarget, private ListBoxModel
@@ -105,19 +105,22 @@ public:
     void paint (Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        g.setGradientFill (ColourGradient (Colour (0xff15123a), 0, 0, Colour (0xff0a0920), 0, r.getBottom(), false));
-        g.fillRoundedRectangle (r.reduced (4), 12);
-        auto glow = [&] (Point<float> c, float rad, Colour col) { g.setGradientFill (ColourGradient (col.withAlpha (0.18f), c.x, c.y, col.withAlpha (0.0f), c.x + rad, c.y, true)); g.fillEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c)); };
-        glow ({ r.getWidth() * 0.15f, 30 }, 380, Colour (0xffff2f6d)); glow ({ r.getWidth() * 0.85f, 60 }, 380, Colour (0xff9b4dff)); glow ({ r.getWidth() * 0.5f, r.getBottom() }, 420, Colour (0xff22d3ee));
-        g.setGradientFill (ColourGradient (Colour (0xffff2f6d), 0, 0, Colour (0xff9b4dff), r.getRight(), r.getBottom(), false));
+        {
+            Graphics::ScopedSaveState ss (g);
+            Path clip; clip.addRoundedRectangle (r.reduced (4), 12); g.reduceClipRegion (clip);
+            pageBackdrop (g, *this, 0.8f);
+        }
+        auto glow = [] (Point<float>, float, Colour) {};   // v0.34: calm - no coloured light
+        glow ({ r.getWidth() * 0.15f, 30 }, 380, TC (0xffff2f6d)); glow ({ r.getWidth() * 0.85f, 60 }, 380, TC (0xff9b4dff)); glow ({ r.getWidth() * 0.5f, r.getBottom() }, 420, TC (0xff22d3ee));
+        g.setGradientFill (ColourGradient (TC (0xffff2f6d), 0, 0, TC (0xff9b4dff), r.getRight(), r.getBottom(), false));
         g.drawRoundedRectangle (r.reduced (4), 12, 1.6f);
         // title
-        g.setColour (Colours::white); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.06f));
+        g.setColour (TC (0xffffffff)); g.setFont (Font (FontOptions (26.0f, Font::bold)).withExtraKerningFactor (0.06f));
         const bool lib = title == "PRESETS";
         g.drawText (lib ? "SOUND" : title, 24, 12, 400, 34, Justification::centredLeft);
         if (lib)
         {
-            g.setGradientFill (ColourGradient (Colour (0xffff2f6d), 140, 0, Colour (0xffff8a3d), 300, 0, false));
+            g.setGradientFill (ColourGradient (TC (0xffff2f6d), 140, 0, TC (0xffff8a3d), 300, 0, false));
             g.drawText ("LIBRARY", 134, 12, 300, 34, Justification::centredLeft);
         }
         // category chips
@@ -126,8 +129,8 @@ public:
             const auto& ch = chips[(size_t) i];
             auto cr = chipRect (i).reduced (3, 3);
             const bool sel = i == chipSel, hot = i == chipHot;
-            const Colour col = ch.cat >= 0 ? categoryColour (ch.cat) : ch.special == 3 ? Colour (0xff36ff6a) : ch.special == 2 ? Colour (0xffffd23f)
-                             : ch.special == 1 ? Colour (0xff22d3ee) : ch.special == 4 ? Colour (0xffff8a3d) : Colour (0xffff2f6d);
+            const Colour col = ch.cat >= 0 ? categoryColour (ch.cat) : ch.special == 3 ? TC (0xff36ff6a) : ch.special == 2 ? TC (0xffffd23f)
+                             : ch.special == 1 ? TC (0xff22d3ee) : ch.special == 4 ? TC (0xffff8a3d) : TC (0xffff2f6d);
             if (sel)
             {
                 g.setColour (col.withAlpha (0.3f)); g.fillRoundedRectangle (cr.expanded (3), 10);
@@ -139,12 +142,12 @@ public:
                 g.fillRoundedRectangle (cr, 8);
                 g.setColour (col.withAlpha (hot ? 0.95f : 0.6f)); g.drawRoundedRectangle (cr, 8, 1.2f);
             }
-            g.setColour (sel ? Colours::white : col); g.fillEllipse (cr.getX() + 9, cr.getCentreY() - 4, 8, 8);
-            g.setColour (sel ? Colours::white : Colour (0xffeeeaff)); g.setFont (Font (FontOptions (13.0f, Font::bold)).withExtraKerningFactor (0.05f));
+            g.setColour (sel ? TC (0xffffffff) : col); g.fillEllipse (cr.getX() + 9, cr.getCentreY() - 4, 8, 8);
+            g.setColour (sel ? TC (0xffffffff) : TC (0xffeeeaff)); g.setFont (Font (FontOptions (13.0f, Font::bold)).withExtraKerningFactor (0.05f));
             g.drawFittedText (ch.name, cr.withTrimmedLeft (22).withTrimmedRight (30).toNearestInt(), Justification::centredLeft, 1, 0.65f);
             if (ch.count > 0)
             {
-                g.setColour (sel ? Colours::white.withAlpha (0.85f) : col.withAlpha (0.85f)); g.setFont (Font (FontOptions (11.0f)));
+                g.setColour (sel ? TC (0xffffffff).withAlpha (0.85f) : col.withAlpha (0.85f)); g.setFont (Font (FontOptions (11.0f)));
                 g.drawText (String (ch.count), cr.withTrimmedRight (8).toNearestInt(), Justification::centredRight);
             }
         }
@@ -245,16 +248,16 @@ private:
                           || (e.factoryIndex < 0 && e.file == proc.currentUserFile());
         const auto* pr = e.factoryIndex >= 0 ? &factoryPresets()[(size_t) e.factoryIndex] : nullptr;
         const bool packSound = pr == nullptr && e.pack.isNotEmpty();
-        const Colour col = pr ? categoryColour (pr->cat) : packSound && e.cat >= 0 ? categoryColour (e.cat) : Colour (0xff22d3ee);
+        const Colour col = pr ? categoryColour (pr->cat) : packSound && e.cat >= 0 ? categoryColour (e.cat) : TC (0xff22d3ee);
         auto r = Rectangle<float> (2, 2, (float) w - 4, (float) h - 4);
         g.setGradientFill (ColourGradient (col.withAlpha (current ? 0.34f : selected ? 0.24f : (row % 2 ? 0.07f : 0.11f)), r.getX(), 0,
-                                           Colour (0x0015123a), r.getRight() * 0.7f, 0, false));
+                                           TC (0x0015123a), r.getRight() * 0.7f, 0, false));
         g.fillRoundedRectangle (r, 7);
         if (current) { g.setColour (col); g.drawRoundedRectangle (r, 7, 1.6f); }
         g.setColour (col); g.fillRoundedRectangle (r.getX(), r.getY() + 4, 4, r.getHeight() - 8, 2);
         const auto favs = getFavourites ? getFavourites() : StringArray();
         const bool fav = favs.contains (e.name);
-        g.setColour (fav ? Colour (0xffffd23f) : Colour (0xff6a6290));
+        g.setColour (fav ? TC (0xffffd23f) : TC (0xff6a6290));
         g.setFont (Font (FontOptions (22.0f))); g.drawText (fav ? String (CharPointer_UTF8 ("\xe2\x98\x85")) : String (CharPointer_UTF8 ("\xe2\x98\x86")), 8, 0, 30, h, Justification::centred);
         // category pill
         const String tag = pr ? categoryNames()[pr->cat] : packSound ? (e.cat >= 0 ? categoryNames()[e.cat] : String ("PACK")) : String ("MY PRESET");
@@ -264,24 +267,24 @@ private:
         g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.06f));
         g.drawFittedText (tag, pill.reduced (8, 0).toNearestInt(), Justification::centred, 1, 0.6f);
         // name, NEW badge, tags
-        g.setColour (Colours::white); g.setFont (Font (FontOptions (19.0f, Font::bold)));
+        g.setColour (TC (0xffffffff)); g.setFont (Font (FontOptions (19.0f, Font::bold)));
         g.drawFittedText (e.name, 206, 0, w * 2 / 5, h, Justification::centredLeft, 1, 0.8f);
         if (pr && pr->version == "0.30")
         {
             GlyphArrangement ga; ga.addLineOfText (Font (FontOptions (19.0f, Font::bold)), e.name, 0, 0);
             const float nx = 206.0f + jmin ((float) w * 0.4f, ga.getBoundingBox (0, -1, true).getWidth()) + 10.0f;
             auto badge = Rectangle<float> (nx, (float) h * 0.5f - 9, 40, 18);
-            g.setGradientFill (ColourGradient (Colour (0xff36ff6a), badge.getX(), 0, Colour (0xff22d3ee), badge.getRight(), 0, false)); g.fillRoundedRectangle (badge, 9);
-            g.setColour (Colour (0xff0a0920)); g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawText ("NEW", badge, Justification::centred);
+            g.setGradientFill (ColourGradient (TC (0xff36ff6a), badge.getX(), 0, TC (0xff22d3ee), badge.getRight(), 0, false)); g.fillRoundedRectangle (badge, 9);
+            g.setColour (TC (0xff0a0920)); g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawText ("NEW", badge, Justification::centred);
         }
-        g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (13.0f)));
+        g.setColour (TC (0xffaaa4cf)); g.setFont (Font (FontOptions (13.0f)));
         String info = pr ? pr->sub.toUpperCase() + "   " + pr->mood + " . " + pr->articulation + (pr->mono ? " . MONO" : "") : packSound ? String() : String ("your sound");
         g.drawFittedText (info, w * 2 / 5 + 260, 0, w - (w * 2 / 5 + 260) - 150, h, Justification::centredRight, 1, 0.8f);
         // pack tag: which sound pack the sound comes from (factory sounds = FACTORY)
         const String packTag = pr ? String ("FACTORY") : packSound ? e.pack.toUpperCase() : String ("MY SOUNDS");
         auto pt = Rectangle<float> ((float) w - 136, (float) h * 0.5f - 10, 124, 20);
-        g.setColour (Colour (0xffff8a3d).withAlpha (pr ? 0.35f : 0.8f)); g.drawRoundedRectangle (pt, 10, 1.0f);
-        g.setColour (Colour (0xffff8a3d).withAlpha (pr ? 0.6f : 1.0f)); g.setFont (Font (FontOptions (10.5f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.setColour (TC (0xffff8a3d).withAlpha (pr ? 0.35f : 0.8f)); g.drawRoundedRectangle (pt, 10, 1.0f);
+        g.setColour (TC (0xffff8a3d).withAlpha (pr ? 0.6f : 1.0f)); g.setFont (Font (FontOptions (10.5f, Font::bold)).withExtraKerningFactor (0.08f));
         g.drawFittedText (packTag, pt.reduced (8, 0).toNearestInt(), Justification::centred, 1, 0.6f);
     }
 
@@ -402,8 +405,8 @@ public:
     void paintOverChildren (Graphics& g) override
     {
         if (! dropHot) return;
-        g.setColour (Colour (0xcc0a0920)); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (4), 12);
-        g.setColour (Colour (0xffff8a3d)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (14), 12, 2.0f);
+        g.setColour (TC (0xcc0a0920)); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (4), 12);
+        g.setColour (TC (0xffff8a3d)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (14), 12, 2.0f);
         g.setFont (Font (FontOptions (30.0f, Font::bold)).withExtraKerningFactor (0.1f));
         g.drawText ("DROP TO INSTALL THE SOUND PACK", getLocalBounds(), Justification::centred);
     }
