@@ -1710,13 +1710,133 @@ void KeysKillaProcessor::setParentPreset (int slot, int idx)
     auto g = genomeFromPreset (idx);
     if (! g.valid()) return;
     parents[(size_t) juce::jlimit (0, 1, slot)] = std::move (g); ++labVer;
+    genomeParentSet (slot);
 }
-void KeysKillaProcessor::clearParent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = Genome(); ++labVer; }
-void KeysKillaProcessor::setParentCurrent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = genomeFromCurrent(); ++labVer; }
+void KeysKillaProcessor::clearParent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = Genome(); ++labVer; genomeParentSet (slot); }
+void KeysKillaProcessor::setParentCurrent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = genomeFromCurrent(); ++labVer; genomeParentSet (slot); }
 void KeysKillaProcessor::setParentChild (int slot, int c)
 {
     if (! juce::isPositiveAndBelow (c, (int) children.size())) return;
     parents[(size_t) juce::jlimit (0, 1, slot)] = children[(size_t) c].g; ++labVer;
+    genomeParentSet (slot);
+}
+
+//==============================================================================
+// v0.35 BREED LAB with your own sounds: a WAV dropped on PARENT A / B. Then the lab breeds audio (the PAIR engine):
+// a sound from the bank in the other slot is rendered to audio first, so any mix works (bank x WAV, WAV x WAV).
+juce::AudioBuffer<float> KeysKillaProcessor::renderGenomeAudio (const Genome& g, double rate, double seconds)
+{
+    if (thumbRenderer == nullptr) thumbRenderer = std::make_unique<KeysKillaProcessor> (false);
+    auto& r = *thumbRenderer;
+    for (size_t i = 0; i < r.params.size() && i < g.v.size(); ++i)
+    {
+        const float v = ID::isModuleParam (r.params[i]->paramID) || r.params[i]->paramID == ID::playMode ? r.params[i]->getDefaultValue() : g.v[i];
+        if (std::abs (r.params[i]->getValue() - v) > 1.0e-6f) r.params[i]->setValueNotifyingHost (v);
+    }
+    r.eco = false;
+    const int block = 512, total = (int) (rate * seconds), offAt = (int) (rate * seconds * 0.62);
+    r.prepareToPlay (rate, block);
+    const int note = r.raw[(size_t) r.ix->bassMode]->load() > 0.5f ? 36 : 60;
+    juce::AudioBuffer<float> out (2, total), buf (2, block);
+    for (int pos = 0; pos < total; pos += block)
+    {
+        juce::MidiBuffer m;
+        if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+        if (pos <= offAt && offAt < pos + block) m.addEvent (juce::MidiMessage::noteOff (1, note), offAt - pos);
+        buf.clear();
+        r.processBlock (buf, m);
+        const int n = std::min (block, total - pos);
+        for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, n);
+    }
+    return out;
+}
+
+void KeysKillaProcessor::genomeParentSet (int slot)
+{
+    const auto s = (size_t) juce::jlimit (0, 1, slot);
+    labWav[s] = false; labAudioParents[s] = nullptr;
+    labAudio = labWav[0] || labWav[1];
+}
+
+bool KeysKillaProcessor::labDropFile (int slot, const juce::File& f)
+{
+    const auto s = (size_t) juce::jlimit (0, 1, slot);
+    auto snd = kk::PairLab::fromFile (f, sr > 0 ? sr : 44100.0);
+    if (snd == nullptr) return false;
+    labAudioParents[s] = snd; labWav[s] = true; labWavFile[s] = f.getFullPathName();
+    parents[s] = Genome();   // the slot now holds your sound
+    labAudio = true;
+    ++labVer;
+    return true;
+}
+
+kk::PairPtr KeysKillaProcessor::labParentAudio (int slot)
+{
+    const auto s = (size_t) juce::jlimit (0, 1, slot);
+    if (labAudioParents[s] == nullptr && parents[s].valid())   // a bank sound: render it once
+    {
+        const double rate = sr > 0 ? sr : 44100.0;
+        labAudioParents[s] = kk::PairLab::fromBuffer (renderGenomeAudio (parents[s], rate, 2.6), rate, rate, parents[s].name);
+    }
+    return labAudioParents[s];
+}
+
+juce::String KeysKillaProcessor::labParentName (int slot) const
+{
+    const auto s = (size_t) juce::jlimit (0, 1, slot);
+    if (labWav[s] && labAudioParents[s] != nullptr) return labAudioParents[s]->name;
+    return parents[s].valid() ? parents[s].name : juce::String();
+}
+
+void KeysKillaProcessor::labBreedAudio()
+{
+    std::vector<kk::PairPtr> ps;
+    for (int k = 0; k < 2; ++k) if (auto p = labParentAudio (k)) ps.push_back (p);
+    if (ps.size() < 2) return;
+    pairSeed = kk::hash32 (pairSeed + (uint32_t) juce::Time::getMillisecondCounter());
+    pairKids = kk::PairLab::breed (ps, pairSeed, pairFlavor, sr > 0 ? sr : 44100.0);
+    pairSel = -1; pairLoopKid = -1;
+    if (loopOn.load() && loopOwner == 2) loopOn = false;
+    ++pairVer; ++labVer;
+    if (! pairKids.empty()) selectPairKid (0, false);
+}
+
+void KeysKillaProcessor::auditionAncestor (int slot)
+{
+    const auto& a = ancestor (slot);
+    if (! a.valid()) return;
+    applyGenome (a, true);
+    previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
+}
+
+kk::PairPtr KeysKillaProcessor::childAsSound (int i)
+{
+    if (! juce::isPositiveAndBelow (i, (int) children.size())) return nullptr;
+    const double rate = sr > 0 ? sr : 44100.0;
+    return kk::PairLab::fromBuffer (renderGenomeAudio (children[(size_t) i].g, rate, 3.0), rate, rate, children[(size_t) i].g.name);
+}
+
+juce::File KeysKillaProcessor::exportChildWav (int i)
+{
+    auto snd = childAsSound (i);
+    if (snd == nullptr) return {};
+    return kk::PairLab::exportWav (*snd, sr > 0 ? sr : 44100.0, snd->name);
+}
+
+void KeysKillaProcessor::auditionParent (int slot)
+{
+    const auto s = (size_t) juce::jlimit (0, 1, slot);
+    if (labWav[s] && labAudioParents[s] != nullptr)
+    {
+        pairPlayer.setSound (labAudioParents[s]);
+        if (auto* q = apvts.getParameter (ID::playMode))
+        { const float v = q->convertTo0to1 ((float) playPair); if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); } }
+        previewNote = labAudioParents[s]->rootNote;
+        return;
+    }
+    if (! parents[s].valid()) return;
+    applyGenome (parents[s], true);   // the parent becomes the sound on the keys - hear it, play it
+    previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
 }
 void KeysKillaProcessor::randomParent (int slot)
 {
@@ -2598,6 +2718,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
         juce::StringArray mk; for (int m : c->marks) mk.add (juce::String (m));
         state.setProperty ("chopMarks", mk.joinIntoString (","), nullptr);
     }
+    for (int k = 0; k < 2; ++k) state.setProperty ("labWav" + juce::String (k), labWav[(size_t) k] ? labWavFile[(size_t) k] : juce::String(), nullptr);
     saveLab (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
@@ -2617,6 +2738,11 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             macroLabels = juce::StringArray::fromTokens (vt.getProperty ("macroNames", "").toString(), "|", "");
             macroLabels.removeEmptyStrings();
             loadLab (vt);
+            for (int k = 0; k < 2; ++k)   // v0.35: your own sounds in PARENT A / B
+            {
+                genomeParentSet (k);
+                if (const juce::File lf (vt.getProperty ("labWav" + juce::String (k), "").toString()); lf.existsAsFile()) labDropFile (k, lf);
+            }
             vt.removeChild (vt.getChildWithName ("BREEDLAB"), nullptr);
             apvts.replaceState (vt);
             syncParamsToState();

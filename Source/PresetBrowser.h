@@ -322,6 +322,7 @@ private:
             m.addItem (4, "Use as PARENT A", en.factoryIndex >= 0);
             m.addItem (5, "Use as PARENT B", en.factoryIndex >= 0);
             m.addItem (3, "Favourite on / off");
+            if (en.factoryIndex < 0 && en.pack.isEmpty()) { m.addSeparator(); m.addItem (6, "Delete this preset (Del)"); }
             m.showMenuAsync (PopupMenu::Options(), [this, row, en, safe = Component::SafePointer<Component> (this)] (int r)
             {
                 if (safe == nullptr || r == 0) return;
@@ -329,6 +330,7 @@ private:
                 else if (r == 2) { proc.setParentCurrent (0); proc.setParentPreset (1, en.factoryIndex); proc.breed(); setVisible (false); if (onBred) onBred(); }
                 else if (r == 4 || r == 5) { proc.setParentPreset (r - 4, en.factoryIndex); if (onBred) onBred(); }
                 else if (r == 3 && toggleFavourite) { toggleFavourite (en.name); list.repaint(); }
+                else if (r == 6) askDelete (row);
             });
             return;
         }
@@ -339,6 +341,22 @@ private:
     }
 
     void listBoxItemDoubleClicked (int row, const MouseEvent&) override { activate (row, true); }
+    void deleteKeyPressed (int row) override { askDelete (row); }
+    // v0.35: your own presets can be deleted (to the recycle bin) - factory sounds stay
+    void askDelete (int row)
+    {
+        if (! isPositiveAndBelow (row, (int) entries.size())) return;
+        const auto en = entries[(size_t) row];
+        if (en.factoryIndex >= 0 || en.pack.isNotEmpty() || ! en.file.existsAsFile()) return;
+        AlertWindow::showOkCancelBox (MessageBoxIconType::QuestionIcon, "DELETE PRESET", "Delete \"" + en.name + "\"?  (it goes to the recycle bin)", "DELETE", "CANCEL", this,
+            ModalCallbackFunction::create ([this, en, safe = Component::SafePointer<Component> (this)] (int res)
+            {
+                if (safe == nullptr || res == 0) return;
+                if (en.file == proc.currentUserFile()) proc.deleteUserPreset(); else en.file.moveToTrash();
+                refresh();
+                if (onChanged) onChanged();
+            }));
+    }
     void returnKeyPressed (int row) override { activate (row, true); }
 
     KeysKillaProcessor& proc;

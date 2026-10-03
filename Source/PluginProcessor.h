@@ -116,9 +116,26 @@ public:
     void clearParent (int slot);
     std::array<std::array<float, 64>, 2> parentWave {};        // PARENT A / B waveforms (rendered by renderNextThumbnail)
     std::array<juce::int64, 2> parentWaveSig { 0, 0 };
-    bool parentsReady() const { return parents[0].valid() && parents[1].valid(); }
+    bool parentsReady() const { return labSlotFilled (0) && labSlotFilled (1); }
+    // v0.35: BREED LAB with your own sounds - a dropped WAV makes the lab breed audio (PAIR engine); the keys play the kids
+    std::atomic<bool> labAudio { false };
+    bool labAudioMode() const { return labAudio.load(); }
+    std::array<bool, 2> labWav { false, false };
+    std::array<juce::String, 2> labWavFile;
+    std::array<kk::PairPtr, 2> labAudioParents;
+    bool labDropFile (int slot, const juce::File& f);          // your sound into PARENT A / B
+    kk::PairPtr labParentAudio (int slot);                     // the parent as audio (bank sounds are rendered)
+    juce::String labParentName (int slot) const;
+    bool labSlotFilled (int slot) const { return labWav[(size_t) juce::jlimit (0, 1, slot)] || parents[(size_t) juce::jlimit (0, 1, slot)].valid(); }
+    void labBreedAudio();                                      // 6 kids from the two parents as audio
+    void auditionParent (int slot);                            // click = hear the parent (and play it on the keys)
+    void auditionAncestor (int slot);
+    kk::PairPtr childAsSound (int i);                          // a bank child rendered as a sound (save / drag)
+    juce::File exportChildWav (int i);
+    void genomeParentSet (int slot);
+    juce::AudioBuffer<float> renderGenomeAudio (const Genome& g, double rate, double seconds);
     void setParentChild (int slot, int childIndex);
-    void setParentGenome (int slot, const Genome& g) { if (g.valid()) { parents[(size_t) juce::jlimit (0, 1, slot)] = g; ++labVer; } }
+    void setParentGenome (int slot, const Genome& g) { if (g.valid()) { parents[(size_t) juce::jlimit (0, 1, slot)] = g; ++labVer; genomeParentSet (slot); } }
     void randomParent (int slot);
     void stepParent (int slot, int dir);
     int  breed();                                       // 6 children from the two parents
