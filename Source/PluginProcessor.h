@@ -134,16 +134,35 @@ public:
     // ---------------- v0.36 EVOLVE: one seed, a living tree of sounds ----------------
     // The seed (a bank sound, the current sound or any WAV) sits in the middle; 6 children grow around it. Click one: it
     // becomes the middle and the next generation grows. SAFE <-> WILD decides how far they may wander.
+    struct FxGenome { std::array<bool, kk::numRackSlots> on {}; std::array<float, kk::numRackValues> v {}; juce::String name; };
     struct EvoNode
     {
-        Genome g;                    // synth sound (bank seeds)
+        Genome g;                    // synth sound (bank seeds); g.loop = its melody
         kk::PairPtr audio;           // audio sound (WAV seeds and their family)
+        FxGenome fx;                 // v0.38 IDEA: its effect chain (sound + melody + FX evolve together)
         int parent = -1, gen = 0;
         std::vector<int> kids;
         std::array<float, 64> wave {}; bool waveReady = false;
         juce::String name;
         bool isAudio() const { return audio != nullptr; }
     };
+    // v0.38 IDEA MODE: a node is a whole idea - its sound, its melody and its effects; hover = hear the idea in time
+    bool evoIdea = true;
+    void evoPick (int node);                                     // you chose it: it grows, and EVOLVE learns your taste
+    void evoNotMyTaste (int node);                               // fewer like this
+    void evoApplyIdea (int node);                                // its effects onto the FX rack (IDEA MODE)
+    juce::File evoExportIdea (int node);                         // the whole idea as a loop WAV (bars at the project tempo)
+    juce::AudioBuffer<float> renderIdea (int node, double rate);
+    // MY TASTE: what you pick / save / drag is learned (kept in Documents/KEYS KILLA/taste.txt, it grows with you)
+    static constexpr int tasteDims = 22;                         // 8 sound + 11 effects + 3 melody
+    struct Taste { std::array<float, tasteDims> like {}, dislike {}; float nLike = 0, nDislike = 0; };
+    Taste taste; bool tasteLoaded = false;
+    float evoTasteAmt = 0.5f;                                    // 0 = ignore it ... 1 = only what you like
+    std::array<float, tasteDims> evoDescribe (const EvoNode& n) const;
+    float tasteScore (const std::array<float, tasteDims>& d) const;
+    void tasteLearn (const EvoNode& n, float weight);           // weight > 0 like, < 0 dislike
+    void tasteLoad(); void tasteSave() const;
+    int tastePicks() const { return (int) std::round (taste.nLike); }
     std::vector<EvoNode> evo;
     int evoCenter = -1;
     float evoWild = 0.35f;
@@ -323,7 +342,6 @@ public:
     juce::File exportEditedSample();
 
     // ---------------- v0.37 FX EVOLVE (SURPRISE FX) + STEP FX ----------------
-    struct FxGenome { std::array<bool, kk::numRackSlots> on {}; std::array<float, kk::numRackValues> v {}; juce::String name; };
     FxGenome fxCurrent() const;
     void fxApply (const FxGenome& g);
     FxGenome fxMutate (const FxGenome& g, float wild, uint32_t seed) const;

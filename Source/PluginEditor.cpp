@@ -5384,14 +5384,16 @@ public:
             const auto& t = kk::theme(); const auto c = r.getCentre();
             if (t.night) kk::modern::sun (g, c, t.text.withAlpha (0.9f)); else kk::modern::moon (g, c, t.text.withAlpha (0.85f), t.night ? Colour (0xff1d2026) : Colour (0xffeef0f2));
         };
+        btn (ideaBtn, "IDEA: SOUND + MELODY + FX", "IDEA MODE: every bubble is a whole idea - its sound, its melody and its effects grow together. Hover = hear the idea in time.  Click to switch to SOUND ONLY", [this]
+        { proc.evoIdea = ! proc.evoIdea; refreshIdeaBtn(); if (proc.evoIdea && proc.evoCenter >= 0) proc.evoApplyIdea (proc.evoCenter); repaint(); });
         btn (seedBtn, "NEW SEED", "Start a new tree: a sound from the bank, a surprise, the current sound - or drop any WAV onto the page", [this] { seedMenu (&seedBtn); });
         btn (againBtn, "EVOLVE AGAIN", "Six new children of the middle sound", [this] { if (proc.evoCenter >= 0) { proc.evoGrow (proc.evoCenter, true); startAnim(); } });
         btn (saveBtn, "SAVE", "Keep the middle sound: as a preset, or as a sound in your folders / kits", [this] { saveMenu (proc.evoCenter, &saveBtn); });
         btn (bankBtn, "PICK FROM THE BANK", "Choose the seed from the sound library", [this] { if (onPickSeed) onPickSeed(); });
         btn (diceBtn, "SURPRISE ME", "A random seed from the bank", [this] { proc.evoSeedRandom(); startAnim(); });
         btn (currentBtn, "USE THE CURRENT SOUND", "The sound on the keys right now becomes the seed", [this] { proc.evoSeedCurrent(); startAnim(); });
-        dragWav.makeFile = [this] { return proc.evoExportWav (proc.evoCenter); };
-        dragWav.setTooltip ("Drag the middle sound into FL Studio as a WAV");
+        dragWav.makeFile = [this] { return proc.evoIdea ? proc.evoExportIdea (proc.evoCenter) : proc.evoExportWav (proc.evoCenter); };
+        dragWav.setTooltip ("Drag into FL Studio as a WAV: IDEA MODE = the whole idea as a 4-bar loop (sound + melody + FX, project tempo), SOUND ONLY = the one-shot");
         dragMidi.makeFile = [this] { return proc.evoExportMidi (proc.evoCenter); };
         dragMidi.setTooltip ("Drag the melody you see (C minor, the notes on the right) into FL Studio as MIDI");
         addAndMakeVisible (dragWav); addAndMakeVisible (dragMidi);
@@ -5427,7 +5429,7 @@ public:
         kk::modern::wordmark (g, { 40, 22, 420, 44 }, 34.0f);
         g.setColour (t.text.withAlpha (0.85f)); g.setFont (kk::modern::font (16.5f, true, 0.06f));
         g.drawText (proc.evo.empty() ? "drop any sound  -  or pick a seed from the bank" : "hover = hear it     click = it grows     drag from the middle = blend",
-                    Rectangle<float> (420, 26, 780, 36), Justification::centredLeft);
+                    Rectangle<float> (420, 26, (float) getWidth() - 420 - 500, 36), Justification::centredLeft);
         // bottom bar
         kk::modern::plate (g, bottomBar().toFloat(), 18.0f);
         drawWild (g);
@@ -5491,11 +5493,13 @@ public:
     void mouseDown (const MouseEvent& e) override
     {
         downNode = nodeAt (e.position); downAction = actionAt (e.position); dragFired = false;
-        if (wildRect().expanded (6).contains (e.position)) { draggingWild = true; setWild (e.position.x); }
+        if (wildRect().expanded (6, 8).contains (e.position)) { draggingWild = true; setWild (e.position.x); }
+        else if (tasteRect().expanded (6, 8).contains (e.position)) { draggingTaste = true; setTaste (e.position.x); }
     }
     void mouseDrag (const MouseEvent& e) override
     {
         if (draggingWild) { setWild (e.position.x); return; }
+        if (draggingTaste) { setTaste (e.position.x); return; }
         if (downAction >= 0 && ! dragFired && e.getDistanceFromDragStart() > 6)   // drag WAV / MELODY out of a bubble
         {
             dragFired = true;
@@ -5530,13 +5534,14 @@ public:
     void mouseUp (const MouseEvent& e) override
     {
         if (draggingWild) { draggingWild = false; return; }
+        if (draggingTaste) { draggingTaste = false; return; }
         if (morphKid >= 0)
         {
             const auto& kids = proc.evo[(size_t) proc.evoCenter].kids;
             const int target = isPositiveAndBelow (morphKid, (int) kids.size()) ? kids[(size_t) morphKid] : -1;
             const bool onKid = target >= 0 && e.position.getDistanceFrom (kidPos (morphKid, 1.0f)) < kidR;
             morphKid = -1;
-            if (onKid) { proc.evoFocus (target); startAnim(); }
+            if (onKid) { proc.evoPick (target); startAnim(); }
             else proc.evoAudition (proc.evoCenter, false);   // let go: back to the middle sound
             repaint(); return;
         }
@@ -5546,10 +5551,19 @@ public:
         if (n < 0) return;
         if (e.mods.isPopupMenu()) { nodeMenu (n); return; }
         if (n == proc.evoCenter) { proc.evoAudition (n); return; }
-        proc.evoFocus (n); startAnim();
+        proc.evoPick (n); startAnim();   // v0.38: you chose it - it grows, MY TASTE learns
         if (onChanged) onChanged();
     }
-    void spacePressed() { if (proc.loopPlaying()) proc.stopLoop(); else if (proc.evoCenter >= 0) proc.evoAudition (proc.evoCenter); }
+    void spacePressed()
+    {
+        if (proc.loopPlaying()) proc.stopLoop();
+        else if (proc.evoCenter >= 0) { proc.evoAudition (proc.evoCenter); if (proc.evoIdea) { proc.evoApplyIdea (proc.evoCenter); proc.toggleLoop(); } }
+    }
+    void refreshIdeaBtn()
+    {
+        ideaBtn.setButtonText (proc.evoIdea ? "IDEA: SOUND + MELODY + FX" : "SOUND ONLY");
+        ideaBtn.selected = proc.evoIdea; ideaBtn.repaint();
+    }
     void showDebugHover (int kidIndex)   // snapshots
     {
         if (proc.evoCenter >= 0 && isPositiveAndBelow (kidIndex, (int) proc.evo[(size_t) proc.evoCenter].kids.size()))
@@ -5571,7 +5585,8 @@ private:
         return { c.x + std::cos (ang) * r * 1.18f, c.y + std::sin (ang) * r };
     }
     Rectangle<int> bottomBar() const { return { 12, getHeight() - 84, getWidth() - 24, 76 }; }
-    Rectangle<float> wildRect() const { const auto b = bottomBar(); return { (float) b.getX() + 120, (float) b.getCentreY() - 6, 300, 12 }; }
+    Rectangle<float> wildRect() const { const auto b = bottomBar(); return { (float) b.getX() + 120, (float) b.getY() + 15, 290, 10 }; }
+    Rectangle<float> tasteRect() const { const auto b = bottomBar(); return { (float) b.getX() + 120, (float) b.getY() + 44, 290, 10 }; }
     static constexpr float centreR = 104.0f, kidR = 64.0f, ringR = 245.0f;
     float anim() const
     {
@@ -5685,13 +5700,24 @@ private:
         g.setColour (Colours::white.withAlpha (t.night ? 0.12f : 0.7f));
         Path refl; refl.addCentredArc (c.x, c.y, r * 0.86f, r * 0.86f, 0, -2.4f, -1.0f, true);
         g.strokePath (refl, PathStrokeType (r * 0.06f, PathStrokeType::curved, PathStrokeType::rounded));
+        // IDEA: the effects it carries
+        if (proc.evoIdea)
+        {
+            // the two that colour it most
+            static const int prio[] { kk::rkHalf, kk::rkGate, kk::rkFlanger, kk::rkPhaser, kk::rkLofi, kk::rkDelay, kk::rkReverb, kk::rkChorus, kk::rkDrive, kk::rkEq, kk::rkWidth };
+            StringArray on;
+            for (int sl : prio) if (n.fx.on[(size_t) sl]) on.add (kk::rackSlotName (sl));
+            const String txt = on.isEmpty() ? String ("DRY") : on.size() == 1 ? on[0] : on[0] + " + " + on[1] + (on.size() > 2 ? " +" : "");
+            g.setColour (on.isEmpty() ? t.dim : kk::accentText()); g.setFont (kk::modern::font (isCentre ? 11.5f : 9.5f, true, 0.06f));
+            g.drawFittedText (txt, Rectangle<int> ((int) (c.x - r * 0.9f), (int) (c.y + r * 0.3f), (int) (r * 1.8f), 14), Justification::centred, 1, 0.7f);
+        }
         // name
         g.setColour (t.text); g.setFont (kk::modern::font (isCentre ? 17.0f : 12.5f, true, 0.04f));
         g.drawFittedText (n.name, Rectangle<int> ((int) (c.x - r * 1.5f), (int) (c.y + r + 6), (int) (r * 3.0f), isCentre ? 24 : 30), Justification::centredTop, 2, 0.75f);
         if (isCentre)
         {
             g.setColour (kk::accentText()); g.setFont (kk::modern::font (11.0f, true, 0.3f));
-            g.drawText ("GEN " + String (n.gen) + (n.isAudio() ? "  .  YOUR SOUND" : ""), Rectangle<float> (c.x - 100, c.y + r * 0.42f, 200, 16), Justification::centred);
+            g.drawText ("GEN " + String (n.gen) + (n.isAudio() ? "  .  YOUR SOUND" : ""), Rectangle<float> (c.x - 100, c.y + r * 0.52f, 200, 16), Justification::centred);
         }
         if (tag.isNotEmpty())
         {
@@ -5715,28 +5741,39 @@ private:
         g.setColour (t.dim); g.setFont (kk::modern::font (13.0f, false, 0.08f));
         g.drawText ("a WAV, a vocal, a loop, a one-shot - it becomes the seed of a new family of sounds", Rectangle<float> (700, 20).withCentre (c.translated (0, 8)), Justification::centred);
     }
-    void drawWild (Graphics& g)
+    void drawRail (Graphics& g, Rectangle<float> r, float value, const String& left, const String& right)
     {
         const auto& t = kk::theme();
-        const auto r = wildRect();
-        g.setColour (t.text); g.setFont (kk::modern::font (12.0f, true, 0.2f));
-        g.drawText ("SAFE", Rectangle<float> (r.getX() - 70, r.getY() - 8, 60, 28), Justification::centredRight);
-        g.drawText ("WILD", Rectangle<float> (r.getRight() + 10, r.getY() - 8, 60, 28), Justification::centredLeft);
-        kk::modern::well (g, r, 6.0f);
-        const float x = r.getX() + r.getWidth() * proc.evoWild;
+        g.setColour (t.text); g.setFont (kk::modern::font (11.5f, true, 0.16f));
+        g.drawText (left, Rectangle<float> (r.getX() - 104, r.getY() - 8, 94, 26), Justification::centredRight);
+        g.drawText (right, Rectangle<float> (r.getRight() + 10, r.getY() - 8, 90, 26), Justification::centredLeft);
+        kk::modern::well (g, r, 5.0f);
+        const float x = r.getX() + r.getWidth() * value;
         g.setGradientFill (ColourGradient (t.accent.withAlpha (0.3f), r.getX(), 0, t.accent, x, 0, false));
-        g.fillRoundedRectangle (r.withRight (x), 6.0f);
-        g.setColour (t.night ? Colour (0xffe8eaed) : Colours::white); g.fillEllipse (Rectangle<float> (22, 22).withCentre ({ x, r.getCentreY() }));
-        g.setColour (t.accent); g.drawEllipse (Rectangle<float> (22, 22).withCentre ({ x, r.getCentreY() }), 1.6f);
+        g.fillRoundedRectangle (r.withRight (x), 5.0f);
+        g.setColour (t.night ? Colour (0xffe8eaed) : Colours::white); g.fillEllipse (Rectangle<float> (18, 18).withCentre ({ x, r.getCentreY() }));
+        g.setColour (t.accent); g.drawEllipse (Rectangle<float> (18, 18).withCentre ({ x, r.getCentreY() }), 1.6f);
+    }
+    void drawWild (Graphics& g)
+    {
+        drawRail (g, wildRect(), proc.evoWild, "SAFE", "WILD");
+        drawRail (g, tasteRect(), proc.evoTasteAmt, "ANY", "MY TASTE");
+        const int picks = proc.tastePicks();
+        g.setColour (kk::theme().dim); g.setFont (kk::modern::font (10.0f, true, 0.06f));
+        g.drawText (picks < 2 ? String ("pick a few - it learns") : "learned from " + String (picks) + " picks",
+                    Rectangle<float> (tasteRect().getX(), tasteRect().getBottom() + 3, tasteRect().getWidth(), 13), Justification::centred);
     }
     void setWild (float x) { const auto r = wildRect(); proc.evoWild = jlimit (0.0f, 1.0f, (x - r.getX()) / r.getWidth()); repaint (bottomBar()); }
+    void setTaste (float x) { const auto r = tasteRect(); proc.evoTasteAmt = jlimit (0.0f, 1.0f, (x - r.getX()) / r.getWidth()); repaint (bottomBar()); }
     void layoutButtons()
     {
         const int W = getWidth();
         themeBtn.setBounds (W - 92, 24, 56, 46);
         studioBtn.setBounds (W - 92 - 132, 26, 124, 42);
+        ideaBtn.setBounds (studioBtn.getX() - 262, 26, 254, 42);
+        refreshIdeaBtn();
         const auto b = bottomBar();
-        int x = b.getX() + 470;
+        int x = b.getX() + 540;
         againBtn.setBounds (x, b.getY() + 18, 146, 40); x += 152;
         seedBtn.setBounds (x, b.getY() + 18, 112, 40); x += 122;
         saveBtn.setBounds (x, b.getY() + 18, 84, 40); x += 92;
@@ -5761,9 +5798,17 @@ private:
         // hover long enough = hear it (the keys play it); leave = back to the middle
         const auto now = Time::getMillisecondCounter();
         if (hovered >= 0 && hovered != proc.evoCenter && ! auditioned && now - hoverSince > 260 && morphKid < 0)
-        { auditioned = true; proc.evoAudition (hovered); lastHeard = hovered; }
+        {
+            auditioned = true; lastHeard = hovered;
+            if (proc.evoIdea)   // the whole idea: its sound, its effects, its melody in time
+            {
+                proc.evoAudition (hovered, false); proc.evoApplyIdea (hovered);
+                if (! proc.loopPlaying()) proc.toggleLoop();
+            }
+            else proc.evoAudition (hovered);
+        }
         if (hovered < 0 && lastHeard >= 0 && lastHeard != proc.evoCenter && now - hoverSince > 400 && morphKid < 0)
-        { proc.evoAudition (proc.evoCenter, false); lastHeard = proc.evoCenter; }
+        { proc.evoAudition (proc.evoCenter, false); if (proc.evoIdea) proc.evoApplyIdea (proc.evoCenter); lastHeard = proc.evoCenter; }
         const bool empty = proc.evo.empty();
         if (empty != wasEmpty) { wasEmpty = empty; layoutButtons(); }
         melodyBtn.setButtonText (proc.loopPlaying() ? "STOP MELODY" : "PLAY MELODY");
@@ -5822,6 +5867,8 @@ private:
         m.addItem (3, "Save...");
         m.addItem (4, "To STUDIO as PARENT A", ! n.isAudio());
         m.addItem (5, "To STUDIO as PARENT B", ! n.isAudio());
+        m.addSeparator();
+        m.addItem (6, "Not my taste (fewer like this)", node != proc.evoCenter);
         m.showMenuAsync (PopupMenu::Options(), [this, node, safe = SafePointer<EvolvePage> (this)] (int r)
         {
             if (safe == nullptr || r == 0) return;
@@ -5829,6 +5876,7 @@ private:
             if (r == 2) proc.evoAudition (node);
             if (r == 3) saveMenu (node, nullptr);
             if (r == 4 || r == 5) { auto g = proc.evo[(size_t) node].g; g.name = proc.evo[(size_t) node].name; proc.setParentGenome (r - 4, g); }
+            if (r == 6) { proc.evoNotMyTaste (node); hovered = -1; repaint(); }
         });
     }
 
@@ -5863,7 +5911,8 @@ private:
     int hovered = -1, lastHeard = -1, downNode = -1, downAction = -1, actionNode = -1, morphKid = -1, lastVer = -1;
     uint32 hoverSince = 0, animStart = 0, lastMorph = 0;
     float morphT = 0.0f;
-    bool auditioned = false, dropHot = false, dragFired = false, draggingWild = false, wasEmpty = true;
+    bool auditioned = false, dropHot = false, dragFired = false, draggingWild = false, draggingTaste = false, wasEmpty = true;
+    HotButton ideaBtn { lnf };
 };
 
 //==============================================================================

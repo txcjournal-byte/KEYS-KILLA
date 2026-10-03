@@ -683,6 +683,55 @@ static int unitTests()
         }
         for (auto f : { fa, fb }) f.deleteFile();
     }
+    // v0.38 EVOLVE IDEA MODE + MY TASTE
+    {
+        KeysKillaProcessor p; p.setCurrentProgram (0); p.prepareToPlay (44100, 512);
+        const auto keepTaste = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("taste.txt").loadFileAsString();
+        p.tasteLoaded = true; p.taste = {};
+        p.evoWild = 0.5f; p.evoSeedPreset (10);
+        const auto& kidsIdx = p.evo[0].kids;
+        int withFx = 0, withLoop = 0;
+        for (int k : kidsIdx) { const auto& n = p.evo[(size_t) k]; for (auto o : n.fx.on) if (o) { ++withFx; break; } withLoop += n.g.loop.valid ? 1 : 0; }
+        check (kidsIdx.size() == 6 && withLoop == 6 && withFx >= 3, "v0.38 IDEA: children carry a melody and effects");
+        const int kid = kidsIdx[3];
+        auto idea = p.renderIdea (kid, 44100.0);
+        const double expect = 44100.0 * 60.0 / 140.0 * 16.0;
+        check (idea.getNumSamples() > (int) expect && idea.getMagnitude (0, idea.getNumSamples()) > 0.05f && idea.getMagnitude (0, idea.getNumSamples()) <= 1.0f,
+               "v0.38 IDEA: the whole idea renders as a 4-bar loop");
+        check (p.evoExportIdea (kid).existsAsFile(), "v0.38 IDEA: the idea drags out as a WAV");
+        // MY TASTE: when it knows what you like, the six it keeps are closer to it
+        const auto target = p.evoDescribe (p.evo[(size_t) kidsIdx[1]]);
+        auto meanDist = [&] (float amt)
+        {
+            double sum = 0; int cnt = 0;
+            for (int rep = 0; rep < 6; ++rep)
+            {
+                p.taste = {}; p.taste.like = target; p.taste.nLike = 12; p.evoTasteAmt = amt;
+                p.evoGrow (0, true);
+                for (int k : p.evo[0].kids)
+                {
+                    const auto d = p.evoDescribe (p.evo[(size_t) k]);
+                    double s2 = 0; for (int q = 0; q < 8; ++q) s2 += (d[(size_t) q] - target[(size_t) q]) * (d[(size_t) q] - target[(size_t) q]);
+                    sum += std::sqrt (s2); ++cnt;
+                }
+            }
+            return sum / std::max (1, cnt);
+        };
+        const double dAny = meanDist (0.0f), dTaste = meanDist (1.0f);
+        std::printf ("MY TASTE: distance to your taste %.3f (ANY) -> %.3f (MY TASTE)\n", dAny, dTaste);
+        check (dTaste < dAny, "v0.38 MY TASTE: the children move towards what you like");
+        p.taste = {};
+        p.evoPick (p.evo[0].kids[2]);
+        check (p.tastePicks() >= 1 && p.taste.nDislike > 0.5f, "v0.38 MY TASTE: a pick is learned (and the others a little less)");
+        // the ideas come back with the project
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q; q.prepareToPlay (44100, 512); q.setStateInformation (mb.getData(), (int) mb.getSize());
+        bool fxSame = q.evo.size() == p.evo.size();
+        for (size_t i = 0; fxSame && i < p.evo.size(); ++i) fxSame = p.evo[i].fx.on == q.evo[i].fx.on;
+        check (fxSame && q.evoIdea == p.evoIdea, "v0.38 IDEA: the effects of every idea come back with the project");
+        auto tf = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("taste.txt");
+        if (keepTaste.isEmpty()) tf.deleteFile(); else tf.replaceWithText (keepTaste);
+    }
     // PAIR flavours change the children (same children, new flavour)
     {
         KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
