@@ -2336,13 +2336,13 @@ static std::vector<DrumTheme> makeDrumThemes()
 {
     return {
         { "808", "SUB BOOSTER  -  DROP YOUR 808, MAKE IT KNOCK, WRITE THE 808 LINE, DRAG IT ALL BACK INTO FL", "DROP YOUR 808 HERE", "808 PATTERNS",
-          TC (0xff1d1a3c), TC (0xff0a0a1a), TC (0xffff5a1f), TC (0xffffc23d), TC (0xffeef0f2), { "ATLANTA", "DRILL", "PLUGG", "RAGE" } },
+          TC (0xff1d1a3c), TC (0xff0a0a1a), TC (0xffff5a1f), TC (0xffffc23d), TC (0xffeef0f2), { "SIMPLE", "SLIDES", "SOFT", "HARD" } },
         { "SNARE / CLAP", "CRACK LAB  -  DROP A SNARE OR CLAP, SHARPEN IT, GENERATE TRAP SNARE ROLLS", "DROP YOUR SNARE / CLAP HERE", "SNARE ROLLS",
-          TC (0xff1b1a3a), TC (0xff0a0a1a), TC (0xff1fe0ff), TC (0xffff3fd2), TC (0xffeef0f2), { "TRAP", "TRIPLET", "DRILL", "BUILD-UP" } },
+          TC (0xff1b1a3a), TC (0xff0a0a1a), TC (0xff1fe0ff), TC (0xffff3fd2), TC (0xffeef0f2), { "SIMPLE", "TRIPLET", "BUSY", "BUILD-UP" } },
         { "HI-HAT", "HAT FACTORY  -  DROP A HI-HAT, MAKE IT SHINE, TRAP ROLLS IN THE PIANO ROLL", "DROP YOUR HI-HAT HERE", "HI-HAT ROLLS",
-          TC (0xff1f1a3e), TC (0xff0a0a1a), TC (0xffffd23f), TC (0xffb070ff), TC (0xffeef0f2), { "ATLANTA", "TRIPLET", "DRILL", "CRAZY" } },
+          TC (0xff1f1a3e), TC (0xff0a0a1a), TC (0xffffd23f), TC (0xffb070ff), TC (0xffeef0f2), { "SIMPLE", "TRIPLET", "BUSY", "CRAZY" } },
         { "KICK", "KICK LAB  -  DROP A KICK, MAKE IT HIT, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR KICK HERE", "KICK PATTERNS",
-          TC (0xff1d1a3c), TC (0xff0a0a1a), TC (0xffff3b30), TC (0xffff9f0a), TC (0xffeef0f2), { "TRAP", "DRILL", "BOUNCE", "HALF-TIME" } },
+          TC (0xff1d1a3c), TC (0xff0a0a1a), TC (0xffff3b30), TC (0xffff9f0a), TC (0xffeef0f2), { "SIMPLE", "BUSY", "BOUNCE", "HALF-TIME" } },
         { "OPEN HAT", "OPEN HAT  -  DROP AN OPEN HAT / CRASH, SHAPE ITS TAIL, SAVE IT INTO YOUR DRUM KIT", "DROP YOUR OPEN HAT HERE", "OPEN HAT PATTERNS",
           TC (0xff1f1a3e), TC (0xff0a0a1a), TC (0xffffe066), TC (0xff64d2ff), TC (0xffeef0f2), { "OFFBEAT", "SPARSE", "SYNCOPATED", "BUSY" } },
         { "PERC", "PERCUSSION  -  RIMS, TOMS, SHAKERS, BONGOS ... SAVE THEM INTO YOUR DRUM KIT", "DROP YOUR PERC HERE", "PERC PATTERNS",
@@ -4604,6 +4604,8 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
+        if (v == 30) { openTab (0); setTheme (1 - kk::themeIndex()); }          // ... and with a drum page open
+        if (v == 29) { openTab (tabEdit); setTheme (1 - kk::themeIndex()); }   // switch the skin with SOUND EDIT open
         if (v == 28) { proc.breed(); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.onBreed(); breedBtn.prime (0.32f, 0.8f); sparks.freezeAt (0.22f); }   // fresh instance: one parent chosen, one empty
         if (v == 13 || v == 14)   // FAMILY TREE with 4 sounds: 13 = SOUND results, 14 = LOOP results
         {
@@ -4635,6 +4637,14 @@ public:
         settings->setValue ("theme", kk::themeIndex());
         lnf.setSkin (Skin::all()[(size_t) kk::themeIndex()]);
         if (auto* c = activeLabCache()) c->rebuild();
+        // pages built on demand keep colours from when they were made: build them again in the new theme,
+        // and reopen the page that was open (SOUND EDIT, drum pages, library, tree ...)
+        const int open = isPanelVisible() ? openTabIndex : -1;
+        hidePanels(); openTabIndex = -1;
+        soundEdit.reset(); advanced.reset(); browser.reset(); treePanel.reset();
+        for (auto& m : modules) m.reset();
+        for (int i = 0; i < (int) tabs.size() && i < numTabs; ++i) tabs[(size_t) i]->tint = drumTheme (i).accent;
+        if (open >= 0) openTab (open);
         sendLookAndFeelChange();
         std::function<void (Component&)> all = [&all] (Component& c) { c.repaint(); for (auto* ch : c.getChildren()) all (*ch); };
         all (*this);
@@ -4642,8 +4652,9 @@ public:
 
     void resized() override
     {
-        prevBtn.setBounds (R (642, 44, 684, 86)); nameBtn.setBounds (R (688, 46, 1044, 84)); nextBtn.setBounds (R (1044, 44, 1082, 86));
-        heartBtn.setBounds (R (1086, 44, 1128, 86)); saveBtn.setBounds (R (1245, 42, 1346, 85)); menuBtn.setBounds (R (1365, 42, 1466, 85));
+        // v0.34: centred in the preset pill (pill = y 30..82)
+        prevBtn.setBounds (R (626, 35, 670, 77)); nameBtn.setBounds (R (688, 37, 1040, 75)); nextBtn.setBounds (R (1042, 35, 1086, 77));
+        heartBtn.setBounds (R (1088, 35, 1128, 77)); saveBtn.setBounds (R (1245, 42, 1346, 85)); menuBtn.setBounds (R (1365, 42, 1466, 85));
         moonBtn.setBounds (R (1483, 40, 1544, 87));
         worldBtn.setBounds (R (1132, 46, 1240, 84));
 

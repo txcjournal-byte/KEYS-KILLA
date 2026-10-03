@@ -17,134 +17,300 @@ inline Font font (float size, bool bold = true, float kern = 0.1f)
 }
 
 //==============================================================================
-// the circuit board: thin traces, bus lines, pads and a few chips - drawn once per theme
-inline Image makeCircuit (int W, int H, Colour ink, Colour lit, uint32 seed)
+// v0.34b: the BACK layer is a real circuit board (chips with height and shadows, copper traces, capacitors, parts)
+// and the FRONT layer is milky, see-through glass floating above it (frosted, thick edges, shadows on the board).
+inline void softShadow (Graphics& g, Rectangle<float> r, float corner, Point<float> off, float spread, float alpha)
 {
-    Image img (Image::ARGB, W, H, true);
-    Graphics g (img);
+    const int n = 7;
+    for (int k = 0; k < n; ++k)
+    {
+        const float e = spread * (float) (k + 1) / (float) n;
+        g.setColour (Colours::black.withAlpha (alpha / (float) n));
+        g.fillRoundedRectangle (r.translated (off.x, off.y).expanded (e - spread * 0.35f), corner + e);
+    }
+}
+
+inline Image makeGrain (uint32 seed, bool night)
+{
+    Image img (Image::ARGB, 192, 192, true);
     Random rnd ((int64) seed);
-    const float grid = 12.0f;
-    auto snap = [grid] (float v) { return std::round (v / grid) * grid; };
-    auto pad = [&g] (Point<float> p, float r, Colour c) { g.setColour (c); g.drawEllipse (p.x - r, p.y - r, r * 2, r * 2, 1.0f); g.fillEllipse (p.x - r * 0.4f, p.y - r * 0.4f, r * 0.8f, r * 0.8f); };
-    // a trace: straight, one 45 degree bend, straight again
-    auto trace = [&] (Point<float> a, float len1, float len2, int dir, int bend, Colour c, float w)
-    {
-        static const Point<float> dirs[] { { 1, 0 }, { 0, 1 }, { -1, 0 }, { 0, -1 } };
-        const auto d1 = dirs[dir & 3];
-        const auto b = a + d1 * len1;
-        const auto d2 = (d1 + dirs[(dir + (bend > 0 ? 1 : 3)) & 3]) * 0.7071f;
-        const auto c2 = b + d2 * len2;
-        const auto e = c2 + d1 * (len1 * 0.6f);
-        Path p; p.startNewSubPath (a); p.lineTo (b); p.lineTo (c2); p.lineTo (e);
-        g.setColour (c); g.strokePath (p, PathStrokeType (w, PathStrokeType::mitered, PathStrokeType::rounded));
-        pad (a, 2.6f, c); pad (e, 2.6f, c);
-    };
-    // bus bundles (the long parallel lines of a motherboard)
-    for (int k = 0; k < 16; ++k)
-    {
-        const Point<float> a (snap (rnd.nextFloat() * (float) W), snap (rnd.nextFloat() * (float) H));
-        const int n = 4 + rnd.nextInt (6), dir = rnd.nextInt (4), bend = rnd.nextBool() ? 1 : -1;
-        const float l1 = 80.0f + rnd.nextFloat() * 260.0f, l2 = 30.0f + rnd.nextFloat() * 90.0f;
-        for (int i = 0; i < n; ++i)
+    for (int y = 0; y < 192; ++y)
+        for (int x = 0; x < 192; ++x)
         {
-            const Point<float> off = (dir & 1) ? Point<float> ((float) i * 6.0f, 0) : Point<float> (0, (float) i * 6.0f);
-            trace (a + off, l1 + (float) i * 6.0f * (float) bend, l2, dir, bend, ink, 1.1f);
+            const float v = rnd.nextFloat();
+            img.setPixelAt (x, y, (v > 0.5f ? Colours::white : Colours::black).withAlpha ((night ? 0.05f : 0.06f) * std::abs (v - 0.5f) * 2.0f));
         }
-    }
-    // single traces
-    for (int k = 0; k < 150; ++k)
-        trace ({ snap (rnd.nextFloat() * (float) W), snap (rnd.nextFloat() * (float) H) }, 20.0f + rnd.nextFloat() * 140.0f, 10.0f + rnd.nextFloat() * 50.0f,
-               rnd.nextInt (4), rnd.nextBool() ? 1 : -1, ink.withMultipliedAlpha (0.8f), 1.0f);
-    // chips: a body and fine pins on two or four sides
-    for (int k = 0; k < 14; ++k)
-    {
-        const float w = 40.0f + rnd.nextFloat() * 90.0f, h = 30.0f + rnd.nextFloat() * 70.0f;
-        const Rectangle<float> r (snap (rnd.nextFloat() * ((float) W - w)), snap (rnd.nextFloat() * ((float) H - h)), w, h);
-        g.setColour (ink.withMultipliedAlpha (0.35f)); g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (ink); g.drawRoundedRectangle (r, 3.0f, 1.0f);
-        const bool four = rnd.nextBool();
-        for (float x = r.getX() + 6; x < r.getRight() - 4; x += 5) { g.drawLine (x, r.getY() - 5, x, r.getY(), 1.0f); g.drawLine (x, r.getBottom(), x, r.getBottom() + 5, 1.0f); }
-        if (four) for (float y = r.getY() + 6; y < r.getBottom() - 4; y += 5) { g.drawLine (r.getX() - 5, y, r.getX(), y, 1.0f); g.drawLine (r.getRight(), y, r.getRight() + 5, y, 1.0f); }
-        g.setColour (ink.withMultipliedAlpha (0.6f)); g.drawEllipse (r.getX() + 5, r.getY() + 5, 5, 5, 1.0f);
-    }
-    // vias
-    for (int k = 0; k < 260; ++k) pad ({ snap (rnd.nextFloat() * (float) W), snap (rnd.nextFloat() * (float) H) }, 1.6f, ink.withMultipliedAlpha (0.7f));
-    // the signal paths into BREED: two quiet amber lines from each parent
-    if (! lit.isTransparent())
-        for (int s = 0; s < 2; ++s)
-            for (int i = 0; i < 3; ++i)
-            {
-                const float y = 228.0f + (float) i * 12.0f;
-                const float x0 = s == 0 ? 640.0f : 1022.0f, x1 = s == 0 ? 742.0f - (float) i * 4 : 932.0f + (float) i * 4;
-                Path p; p.startNewSubPath (x0, y); p.lineTo ((x0 + x1) * 0.5f, y); p.lineTo (x1, 252.0f + ((float) i - 1.0f) * 8.0f);
-                g.setColour (lit); g.strokePath (p, PathStrokeType (1.2f));
-                pad ({ x0, y }, 2.4f, lit);
-            }
     return img;
 }
 
-inline Image blurred (const Image& src, int factor = 4, int radius = 5)
+struct BoardLook
+{
+    Colour baseA, baseB, copper, copperHi, chipTop, chipBottom, chipEdge, metal, metalDark, ink, led;
+};
+inline BoardLook boardLook (bool night)
+{
+    if (night) return { Colour (0xff15181c), Colour (0xff090a0c), Colour (0xff7a5a33), Colour (0xffc08a4a), Colour (0xff2b2f35), Colour (0xff121417),
+                        Colour (0xff3d424a), Colour (0xff8a8780), Colour (0xff3c3b38), Colour (0xff6c727a), Colour (0xffff8a3d) };
+    return { Colour (0xff9aa1a9), Colour (0xff747b84), Colour (0xffb08a52), Colour (0xffe2c48e), Colour (0xff3b4047), Colour (0xff1c1f23),
+             Colour (0xff59606a), Colour (0xffd9d6cf), Colour (0xff8e8b84), Colour (0xff9aa0a8), Colour (0xffff8a3d) };
+}
+
+inline void chip (Graphics& g, Rectangle<float> r, const BoardLook& L, bool night, Random& rnd, bool bga, const String& code)
+{
+    // pins (gull-wing): first, so the body sits on them
+    if (! bga)
+    {
+        const float pl = 7.0f, pw = 2.2f, gap = 5.5f;
+        for (int side = 0; side < 4; ++side)
+        {
+            const bool horiz = side < 2;
+            const float len = horiz ? r.getWidth() : r.getHeight();
+            for (float t = 7.0f; t < len - 5.0f; t += gap)
+            {
+                Rectangle<float> p = side == 0 ? Rectangle<float> (r.getX() + t, r.getY() - pl, pw, pl)
+                                   : side == 1 ? Rectangle<float> (r.getX() + t, r.getBottom(), pw, pl)
+                                   : side == 2 ? Rectangle<float> (r.getX() - pl, r.getY() + t, pl, pw)
+                                               : Rectangle<float> (r.getRight(), r.getY() + t, pl, pw);
+                g.setColour (Colours::black.withAlpha (night ? 0.5f : 0.3f)); g.fillRect (p.translated (1.5f, 2.0f));
+                g.setGradientFill (ColourGradient (L.metal, p.getX(), p.getY(), L.metalDark, p.getRight(), p.getBottom(), false)); g.fillRect (p);
+            }
+        }
+    }
+    softShadow (g, r, 4.0f, { 6.0f, 9.0f }, 14.0f, night ? 0.85f : 0.55f);
+    // body: dark epoxy, light from the top left - the lower and right side shows its height
+    g.setGradientFill (ColourGradient (L.chipTop, r.getX(), r.getY(), L.chipBottom, r.getRight(), r.getBottom(), false));
+    g.fillRoundedRectangle (r, 4.0f);
+    auto top = r.reduced (3.0f).withTrimmedBottom (2.5f).withTrimmedRight (2.0f);
+    g.setGradientFill (ColourGradient (L.chipTop.brighter (0.18f), top.getX(), top.getY(), L.chipTop.darker (0.25f), top.getX(), top.getBottom(), false));
+    g.fillRoundedRectangle (top, 3.0f);
+    g.setColour (Colours::white.withAlpha (night ? 0.10f : 0.22f)); g.drawLine (top.getX() + 3, top.getY() + 0.5f, top.getRight() - 3, top.getY() + 0.5f, 1.0f);
+    g.setColour (Colours::black.withAlpha (0.45f)); g.drawRoundedRectangle (r, 4.0f, 1.0f);
+    // a soft sheen across the top
+    g.setGradientFill (ColourGradient (Colours::white.withAlpha (night ? 0.05f : 0.10f), top.getX(), top.getY(), Colours::white.withAlpha (0.0f), top.getCentreX(), top.getCentreY(), false));
+    g.fillRoundedRectangle (top, 3.0f);
+    if (bga)
+    {   // heat spreader: a metal lid with a brushed gradient
+        auto lid = top.reduced (top.getWidth() * 0.12f);
+        softShadow (g, lid, 3.0f, { 2.0f, 3.0f }, 5.0f, 0.4f);
+        g.setGradientFill (ColourGradient (L.metal.brighter (0.1f), lid.getX(), lid.getY(), L.metalDark, lid.getRight(), lid.getBottom(), false));
+        g.fillRoundedRectangle (lid, 3.0f);
+        for (float y = lid.getY() + 2; y < lid.getBottom() - 1; y += 2.0f)
+        { g.setColour (Colours::white.withAlpha (rnd.nextFloat() * 0.05f)); g.drawHorizontalLine ((int) y, lid.getX() + 2, lid.getRight() - 2); }
+        g.setColour (Colours::white.withAlpha (0.35f)); g.drawLine (lid.getX() + 3, lid.getY() + 0.6f, lid.getRight() - 3, lid.getY() + 0.6f, 1.0f);
+        g.setColour (Colours::black.withAlpha (0.35f)); g.drawRoundedRectangle (lid, 3.0f, 1.0f);
+        g.setColour (Colours::black.withAlpha (0.28f)); g.setFont (Font (FontOptions (lid.getHeight() * 0.11f, Font::bold)).withExtraKerningFactor (0.2f));
+        g.drawText (code, lid.reduced (6), Justification::centred);
+    }
+    else
+    {
+        g.setColour (Colours::white.withAlpha (0.12f)); g.fillEllipse (top.getX() + 5, top.getY() + 5, 5, 5);   // pin-1 mark
+        g.setColour (Colours::white.withAlpha (night ? 0.20f : 0.30f)); g.setFont (Font (FontOptions (std::min (10.0f, top.getHeight() * 0.22f), Font::bold)).withExtraKerningFactor (0.15f));
+        g.drawText (code, top.reduced (6, 2), Justification::centred);
+    }
+}
+
+inline void capacitor (Graphics& g, Point<float> c, float rad, const BoardLook& L, bool night)
+{
+    softShadow (g, Rectangle<float> (rad * 2, rad * 2).withCentre (c), rad, { rad * 0.45f, rad * 0.7f }, rad * 0.8f, night ? 0.8f : 0.5f);
+    g.setColour (L.metalDark.darker (0.4f)); g.fillEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c));
+    g.setGradientFill (ColourGradient (L.metal.brighter (0.15f), c.x - rad, c.y - rad, L.metalDark, c.x + rad, c.y + rad, false));
+    g.fillEllipse (Rectangle<float> (rad * 1.8f, rad * 1.8f).withCentre (c));
+    g.setColour (Colours::black.withAlpha (0.3f));   // vent cross
+    g.drawLine (c.x - rad * 0.55f, c.y, c.x + rad * 0.55f, c.y, 1.0f); g.drawLine (c.x, c.y - rad * 0.55f, c.x, c.y + rad * 0.55f, 1.0f);
+    Path band; band.addCentredArc (c.x, c.y, rad * 0.9f, rad * 0.9f, 0, 2.2f, 4.0f, true);
+    g.setColour (Colours::black.withAlpha (0.35f)); g.strokePath (band, PathStrokeType (rad * 0.18f));
+    g.setColour (Colours::white.withAlpha (0.45f)); g.fillEllipse (Rectangle<float> (rad * 0.5f, rad * 0.35f).withCentre (c.translated (-rad * 0.35f, -rad * 0.4f)));
+}
+
+inline void smd (Graphics& g, Point<float> c, bool vertical, const BoardLook& L, bool night)
+{
+    auto r = vertical ? Rectangle<float> (5, 11).withCentre (c) : Rectangle<float> (11, 5).withCentre (c);
+    g.setColour (Colours::black.withAlpha (night ? 0.6f : 0.35f)); g.fillRect (r.translated (1.5f, 2.0f));
+    g.setColour (Colour (0xff1c1e21)); g.fillRect (r);
+    g.setColour (L.metal);
+    if (vertical) { g.fillRect (r.withHeight (2.5f)); g.fillRect (r.withTrimmedTop (r.getHeight() - 2.5f)); }
+    else          { g.fillRect (r.withWidth (2.5f));  g.fillRect (r.withTrimmedLeft (r.getWidth() - 2.5f)); }
+}
+
+inline Image makeBoard (bool night, uint32 seed)
+{
+    const int W = 1672, H = 941;
+    const auto L = boardLook (night);
+    Image img (Image::ARGB, W, H, true);
+    Graphics g (img);
+    Random rnd ((int64) seed);
+    // board: soldermask with a fine fibreglass weave
+    g.setGradientFill (ColourGradient (L.baseA, 0, 0, L.baseB, (float) W * 0.4f, (float) H, false)); g.fillAll();
+    auto pool = [&g] (Point<float> c, float rad, Colour col)
+    { g.setGradientFill (ColourGradient (col, c.x, c.y, col.withAlpha (0.0f), c.x + rad, c.y, true)); g.fillEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c)); };
+    pool ({ 837, 252 }, 520, L.led.withAlpha (night ? 0.20f : 0.16f));          // warm light behind BREED
+    pool ({ 120, 860 }, 600, Colours::white.withAlpha (night ? 0.03f : 0.18f));
+    pool ({ 1560, 80 }, 520, Colours::white.withAlpha (night ? 0.04f : 0.22f));
+
+    // components: fixed big ones (under BREED and the panels) + random small ones, no overlaps
+    struct Part { Rectangle<float> r; int kind; };   // 0 qfp, 1 bga (lid), 2 cap, 3 smd
+    std::vector<Part> parts;
+    auto freeAt = [&parts] (Rectangle<float> r) { for (auto& p : parts) if (p.r.expanded (14).intersects (r)) return false; return true; };
+    parts.push_back ({ Rectangle<float> (250, 250).withCentre ({ 837, 252 }), 1 });   // the processor under the reactor
+    // v0.34c: calm - behind the glass is mostly colour; only the processor under BREED and its lines
+    for (int k = 0; k < 0; ++k)
+    {
+        const float w = 40.0f + rnd.nextFloat() * 70.0f, h = 30.0f + rnd.nextFloat() * 50.0f;
+        Rectangle<float> r (14.0f + rnd.nextFloat() * ((float) W - w - 28.0f), 14.0f + rnd.nextFloat() * ((float) H - h - 28.0f), w, h);
+        if (freeAt (r)) parts.push_back ({ r, 0 });
+    }
+    for (int k = 0; k < 0; ++k)
+    {
+        const float rad = 7.0f + rnd.nextFloat() * 8.0f;
+        auto r = Rectangle<float> (rad * 2, rad * 2).withCentre ({ 20.0f + rnd.nextFloat() * (float) (W - 40), 20.0f + rnd.nextFloat() * (float) (H - 40) });
+        if (freeAt (r)) parts.push_back ({ r, 2 });
+    }
+    for (int k = 0; k < 0; ++k)
+    {
+        auto r = Rectangle<float> (12, 12).withCentre ({ 10.0f + rnd.nextFloat() * (float) (W - 20), 10.0f + rnd.nextFloat() * (float) (H - 20) });
+        if (freeAt (r.reduced (-2))) parts.push_back ({ r, 3 });
+    }
+
+    // copper traces: leave the chips on all sides, bend 45 degrees, end in a via
+    auto via = [&g, &L] (Point<float> p) { g.setColour (L.copper); g.fillEllipse (p.x - 3.2f, p.y - 3.2f, 6.4f, 6.4f); g.setColour (L.baseB.darker (0.5f)); g.fillEllipse (p.x - 1.3f, p.y - 1.3f, 2.6f, 2.6f); };
+    auto trace = [&] (Point<float> a, Point<float> d, float l1, float l2, int bend)
+    {
+        const Point<float> side (-d.y * (float) bend, d.x * (float) bend);
+        const auto b = a + d * l1, c = b + (d + side) * (0.7071f * l2), e = c + d * (l1 * 0.5f);
+        Path p; p.startNewSubPath (a); p.lineTo (b); p.lineTo (c); p.lineTo (e);
+        g.setColour (Colours::black.withAlpha (night ? 0.35f : 0.18f)); g.strokePath (p, PathStrokeType (2.4f), AffineTransform::translation (0.6f, 1.0f));
+        g.setColour (L.copper.withAlpha (night ? 0.75f : 0.8f)); g.strokePath (p, PathStrokeType (1.7f, PathStrokeType::mitered, PathStrokeType::rounded));
+        g.setColour (L.copperHi.withAlpha (night ? 0.25f : 0.35f)); g.strokePath (p, PathStrokeType (0.6f), AffineTransform::translation (-0.4f, -0.4f));
+        via (e);
+    };
+    for (auto& p : parts)
+    {
+        if (p.kind > 1) continue;
+        const int n = 3 + rnd.nextInt (7);
+        for (int i = 0; i < n; ++i)
+        {
+            const int side = rnd.nextInt (4);
+            const float t = 0.15f + 0.7f * rnd.nextFloat();
+            const Point<float> a = side == 0 ? Point<float> (p.r.getX() + p.r.getWidth() * t, p.r.getY() - 8) : side == 1 ? Point<float> (p.r.getX() + p.r.getWidth() * t, p.r.getBottom() + 8)
+                                 : side == 2 ? Point<float> (p.r.getX() - 8, p.r.getY() + p.r.getHeight() * t) : Point<float> (p.r.getRight() + 8, p.r.getY() + p.r.getHeight() * t);
+            const Point<float> d = side == 0 ? Point<float> (0, -1) : side == 1 ? Point<float> (0, 1) : side == 2 ? Point<float> (-1, 0) : Point<float> (1, 0);
+            const float l1 = 14.0f + rnd.nextFloat() * 60.0f, l2 = 10.0f + rnd.nextFloat() * 40.0f;
+            const int bend = rnd.nextBool() ? 1 : -1;
+            for (int b = 0; b < (p.kind == 1 ? 4 : 2); ++b)   // small buses of parallel lines
+                trace (a + Point<float> (-d.y, d.x) * (float) b * 5.0f, d, l1 + (float) b * 5.0f * (float) bend, l2, bend);
+        }
+    }
+    // long buses across the board
+    for (int k = 0; k < 3; ++k)
+    {
+        const Point<float> a (rnd.nextFloat() * (float) W, rnd.nextFloat() * (float) H);
+        const Point<float> d = rnd.nextBool() ? Point<float> (1, 0) : Point<float> (0, 1);
+        const float l1 = 120.0f + rnd.nextFloat() * 300.0f, l2 = 20.0f + rnd.nextFloat() * 60.0f;
+        const int bend = rnd.nextBool() ? 1 : -1;
+        for (int b = 0; b < 6; ++b) trace (a + Point<float> (-d.y, d.x) * (float) b * 5.0f, d, l1 + (float) b * 5.0f * (float) bend, l2, bend);
+    }
+
+    // parts on top of the copper
+    static const char* codes[] { "KK-7720", "KX 3341", "A0 1180", "KK-2026", "B7 0451", "KX 9902", "M4 2210", "KK-0034" };
+    for (auto& p : parts)
+    {
+        if (p.kind == 0) chip (g, p.r, L, night, rnd, false, codes[rnd.nextInt (8)]);
+        else if (p.kind == 1) chip (g, p.r, L, night, rnd, true, p.r.getWidth() > 200 ? "KEYS KILLA  KK-1" : codes[rnd.nextInt (8)]);
+        else if (p.kind == 2) capacitor (g, p.r.getCentre(), p.r.getWidth() * 0.5f, L, night);
+        else smd (g, p.r.getCentre(), rnd.nextBool(), L, night);
+    }
+    // a few status lights (amber), brighter at night
+    for (auto pt : { Point<float> (700, 120), Point<float> (975, 120), Point<float> (700, 384), Point<float> (975, 384) })
+    {
+        g.setGradientFill (ColourGradient (L.led.withAlpha (night ? 0.55f : 0.35f), pt.x, pt.y, L.led.withAlpha (0.0f), pt.x + 22, pt.y, true));
+        g.fillEllipse (pt.x - 22, pt.y - 22, 44, 44);
+        g.setColour (L.led.brighter (0.4f)); g.fillEllipse (pt.x - 2.5f, pt.y - 2.5f, 5, 5);
+    }
+    // depth: the board sits back - a soft vignette
+    g.setGradientFill (ColourGradient (Colours::transparentBlack, (float) W * 0.5f, (float) H * 0.45f, Colours::black.withAlpha (night ? 0.55f : 0.28f), 0, 0, true));
+    g.fillAll();
+    return img;
+}
+
+inline Image blurred (const Image& src, int factor = 3, int radius = 4)
 {
     Image small (Image::ARGB, src.getWidth() / factor, src.getHeight() / factor, true);
     {
         Graphics g (small);
-        g.setImageResamplingQuality (Graphics::mediumResamplingQuality);
+        g.setImageResamplingQuality (Graphics::highResamplingQuality);
         g.drawImage (src, small.getBounds().toFloat(), RectanglePlacement::stretchToFit);
     }
     ImageConvolutionKernel k (radius * 2 + 1);
-    k.createGaussianBlur ((float) radius * 0.8f);
+    k.createGaussianBlur ((float) radius * 0.9f);
     k.applyToImage (small, small, small.getBounds());
     return small;
 }
 
 //==============================================================================
-// the background layers every page shares: base gradient + sharp circuit, and the frosted (blurred) circuit for glass
-struct Backdrop { Image sharp, soft; };
+struct Backdrop { Image sharp, soft, grain; };
 // owned by the editor's image cache (images must die with the editor - static images froze FL Studio on exit)
 inline Backdrop*& activeBackdrop() { static Backdrop* b = nullptr; return b; }
 inline Backdrop makeBackdrop()
 {
-    const auto& th = theme();
+    const bool night = theme().night;
     Backdrop b;
-    b.sharp = makeCircuit (1672, 941, th.trace.withAlpha (th.night ? 0.22f : 0.30f), th.accent.withAlpha (th.night ? 0.35f : 0.45f), 20260934);
+    b.sharp = makeBoard (night, 20260934);
     b.soft = blurred (b.sharp);
+    b.grain = makeGrain (77, night);
     return b;
 }
 
 inline void base (Graphics& g, Rectangle<float> area)
 {
+    if (auto* bd = activeBackdrop()) { g.drawImage (bd->sharp, area, RectanglePlacement::fillDestination); return; }
     const auto& t = theme();
     g.setGradientFill (ColourGradient (t.baseTop, 0, area.getY(), t.baseBottom, 0, area.getBottom(), false));
     g.fillRect (area);
-    // a soft light from the top centre, like a lamp over the desk
-    g.setGradientFill (ColourGradient (Colours::white.withAlpha (t.night ? 0.035f : 0.28f), area.getCentreX(), area.getY(),
-                                       Colours::white.withAlpha (0.0f), area.getCentreX(), area.getY() + area.getHeight() * 0.75f, true));
-    g.fillRect (area);
 }
 
-// frosted glass: the circuit behind it goes soft, milky tint, a bright top edge and a quiet border
+// FRONT layer: a pane of milky glass floating above the board - its shadow falls on the board, the board shows
+// through frosted (slightly shifted = refraction), a thick bright edge on top, a darker one below, a soft reflection
 inline void plate (Graphics& g, Rectangle<float> r, float corner = 12.0f, bool accentEdge = false)
 {
     const auto& t = theme();
     const auto* bd = activeBackdrop();
-    for (int k = 3; k >= 1; --k)   // soft shadow
-    {
-        g.setColour (t.shadow.withAlpha ((t.night ? 0.16f : 0.035f) * (float) k));
-        g.fillRoundedRectangle (r.translated (0, (float) (5 - k)).expanded ((float) (4 - k)), corner + (float) (4 - k));
-    }
+    softShadow (g, r, corner, { 10.0f, 16.0f }, 26.0f, t.night ? 0.9f : 0.42f);
     {
         Graphics::ScopedSaveState ss (g);
         Path clip; clip.addRoundedRectangle (r, corner);
         g.reduceClipRegion (clip);
-        g.setImageResamplingQuality (Graphics::mediumResamplingQuality);
-        g.setOpacity (1.0f);
-        if (bd != nullptr) g.drawImage (bd->soft, Rectangle<float> (0, 0, 1672, 941), RectanglePlacement::stretchToFit);
-        g.setColour (t.glass); g.fillRoundedRectangle (r, corner);
-        g.setGradientFill (ColourGradient (Colours::white.withAlpha (t.night ? 0.05f : 0.30f), 0, r.getY(), Colours::white.withAlpha (0.0f), 0, r.getY() + std::min (60.0f, r.getHeight() * 0.5f), false));
-        g.fillRoundedRectangle (r, corner);
+        if (bd != nullptr)
+        {
+            g.setImageResamplingQuality (Graphics::highResamplingQuality);
+            g.drawImage (bd->soft, Rectangle<float> (-5, -7, 1672, 941), RectanglePlacement::stretchToFit);   // refraction shift
+        }
+        // milk: whiter (day) / smoked (night), a little denser towards the bottom
+        if (t.night)
+        {
+            g.setGradientFill (ColourGradient (Colour (0x6c1a1e24), 0, r.getY(), Colour (0x9010131a), 0, r.getBottom(), false)); g.fillRect (r);
+            g.setColour (Colours::white.withAlpha (0.045f)); g.fillRect (r);
+        }
+        else
+        {
+            g.setGradientFill (ColourGradient (Colour (0xa8ffffff), 0, r.getY(), Colour (0xbcf2f5f8), 0, r.getBottom(), false)); g.fillRect (r);
+        }
+        if (bd != nullptr) { g.setTiledImageFill (bd->grain, 0, 0, 1.0f); g.fillRect (r); }
+        // reflection: one wide soft diagonal band
+        Path band;
+        band.startNewSubPath (r.getX(), r.getY() + r.getHeight() * 0.15f);
+        band.lineTo (r.getX() + r.getWidth() * 0.32f, r.getY()); band.lineTo (r.getX() + r.getWidth() * 0.55f, r.getY());
+        band.lineTo (r.getX(), r.getY() + r.getHeight() * 0.75f); band.closeSubPath();
+        g.setGradientFill (ColourGradient (Colours::white.withAlpha (t.night ? 0.06f : 0.22f), r.getX(), r.getY(), Colours::white.withAlpha (0.0f), r.getX() + r.getWidth() * 0.4f, r.getY() + r.getHeight() * 0.6f, false));
+        g.fillPath (band);
+        // inner rim: the glass thickness catches light at the edge
+        g.setColour (Colours::white.withAlpha (t.night ? 0.05f : 0.30f)); g.drawRoundedRectangle (r.reduced (3.0f), corner - 2.0f, 3.0f);
     }
-    g.setColour (accentEdge ? t.accent.withAlpha (0.75f) : t.glassEdge); g.drawRoundedRectangle (r.reduced (0.5f), corner, accentEdge ? 1.4f : 1.0f);
-    g.setColour (t.glassHi); g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + corner, r.getRight() - corner);
+    // edges: bright top-left, darker bottom-right
+    g.setGradientFill (ColourGradient (Colours::white.withAlpha (t.night ? 0.30f : 0.95f), r.getX(), r.getY(),
+                                       (t.night ? Colours::white.withAlpha (0.06f) : Colour (0x80707a85)), r.getRight(), r.getBottom(), false));
+    g.drawRoundedRectangle (r.reduced (0.6f), corner, 1.3f);
+    g.setColour (Colours::black.withAlpha (t.night ? 0.6f : 0.16f)); g.drawRoundedRectangle (r.expanded (0.8f), corner + 0.8f, 0.8f);
+    if (accentEdge) { g.setColour (t.accent.withAlpha (0.75f)); g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.4f); }
 }
 
 // a recessed well (meters, slots)
@@ -239,9 +405,9 @@ inline Image makeBackground()
     Image img (Image::RGB, 1672, 941, true);
     Graphics g (img);
     base (g, { 0, 0, 1672, 941 });
-    if (auto* bd = activeBackdrop()) g.drawImageAt (bd->sharp, 0, 0);
 
-    // ---- header: wordmark, preset pill, buttons
+    // ---- header: one long pane of glass, then wordmark, preset pill, buttons
+    plate (g, { 10, 12, 1652, 80 }, 18.0f);
     wordmark (g, { 140, 26, 470, 44 }, 34.0f);
     label (g, "DON'T BROWSE SOUNDS, BREED THEM.", { 141, 70, 440, 18 }, 10.5f, t.dim, Justification::centredLeft);
     plate (g, { 616, 30, 520, 52 }, 26.0f);
@@ -361,7 +527,6 @@ inline Image makePageBackdrop()
     Image img (Image::RGB, 1672, 941, true);
     Graphics g (img);
     base (g, { 0, 0, 1672, 941 });
-    if (auto* bd = activeBackdrop()) g.drawImageAt (bd->sharp, 0, 0);
     return img;
 }
 // piano keys for the keyboard component (stretched to every key)
