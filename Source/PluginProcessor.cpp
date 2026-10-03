@@ -108,8 +108,7 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 
     loadPreset (0);
     undoStack.clear(); redoStack.clear(); lastSnap.clear();
-    setParentPreset (0, 0);
-    setParentPreset (1, juce::jmin ((int) factoryPresets().size() - 1, 250));
+    // v0.34: BREED LAB starts with two empty parents - you choose (or drop) your two sounds; the keys play the first preset
 
     juce::ignoreUnused (withModules);   // v0.32: VOODOO / EFFECTOR / DIGGA KILLA are separate plugins again
     for (int d = 0; d < kk::numDrumSlots; ++d) generatePattern (d, 0, 2, 0.5f);
@@ -1712,6 +1711,7 @@ void KeysKillaProcessor::setParentPreset (int slot, int idx)
     if (! g.valid()) return;
     parents[(size_t) juce::jlimit (0, 1, slot)] = std::move (g); ++labVer;
 }
+void KeysKillaProcessor::clearParent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = Genome(); ++labVer; }
 void KeysKillaProcessor::setParentCurrent (int slot) { parents[(size_t) juce::jlimit (0, 1, slot)] = genomeFromCurrent(); ++labVer; }
 void KeysKillaProcessor::setParentChild (int slot, int c)
 {
@@ -2176,6 +2176,17 @@ void KeysKillaProcessor::renderWave (const Genome& g, std::array<float, 64>& wav
 
 bool KeysKillaProcessor::renderNextThumbnail()
 {
+    for (int s = 0; s < 2; ++s)   // the parents' own waveforms (shown in PARENT A / B)
+    {
+        const auto& pg = parents[(size_t) s];
+        const auto sig = pg.valid() ? (juce::int64) pg.name.hashCode64() ^ (juce::int64) (pg.v.size() * 7919) ^ (juce::int64) (pg.v[0] * 1.0e6f) : 0;
+        if (sig != parentWaveSig[(size_t) s])
+        {
+            parentWaveSig[(size_t) s] = sig;
+            if (pg.valid()) renderWave (pg, parentWave[(size_t) s]); else parentWave[(size_t) s].fill (0.0f);
+            ++labVer; return true;
+        }
+    }
     for (auto& c : children)
         if (! c.waveReady) { renderWave (c.g, c.wave); c.waveReady = true; ++labVer; return true; }
     for (auto& t : treeResults)
@@ -2376,6 +2387,7 @@ void KeysKillaProcessor::loadLab (const juce::ValueTree& state)
         Genome g;
         g.name = t.getProperty ("name").toString(); g.cat = t.getProperty ("cat", -1); g.era = t.getProperty ("era", 0);
         g.gen = t.getProperty ("gen", 0); g.preset = t.getProperty ("preset", -1); g.v = stringToFloats (t.getProperty ("v").toString());
+        if (g.preset >= 0 && g.gen == 0) g.name = currentFactoryName (g.name);   // v0.34: renamed factory sounds
         if (g.v.size() != params.size()) g.v.clear();
         g.loop = loopFromString (t.getProperty ("loop").toString());
         if (! g.loop.valid) g.loop = kk::loopFromSeed ((uint32_t) g.name.hashCode());
@@ -2598,6 +2610,7 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             auto vt = juce::ValueTree::fromXml (*xml);
             currentPreset = vt.getProperty ("presetIndex", -1);
             presetName = vt.getProperty ("presetName", "Init").toString();
+            if (currentPreset >= 0) presetName = currentFactoryName (presetName);   // v0.34: old genre names -> new names (same sound)
             userFile = juce::File (vt.getProperty ("userFile", "").toString());
             setFxOrder (orderFromString (vt.getProperty ("fxOrder", "").toString()));
             eco = (bool) vt.getProperty ("eco", false);
@@ -2756,13 +2769,112 @@ int KeysKillaProcessor::importPack (const juce::File& src)
     return count;
 }
 
-bool KeysKillaProcessor::exportPack (const juce::File& zipFile)
+bool KeysKillaProcessor::exportPack (const juce::File& zipFile, const juce::String& packName)
 {
+    // v0.34: your presets as a .kkpack sound pack (pack.json + the sounds)
     juce::ZipFile::Builder b;
-    for (auto& f : userPresets()) b.addFile (f, 9, f.getFileName());
+    auto* info = new juce::DynamicObject();
+    info->setProperty ("format", "KEYS KILLA pack"); info->setProperty ("version", 1);
+    info->setProperty ("name", packName); info->setProperty ("author", "");
+    info->setProperty ("info", "Sounds made with KEYS KILLA");
+    const auto json = juce::JSON::toString (juce::var (info), false);
+    auto tmp = juce::File::createTempFile ("json");
+    tmp.replaceWithText (json);
+    b.addFile (tmp, 9, "pack.json");
+    for (auto& f : userPresets()) b.addFile (f, 9, "sounds/" + f.getFileName());
     zipFile.deleteFile();
-    juce::FileOutputStream os (zipFile);
-    return os.openedOk() && b.writeToStream (os, nullptr);
+    bool ok = false;
+    {
+        juce::FileOutputStream os (zipFile);
+        ok = os.openedOk() && b.writeToStream (os, nullptr);
+    }
+    tmp.deleteFile();
+    return ok;
+}
+
+juce::File KeysKillaProcessor::packsDir()
+{
+    auto d = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Packs");
+    d.createDirectory();
+    return d;
+}
+
+juce::String KeysKillaProcessor::installPack (const juce::File& src, juce::String* error)
+{
+    auto fail = [error] (const juce::String& e) { if (error) *error = e; return juce::String(); };
+    if (! src.existsAsFile()) return fail ("file not found");
+    juce::ZipFile zip (src);
+    if (zip.getNumEntries() == 0) return fail ("this is not a sound pack");
+    juce::String name = src.getFileNameWithoutExtension(), author, info;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+        if (auto* e = zip.getEntry (i); e && juce::File::createFileWithoutCheckingPath (e->filename).getFileName().equalsIgnoreCase ("pack.json"))
+        {
+            std::unique_ptr<juce::InputStream> in (zip.createStreamForEntry (i));
+            const auto v = in ? juce::JSON::parse (in->readEntireStreamAsString()) : juce::var();
+            if (v["name"].toString().trim().isNotEmpty()) name = v["name"].toString().trim();
+        }
+    name = juce::File::createLegalFileName (name).trim();
+    if (name.isEmpty() || name.equalsIgnoreCase ("FACTORY")) name = "PACK " + juce::String (juce::Time::currentTimeMillis() % 100000);
+    auto dir = packsDir().getChildFile (name);
+    dir.deleteRecursively(); dir.createDirectory();
+    int sounds = 0;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+    {
+        auto* e = zip.getEntry (i);
+        if (e == nullptr || e->filename.endsWithChar ('/') || e->filename.contains ("..")) continue;
+        const auto fn = e->filename.replaceCharacter ('\\', '/');
+        const auto leaf = juce::File::createLegalFileName (fn.fromLastOccurrenceOf ("/", false, false));
+        const auto ext = leaf.fromLastOccurrenceOf (".", true, false).toLowerCase();
+        juce::File out;
+        if (ext == ".kkpreset") { out = dir.getChildFile ("sounds").getChildFile (leaf); ++sounds; }
+        else if (ext == ".wav" || ext == ".aif" || ext == ".aiff" || ext == ".flac") out = dir.getChildFile ("samples").getChildFile (leaf);
+        else if (leaf.equalsIgnoreCase ("pack.json") || leaf.startsWithIgnoreCase ("cover.") || leaf.equalsIgnoreCase ("info.txt")) out = dir.getChildFile (leaf);
+        else continue;
+        out.getParentDirectory().createDirectory();
+        std::unique_ptr<juce::InputStream> in (zip.createStreamForEntry (i));
+        if (in == nullptr) continue;
+        juce::FileOutputStream os (out);
+        if (os.openedOk()) { os.setPosition (0); os.truncate(); os.writeFromInputStream (*in, -1); }
+    }
+    if (sounds == 0) { dir.deleteRecursively(); return fail ("the pack has no sounds"); }
+    rescanPacks();
+    return name;
+}
+
+bool KeysKillaProcessor::removePack (const juce::String& name)
+{
+    auto dir = packsDir().getChildFile (juce::File::createLegalFileName (name));
+    if (name.isEmpty() || ! dir.isDirectory() || ! dir.deleteRecursively()) return false;
+    rescanPacks();
+    return true;
+}
+
+void KeysKillaProcessor::rescanPacks()
+{
+    packList.clear(); packSoundList.clear();
+    auto dirs = packsDir().findChildFiles (juce::File::findDirectories, false);
+    std::sort (dirs.begin(), dirs.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName().compareIgnoreCase (b.getFileName()) < 0; });
+    for (auto& d : dirs)
+    {
+        PackInfo pi; pi.dir = d; pi.name = d.getFileName();
+        const auto v = juce::JSON::parse (d.getChildFile ("pack.json"));
+        if (v.isObject())
+        {
+            if (v["name"].toString().isNotEmpty()) pi.name = v["name"].toString();
+            pi.author = v["author"].toString(); pi.info = v["info"].toString();
+        }
+        for (auto* c : { "cover.png", "cover.jpg" }) if (d.getChildFile (c).existsAsFile()) { pi.cover = d.getChildFile (c); break; }
+        auto files = d.findChildFiles (juce::File::findFiles, true, "*.kkpreset");
+        std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName().compareIgnoreCase (b.getFileName()) < 0; });
+        for (auto& f : files)
+        {
+            PackSound ps; ps.file = f; ps.name = f.getFileNameWithoutExtension(); ps.pack = pi.name;
+            const auto pv = juce::JSON::parse (f);
+            ps.cat = categoryNames().indexOf (pv["category"].toString(), true);
+            packSoundList.push_back (ps); ++pi.sounds;
+        }
+        if (pi.sounds > 0) packList.push_back (pi);
+    }
 }
 
 juce::AudioProcessorEditor* KeysKillaProcessor::createEditor() { return new KeysKillaEditor (*this); }

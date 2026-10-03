@@ -28,6 +28,9 @@ struct Preset
     bool mono = false;
     int brightness = 3, movement = 0, cpu = 1;             // 1..5, 0..5, 1..3
     juce::String author { "KEYS KILLA Factory" }, version { "0.5" };
+    juce::String id;           // v0.34: stable internal ID ("kk.<slug of the v0.33 name>") - never changes again
+    juce::String legacyName;   // v0.34: the name up to v0.33 (favourites / old projects are migrated from it)
+    juce::String pack { "FACTORY" };
 
     bool isBass() const { return cat == cBass || cat == c808; }
     juce::String info() const;                             // one-line tag summary for the browser
@@ -35,6 +38,8 @@ struct Preset
 };
 
 const std::vector<Preset>& factoryPresets();
+int findFactoryPreset (const juce::String& nameOrOldNameOrId);   // -1 if none (v0.34: old names still resolve)
+juce::String currentFactoryName (const juce::String& maybeOldName); // old name -> new name (unchanged if unknown)
 const juce::StringArray& categoryNames();
 const juce::StringArray& subcategoryNames (int cat);
 const juce::StringArray& eraNames();                       // "2010-12" ... "FUTURE"

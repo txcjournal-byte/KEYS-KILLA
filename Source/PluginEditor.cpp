@@ -585,7 +585,7 @@ static void dragLoopOut (KeysKillaProcessor& proc, const KeysKillaProcessor::Gen
 }
 
 //==============================================================================
-// PARENT A / B card: category picture, name, tags
+// PARENT A / B card (v0.34): just the sound's name and its real waveform - or an empty slot to fill
 class ParentCard : public Component, public SettableTooltipClient
 {
 public:
@@ -598,33 +598,46 @@ public:
     {
         const auto& s = *lnf.skin;
         const auto& pg = proc.parent (slot);
-        auto r = getLocalBounds().toFloat();
-        const Point<float> c (r.getCentreX(), 96.0f);
-        ColourGradient glow (s.accent.withAlpha (0.38f), c.x, c.y + 12, s.accent.withAlpha (0.0f), c.x + 110, c.y + 12, true);
-        g.setGradientFill (glow); g.fillEllipse (Rectangle<float> (230, 170).withCentre (c.translated (0, 12)));
-        const auto& icons = labImages().icons;
-        const int ic = iconOfCategory (pg.valid() ? pg.cat : -1);
-        if (icons.isValid())
+        auto r = getLocalBounds().toFloat().reduced (10, 14);
+        const auto wv = Rectangle<float> (r.getX() + 8, 44, r.getWidth() - 16, 120);
+        if (! pg.valid())
         {
-            g.setImageResamplingQuality (Graphics::highResamplingQuality);
-            Graphics::ScopedSaveState ss (g);
-            g.reduceClipRegion (Rectangle<float> (150, 156).withCentre (c).toNearestInt());
-            g.drawImage (icons, Rectangle<float> (150.0f * 10, 156).withPosition (c.x - 75 - 150.0f * (float) ic, c.y - 78), RectanglePlacement::stretchToFit);
+            // empty slot: dashed frame, big plus, one clear line
+            Path frame; frame.addRoundedRectangle (wv.expanded (0, 18), 10.0f);
+            Path dashed; const float dl[] { 7.0f, 6.0f };
+            PathStrokeType (1.4f).createDashedStroke (dashed, frame, dl, 2);
+            g.setColour (s.accent.withAlpha (over ? 0.9f : 0.55f)); g.fillPath (dashed);
+            if (over) { g.setColour (s.accent.withAlpha (0.07f)); g.fillRoundedRectangle (wv.expanded (0, 18), 10.0f); }
+            const auto c = wv.getCentre().translated (0, -12);
+            g.setColour (s.accent.withAlpha (over ? 1.0f : 0.8f));
+            g.fillRoundedRectangle (Rectangle<float> (34, 3.2f).withCentre (c), 1.6f);
+            g.fillRoundedRectangle (Rectangle<float> (3.2f, 34).withCentre (c), 1.6f);
+            g.setColour (Colour (0xffeee8e4).withAlpha (0.85f)); g.setFont (serif (14.0f, true, 0.18f));
+            g.drawText ("CLICK TO CHOOSE A SOUND", wv.withTrimmedTop (wv.getHeight() * 0.62f).toNearestInt(), Justification::centred);
+            g.setColour (Colour (0x99d8d2ce)); g.setFont (serif (12.0f, false, 0.2f));
+            g.drawText ("or roll the dice", Rectangle<int> (0, 192, getWidth(), 20), Justification::centred);
+            return;
         }
-        if (over) { g.setColour (s.accent.withAlpha (0.08f)); g.fillRoundedRectangle (r, 6); }
+        if (over) { g.setColour (s.accent.withAlpha (0.07f)); g.fillRoundedRectangle (r, 8); }
+        // waveform: mirrored bars, white with a soft accent tail
+        const auto& w = proc.parentWave[(size_t) slot];
+        float peak = 0.0001f; for (auto v : w) peak = std::max (peak, v);
+        const float bw = wv.getWidth() / 64.0f;
+        for (int b = 0; b < 64; ++b)
+        {
+            const float v = std::pow (w[(size_t) b] / peak, 0.7f);
+            const float h = std::max (1.0f, v * wv.getHeight() * 0.48f);
+            g.setColour (Colours::white.interpolatedWith (s.accent, (float) b / 110.0f).withAlpha (0.88f));
+            g.fillRoundedRectangle (wv.getX() + (float) b * bw + bw * 0.2f, wv.getCentreY() - h, bw * 0.6f, h * 2.0f, bw * 0.3f);
+        }
         g.setColour (Colour (0xffeee8e4));
-        g.setFont (serif (29.0f, false, 0.02f));
-        g.drawFittedText (pg.valid() ? pg.name : String ("choose a sound"), Rectangle<int> (0, 176, getWidth(), 32), Justification::centred, 1, 0.6f);
-        String tags;
-        if (pg.valid())
-        {
-            tags = pg.cat >= 0 ? categoryNames()[pg.cat] : String ("USER");
-            if (pg.preset >= 0) tags << "  .  " << factoryPresets()[(size_t) pg.preset].mood.toUpperCase();
-            if (pg.gen > 0) tags << "  .  GEN " << pg.gen;
-        }
-        g.setColour (Colour (0xffc8c4e8));
-        g.setFont (serif (15.0f, false, 0.2f));
-        g.drawFittedText (tags, Rectangle<int> (0, 208, getWidth(), 20), Justification::centred, 1, 0.7f);
+        g.setFont (serif (27.0f, false, 0.02f));
+        g.drawFittedText (pg.name, Rectangle<int> (0, 176, getWidth(), 32), Justification::centred, 1, 0.6f);
+        String tags = pg.cat >= 0 ? categoryNames()[pg.cat] : String ("USER");
+        if (pg.gen > 0) tags << "  .  GEN " << pg.gen;
+        g.setColour (s.accent.withAlpha (0.85f));
+        g.setFont (serif (13.0f, true, 0.24f));
+        g.drawFittedText (tags.toUpperCase(), Rectangle<int> (0, 208, getWidth(), 20), Justification::centred, 1, 0.7f);
     }
     void mouseEnter (const MouseEvent&) override { over = true; repaint(); }
     void mouseExit (const MouseEvent&) override { over = false; repaint(); }
@@ -641,10 +654,18 @@ public:
     explicit BreedButton (KKLookAndFeel& l) : lnf (l) { setTooltip ("BREED: make 6 new sounds (children) from PARENT A and PARENT B."); }
     std::function<void()> onBreed;
     float flash = 0;
+    bool ready = true;   // v0.34: false until both parents are chosen (dimmed, "choose 2 sounds")
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
         const auto c = getLocalBounds().toFloat().getCentre();
+        if (! ready)
+        {
+            g.setColour (Colour (0xe0141010)); g.fillEllipse (getLocalBounds().toFloat().reduced (getWidth() * 0.16f));
+            g.setColour (Colour (0xffd8d2ce).withAlpha (0.8f)); g.setFont (serif (13.0f, true, 0.2f));
+            g.drawFittedText ("CHOOSE\n2 SOUNDS", getLocalBounds().reduced (getWidth() / 4), Justification::centred, 2);
+            return;
+        }
         const float a = jlimit (0.0f, 1.0f, (over ? 0.35f : 0.0f) + flash);
         if (a <= 0.0f) return;
         g.setGradientFill (ColourGradient (s.accent.withAlpha (0.55f * a), c.x, c.y, s.accent.withAlpha (0.0f), c.x + 100, c.y, true));
@@ -4098,7 +4119,11 @@ public:
             dc.onClick = [this, sl] { proc.randomParent (sl); labChanged(); };   dc.setTooltip ("Random parent from the whole library");
             addAndMakeVisible (pv); addAndMakeVisible (nx); addAndMakeVisible (dc);
         }
-        breedBtn.onBreed = [this] { proc.breed(); labChanged(); };
+        breedBtn.onBreed = [this]
+        {
+            if (! proc.parentsReady()) { parentMenu (proc.parent (0).valid() ? 1 : 0); return; }   // empty slot: choose it first
+            proc.breed(); labChanged();
+        };
         addAndMakeVisible (breedBtn);
 
         // ---- children, genes, mutate
@@ -4309,6 +4334,7 @@ public:
             proc.pairDice (0); proc.pairDice (1); proc.pairDice (2); proc.pairBreed(); proc.selectPairKid (1, false); openTab (tabPair);
         }
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
+        if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); }   // fresh instance: one parent chosen, one empty
         if (v == 13 || v == 14)   // FAMILY TREE with 4 sounds: 13 = SOUND results, 14 = LOOP results
         {
             proc.setAncestorPreset (0, 0); proc.setAncestorPreset (1, 60); proc.setAncestorPreset (2, 200); proc.setAncestorPreset (3, 330);
@@ -4540,6 +4566,7 @@ private:
             m.addItem (5, "Use PARENT B", proc.parent (1).valid());
             m.addItem (6, "Empty");
         }
+        else m.addItem (6, "Empty", proc.parent (slot).valid());
         const auto& ps = factoryPresets();
         for (int c = 0; c < numCategories; ++c)
         {
@@ -4568,7 +4595,7 @@ private:
             if (r == 2) setPreset (-1);
             else if (r == 3) { if (ancestor) proc.randomAncestor (slot); else proc.randomParent (slot); }
             else if (r == 4 || r == 5) proc.setAncestorGenome (slot, proc.parent (r - 4));
-            else if (r == 6) proc.clearAncestor (slot);
+            else if (r == 6) { if (ancestor) proc.clearAncestor (slot); else proc.clearParent (slot); }
             else if (r >= 1000) setPreset (r - 1000);
             labChanged();
             if (treePanel) treePanel->refresh();
@@ -4659,7 +4686,15 @@ private:
         refreshState();
     }
 
-    StringArray favourites() const { return StringArray::fromTokens (settings->getValue ("favourites"), "|", ""); }
+    StringArray favourites() const
+    {
+        // v0.34: favourites saved under the old (genre) names follow their sound to its new name
+        auto f = StringArray::fromTokens (settings->getValue ("favourites"), "|", "");
+        bool changed = false;
+        for (auto& n : f) if (const auto nn = currentFactoryName (n); nn != n) { n = nn; changed = true; }
+        if (changed) { f.removeDuplicates (false); settings->setValue ("favourites", f.joinIntoString ("|")); }
+        return f;
+    }
     void toggleFavourite() { toggleFavouriteNamed (proc.currentName()); }
     void toggleFavouriteNamed (const String& n)
     {
@@ -4709,10 +4744,11 @@ private:
         m.addItem (5, "Revert", proc.isModified());
         m.addItem (6, "Init patch");
         m.addItem (7, "Browse presets...");
-        packs.addItem (20, "Import preset pack (.zip or folder)...");
-        packs.addItem (21, "Export user presets as pack (.zip)...");
-        packs.addItem (22, "Show user preset folder");
-        m.addSubMenu ("Preset packs", packs);
+        packs.addItem (20, "INSTALL PACK (.kkpack)...");
+        packs.addItem (21, "Export my presets as a pack (.kkpack)...");
+        packs.addItem (23, "Show the Packs folder");
+        packs.addItem (22, "Show my preset folder");
+        m.addSubMenu ("Sound packs", packs);
         m.addSectionHeader ("EDIT");
         m.addItem (8, "Undo", proc.canUndo());
         m.addItem (9, "Redo", proc.canRedo());
@@ -4749,21 +4785,17 @@ private:
                 case 18: proc.panic(); break;
                 case 19: settings->setValue ("keysToPlugin", ! keysToPlugin()); applyKeyMode(); break;
                 case 20:
-                    chooser = std::make_unique<FileChooser> ("Import preset pack", File::getSpecialLocation (File::userDocumentsDirectory), "*.zip");
-                    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectDirectories,
-                                          [this] (const FileChooser& fc)
-                                          {
-                                              if (fc.getResult() == File()) return;
-                                              const int n = proc.importPack (fc.getResult());
-                                              AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Import", String (n) + " presets imported.", "OK", this);
-                                          });
+                    ensureBrowser(); hidePanels();
+                    browser->open (-1, -1, false); openTabIndex = tabBrowser; updateTabs();
+                    browser->chooseAndInstall();   // v0.34: sound packs install into the library (PACKS)
                     break;
                 case 21:
-                    chooser = std::make_unique<FileChooser> ("Export preset pack", File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("KEYS KILLA presets.zip"), "*.zip");
+                    chooser = std::make_unique<FileChooser> ("Export my presets as a sound pack", File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("MY PACK.kkpack"), "*.kkpack");
                     chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
-                                          [this] (const FileChooser& fc) { if (fc.getResult() != File()) proc.exportPack (fc.getResult().withFileExtension ("zip")); });
+                                          [this] (const FileChooser& fc) { if (fc.getResult() != File()) proc.exportPack (fc.getResult().withFileExtension ("kkpack"), fc.getResult().getFileNameWithoutExtension()); });
                     break;
                 case 22: KeysKillaProcessor::userPresetDir().startAsProcess(); break;
+                case 23: KeysKillaProcessor::packsDir().startAsProcess(); break;
                 default: if (r > 100) setScale (r - 100); break;
             }
             refreshState();
@@ -4795,6 +4827,9 @@ private:
     {
         isFav = favourites().contains (proc.currentName());
         heartBtn.repaint(); nameBtn.repaint();
+        breedBtn.ready = proc.parentsReady(); breedBtn.repaint();
+        prevA.setVisible (proc.parent (0).valid()); nextA.setVisible (proc.parent (0).valid());
+        prevB.setVisible (proc.parent (1).valid()); nextB.setVisible (proc.parent (1).valid());
         const bool bass = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
         static const char* normal[] { "DARK", "SPACE", "MOVEMENT", "WIDTH", "TEXTURE", "PUNCH", "DIRT", "MIX" };
         static const char* bassL[] { "SUB", "WOBBLE", "TONE", "CLICK", "GLIDE", "KNOCK", "DIRT", "MIX" };
@@ -4874,6 +4909,7 @@ private:
         if (std::abs (nl - meter.l) > 1.0e-4f || std::abs (nr - meter.r) > 1.0e-4f || warn != meter.warn)
         { meter.l = nl < 1.0e-4f ? 0.0f : nl; meter.r = nr < 1.0e-4f ? 0.0f : nr; meter.warn = warn; meter.repaint(); }
 
+        if (breedBtn.ready != proc.parentsReady()) { breedBtn.ready = proc.parentsReady(); breedBtn.repaint(); }
         if (breedBtn.flash > 0) { breedBtn.flash = std::max (0.0f, breedBtn.flash - 0.08f); breedBtn.repaint(); }
         proc.renderNextThumbnail();   // one child waveform per tick keeps the UI smooth
 

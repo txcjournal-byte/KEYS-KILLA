@@ -10,7 +10,7 @@ inline Colour categoryColour (int cat)
     return isPositiveAndBelow (cat, (int) (sizeof (c) / sizeof (c[0]))) ? Colour (c[cat]) : Colour (0xffff2f6d);
 }
 
-class PresetBrowser : public Component, private ListBoxModel
+class PresetBrowser : public Component, public FileDragAndDropTarget, private ListBoxModel
 {
 public:
     std::function<void()> focusKeys;   // after a click: let the keys play, not type
@@ -32,7 +32,7 @@ public:
         category.addItem ("All categories", 1);
         for (int c = 0; c < numCategories; ++c) if (c != c808) category.addItem (categoryNames()[c], c + 2);   // 808 sounds are in BASS
         category.onChange = [this] { fillSubs(); refresh(); };
-        subcat.onChange = [this] { refresh(); };
+        subcat.onChange = [this] { if (packsOnly) packSel = subcat.getSelectedId() - 2; refresh(); };
         fillSubs();
         era.addItem ("All eras", 1);
         for (int e = 0; e < numEras; ++e) era.addItem (eraNames()[e], e + 2);
@@ -65,6 +65,7 @@ public:
         addChildComponent (category); addAndMakeVisible (subcat); addChildComponent (era);   // eras are not shown any more (v0.7); chips pick the category
         for (auto* b : { &exclusiveOnly, &favOnly, &userOnly }) b->setVisible (false);
         chips.push_back ({ "ALL SOUNDS", -1, 0 }); chips.push_back ({ "NEW", -1, 3 }); chips.push_back ({ "FAVOURITES", -1, 2 }); chips.push_back ({ "MY PRESETS", -1, 1 });
+        chips.push_back ({ "PACKS", -1, 4 });
         for (int c : { (int) cPiano, (int) cKeys, (int) cOrgan, (int) cBells, (int) cMallets, (int) cPlucks, (int) cGuitar, (int) cStrings, (int) cBrass,
                        (int) cWoodwind, (int) cWorld, (int) cChoir, (int) cLead, (int) cSynth, (int) cPads, (int) cBass, (int) cChip, (int) cArp,
                        (int) cTexture, (int) cDrums, (int) cFX, (int) cGameFx, (int) cCinematic })
@@ -75,6 +76,10 @@ public:
         list.setRowHeight (40);
         list.setColour (ListBox::backgroundColourId, Colours::transparentBlack);
         addAndMakeVisible (list);
+        installBtn.setButtonText ("INSTALL PACK");
+        installBtn.setTooltip ("Install a sound pack (.kkpack) - or just drag the file into this window");
+        installBtn.onClick = [this] { chooseAndInstall(); };
+        addAndMakeVisible (installBtn);
         closeBtn.setButtonText ("CLOSE");
         closeBtn.onClick = [this] { setVisible (false); };
         addAndMakeVisible (closeBtn);
@@ -85,6 +90,7 @@ public:
     void open (int cat, int eraIdx, bool exclusive, std::function<void (int)> pick = nullptr, const String& heading = "PRESETS")
     {
         pickHandler = std::move (pick); title = heading;
+        proc.rescanPacks(); updatePackCount(); packsOnly = false; packSel = -1;
         category.setSelectedId (cat >= 0 ? cat + 2 : 1, dontSendNotification);
         fillSubs();
         if (cat >= 0 && proc.uiSub >= 0 && ! pick) subcat.setSelectedId (proc.uiSub + 2, dontSendNotification);
@@ -121,7 +127,7 @@ public:
             auto cr = chipRect (i).reduced (3, 3);
             const bool sel = i == chipSel, hot = i == chipHot;
             const Colour col = ch.cat >= 0 ? categoryColour (ch.cat) : ch.special == 3 ? Colour (0xff36ff6a) : ch.special == 2 ? Colour (0xffffd23f)
-                             : ch.special == 1 ? Colour (0xff22d3ee) : Colour (0xffff2f6d);
+                             : ch.special == 1 ? Colour (0xff22d3ee) : ch.special == 4 ? Colour (0xffff8a3d) : Colour (0xffff2f6d);
             if (sel)
             {
                 g.setColour (col.withAlpha (0.3f)); g.fillRoundedRectangle (cr.expanded (3), 10);
@@ -154,7 +160,8 @@ public:
     void resized() override
     {
         closeBtn.setBounds (getWidth() - 140, 14, 116, 36);
-        search.setBounds (300, 14, getWidth() - 300 - 160, 36);
+        installBtn.setBounds (getWidth() - 300, 14, 150, 36);
+        search.setBounds (300, 14, getWidth() - 300 - 320, 36);
         auto r = getLocalBounds().reduced (20).withTrimmedTop (chipsBottom() - 10);
         auto row2 = r.removeFromTop (34);
         subcat.setBounds (row2.removeFromLeft (230)); row2.removeFromLeft (6);
@@ -171,7 +178,7 @@ public:
         entries.clear();
         const auto q = search.getText().trim().toLowerCase();
         const auto favs = getFavourites ? getFavourites() : StringArray();
-        const int cat = category.getSelectedId() - 2, er = era.getSelectedId() - 2, sb = subcat.getSelectedId() - 2;
+        const int cat = category.getSelectedId() - 2, er = era.getSelectedId() - 2, sb = packsOnly ? -1 : subcat.getSelectedId() - 2;
         const int md = mood.getSelectedId() - 2, chx = character.getSelectedId() - 2, ar = artic.getSelectedId() - 2;
         const int vo = voicing.getSelectedId() - 2, br = bright.getSelectedId() - 2, mv = motion.getSelectedId() - 2, cp = cpuSel.getSelectedId() - 2;
         const bool tagFilter = sb >= 0 || md >= 0 || chx >= 0 || ar >= 0 || vo >= 0 || br >= 0 || mv >= 0 || cp >= 0;
@@ -182,9 +189,18 @@ public:
                 const auto name = f.getFileNameWithoutExtension();
                 if (cat >= 0 || er >= 0 || tagFilter) continue;
                 if (favOnly.getToggleState() && ! favs.contains (name)) continue;
+                if (packsOnly) continue;
                 if (matches (name + " user")) entries.push_back ({ name, "MY PRESET", -1, f });
             }
-        if (! userOnly.getToggleState())
+        if (! exclusiveOnly.getToggleState() && ! newOnly && ! userOnly.getToggleState() && ! (packsOnly && packSel == 0) && er < 0 && sb < 0 && ! tagFilter)
+            for (auto& ps : proc.packSounds())   // sounds from installed packs
+            {
+                if (packsOnly && packSel > 0 && ps.pack != proc.packs()[(size_t) (packSel - 1)].name) continue;
+                if (cat >= 0 && ps.cat != cat) continue;
+                if (favOnly.getToggleState() && ! favs.contains (ps.name)) continue;
+                if (matches (ps.name + " " + ps.pack + " pack")) entries.push_back ({ ps.name, ps.pack, -1, ps.file, ps.pack, ps.cat });
+            }
+        if (! userOnly.getToggleState() && ! (packsOnly && packSel != 0))
         {
             const auto& ps = factoryPresets();
             for (int i = 0; i < (int) ps.size(); ++i)
@@ -204,20 +220,20 @@ public:
                 if (newOnly && pr.version != "0.30") continue;
                 if (favOnly.getToggleState() && ! favs.contains (pr.name)) continue;
                 const auto info = pr.info();
-                if (q.isEmpty() || pr.searchText().contains (q)) entries.push_back ({ pr.name, info, i, {} });
+                if (q.isEmpty() || pr.searchText().contains (q) || pr.legacyName.toLowerCase().contains (q)) entries.push_back ({ pr.name, info, i, {}, {}, pr.cat });
             }
         }
         list.updateContent();
         list.repaint();
         count.setText (String ((int) entries.size()) + " sounds   -   click = hear it and play it on the keys,  double-click = load and close,  right-click = more", dontSendNotification);
         int want = 0;
-        if (userOnly.getToggleState()) want = 3; else if (favOnly.getToggleState()) want = 2; else if (newOnly) want = 1;
-        else for (int i = 4; i < (int) chips.size(); ++i) if (chips[(size_t) i].cat == cat) want = i;
+        if (userOnly.getToggleState()) want = 3; else if (favOnly.getToggleState()) want = 2; else if (newOnly) want = 1; else if (packsOnly) want = 4;
+        else for (int i = 5; i < (int) chips.size(); ++i) if (chips[(size_t) i].cat == cat) want = i;
         if (want != chipSel) { chipSel = want; repaint(); }
     }
 
 private:
-    struct Entry { String name, info; int factoryIndex; File file; };
+    struct Entry { String name, info; int factoryIndex; File file; String pack; int cat = -1; };
 
     int getNumRows() override { return (int) entries.size(); }
 
@@ -228,7 +244,8 @@ private:
         const bool current = (e.factoryIndex >= 0 && e.factoryIndex == proc.currentPresetIndex())
                           || (e.factoryIndex < 0 && e.file == proc.currentUserFile());
         const auto* pr = e.factoryIndex >= 0 ? &factoryPresets()[(size_t) e.factoryIndex] : nullptr;
-        const Colour col = pr ? categoryColour (pr->cat) : Colour (0xff22d3ee);
+        const bool packSound = pr == nullptr && e.pack.isNotEmpty();
+        const Colour col = pr ? categoryColour (pr->cat) : packSound && e.cat >= 0 ? categoryColour (e.cat) : Colour (0xff22d3ee);
         auto r = Rectangle<float> (2, 2, (float) w - 4, (float) h - 4);
         g.setGradientFill (ColourGradient (col.withAlpha (current ? 0.34f : selected ? 0.24f : (row % 2 ? 0.07f : 0.11f)), r.getX(), 0,
                                            Colour (0x0015123a), r.getRight() * 0.7f, 0, false));
@@ -240,7 +257,7 @@ private:
         g.setColour (fav ? Colour (0xffffd23f) : Colour (0xff6a6290));
         g.setFont (Font (FontOptions (22.0f))); g.drawText (fav ? String (CharPointer_UTF8 ("\xe2\x98\x85")) : String (CharPointer_UTF8 ("\xe2\x98\x86")), 8, 0, 30, h, Justification::centred);
         // category pill
-        const String tag = pr ? categoryNames()[pr->cat] : String ("MY PRESET");
+        const String tag = pr ? categoryNames()[pr->cat] : packSound ? (e.cat >= 0 ? categoryNames()[e.cat] : String ("PACK")) : String ("MY PRESET");
         auto pill = Rectangle<float> (44, (float) h * 0.5f - 11, 150, 22);
         g.setColour (col.withAlpha (0.22f)); g.fillRoundedRectangle (pill, 11);
         g.setColour (col); g.drawRoundedRectangle (pill, 11, 1.0f);
@@ -258,8 +275,14 @@ private:
             g.setColour (Colour (0xff0a0920)); g.setFont (Font (FontOptions (10.5f, Font::bold))); g.drawText ("NEW", badge, Justification::centred);
         }
         g.setColour (Colour (0xffaaa4cf)); g.setFont (Font (FontOptions (13.0f)));
-        String info = pr ? pr->sub.toUpperCase() + "   " + pr->mood + " . " + pr->articulation + (pr->mono ? " . MONO" : "") : String ("your sound");
-        g.drawFittedText (info, w * 2 / 5 + 260, 0, w - (w * 2 / 5 + 260) - 14, h, Justification::centredRight, 1, 0.8f);
+        String info = pr ? pr->sub.toUpperCase() + "   " + pr->mood + " . " + pr->articulation + (pr->mono ? " . MONO" : "") : packSound ? String() : String ("your sound");
+        g.drawFittedText (info, w * 2 / 5 + 260, 0, w - (w * 2 / 5 + 260) - 150, h, Justification::centredRight, 1, 0.8f);
+        // pack tag: which sound pack the sound comes from (factory sounds = FACTORY)
+        const String packTag = pr ? String ("FACTORY") : packSound ? e.pack.toUpperCase() : String ("MY SOUNDS");
+        auto pt = Rectangle<float> ((float) w - 136, (float) h * 0.5f - 10, 124, 20);
+        g.setColour (Colour (0xffff8a3d).withAlpha (pr ? 0.35f : 0.8f)); g.drawRoundedRectangle (pt, 10, 1.0f);
+        g.setColour (Colour (0xffff8a3d).withAlpha (pr ? 0.6f : 1.0f)); g.setFont (Font (FontOptions (10.5f, Font::bold)).withExtraKerningFactor (0.08f));
+        g.drawFittedText (packTag, pt.reduced (8, 0).toNearestInt(), Justification::centred, 1, 0.6f);
     }
 
     void activate (int row, bool close)
@@ -322,18 +345,27 @@ private:
     void fillSubs()
     {
         subcat.clear (dontSendNotification);
+        if (packsOnly)
+        {
+            subcat.addItem ("All packs", 1); subcat.addItem ("FACTORY", 2);
+            for (int k = 0; k < (int) proc.packs().size(); ++k) subcat.addItem (proc.packs()[(size_t) k].name, k + 3);
+            subcat.setSelectedId (packSel + 2, dontSendNotification); subcat.setEnabled (true);
+            return;
+        }
         subcat.addItem ("All subcategories", 1);
         const int c = category.getSelectedId() - 2;
         if (c >= 0) { const auto& subs = subcategoryNames (c); for (int i = 0; i < subs.size(); ++i) subcat.addItem (subs[i], i + 2); }
         subcat.setSelectedId (1, dontSendNotification);
         subcat.setEnabled (c >= 0);
     }
-    TextButton exclusiveOnly, favOnly, userOnly, closeBtn;
-    struct Chip { String name; int cat; int special; int count = 0; };   // special: 1 my presets, 2 favourites, 3 NEW
+    TextButton exclusiveOnly, favOnly, userOnly, closeBtn, installBtn;
+    struct Chip { String name; int cat; int special; int count = 0; };   // special: 1 my presets, 2 favourites, 3 NEW, 4 PACKS
     std::vector<Chip> chips;
     int chipSel = 0, chipHot = -1;
-    bool newOnly = false;
-    static constexpr int chipCols = 9;
+    bool newOnly = false, packsOnly = false, dropHot = false;
+    int packSel = -1;                       // PACKS: -1 all packs, 0 FACTORY, 1.. installed packs
+    std::unique_ptr<FileChooser> chooser;
+    static constexpr int chipCols = 10;
     int chipsBottom() const { return 60 + ((int) chips.size() + chipCols - 1) / chipCols * 38 + 14; }
     Rectangle<float> chipRect (int i) const
     {
@@ -346,9 +378,57 @@ private:
         userOnly.setToggleState (ch.special == 1, dontSendNotification);
         favOnly.setToggleState (ch.special == 2, dontSendNotification);
         newOnly = ch.special == 3;
+        packsOnly = ch.special == 4; packSel = -1;
         category.setSelectedId (ch.cat >= 0 ? ch.cat + 2 : 1, dontSendNotification);
         fillSubs(); chipSel = i; refresh(); repaint();
     }
+    void updatePackCount()
+    {
+        for (auto& ch : chips) if (ch.special == 4) ch.count = 1 + (int) proc.packs().size();   // FACTORY + installed packs
+    }
+public:
+    bool isInterestedInFileDrag (const StringArray& files) override
+    {
+        for (auto& f : files) if (f.endsWithIgnoreCase (".kkpack") || f.endsWithIgnoreCase (".zip")) return true;
+        return false;
+    }
+    void fileDragEnter (const StringArray&, int, int) override { dropHot = true; repaint(); }
+    void fileDragExit (const StringArray&) override { dropHot = false; repaint(); }
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        dropHot = false; repaint();
+        for (auto& f : files) install (File (f));
+    }
+    void paintOverChildren (Graphics& g) override
+    {
+        if (! dropHot) return;
+        g.setColour (Colour (0xcc0a0920)); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (4), 12);
+        g.setColour (Colour (0xffff8a3d)); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (14), 12, 2.0f);
+        g.setFont (Font (FontOptions (30.0f, Font::bold)).withExtraKerningFactor (0.1f));
+        g.drawText ("DROP TO INSTALL THE SOUND PACK", getLocalBounds(), Justification::centred);
+    }
+    void install (const File& f)
+    {
+        String err;
+        const auto name = proc.installPack (f, &err);
+        if (name.isEmpty())
+        {
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "INSTALL PACK", f.getFileName() + ": " + err, "OK", this);
+            return;
+        }
+        updatePackCount();
+        for (int i = 0; i < (int) chips.size(); ++i) if (chips[(size_t) i].special == 4) selectChip (i);
+        for (int k = 0; k < (int) proc.packs().size(); ++k) if (proc.packs()[(size_t) k].name == name) { packSel = k + 1; subcat.setSelectedId (k + 3, dontSendNotification); }
+        refresh(); repaint();
+    }
+    void chooseAndInstall()
+    {
+        chooser = std::make_unique<FileChooser> ("Install a sound pack", File::getSpecialLocation (File::userDocumentsDirectory), "*.kkpack;*.zip");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                              [this, safe = Component::SafePointer<Component> (this)] (const FileChooser& fc)
+                              { if (safe != nullptr && fc.getResult() != File()) install (fc.getResult()); });
+    }
+private:
     Label count;
     ListBox list;
     std::vector<Entry> entries;

@@ -563,6 +563,54 @@ static int unitTests()
         check (kk::SoundKits::renameKit (kit, kit + " 2") && kk::SoundKits::count (kit + " 2") == 2, "SOUND KITS: rename a kit");
         check (kk::SoundKits::deleteKit (kit + " 2") && ! kk::SoundKits::kits().contains (kit + " 2"), "SOUND KITS: delete a kit");
     }
+    // v0.34 NAMES: no genre / city words, unique names and IDs, old names still find their sound
+    {
+        const auto& ps = factoryPresets();
+        std::set<juce::String> names, ids; bool clean = true, legacy = true;
+        for (auto& pr : ps)
+        {
+            for (auto* w : { "Trap", "Drill", "Plugg", "Rage", "Atlanta", "ATL", "Detroit", "UK", "Memphis", "Phonk" })
+                if (juce::StringArray::fromTokens (pr.name, " ", "").contains (w) || pr.name.contains ("Supertrap")) { clean = false; std::printf ("   genre name: %s\n", pr.name.toRawUTF8()); }
+            names.insert (pr.name); ids.insert (pr.id);
+            legacy &= findFactoryPreset (pr.legacyName) == (int) (&pr - ps.data()) && findFactoryPreset (pr.id) == (int) (&pr - ps.data());
+        }
+        check (clean, "NAMES: no Trap / Drill / Plugg / Rage / city words in sound names");
+        check (names.size() == ps.size() && ids.size() == ps.size(), "NAMES: every name and ID is unique");
+        check (legacy, "NAMES: the old name and the ID find the same sound");
+        check (currentFactoryName ("Classic Trap Bell") == "Classic Minor Bell" && ps[0].legacyName == "Classic Trap Bell", "NAMES: favourites move to the new name");
+        // a v0.33 project (index + old name) opens the same sound under its new name
+        KeysKillaProcessor a (false), b (false);
+        a.setCurrentProgram (0);
+        juce::MemoryBlock mb; a.getStateInformation (mb);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+        xml->setAttribute ("presetName", "Classic Trap Bell");
+        juce::AudioProcessor::copyXmlToBinary (*xml, mb);
+        b.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (b.currentName() == "Classic Minor Bell" && b.currentPresetIndex() == 0, "NAMES: an old project opens the same sound with its new name");
+    }
+    // v0.34 SOUND PACKS: export -> .kkpack -> install -> PACKS list
+    {
+        KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
+        p.setCurrentProgram (5);
+        auto pre = KeysKillaProcessor::userPresetDir().getChildFile ("KK TEST PACK SOUND.kkpreset");
+        check (p.saveUserPreset (pre), "PACKS: save a sound");
+        auto pk = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("KK TEST.kkpack");
+        check (p.exportPack (pk, "KK TEST PACK") && pk.existsAsFile(), "PACKS: export my sounds as a .kkpack");
+        pre.deleteFile();
+        juce::String err;
+        const auto name = p.installPack (pk, &err);
+        bool found = false;
+        for (auto& s : p.packSounds()) found |= s.name == "KK TEST PACK SOUND" && s.pack == "KK TEST PACK" && s.cat == factoryPresets()[5].cat;
+        check (name == "KK TEST PACK" && found, "PACKS: install puts the sounds in Documents/KEYS KILLA/Packs with their pack + category");
+        bool loads = false;
+        for (auto& s : p.packSounds()) if (s.pack == "KK TEST PACK") loads = p.loadUserPreset (s.file);
+        check (loads, "PACKS: a pack sound loads");
+        auto bad = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_not_a_pack.kkpack");
+        bad.replaceWithText ("hello");
+        check (p.installPack (bad, &err).isEmpty() && err.isNotEmpty(), "PACKS: a broken file is refused with a message");
+        check (p.removePack ("KK TEST PACK"), "PACKS: remove a pack");
+        pk.deleteFile(); bad.deleteFile();
+    }
     // DRUM KIT: seven drum slots, the boosted sound saved into a kit folder (808s / Kicks / ... like a bought kit)
     {
         KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
@@ -845,6 +893,7 @@ int main (int argc, char** argv)
     std::printf ("KEYS KILLA tests: juce ready\n");
     KeysKillaProcessor p;
     std::printf ("KEYS KILLA tests: processor ready (%d KB)\n", (int) (sizeof (KeysKillaProcessor) / 1024));
+    if (argc > 1 && juce::String (argv[1]) == "-unit") { const int f = unitTests(); std::printf ("unit failures: %d\n", f); return f; }
     if (argc > 1 && juce::String (argv[1]) == "-lib") return libraryCheck (p, true);   // v0.30 sound library cleanliness only
     if (argc > 1 && juce::String (argv[1]) == "-cal")   // prints suggested output gain per preset (target -15 dB short-term RMS)
     {
@@ -1037,6 +1086,13 @@ int main (int argc, char** argv)
             const auto t2 = juce::Time::getMillisecondCounterHiRes();
             std::printf ("open+paint %.1f ms, close %.1f ms\n", t1 - t0, t2 - t1);
         }
+        return 0;
+    }
+    if (argc > 1 && juce::String (argv[1]) == "-names")   // -names : index | name | old name | category | id
+    {
+        int i = 0;
+        for (auto& pr : factoryPresets())
+            std::printf ("%d|%s|%s|%s|%s\n", i++, pr.name.toRawUTF8(), pr.legacyName.toRawUTF8(), categoryNames()[pr.cat].toRawUTF8(), pr.id.toRawUTF8());
         return 0;
     }
     if (argc > 1 && juce::String (argv[1]) == "-stats")

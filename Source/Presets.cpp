@@ -22,14 +22,14 @@ const juce::StringArray& subcategoryNames (int cat)
         juce::StringArray { "Grand", "Bright", "Dark", "Soft", "Felt", "Detuned", "Lo-Fi", "Digital", "Ambient", "Processed" },
         juce::StringArray { "Electric", "Digital", "Workstation", "Dreamy", "Dark", "Ambient", "Glass", "Broken", "Hybrid", "Organ" },
         juce::StringArray { "Trap Bell", "Glass", "Tubular", "Music Box", "Digital", "Dark", "Metallic", "Distorted", "Ambient", "Hybrid" },
-        juce::StringArray { "Short", "Soft", "Digital", "Metallic", "Guitar-like", "Synthetic", "Rage", "Ambient", "Hybrid" },
+        juce::StringArray { "Short", "Soft", "Digital", "Metallic", "Guitar-like", "Synthetic", "Wild", "Ambient", "Hybrid" },
         juce::StringArray { "Marimba", "Kalimba", "Xylophone", "Celesta", "Metallic", "Wooden", "Hybrid" },
         juce::StringArray { "Nylon", "Acoustic", "Electric", "Clean", "Muted", "Processed", "Reverse", "Ambient", "Synth Hybrid" },
         juce::StringArray { "Ensemble", "Solo", "Pizzicato", "Staccato", "Sustained", "Synthetic", "Dark", "Cinematic", "Hybrid" },
         juce::StringArray { "Horns", "Trumpets", "Sections", "Synth Brass", "Dark Brass", "Trap Brass", "Hybrid Brass", "Hits" },
         juce::StringArray { "Male", "Female", "Mixed", "Vowels", "Air", "Vocal Texture", "Reverse Vocal", "Synthetic Vocal", "Ghost Choir" },
         juce::StringArray { "Flute", "Piccolo", "Clarinet-like", "Breath", "Ethnic Flute", "Synthetic Wind" },
-        juce::StringArray { "Analog", "Digital", "Mono", "Portamento", "Rage", "Detuned", "Distorted", "Metallic", "Future" },
+        juce::StringArray { "Analog", "Digital", "Mono", "Portamento", "Wild", "Detuned", "Distorted", "Metallic", "Future" },
         juce::StringArray { "Dark", "Space", "Dream", "Analog", "Digital", "Choir", "Evolving", "Granular", "Spectral", "Future" },
         juce::StringArray { "Poly", "Analog", "Digital", "FM", "Wavetable", "Hybrid", "Spectral", "Granular" },
         juce::StringArray { "Sub", "Synth Bass", "Reese", "Distorted", "Pluck Bass", "Hybrid Bass" },
@@ -295,7 +295,7 @@ void classify (Preset& p, int oldTile)
             if (has ({ "melting" })) set (cPiano, "Processed");
             break;
         case tPlucks:
-            set (cPlucks, has ({ "harp" }) ? "Guitar-like" : has ({ "digicore", "wt ", "glassy" }) ? "Digital" : has ({ "hyper" }) ? "Rage"
+            set (cPlucks, has ({ "harp" }) ? "Guitar-like" : has ({ "digicore", "wt ", "glassy" }) ? "Digital" : has ({ "hyper" }) ? "Wild"
                         : has ({ "plugg" }) ? "Soft" : has ({ "rubber" }) ? "Synthetic" : has ({ "mystery" }) ? "Digital" : "Short");
             break;
         case tFlutes:
@@ -313,7 +313,7 @@ void classify (Preset& p, int oldTile)
             if (has ({ "orchestra" })) set (cStrings, "Dark");
             break;
         case tLeads:
-            set (cLead, has ({ "rage" }) ? "Rage" : has ({ "supersaw" }) ? "Detuned" : has ({ "blown", "clip" }) ? "Distorted"
+            set (cLead, has ({ "rage" }) ? "Wild" : has ({ "supersaw" }) ? "Detuned" : has ({ "blown", "clip" }) ? "Distorted"
                       : has ({ "glide", "octave jump" }) ? "Portamento" : has ({ "hyper", "sync", "wt " }) ? "Digital" : "Analog");
             if (has ({ "jerk", "glitch" })) set (cSynth, "Digital");
             if (has ({ "early plugg synth" })) set (cSynth, "Poly");
@@ -337,6 +337,41 @@ void classify (Preset& p, int oldTile)
     }
 }
 } // namespace
+
+// v0.34: the sound's name says how it sounds - no genre / city words (rules below, the v0.33 name stays as legacyName)
+static juce::String soundName (juce::String n)
+{
+    static const std::pair<const char*, const char*> whole[] {   // whole names
+        { "Glassy Plugg", "Glassy Soft Bell" }, { "Detroit Keys", "Bouncy Keys" }, { "Pluggnb Keys", "Velvet Keys" },
+        { "UK Drill Slide Piano", "Gliding Minor Piano" }, { "Rage Keys", "Wild Saw Keys" }, { "Emo Guitar Pick", "Sad Guitar Pick" },
+        { "Digicore Pluck", "Glitch Pluck" }, { "Early Plugg Pluck", "Early Soft Pluck" }, { "Old Trap Flute", "Old Dark Flute" },
+        { "Trap Flute", "Airy Flute" }, { "Whistle Lead ATL", "Pure Whistle Lead" }, { "NY Drill Strings", "Sliding Dark Strings" },
+        { "Early Plugg Synth", "Early Soft Synth" }, { "Early Rage Saw", "Early Wild Saw" }, { "Rage Supersaw", "Wild Supersaw" },
+        { "Jerk Synth", "Bounce Synth" }, { "Blown Rage Lead", "Blown Wild Lead" }, { "Club Rage Stab", "Club Wild Stab" },
+        { "Drill Reese", "Sliding Reese" }, { "Plugg Square Bass", "Soft Square Bass" }, { "Pluggnb Soft Bass", "Velvet Soft Bass" },
+        { "Blown Rage Bass", "Blown Wild Bass" }, { "Memphis Dirt Bass", "Dusty Grit Bass" }, { "WT Rage Lead", "WT Wild Lead" },
+        { "Rage Saw Bass", "Wild Saw Bass" }, { "Jerk Bounce Bass", "Jumpy Bounce Bass" }, { "Detroit Pluck Bass", "Snappy Pluck Bass" },
+        { "Digicore Wobble", "Glitch Wobble" }, { "Phonk Crush Bass", "Dirty Crush Bass" }, { "Bouncy Atlanta Piano", "Bouncy Bright Piano" },
+        { "Trap Grand Piano", "Moody Grand Piano" }, { "Dark Trap Piano", "Dark Night Piano" }, { "Drill Slide Piano", "Sliding Minor Piano" },
+        { "Trap Organ Chords", "Dark Organ Chords" }, { "Epic Trap Strings", "Epic Minor Strings" }, { "Drill Violin Lead", "Sliding Violin Lead" },
+        { "Trap Horns", "Big Horns" }, { "Acoustic Trap Guitar", "Acoustic Night Guitar" }, { "Rage Arp Saw", "Wild Arp Saw" },
+        { "Plugg Arp", "Soft Bell Arp" }, { "Drill Staccato Strings", "Sharp Staccato Strings" }, { "Supertrap Glass Keys", "Super Glass Keys" },
+        { "Rage Anthem Lead", "Wild Anthem Lead" } };
+    for (auto& [a, b] : whole) if (n == a) return b;
+    static const std::pair<const char*, const char*> base[] {    // the sound after an era word
+        { "Trap Bell Arp", "Minor Bell Arp" }, { "Icy Trap Bell", "Icy Bell" }, { "Trap Bell", "Minor Bell" },
+        { "Trap Staccato Violins", "Staccato Violins" }, { "Trap Flute Lead", "Dark Flute Lead" }, { "Trap Flute", "Dark Flute" },
+        { "Trap Piano Keys", "Night Piano Keys" }, { "Plugg Pluck", "Mellow Pluck" }, { "Dark Trap Strings", "Dark Minor Strings" },
+        { "Drill Horn Riff", "Sliding Horn Riff" }, { "Grand Trap Piano", "Grand Night Piano" }, { "Short Trap Pluck", "Short Pluck" },
+        { "Rage Pluck", "Saw Pluck" }, { "Trap Brass Stab", "Brass Stab" }, { "Rage Lead", "Saw Lead" } };
+    juce::String era;
+    for (auto* e : { "Classic ", "Layered ", "Atmos ", "Lo-Fi ", "Rage ", "Hyper ", "Future " })
+        if (n.startsWith (e)) { era = juce::String (e) == "Rage " ? "Wild " : juce::String (e); n = n.substring ((int) std::strlen (e)); break; }
+    for (auto& [a, b] : base) if (n == a) { n = b; break; }
+    for (auto* w : { "Trap ", "Drill ", "Plugg ", "Pluggnb ", "Rage ", "Atlanta ", "ATL ", "Detroit ", "UK ", "NY ", "Memphis ", "Phonk " })
+        n = (n + " ").replace (w, "").trimEnd();
+    return era + n;
+}
 
 const std::vector<Preset>& factoryPresets()
 {
@@ -1009,7 +1044,7 @@ const std::vector<Preset>& factoryPresets()
         R (cPlucks, "Metallic", "Metallic Pluck", { 4, 5 }, { { engine, FM }, { fmRatio, 7.0f }, { fmAmt, 0.5f }, { decay, 0.4f }, { sustain, 0 }, { body, 4 }, { bodyMix, 0.3f } });
         R (cPlucks, "Guitar-like", "Pick Pluck", { 1, 3 }, with (guitB, { { decay, 1.0f }, { bodyMix, 0.4f } }));
         R (cPlucks, "Synthetic", "Synthetic Pluck", { 2, 6 }, with (pluckB, { { wave, 0.8f }, { unison, 3 }, { detune, 0.25f }, { fenv, 0.7f }, { fdecay, 0.1f }, { reso, 0.35f } }));
-        R (cPlucks, "Rage", "Rage Pluck", { 4, 5 }, with (pluckB, { { wave, 0.0f }, { unison, 7 }, { detune, 0.45f }, { decay, 0.3f }, { sustain, 0.05f }, { drive, 0.4f } }));
+        R (cPlucks, "Wild", "Rage Pluck", { 4, 5 }, with (pluckB, { { wave, 0.0f }, { unison, 7 }, { detune, 0.45f }, { decay, 0.3f }, { sustain, 0.05f }, { drive, 0.4f } }));
         R (cPlucks, "Ambient", "Ambient Pluck", { 2, 6 }, { { engine, PL }, { wave, 0.5f }, { decay, 1.5f }, { sustain, 0 }, { revMix, 0.5f }, { revType, 2 }, { delayMix, 0.35f } });
         R (cPlucks, "Hybrid", "Hybrid Pluck", { 5, 6 }, { { engine, PL }, { wave, 0.6f }, { decay, 0.9f }, { sustain, 0 }, { layerB, 1 }, { engineB, FM }, { fmRatioB, 3.5f },
                                                           { fmAmtB, 0.4f }, { levelB, 0.5f } });
@@ -1088,7 +1123,7 @@ const std::vector<Preset>& factoryPresets()
         R (cLead, "Digital", "Digital Lead", { 1, 4, 5 }, with (leadB, { { engine, WT }, { wave, 0.6f }, { unison, 3 }, { detune, 0.2f }, { delayMix, 0.2f } }));
         R (cLead, "Mono", "Mono Square Lead", { 0, 3 }, with (leadB, { { wave, 0.5f }, { unison, 1 }, { cutoff, 4000 } }));
         R (cLead, "Portamento", "Glide Lead", { 3, 4, 5 }, with (leadB, { { glide, 0.3f } }));
-        R (cLead, "Rage", "Rage Lead", { 4, 5 }, with (leadB, { { unison, 8 }, { detune, 0.5f }, { drive, 0.5f }, { driveType, 3 }, { width, 0.9f }, { mono, 0 } }));
+        R (cLead, "Wild", "Rage Lead", { 4, 5 }, with (leadB, { { unison, 8 }, { detune, 0.5f }, { drive, 0.5f }, { driveType, 3 }, { width, 0.9f }, { mono, 0 } }));
         R (cLead, "Detuned", "Detuned Stack Lead", { 3, 4 }, with (leadB, { { unison, 7 }, { detune, 0.6f }, { chorus, 0.2f }, { mono, 0 } }));
         R (cLead, "Distorted", "Fuzz Lead", { 4, 5 }, with (leadB, { { wave, 0.5f }, { unison, 3 }, { drive, 0.7f }, { driveType, 4 }, { cutoff, 5000 } }));
         R (cLead, "Metallic", "Metallic Lead", { 4, 6 }, { { engine, FM }, { fmAlgo, 1 }, { fmRatio, 1.41f }, { fmAmt, 0.5f }, { sustain, 1 }, { release, 0.3f },
@@ -1212,7 +1247,7 @@ const std::vector<Preset>& factoryPresets()
         R (cGuitar, "Acoustic", "Dark Acoustic Riff", { 1, 3 }, with (guitB, { { wave, 0.7f }, { decay, 1.6f }, { cutoff, 5000 }, { revMix, 0.25f } }));
         R (cGuitar, "Electric", "Dark Electric Guitar", { 3, 5 }, with (guitB, { { wave, 0.85f }, { body, 0 }, { drive, 0.45f }, { driveType, 1 }, { cutoff, 3500 }, { revMix, 0.3f } }));
         R (cPiano, "Grand", "Trap Piano Keys", { 0, 3, 4 }, with (pianoB, { { cutoff, 6000 }, { revMix, 0.25f } }));
-        R (cLead, "Rage", "Anthem Lead", { 4, 5 }, with (leadB, { { unison, 8 }, { detune, 0.55f }, { drive, 0.45f }, { driveType, 3 }, { delayMix, 0.25f }, { mono, 0 } }));
+        R (cLead, "Wild", "Anthem Lead", { 4, 5 }, with (leadB, { { unison, 8 }, { detune, 0.55f }, { drive, 0.45f }, { driveType, 3 }, { delayMix, 0.25f }, { mono, 0 } }));
         R (cLead, "Digital", "Whistle Lead", { 0, 1, 5 }, { { engine, FL }, { wave, 0.1f }, { octave, 1 }, { sustain, 0.9f }, { release, 0.3f }, { mono, 1 }, { legato, 1 },
                                                            { glide, 0.08f }, { lfoPitch, 0.05f }, { revMix, 0.3f } });
         R (cPlucks, "Soft", "Plugg Pluck", { 2, 3 }, with (pluckB, { { wave, 0.45f }, { cutoff, 1800 }, { decay, 0.35f }, { revMix, 0.3f }, { delayMix, 0.2f } }));
@@ -1547,6 +1582,15 @@ const std::vector<Preset>& factoryPresets()
             for (auto& pr : v)
                 if (const int nSeen = seen[pr.name]++; nSeen > 0) pr.name << (nSeen == 1 ? " II" : nSeen == 2 ? " III" : " IV");
         }
+        // ---- v0.34: freeze the v0.33 name as legacy name + stable ID
+        for (auto& pr : v)
+        {
+            pr.legacyName = pr.name;
+            juce::String slug;
+            for (auto ch : pr.name.toLowerCase()) slug << (juce::CharacterFunctions::isLetterOrDigit (ch) ? juce::String::charToString (ch) : juce::String ("-"));
+            while (slug.contains ("--")) slug = slug.replace ("--", "-");
+            pr.id = "kk." + slug.trimCharactersAtStart ("-").trimCharactersAtEnd ("-");
+        }
         // ---- first impression: trap essentials open the library
         {
             static const char* heroes[] { "Classic Trap Bell", "Classic Hard Horn Stab", "Classic Orchestra Brass Hit", "Classic Trap Staccato Violins",
@@ -1554,9 +1598,17 @@ const std::vector<Preset>& factoryPresets()
                                           "Atmos Plugg Pluck", "Classic Trap Bell Arp", "Classic Dark Trap Strings", "Classic Icy Trap Bell",
                                           "Rage Drill Horn Riff", "Classic Epic Stab Hit", "Classic Whistle Lead" };
             std::vector<Preset> front, rest;
-            for (auto* h : heroes) for (auto& pr : v) if (pr.name == h) { front.push_back (pr); break; }
+            for (auto* h : heroes) for (auto& pr : v) if (pr.legacyName == h) { front.push_back (pr); break; }
             for (auto& pr : v) { bool isHero = false; for (auto& f : front) isHero |= f.name == pr.name; if (! isHero) rest.push_back (pr); }
             v = front; v.insert (v.end(), rest.begin(), rest.end());
+        }
+
+        // ---- v0.34: names describe the sound, not a genre or a city (order and sound stay the same)
+        for (auto& pr : v) pr.name = soundName (pr.name);
+        {
+            std::map<juce::String, int> seen;
+            for (auto& pr : v)
+                if (const int nSeen = seen[pr.name]++; nSeen > 0) pr.name << (nSeen == 1 ? " II" : nSeen == 2 ? " III" : nSeen == 3 ? " IV" : " V");
         }
 
         // ---- metadata for the whole library
@@ -1565,7 +1617,7 @@ const std::vector<Preset>& factoryPresets()
         // loudness table produced by tests/calibrate.py
         for (auto& pr : v)
             for (const auto& g : presetGains)
-                if (pr.name == g.name)
+                if (pr.name == g.name || pr.legacyName == g.name)
                 {
                     bool found = false;
                     for (auto& [k, x] : pr.values) if (k == ID::gain) { x = g.gain; found = true; }
@@ -1575,4 +1627,19 @@ const std::vector<Preset>& factoryPresets()
         return v;
     }();
     return presets;
+}
+
+int findFactoryPreset (const juce::String& key)
+{
+    if (key.isEmpty()) return -1;
+    const auto& ps = factoryPresets();
+    for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].name == key || ps[(size_t) i].id == key) return i;
+    for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].legacyName == key) return i;
+    return -1;
+}
+
+juce::String currentFactoryName (const juce::String& n)
+{
+    const int i = findFactoryPreset (n);
+    return i >= 0 ? factoryPresets()[(size_t) i].name : n;
 }

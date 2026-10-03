@@ -71,7 +71,18 @@ public:
     bool renameUserPreset (const juce::String& newName);
     bool deleteUserPreset();
     int  importPack (const juce::File& zipOrFolder);
-    bool exportPack (const juce::File& zip);
+    bool exportPack (const juce::File& zip, const juce::String& packName = "MY PACK");
+
+    // v0.34 SOUND PACKS: a .kkpack is a zip with pack.json (name, author, info), cover.png and *.kkpreset sounds
+    // (later also samples/*.wav). Installed into Documents/KEYS KILLA/Packs/<pack name>/. The factory sounds are the FACTORY pack.
+    struct PackSound { juce::File file; juce::String name, pack; int cat = -1; };
+    struct PackInfo { juce::String name, author, info; juce::File dir, cover; int sounds = 0; };
+    static juce::File packsDir();
+    juce::String installPack (const juce::File& kkpack, juce::String* error = nullptr);   // returns the pack name ("" = failed)
+    bool removePack (const juce::String& name);
+    void rescanPacks();
+    const std::vector<PackInfo>& packs() const { return packList; }
+    const std::vector<PackSound>& packSounds() const { return packSoundList; }
 
     // DICE
     enum DiceLock { lockEngine, lockFilter, lockEnv, lockMod, lockFx, lockExclusive, numLocks };
@@ -102,6 +113,10 @@ public:
     struct TreeResult { Genome g; std::array<float, 64> wave {}; bool waveReady = false; int rating = 0; };
     void setParentPreset (int slot, int presetIndex);
     void setParentCurrent (int slot);
+    void clearParent (int slot);
+    std::array<std::array<float, 64>, 2> parentWave {};        // PARENT A / B waveforms (rendered by renderNextThumbnail)
+    std::array<juce::int64, 2> parentWaveSig { 0, 0 };
+    bool parentsReady() const { return parents[0].valid() && parents[1].valid(); }
     void setParentChild (int slot, int childIndex);
     void setParentGenome (int slot, const Genome& g) { if (g.valid()) { parents[(size_t) juce::jlimit (0, 1, slot)] = g; ++labVer; } }
     void randomParent (int slot);
@@ -422,6 +437,8 @@ private:
     // presets
     int currentPreset = -1;
     juce::String presetName { "Init" };
+    std::vector<PackInfo> packList;
+    std::vector<PackSound> packSoundList;
     juce::File userFile;
     juce::StringArray macroLabels;
     std::vector<float> loadedSnapshot;
