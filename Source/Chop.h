@@ -43,6 +43,20 @@ public:
     }
     ChopPtr current() const { const juce::SpinLock::ScopedLockType l (lock); return data; }
     bool hasSource() const { auto d = current(); return d != nullptr && d->src != nullptr && d->src->getNumSamples() > 0; }
+    void clear() { publish (std::make_shared<ChopData>()); }   // v0.35: CLEAR - the sampler is empty again
+    // v0.35: new audio of the same length (MUTATE / KILL / UNDO) - the cuts and the slice settings stay
+    void replaceAudio (std::shared_ptr<const juce::AudioBuffer<float>> src)
+    {
+        auto d = current(); if (d == nullptr || src == nullptr) return;
+        auto n = std::make_shared<ChopData> (*d);
+        n->src = std::move (src);
+        publish (n);
+    }
+    // v0.35: play any part of the sample (the selection), once or as a loop
+    void playRegion (int start, int end, bool loop) { regStart = start; regEnd = end; regLoop = loop; regReq = true; }
+    void stopAll() { stopReq = true; }
+    bool regionPlaying() const { return regActive.load(); }
+    bool anyPlaying() const { return regActive.load() || playhead() >= 0; }
 
     // mode 0 = transients, -1 = note changes (vocals / melodies), gridMode: 1/4 1/8 1/16 at the tempo, >0 = equal slices
     void autoSlice (int mode, double bpm = 0.0, int gridDiv = 0)
@@ -221,11 +235,34 @@ public:
     void render (float* L, float* R, int n)
     {
         const juce::SpinLock::ScopedTryLockType tl (lock);
-        if (! tl.isLocked() || data == nullptr || data->src == nullptr) return;
+        if (! tl.isLocked() || data == nullptr || data->src == nullptr) { regActive = false; return; }
         const auto& d = *data;
         const auto& a = *d.src;
         const float* l = a.getReadPointer (0); const float* r = a.getReadPointer (a.getNumChannels() > 1 ? 1 : 0);
         const double inc = d.rate / outRate;
+        if (stopReq.exchange (false)) { for (auto& v : voices) v.rel = true; regActive = false; reg.on = false; }
+        if (regReq.exchange (false))
+        {
+            reg = {}; reg.on = true; reg.s0 = juce::jlimit (0, a.getNumSamples() - 2, regStart.load()); reg.s1 = juce::jlimit (reg.s0 + 2, a.getNumSamples(), regEnd.load());
+            reg.loop = regLoop.load(); regActive = true;
+        }
+        if (reg.on)   // the selection player (with 6 ms fades so a loop never clicks)
+        {
+            const double slen = reg.s1 - reg.s0, fade = std::min (slen * 0.25, d.rate * 0.006);
+            for (int i = 0; i < n; ++i)
+            {
+                if (reg.pos >= slen - 1) { if (reg.loop) reg.pos = 0; else { reg.on = false; break; } }
+                const double p = reg.s0 + reg.pos;
+                const int i0 = std::min ((int) p, a.getNumSamples() - 2);
+                const float fr = (float) (p - std::floor (p));
+                const float g = (float) std::min (1.0, std::min (reg.pos / fade, (slen - reg.pos) / fade));
+                L[i] += (l[i0] + (l[i0 + 1] - l[i0]) * fr) * g;
+                R[i] += (r[i0] + (r[i0 + 1] - r[i0]) * fr) * g;
+                reg.pos += inc;
+            }
+            playPos = (float) ((reg.s0 + reg.pos) / std::max (1, a.getNumSamples()));
+            regActive = reg.on;
+        }
         const float relStep = 1.0f / (0.012f * (float) outRate);
         for (auto& v : voices)
         {
@@ -253,7 +290,76 @@ public:
             playPos = (float) ((s0 + v.pos) / std::max (1, a.getNumSamples()));
         }
     }
-    float playhead() const { for (auto& v : voices) if (v.active) return playPos.load(); return -1.0f; }
+    float playhead() const { if (regActive.load()) return playPos.load(); for (auto& v : voices) if (v.active) return playPos.load(); return -1.0f; }
+
+    // v0.35 MUTATE / KILL: the part turns into something new - grains move, jump octaves, play backwards, get crushed -
+    // but a bit of the original stays underneath, so the melody still shows through. Same length, new every press.
+    static void mutate (juce::AudioBuffer<float>& a, int start, int end, double rate, bool kill, uint32_t seed)
+    {
+        start = juce::jlimit (0, a.getNumSamples(), start); end = juce::jlimit (start, a.getNumSamples(), end);
+        const int len = end - start, ch = a.getNumChannels();
+        if (len < 256) return;
+        juce::AudioBuffer<float> src (ch, len);
+        for (int c = 0; c < ch; ++c) src.copyFrom (c, 0, a, c, start, len);
+        juce::AudioBuffer<float> wet (ch, len); wet.clear();
+        juce::Random rnd ((juce::int64) seed);
+        const int grain = (int) (rate * (kill ? 0.045 + rnd.nextFloat() * 0.06 : 0.07 + rnd.nextFloat() * 0.09));
+        const int hop = std::max (32, grain / 2);
+        static const float ratiosM[] { 1.0f, 1.0f, 2.0f, 0.5f, 1.5f, 1.0f, 0.75f };
+        static const float ratiosK[] { 0.5f, 2.0f, 0.25f, 1.5f, 0.6667f, 3.0f, 1.0f };
+        const float scatter = (float) rate * (kill ? 0.6f : 0.25f);
+        for (int pos = -grain; pos < len; pos += hop)
+        {
+            const float ratio = kill ? ratiosK[rnd.nextInt (7)] : ratiosM[rnd.nextInt (7)];
+            const bool rev = rnd.nextFloat() < (kill ? 0.45f : 0.25f);
+            const double from = juce::jlimit (0.0, (double) std::max (1, len - 2), (double) pos + (rnd.nextFloat() * 2.0f - 1.0f) * scatter);
+            const float gain = 0.6f + 0.6f * rnd.nextFloat();
+            for (int k = 0; k < grain; ++k)
+            {
+                const int o = pos + k;
+                if (o < 0 || o >= len) continue;
+                const double rp = rev ? from + (grain - k) * ratio : from + k * ratio;
+                const int i0 = (int) std::fmod (std::max (0.0, rp), (double) (len - 1));
+                const float fr = (float) (rp - std::floor (rp));
+                const float w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) k / (float) grain);
+                for (int c = 0; c < ch; ++c)
+                {
+                    const float* x = src.getReadPointer (c);
+                    wet.addSample (c, o, (x[i0] + (x[std::min (len - 1, i0 + 1)] - x[i0]) * fr) * w * gain);
+                }
+            }
+        }
+        if (kill)   // crush + ring: it really dies
+        {
+            const float bits = 6.0f + rnd.nextFloat() * 3.0f, q = std::pow (2.0f, bits), ringHz = 40.0f + rnd.nextFloat() * 180.0f;
+            const int hold = 2 + rnd.nextInt (4);
+            for (int c = 0; c < ch; ++c)
+            {
+                float* x = wet.getWritePointer (c); float held = 0;
+                for (int i = 0; i < len; ++i)
+                {
+                    if (i % hold == 0) held = std::round (x[i] * q) / q;
+                    const float ring = std::sin (juce::MathConstants<float>::twoPi * ringHz * (float) i / (float) rate);
+                    x[i] = held * (0.55f + 0.45f * ring);
+                }
+            }
+        }
+        // the original stays a little underneath, same loudness as before, soft edges
+        const float dry = kill ? 0.18f : 0.32f;
+        const float rmsIn = src.getRMSLevel (0, 0, len) + 1.0e-6f, rmsWet = wet.getRMSLevel (0, 0, len) + 1.0e-6f;
+        const float wg = rmsIn / rmsWet;
+        const int edge = std::min (len / 4, (int) (rate * 0.01));
+        for (int c = 0; c < ch; ++c)
+        {
+            const float* x = src.getReadPointer (c); const float* w = wet.getReadPointer (c); float* out = a.getWritePointer (c, start);
+            for (int i = 0; i < len; ++i)
+            {
+                const float m = juce::jlimit (-1.0f, 1.0f, x[i] * dry + w[i] * wg * (1.0f - dry));
+                const float e = edge > 0 ? std::min (1.0f, std::min ((float) i / (float) edge, (float) (len - 1 - i) / (float) edge)) : 1.0f;
+                out[i] = x[i] + (m - x[i]) * e;
+            }
+        }
+    }
     std::atomic<int> lastHit { -1 };
 
     // energy-flux onsets, at most maxCount slices, at least 60 ms apart
@@ -333,6 +439,9 @@ private:
         for (auto& v : voices) v.active = false;
     }
     struct Voice { bool active = false, rel = false; int slice = 0, note = 60, delay = 0; double pos = 0; float vel = 1, relGain = 1; };
+    struct Region { bool on = false, loop = false; int s0 = 0, s1 = 0; double pos = 0; } reg;
+    std::atomic<int> regStart { 0 }, regEnd { 0 };
+    std::atomic<bool> regLoop { false }, regReq { false }, stopReq { false }, regActive { false };
     mutable juce::SpinLock lock;
     ChopPtr data;
     std::array<Voice, 8> voices {};

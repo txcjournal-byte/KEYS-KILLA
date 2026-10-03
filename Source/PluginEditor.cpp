@@ -173,8 +173,8 @@ Font KKLookAndFeel::getTextButtonFont (TextButton&, int h) { return serif (jmin 
 Font KKLookAndFeel::getComboBoxFont (ComboBox& c) { return serif (jmin (24.0f, (float) c.getHeight() * 0.62f), false, 0.08f); }
 Font KKLookAndFeel::getLabelFont (Label& l)
 {
-    if (dynamic_cast<Slider*> (l.getParentComponent()) != nullptr)   // knob value boxes scale with their box
-        return serif (jmax (11.0f, (float) l.getHeight() * 0.72f), false, 0.2f);
+    if (auto* sl = dynamic_cast<Slider*> (l.getParentComponent()))   // knob value boxes scale with their box
+        return sl->getSliderStyle() == Slider::LinearBar ? serif (13.0f, true, 0.12f) : serif (jmax (11.0f, (float) l.getHeight() * 0.72f), false, 0.2f);
     return l.getFont();
 }
 Font KKLookAndFeel::getPopupMenuFont() { return serif (25.0f, false, 0.05f); }   // menus scale with the 60 % window
@@ -2109,8 +2109,8 @@ public:
     }
     void loadSample (const File& f)
     {
-        note = proc.chopLoadFile (f) ? "loaded - cut at the hits. Pick another cut mode above, move the yellow markers, play the pads" : "could not read " + f.getFileName();
-        mode = 0; sel = 0; refresh();
+        note = proc.chopLoadFile (f) ? "loaded - cut at the hits.  Wheel = zoom,  drag in the wave = select a part,  SPACE = play / stop" : "could not read " + f.getFileName();
+        mode = 0; sel = 0; selA = selB = -1; resetView(); refresh();
     }
     void browse()
     {
@@ -2185,6 +2185,19 @@ public:
         dragMidi.makeFile = [this] { return proc.chop.exportMidi (proc.lastBpm.load()); };
         dragMidi.setTooltip ("Drag the chop pattern into FL: a MIDI clip that plays the slices in order - move the notes = flip the sample");
         addAndMakeVisible (dragWav); addAndMakeVisible (dragMidi);
+        // v0.35: CLEAR + the selection tools (work on the selected part - nothing selected = the whole sample)
+        btn (clearBtn, "CLEAR", "Remove the sample from the SAMPLER", [this] { proc.chopClear(); selA = selB = -1; note = "empty - drop a new sample"; resetView(); refresh(); });
+        btn (playSelBtn, "PLAY", "Play the selected part (SPACE = play / stop)", [this] { playSelection(); });
+        btn (loopSelBtn, "LOOP", "Play the selected part as a loop - drag it out as a loop WAV", [this] { loopOn = ! loopOn; loopSelBtn.selected = loopOn; loopSelBtn.repaint(); if (proc.chop.regionPlaying()) playSelection(); });
+        btn (toABtn, "> PARENT A", "The selected part becomes PARENT A in BREED LAB - breed it", [this] { toParent (0); });
+        btn (toBBtn, "> PARENT B", "The selected part becomes PARENT B in BREED LAB - breed it", [this] { toParent (1); });
+        btn (mutateBtn, "MUTATE", "MUTATE: the part (or the whole sample) turns into something new - the melody still shows through. Again = a new one", [this] { doMutate (false); });
+        btn (killBtn, "KILL", "KILL: mutated beyond recognition - only a trace of the original stays. Again = a new one", [this] { doMutate (true); });
+        btn (undoBtn, "UNDO", "Back to the sample before the last MUTATE / KILL", [this] { if (proc.chopUndoMutate()) { note = "undone"; peaksKey = {}; repaint(); } });
+        btn (allBtn, "SELECT ALL", "Select the whole sample (again = no selection)", [this] { auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return; if (hasSel()) selA = selB = -1; else { selA = 0; selB = c->src->getNumSamples(); } repaint(); refreshSelButtons(); });
+        dragSel.makeFile = [this] { auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return File(); return hasSel() ? proc.exportChopRegion (selA, selB, loopOn) : proc.exportChopRegion (0, c->src->getNumSamples(), loopOn); };
+        dragSel.setTooltip ("Drag the selected part into FL Studio as a WAV (LOOP on = a clean loop)");
+        addAndMakeVisible (dragSel);
         setOpaque (true);
         startTimerHz (30);
     }
@@ -2219,7 +2232,11 @@ public:
             return;
         }
         const int len = c->src->getNumSamples();
-        auto xOf = [&] (int smp) { return w.getX() + 10 + (w.getWidth() - 20) * (float) smp / (float) std::max (1, len); };
+        if (viewLen <= 0 || viewStart + viewLen > len) resetView();
+        updatePeaks();
+        g.saveState();
+        g.reduceClipRegion (wave.reduced (2));
+        auto xOf = [&] (int smp) { return w.getX() + 10 + (w.getWidth() - 20) * (float) (smp - viewStart) / (float) std::max (1, viewLen); };
         for (int i = 0; i < c->numSlices(); ++i)
         {
             const float x0 = xOf (c->sliceStart (i)), x1 = xOf (c->sliceEnd (i));
@@ -2230,14 +2247,23 @@ public:
         for (int k = 0; k < (int) peaks.size(); ++k)
         {
             const float x = w.getX() + 10 + (w.getWidth() - 20) * (float) k / (float) peaks.size();
-            const int smp = (int) ((juce::int64) len * k / (juce::int64) peaks.size());
+            const int smp = viewStart + (int) ((juce::int64) viewLen * k / (juce::int64) peaks.size());
             int si = 0; while (si + 1 < c->numSlices() && c->sliceStart (si + 1) <= smp) ++si;
             g.setColour (si == sel ? s.accent : TC (0xffc9ced6));
             g.drawVerticalLine ((int) x, mid - peaks[(size_t) k] * half, mid + peaks[(size_t) k] * half);
         }
+        if (hasSel())
+        {
+            const float x0 = jlimit (w.getX(), w.getRight(), xOf (selA)), x1 = jlimit (w.getX(), w.getRight(), xOf (selB));
+            g.setColour (s.accent.withAlpha (0.22f)); g.fillRect (x0, w.getY() + 2, x1 - x0, w.getHeight() - 4);
+            g.setColour (s.accent); g.drawVerticalLine ((int) x0, w.getY() + 2, w.getBottom() - 2); g.drawVerticalLine ((int) x1, w.getY() + 2, w.getBottom() - 2);
+            g.setFont (Font (FontOptions (11.0f, Font::bold)));
+            g.drawText (String ((double) (selB - selA) / c->rate, 2) + " s" + (loopOn ? "  LOOP" : ""), Rectangle<float> (x0 + 4, w.getY() + 4, 140, 14), Justification::centredLeft);
+        }
         for (int i = 0; i < c->numSlices(); ++i)
         {
             const float x = xOf (c->sliceStart (i));
+            if (x < w.getX() || x > w.getRight()) continue;
             g.setColour (i == hoverMark ? TC (0xffffffff) : TC (0xffffc23d));
             g.fillRect (x - 1.0f, w.getY() + 2, i == 0 ? 1.0f : 2.0f, w.getHeight() - 4);
             if (i > 0) { Path tri; tri.addTriangle (x - 7, w.getY() + 2, x + 7, w.getY() + 2, x, w.getY() + 12); g.fillPath (tri); }
@@ -2246,10 +2272,20 @@ public:
         }
         if (const float ph = proc.chop.playhead(); ph >= 0)
         {
-            g.setColour (TC (0xffffffff)); g.drawVerticalLine ((int) (w.getX() + 10 + (w.getWidth() - 20) * ph), w.getY(), w.getBottom());
+            g.setColour (TC (0xffffffff)); g.drawVerticalLine ((int) xOf ((int) (ph * (float) len)), w.getY(), w.getBottom());
         }
+        g.restoreState();
         g.setColour (TC (0xffaaa4cf)); g.setFont (Font (FontOptions (11.0f, Font::bold)));
-        g.drawText ("CLICK = PLAY A SLICE   DRAG A YELLOW MARKER = MOVE IT   DOUBLE-CLICK = NEW CUT   RIGHT-CLICK A MARKER = REMOVE", wave.withY (wave.getBottom() + 4).withHeight (16), Justification::centredLeft);
+        // scroll bar: where you are in the sample (drag it)
+        {
+            const auto sb = scrollBar().toFloat();
+            g.setColour (kk::theme().well); g.fillRoundedRectangle (sb, 4);
+            const float x0 = sb.getX() + sb.getWidth() * (float) viewStart / (float) len, x1 = sb.getX() + sb.getWidth() * (float) (viewStart + viewLen) / (float) len;
+            g.setColour (s.accent.withAlpha (viewLen < len ? 0.75f : 0.3f)); g.fillRoundedRectangle (x0, sb.getY() + 1, std::max (6.0f, x1 - x0), sb.getHeight() - 2, 3);
+        }
+        g.setColour (kk::theme().dim); g.setFont (Font (FontOptions (11.0f, Font::bold)));
+        g.drawText ("WHEEL = ZOOM   SHIFT+WHEEL = SCROLL   DRAG IN THE WAVE = SELECT A PART   CLICK = PLAY A SLICE   DOUBLE-CLICK = NEW CUT   DRAG A MARKER = MOVE   RIGHT-CLICK MARKER = REMOVE",
+                    scrollBar().withY (scrollBar().getBottom() + 2).withHeight (14), Justification::centredLeft);
         // selected slice
         g.setColour (TC (0xffffffff)); g.setFont (Font (FontOptions (18.0f, Font::bold)));
         if (sel < c->numSlices())
@@ -2280,15 +2316,25 @@ public:
         for (int i = 0; i < (int) modeBtns.size(); ++i) { const int bw = i == 0 ? 116 : i == 1 ? 74 : 52; modeBtns[(size_t) i]->setBounds (x, 16, bw, 32); x += bw + 5; }
         keysBtn.setBounds (x + 10, 14, 220, 36); keysBtn.setVisible (false);   // v0.35: the SAMPLER page plays the chops by itself
         backBtn.setBounds (W - 196, 14, 182, 36);
-        bankAllBtn.setBounds (W - 196 - 146, 14, 136, 36);
-        wave = { 14, 78, W - 28, std::max (200, H - 78 - 360) };
-        selRow = { 18, wave.getBottom() + 26, W - 36, 40 };
+        clearBtn.setBounds (W - 196 - 98, 14, 90, 36);
+        bankAllBtn.setBounds (clearBtn.getX() - 146, 14, 136, 36);
+        wave = { 14, 78, W - 28, std::max (180, H - 78 - 410) };
+        // selection tools row
+        {
+            auto row = Rectangle<int> (14, wave.getBottom() + 34, W - 28, 36);
+            for (auto* b : { &allBtn, &playSelBtn, &loopSelBtn }) { b->setBounds (row.removeFromLeft (b == &allBtn ? 112 : 76)); row.removeFromLeft (6); }
+            dragSel.setBounds (row.removeFromLeft (190)); row.removeFromLeft (14);
+            for (auto* b : { &toABtn, &toBBtn }) { b->setBounds (row.removeFromLeft (112)); row.removeFromLeft (6); }
+            row.removeFromLeft (14);
+            for (auto* b : { &mutateBtn, &killBtn, &undoBtn }) { b->setBounds (row.removeFromLeft (b == &undoBtn ? 76 : 100)); row.removeFromLeft (6); }
+        }
+        selRow = { 18, wave.getBottom() + 34 + 36 + 12, W - 36, 40 };
         int cx = selRow.getX() + 250;
         revBtn.setBounds (cx, selRow.getY() + 2, 92, 34); cx += 100;
         for (auto* sl : { &pitchSl, &volSl, &panSl, &fadeSl }) { sl->setBounds (cx, selRow.getY() + 2, 118, 34); cx += 124; }
         dragWav.setBounds (W - 18 - 180, selRow.getY() - 4, 180, 46);
         bankBtn.setBounds (dragWav.getX() - 136, selRow.getY(), 128, 38);
-        pairBtn.setBounds (bankBtn.getX() - 136, selRow.getY(), 128, 38);
+        pairBtn.setBounds (bankBtn.getX() - 136, selRow.getY(), 128, 38); pairBtn.setVisible (false);   // v0.35: > PARENT A / B above does it
         padArea = { 14, selRow.getBottom() + 34, W - 28 - 210, H - selRow.getBottom() - 48 };
         const int colX = padArea.getRight() + 12, colW = W - 14 - colX;
         dragMidi.setBounds (colX, padArea.getY(), colW, 48);
@@ -2312,12 +2358,48 @@ public:
         if (m > 0) { dragMark = m; return; }
         const int smp = sampleAt (e.position.x);
         if (e.getNumberOfClicks() > 1) { auto mk = c->marks; mk.push_back (smp); proc.chop.setMarks (mk); refresh(); return; }
-        int si = 0; while (si + 1 < c->numSlices() && c->sliceStart (si + 1) <= smp) ++si;
-        sel = si; loadFx(); proc.chopPad = si; repaint();
+        pressSmp = smp; selecting = false; inWave = true;
+    }
+    void mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& wd) override
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr || ! wave.contains (e.getPosition())) return;
+        const int len = c->src->getNumSamples();
+        if (e.mods.isShiftDown() || std::abs (wd.deltaX) > std::abs (wd.deltaY))   // scroll
+        {
+            const float d = std::abs (wd.deltaX) > std::abs (wd.deltaY) ? wd.deltaX : wd.deltaY;
+            viewStart = jlimit (0, std::max (0, len - viewLen), viewStart - (int) (d * (float) viewLen * 0.5f));
+        }
+        else   // zoom around the mouse
+        {
+            const int at = sampleAt (e.position.x);
+            const float f = wd.deltaY > 0 ? 0.8f : 1.25f;
+            const int minLen = std::max (256, (int) (c->rate * 0.02));
+            const int nl = jlimit (minLen, len, (int) ((float) viewLen * f));
+            const float rel = (float) (at - viewStart) / (float) std::max (1, viewLen);
+            viewLen = nl; viewStart = jlimit (0, std::max (0, len - viewLen), at - (int) (rel * (float) nl));
+        }
+        repaint();
     }
     void mouseDrag (const MouseEvent& e) override
     {
-        if (dragMark <= 0) return;
+        if (draggingBar || (dragMark <= 0 && scrollBar().contains (e.getMouseDownPosition())))
+        {
+            auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
+            draggingBar = true;
+            const auto sb = scrollBar();
+            const int len = c->src->getNumSamples();
+            const int centre = (int) ((e.position.x - (float) sb.getX()) / (float) sb.getWidth() * (float) len);
+            viewStart = jlimit (0, std::max (0, len - viewLen), centre - viewLen / 2);
+            repaint(); return;
+        }
+        if (dragMark <= 0)
+        {
+            if (! inWave || e.getDistanceFromDragStart() < 4) return;
+            selecting = true;
+            const int smp = sampleAt (e.position.x);
+            selA = std::min (pressSmp, smp); selB = std::max (pressSmp, smp);
+            refreshSelButtons(); repaint (wave); return;
+        }
         auto c = proc.chop.current(); if (c == nullptr) return;
         auto mk = c->marks;
         if (dragMark >= (int) mk.size()) return;
@@ -2326,7 +2408,88 @@ public:
         proc.chop.setMarks (mk);
         repaint (wave);
     }
-    void mouseUp (const MouseEvent&) override { if (dragMark > 0) refresh(); dragMark = -1; }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (draggingBar) { draggingBar = false; return; }
+        if (dragMark > 0) refresh();
+        else if (inWave && ! selecting && ! e.mods.isPopupMenu() && e.getNumberOfClicks() == 1)   // a click: play that slice
+        {
+            if (auto c = proc.chop.current(); c != nullptr && c->src != nullptr)
+            {
+                const int smp = sampleAt (e.position.x);
+                if (! (hasSel() && smp >= selA && smp <= selB)) { selA = selB = -1; refreshSelButtons(); }
+                int si = 0; while (si + 1 < c->numSlices() && c->sliceStart (si + 1) <= smp) ++si;
+                sel = si; loadFx(); proc.chopPad = si; repaint();
+            }
+        }
+        dragMark = -1; inWave = false; selecting = false;
+    }
+public:
+    // v0.35: SPACE on the SAMPLER page: stop whatever plays - or play the selection / the selected slice
+    void debugSelect (int a0, int a1, int v0, int vl) { selA = a0; selB = a1; viewStart = v0; viewLen = vl; peaksKey = {}; refreshSelButtons(); repaint(); }
+    void spacePressed()
+    {
+        if (proc.chop.anyPlaying()) { proc.chop.stopAll(); repaint(); return; }
+        if (hasSel()) playSelection(); else proc.chopPad = sel;
+    }
+private:
+    bool hasSel() const { return selA >= 0 && selB > selA + 64; }
+    void playSelection()
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
+        if (hasSel()) proc.chop.playRegion (selA, selB, loopOn);
+        else proc.chop.playRegion (0, c->src->getNumSamples(), loopOn);
+    }
+    void toParent (int slot)
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
+        const int a0 = hasSel() ? selA : c->sliceStart (sel), a1 = hasSel() ? selB : c->sliceEnd (sel);
+        note = proc.chopRegionToParent (a0, a1, slot) ? String ("in BREED LAB as PARENT ") + (slot == 0 ? "A" : "B") + " - open BREED LAB and press BREED" : String ("could not use it");
+        repaint();
+    }
+    void doMutate (bool kill)
+    {
+        if (! proc.chopMutate (hasSel() ? selA : 0, hasSel() ? selB : 0, kill)) return;
+        note = String (kill ? "KILLED" : "MUTATED") + (hasSel() ? " the selection" : " the whole sample") + " - again = a new one, UNDO = back";
+        peaksKey = {}; refreshSelButtons(); repaint();
+        playSelection();
+    }
+    void refreshSelButtons()
+    {
+        const bool any = proc.chop.current() != nullptr && proc.chop.current()->src != nullptr;
+        for (auto* b : { &playSelBtn, &loopSelBtn, &toABtn, &toBBtn, &mutateBtn, &killBtn, &undoBtn, &allBtn, &clearBtn }) b->setVisible (any);
+        dragSel.setVisible (any);
+        mutateBtn.setButtonText (hasSel() ? "MUTATE" : "MUTATE ALL"); killBtn.setButtonText (hasSel() ? "KILL" : "KILL ALL");
+        undoBtn.setEnabled (proc.chopCanUndo());
+        allBtn.setButtonText (hasSel() ? "UNSELECT" : "SELECT ALL");
+    }
+    void resetView() { auto c = proc.chop.current(); viewStart = 0; viewLen = c != nullptr && c->src != nullptr ? c->src->getNumSamples() : 0; peaksKey = {}; }
+    Rectangle<int> scrollBar() const { return { wave.getX() + 10, wave.getBottom() + 4, wave.getWidth() - 20, 10 }; }
+    void updatePeaks()
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
+        const int cols = std::max (200, wave.getWidth() - 20);
+        const auto key = std::make_tuple ((const void*) c->src.get(), viewStart, viewLen, cols);
+        if (key == peaksKey) return;
+        peaksKey = key;
+        peaks.assign ((size_t) cols, 0.0f);
+        const auto& a = *c->src;
+        const int len = a.getNumSamples();
+        for (int k = 0; k < cols; ++k)
+        {
+            const int s0 = jlimit (0, len - 1, viewStart + (int) ((juce::int64) viewLen * k / cols));
+            const int s1 = jlimit (s0 + 1, len, viewStart + (int) ((juce::int64) viewLen * (k + 1) / cols));
+            const int step = std::max (1, (s1 - s0) / 256);   // long views: sample every n-th value (fast)
+            float m = 0;
+            for (int ch = 0; ch < a.getNumChannels(); ++ch) { const float* x = a.getReadPointer (ch); for (int i = s0; i < s1; i += step) m = std::max (m, std::abs (x[i])); }
+            peaks[(size_t) k] = m;
+        }
+        float mx = 1.0e-6f; for (auto v : peaks) mx = std::max (mx, v);   // normalised to the whole file's view
+        for (auto& v : peaks) v /= std::max (mx, 0.05f);
+    }
+    std::tuple<const void*, int, int, int> peaksKey {};
+    int viewStart = 0, viewLen = 0, selA = -1, selB = -1, pressSmp = 0;
+    bool selecting = false, inWave = false, draggingBar = false, loopOn = false;
 private:
     kk::PairPtr sliceSound (int i) const
     {
@@ -2340,10 +2503,11 @@ private:
     {
         const bool has = proc.chop.current() != nullptr && proc.chop.current()->src != nullptr;   // slice controls only with a sample
         for (Component* c : { (Component*) &pitchSl, (Component*) &volSl, (Component*) &panSl, (Component*) &fadeSl, (Component*) &revBtn,
-                              (Component*) &pairBtn, (Component*) &bankBtn, (Component*) &dragWav, (Component*) &dragMidi, (Component*) &flipBtn,
+                              (Component*) &bankBtn, (Component*) &dragWav, (Component*) &dragMidi, (Component*) &flipBtn,
                               (Component*) &dragFlip, (Component*) &bankAllBtn })
             c->setVisible (has);
-        peaks = proc.chop.overview (std::max (200, wave.getWidth() - 20));
+        peaksKey = {};
+        refreshSelButtons();
         for (int i = 0; i < (int) modeBtns.size(); ++i) { modeBtns[(size_t) i]->selected = i == mode; modeBtns[(size_t) i]->repaint(); }
         keysBtn.setButtonText (keysOn() ? "KEYS PLAY THE CHOPS" : "PLAY CHOPS ON KEYS"); keysBtn.selected = keysOn(); keysBtn.repaint();
         if (auto c = proc.chop.current()) sel = jlimit (0, std::max (0, c->numSlices() - 1), sel);
@@ -2360,14 +2524,14 @@ private:
     {
         auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return 0;
         const auto w = wave.toFloat();
-        return jlimit (0, c->src->getNumSamples() - 1, (int) ((x - w.getX() - 10) / (w.getWidth() - 20) * (float) c->src->getNumSamples()));
+        return jlimit (0, c->src->getNumSamples() - 1, viewStart + (int) ((x - w.getX() - 10) / (w.getWidth() - 20) * (float) viewLen));
     }
     int markAt (Point<float> p) const
     {
         auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr || ! wave.toFloat().contains (p)) return -1;
         const auto w = wave.toFloat();
         for (int i = 1; i < c->numSlices(); ++i)
-            if (std::abs (w.getX() + 10 + (w.getWidth() - 20) * (float) c->sliceStart (i) / (float) c->src->getNumSamples() - p.x) < 6.0f) return i;
+            if (std::abs (w.getX() + 10 + (w.getWidth() - 20) * (float) (c->sliceStart (i) - viewStart) / (float) std::max (1, viewLen) - p.x) < 6.0f) return i;
         return -1;
     }
     void timerCallback() override
@@ -2378,7 +2542,7 @@ private:
         for (auto& v : padLit) if (v > 0.01f) { v *= 0.85f; any = true; } else v = 0;
         if (any) repaint (padArea);
         if (proc.chop.playhead() >= 0 || wasPlaying) { wasPlaying = proc.chop.playhead() >= 0; repaint (wave); }
-        if (keysOn() != keysBtn.selected) refresh();
+        if (loopSelBtn.selected != loopOn) { loopSelBtn.selected = loopOn; loopSelBtn.repaint(); }
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     std::vector<std::unique_ptr<HotButton>> modeBtns;
@@ -2389,6 +2553,8 @@ private:
     Slider pitchSl, volSl, panSl, fadeSl;
     HotButton revBtn { lnf }, flipBtn { lnf };
     uint32_t flipSeed = 1; File flipFile;
+    HotButton clearBtn { lnf }, playSelBtn { lnf }, loopSelBtn { lnf }, toABtn { lnf }, toBBtn { lnf }, mutateBtn { lnf }, killBtn { lnf }, undoBtn { lnf }, allBtn { lnf };
+    DragFileButton dragSel { "DRAG PART WAV", TC (0xff36ff6a) };
     bool loadingFx = false;
     void pushFx()
     {
@@ -4734,6 +4900,24 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
+        if (v == 31)   // SAMPLER with a sample, zoomed in, a part selected
+        {
+            auto f = File::getSpecialLocation (File::tempDirectory).getChildFile ("kk_shot_sample.wav");
+            AudioBuffer<float> b (2, 44100 * 4);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const int beat = i % 11025;
+                const float x = (beat < 3000 ? std::sin ((float) beat * 0.02f) * std::exp (-(float) beat / 900.0f) : 0.0f) + 0.2f * std::sin ((float) i * 0.03f) * (0.5f + 0.5f * std::sin ((float) i * 0.0002f));
+                b.setSample (0, i, x); b.setSample (1, i, x);
+            }
+            f.deleteFile();
+            { WavAudioFormat wav; std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (new FileOutputStream (f), 44100, 2, 16, {}, 0)); if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+            proc.chopLoadFile (f);
+            openTab (tabSampler);
+            std::function<ChopPanel* (Component*)> find = [&find] (Component* c) -> ChopPanel*
+            { if (auto* cp = dynamic_cast<ChopPanel*> (c)) return cp; for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r; return nullptr; };
+            if (auto* m = module (tabSampler)) if (auto* cp = find (m)) cp->debugSelect (44100 / 2, 44100 * 2, 0, 44100 * 3);
+        }
         if (v == 30) { openTab (0); setTheme (1 - kk::themeIndex()); }          // ... and with a drum page open
         if (v == 29) { openTab (tabEdit); setTheme (1 - kk::themeIndex()); }   // switch the skin with SOUND EDIT open
         if (v == 28) { proc.breed(); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.onBreed(); breedBtn.prime (0.32f, 0.8f); sparks.freezeAt (0.22f); }   // fresh instance: one parent chosen, one empty
@@ -5489,6 +5673,12 @@ private:
 
     void spaceAction()
     {
+        if (openTabIndex == tabSampler && isPanelVisible())   // v0.35: SAMPLER - stop / play the part
+        {
+            std::function<ChopPanel* (Component*)> find = [&find] (Component* c) -> ChopPanel*
+            { if (auto* cp = dynamic_cast<ChopPanel*> (c)) return cp; for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r; return nullptr; };
+            if (auto* m = module (tabSampler)) if (auto* cp = find (m)) { cp->spacePressed(); return; }
+        }
         if (treePanel != nullptr && treePanel->isVisible() && ! proc.treeKids().empty())
         {
             if (proc.loopPlaying()) proc.stopLoop();

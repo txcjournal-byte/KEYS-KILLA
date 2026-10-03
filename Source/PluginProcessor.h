@@ -243,6 +243,14 @@ public:
     juce::MidiBuffer vstNoMidi;
     kk::WorldStage worldExt;                                     // SOUND WORLD for PAIR / VST / CHOP / input                               // FX INPUT (mixer insert) copy                             // UI pad -> audio thread
     bool chopLoadFile (const juce::File& f);                    // SAMPLER: load your sample (WAV / AIFF / FLAC / MP3)
+    void chopClear();                                           // CLEAR: the sampler is empty
+    bool chopMutate (int start, int end, bool kill);            // MUTATE / KILL the selection (end <= start: everything)
+    bool chopUndoMutate();
+    bool chopCanUndo() const { return ! chopUndo.empty(); }
+    juce::AudioBuffer<float> chopRegion (int start, int end, bool loop) const;
+    juce::File exportChopRegion (int start, int end, bool loop) const;   // the selection as a WAV (drag into FL)
+    bool chopRegionToParent (int start, int end, int slot);     // the selection becomes a parent in BREED LAB
+    std::vector<std::shared_ptr<const juce::AudioBuffer<float>>> chopUndo;
     juce::String chopFile;
     kk::MelodyRack rack;                                        // FX RACK (message thread writes, audio reads)
     bool chopToPair (int slice, int slot = -1);

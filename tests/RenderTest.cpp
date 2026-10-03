@@ -357,6 +357,29 @@ static int unitTests()
             p.chop.setFx (2, fx);
             const auto sb = p.chop.slice (2);
             check (std::abs (sb.getNumSamples() - before / 2) < 4 && sb.getMagnitude (1, 0, sb.getNumSamples()) < 1.0e-4f, "CHOP: per-slice pitch +12 halves it, pan hard left");
+            {   // v0.35 SAMPLER tools: selection as WAV / loop / parent, MUTATE / KILL keep the length and some of the original, UNDO, CLEAR
+                const auto src0 = p.chop.current()->src;
+                const int L = src0->getNumSamples();
+                const auto rf = p.exportChopRegion (L / 4, L / 2, true);
+                check (rf.existsAsFile() && rf.getSize() > 2000, "SAMPLER: the selected part drags out as a WAV loop");
+                check (p.chopRegionToParent (L / 4, L / 2, 1) && p.labWav[1] && p.labAudioMode(), "SAMPLER: the selected part becomes a BREED LAB parent");
+                p.clearParent (1);
+                check (p.chopMutate (L / 4, L / 2, false), "SAMPLER: MUTATE the selection");
+                const auto m1 = p.chop.current()->src;
+                double num = 0, d1 = 0, d2 = 0; float diff = 0;
+                for (int i = L / 4; i < L / 2; ++i) { const float x = src0->getSample (0, i), y = m1->getSample (0, i); num += x * y; d1 += x * x; d2 += y * y; diff = std::max (diff, std::abs (x - y)); }
+                const double corr = num / std::sqrt (d1 * d2 + 1e-12);
+                bool outsideSame = true; for (int i = 0; i < L / 4; i += 97) outsideSame &= src0->getSample (0, i) == m1->getSample (0, i);
+                check (m1->getNumSamples() == L && diff > 0.05f && corr > 0.05 && corr < 0.97 && outsideSame, "SAMPLER: MUTATE changes the part, keeps a trace of it, the rest untouched");
+                check (p.chopMutate (0, 0, true) && p.chop.current()->src->getNumSamples() == L, "SAMPLER: KILL the whole sample");
+                check (p.chopUndoMutate() && p.chopUndoMutate() && p.chop.current()->src == src0, "SAMPLER: UNDO goes back to the original");
+                p.chop.playRegion (100, 20000, true);
+                juce::AudioBuffer<float> rb (2, 512); float rpk = 0;
+                for (int k = 0; k < 60; ++k) { juce::MidiBuffer m; p.processBlock (rb, m); rpk = std::max (rpk, rb.getMagnitude (0, 512)); }
+                check (rpk > 0.02f && p.chop.regionPlaying(), "SAMPLER: the selection plays as a loop");
+                p.chop.stopAll(); { juce::MidiBuffer m; p.processBlock (rb, m); }
+                check (! p.chop.regionPlaying(), "SAMPLER: SPACE / STOP stops it");
+            }
             p.chop.autoSlice (1, 120.0, 8);
             check (p.chop.current()->numSlices() >= 4, "CHOP: 1/8 grid at the project tempo");
             p.chop.autoSlice (-1);

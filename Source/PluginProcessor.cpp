@@ -889,6 +889,81 @@ bool KeysKillaProcessor::chopLoadFile (const juce::File& f)
     chopFile = f.getFullPathName();
     return true;
 }
+// v0.35 SAMPLER tools: CLEAR, MUTATE / KILL (whole sample or the selection, UNDO), the selection as a WAV / loop / parent
+static bool writeWavFile (const juce::AudioBuffer<float>& b, double rate, const juce::File& f)
+{
+    f.getParentDirectory().createDirectory(); f.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), rate, (unsigned) b.getNumChannels(), 24, {}, 0));
+    return w != nullptr && w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+}
+
+void KeysKillaProcessor::chopClear()
+{
+    chop.stopAll(); chop.clear(); chopFile.clear(); chopUndo.clear();
+}
+
+bool KeysKillaProcessor::chopMutate (int start, int end, bool kill)
+{
+    auto c = chop.current();
+    if (c == nullptr || c->src == nullptr) return false;
+    if (end <= start) { start = 0; end = c->src->getNumSamples(); }   // nothing selected: the whole sample
+    chopUndo.push_back (c->src);
+    if (chopUndo.size() > 8) chopUndo.erase (chopUndo.begin());
+    auto n = std::make_shared<juce::AudioBuffer<float>> (*c->src);
+    kk::ChopLab::mutate (*n, start, end, c->rate, kill, (uint32_t) juce::Time::getMillisecondCounter() * 2654435761u);
+    chop.replaceAudio (n);
+    // keep it with the project: the new audio is a file next to your sounds
+    auto f = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Sampler")
+                 .getNonexistentChildFile (juce::File::createLegalFileName (c->name) + (kill ? " KILL" : " MUTATE"), ".wav");
+    if (writeWavFile (*n, c->rate, f)) chopFile = f.getFullPathName();
+    return true;
+}
+
+bool KeysKillaProcessor::chopUndoMutate()
+{
+    if (chopUndo.empty()) return false;
+    chop.replaceAudio (chopUndo.back()); chopUndo.pop_back();
+    return true;
+}
+
+juce::AudioBuffer<float> KeysKillaProcessor::chopRegion (int start, int end, bool loop) const
+{
+    auto c = chop.current();
+    if (c == nullptr || c->src == nullptr) return {};
+    const auto& a = *c->src;
+    start = juce::jlimit (0, a.getNumSamples(), start); end = juce::jlimit (start, a.getNumSamples(), end);
+    juce::AudioBuffer<float> b (a.getNumChannels(), end - start);
+    for (int ch = 0; ch < a.getNumChannels(); ++ch) b.copyFrom (ch, 0, a, ch, start, end - start);
+    const int fade = std::min (b.getNumSamples() / 4, (int) (c->rate * (loop ? 0.006 : 0.003)));
+    if (fade > 1) { b.applyGainRamp (0, fade, 0.0f, 1.0f); b.applyGainRamp (b.getNumSamples() - fade, fade, 1.0f, 0.0f); }
+    return b;
+}
+
+juce::File KeysKillaProcessor::exportChopRegion (int start, int end, bool loop) const
+{
+    auto c = chop.current();
+    auto b = chopRegion (start, end, loop);
+    if (c == nullptr || b.getNumSamples() < 64) return {};
+    const double secs = (double) b.getNumSamples() / c->rate;
+    const double bpm = lastBpm.load() > 0 ? lastBpm.load() : 140.0;
+    const double bars = secs / (240.0 / bpm);
+    const auto tag = loop ? juce::String (" loop ") + juce::String (bars, 1) + " bars " + juce::String (juce::roundToInt (bpm)) + "BPM" : juce::String (" cut");
+    auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("KEYS KILLA Sampler")
+                 .getChildFile (juce::File::createLegalFileName (c->name + tag) + ".wav");
+    return writeWavFile (b, c->rate, f) ? f : juce::File();
+}
+
+bool KeysKillaProcessor::chopRegionToParent (int start, int end, int slot)
+{
+    auto c = chop.current();
+    auto b = chopRegion (start, end, false);
+    if (c == nullptr || b.getNumSamples() < 64) return false;
+    auto f = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Sampler")
+                 .getNonexistentChildFile (juce::File::createLegalFileName (c->name) + " part", ".wav");
+    return writeWavFile (b, c->rate, f) && labDropFile (slot, f);
+}
+
 bool KeysKillaProcessor::chopToPair (int i, int slot)
 {
     auto b = chop.slice (i);
