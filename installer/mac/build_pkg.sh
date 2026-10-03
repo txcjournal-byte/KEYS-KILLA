@@ -13,12 +13,12 @@ STAGE="$ROOT/build/pkgroot"
 OUT="$ROOT/build/installer"
 
 rm -rf "$STAGE" && mkdir -p "$STAGE/Library/Audio/Plug-Ins/VST3" "$STAGE/Library/Audio/Plug-Ins/Components" "$STAGE/Applications" "$OUT"
-cp -R "$ART/VST3/BREED LAB.vst3" "$STAGE/Library/Audio/Plug-Ins/VST3/"
-cp -R "$ART/AU/BREED LAB.component" "$STAGE/Library/Audio/Plug-Ins/Components/"
-cp -R "$ART/Standalone/BREED LAB.app" "$STAGE/Applications/"
+cp -R "$ART/VST3/EVOLVE.vst3" "$STAGE/Library/Audio/Plug-Ins/VST3/"
+cp -R "$ART/AU/EVOLVE.component" "$STAGE/Library/Audio/Plug-Ins/Components/"
+cp -R "$ART/Standalone/EVOLVE.app" "$STAGE/Applications/"
 
 if [ -n "${MAC_APP_SIGN_ID:-}" ]; then
-    for b in "$STAGE/Library/Audio/Plug-Ins/VST3/BREED LAB.vst3" "$STAGE/Library/Audio/Plug-Ins/Components/BREED LAB.component" "$STAGE/Applications/BREED LAB.app"; do
+    for b in "$STAGE/Library/Audio/Plug-Ins/VST3/EVOLVE.vst3" "$STAGE/Library/Audio/Plug-Ins/Components/EVOLVE.component" "$STAGE/Applications/EVOLVE.app"; do
         codesign --force --deep --options runtime --timestamp --sign "$MAC_APP_SIGN_ID" "$b"
     done
 fi
@@ -28,7 +28,7 @@ pkgbuild --root "$STAGE" --identifier com.808killa.keyskilla --version "$VERSION
 cat > "$OUT/distribution.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>BREED LAB $VERSION</title>
+    <title>EVOLVE by TrapVST $VERSION</title>
     <license file="EULA.txt"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <choices-outline><line choice="default"/></choices-outline>

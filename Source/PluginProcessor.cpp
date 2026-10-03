@@ -4,6 +4,7 @@
 #include "PluginEditor.h"
 #include "BinaryData.h"
 
+static bool writeWavFile (const juce::AudioBuffer<float>& b, double rate, const juce::File& f);
 namespace
 {
 constexpr int kChunk = 512;
@@ -112,6 +113,8 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 
     juce::ignoreUnused (withModules);   // v0.32: VOODOO / EFFECTOR / DIGGA KILLA are separate plugins again
     for (int d = 0; d < kk::numDrumSlots; ++d) generatePattern (d, 0, 2, 0.5f);
+    resetSampleEdit();
+    stepPreset (0);   // STEP FX starts with a pattern ready (off until you switch it on)
 }
 
 KeysKillaProcessor::~KeysKillaProcessor()
@@ -171,6 +174,15 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fxIn.setSize (2, std::max (64, samplesPerBlock) * 2);
     extBuf.setSize (2, std::max (64, samplesPerBlock) * 2);
     worldExt.prepare (sampleRate);
+    extFx = std::make_unique<kk::FxRack>(); extFx->prepare (sampleRate, kChunk);
+    extL.assign (kChunk, 0.0f); extR.assign (kChunk, 0.0f); extG.assign (kChunk, 0.0f); extTail = 0; extLpHz = extHpHz = -1;
+    for (auto& f : extLp) f.reset();
+    for (auto& f : extHp) f.reset();
+    {
+        int size = 1; while (size < (int) (sampleRate * 2.6)) size <<= 1;
+        stepBufL.assign ((size_t) size, 0.0f); stepBufR.assign ((size_t) size, 0.0f); echoL.assign ((size_t) size, 0.0f); echoR.assign ((size_t) size, 0.0f);
+        stepW = echoW = 0; stepLast = -1; for (auto& e : stepEnv) e = 0;
+    }
 }
 
 float KeysKillaProcessor::value (int i) const
@@ -598,6 +610,10 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
     const auto& I = *ix;
+    pairPlayer.shTune = sampleEdit[seTune].load() + sampleEdit[seFine].load() / 100.0f;
+    pairPlayer.shStart = sampleEdit[seStart].load(); pairPlayer.shAttack = sampleEdit[seAttack].load();
+    pairPlayer.shRelease = sampleEdit[seRelease].load(); pairPlayer.shRev = sampleEdit[seReverse].load() > 0.5f;
+    chop.choke = chopChoke.load();
 
     double bpm = 140.0, ppq = 0; bool hostPlaying = false;
     if (auto* ph = getPlayHead())
@@ -761,12 +777,35 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         float* eL = extBuf.getWritePointer (0); float* eR = extBuf.getWritePointer (1);
         pairPlayer.render (eL, eR, n, sr);
         if (const int h = chopPad.exchange (-1); h >= 0) chop.noteOn (kk::ChopLab::firstNote + h, 0.9f, 0);
+        if (flipOn.load())   // SAMPLER FLIP: the pattern plays the chops in time (1/16 steps, 2 bars)
+        {
+            const juce::SpinLock::ScopedTryLockType fl (flipLock);
+            if (fl.isLocked() && ! flipSeq.empty())
+            {
+                if (hostPlaying) flipOrigin = 0.0;
+                else if (flipOrigin < 0.0) flipOrigin = std::floor (beatPos * 4.0) / 4.0;
+                const int steps = (int) flipSeq.size();
+                for (int i = 0; i < n; ++i)
+                {
+                    const double b = beatPos + bps * i - flipOrigin;
+                    const int st = (int) std::floor (b * 4.0);
+                    if (st == flipLastStep) continue;
+                    flipLastStep = st;
+                    const int k = ((st % steps) + steps) % steps;
+                    flipStepNow = k;
+                    const auto& fs = flipSeq[(size_t) k];
+                    if (fs.slice >= 0) chop.noteOn (kk::ChopLab::firstNote + fs.slice, fs.vel, i, fs.rev, fs.semi);
+                }
+            }
+        }
+        else flipStepNow = -1;
         chop.render (eL, eR, n);
         vstNoMidi.clear();
         if (vst.loaded()) vst.process (eL, eR, n, vstKeys.load() == 0 ? vstMidi : vstNoMidi, getPlayHead());
         vstNoMidi.clear();
         if (vstB.loaded()) vstB.process (eL, eR, n, vstKeys.load() == 1 ? vstMidi : vstNoMidi, getPlayHead());
         if (hasInput) for (int c = 0; c < 2; ++c) extBuf.addFrom (c, 0, fxIn, c, 0, n);
+        processSampleFx (eL, eR, n, beatPos, bps);   // v0.37: the big knobs + SAMPLE EDIT colour your sounds too
         worldExt.process (eL, eR, n, (int) raw[(size_t) I.world]->load(), raw[(size_t) I.worldAmt]->load(),
                           (int) raw[(size_t) I.gate]->load(), raw[(size_t) I.gateDepth]->load(), beatPos, bps);
         for (int c = 0; c < 2; ++c) buffer.addFrom (c, 0, extBuf, c, 0, n);
@@ -779,6 +818,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (vst.loaded()) vst.process (L, R, n, vstMidi, getPlayHead());
     }
     processRack (buffer, n, beatPos, bps);   // FX RACK: the whole melody bus (synth, PAIR, VST, SAMPLER)
+    processStepFx (buffer, n, beatPos, bps); // v0.37 STEP FX: effects in time on the melody bus
     // DRUM BOOST: the drums play after the melody effects - the FX RACK never touches them
     if (buffer.getNumChannels() > 1)
         for (int d = 0; d < kk::numDrumSlots; ++d)
@@ -887,6 +927,7 @@ bool KeysKillaProcessor::chopLoadFile (const juce::File& f)
     r->read (buf.get(), 0, len, 0, true, true);   // mono files land on both channels
     chop.setSource (buf, r->sampleRate, f.getFileNameWithoutExtension());
     chopFile = f.getFullPathName();
+    flips.clear(); flipCenter = -1; flipOn = false; ++flipVer;
     return true;
 }
 // v0.35 SAMPLER tools: CLEAR, MUTATE / KILL (whole sample or the selection, UNDO), the selection as a WAV / loop / parent
@@ -911,7 +952,7 @@ bool KeysKillaProcessor::chopMutate (int start, int end, bool kill)
     chopUndo.push_back (c->src);
     if (chopUndo.size() > 8) chopUndo.erase (chopUndo.begin());
     auto n = std::make_shared<juce::AudioBuffer<float>> (*c->src);
-    kk::ChopLab::mutate (*n, start, end, c->rate, kill, (uint32_t) juce::Time::getMillisecondCounter() * 2654435761u);
+    kk::ChopLab::mutate (*n, start, end, c->rate, kill, (uint32_t) juce::Time::getMillisecondCounter() * 2654435761u, lastBpm.load());
     chop.replaceAudio (n);
     // keep it with the project: the new audio is a file next to your sounds
     auto f = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Sampler")
@@ -1014,14 +1055,8 @@ void KeysKillaProcessor::selectPairKid (int i, bool audition)
 {
     if (i < 0 || i >= (int) pairKids.size()) return;
     pairSel = i;
-    pairPlayer.setSound (pairKids[(size_t) i]);
-    if (auto* q = apvts.getParameter (ID::playMode))
-    {
-        const float v = q->convertTo0to1 ((float) playPair);
-        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
-    }
-    if (audition) previewNote = pairKids[(size_t) i]->rootNote;
-    ++pairVer;
+    useSample (pairKids[(size_t) i], audition);
+    ++pairVer; ++labVer;
 }
 
 void KeysKillaProcessor::togglePairLoop (int i)
@@ -1103,13 +1138,7 @@ void KeysKillaProcessor::bankToPair (int bankIndex, int slot)
 void KeysKillaProcessor::auditionBank (int bankIndex)
 {
     if (bankIndex < 0 || bankIndex >= (int) bank.size()) return;
-    pairPlayer.setSound (bank[(size_t) bankIndex].sound);
-    if (auto* q = apvts.getParameter (ID::playMode))
-    {
-        const float v = q->convertTo0to1 ((float) playPair);
-        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
-    }
-    previewNote = bank[(size_t) bankIndex].sound->rootNote;
+    useSample (bank[(size_t) bankIndex].sound, true);
 }
 
 // ---------------- BANK on disk ----------------
@@ -1141,13 +1170,7 @@ void KeysKillaProcessor::auditionFile (const juce::File& f)
 {
     auto s = kk::PairLab::fromFile (f, sr > 0 ? sr : 44100.0);
     if (s == nullptr) return;
-    pairPlayer.setSound (s);
-    if (auto* q = apvts.getParameter (ID::playMode))
-    {
-        const float v = q->convertTo0to1 ((float) playPair);
-        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
-    }
-    previewNote = s->rootNote;
+    useSample (s, true);
 }
 
 juce::File KeysKillaProcessor::bankFolder()
@@ -1580,6 +1603,7 @@ bool KeysKillaProcessor::isModified() const
 
 void KeysKillaProcessor::loadPreset (int index)
 {
+    setPlayMode (playKeys);
     const auto& ps = factoryPresets();
     if (! juce::isPositiveAndBelow (index, (int) ps.size()) || loadingPreset) return;
     const juce::ScopedValueSetter<bool> guard (loadingPreset, true);   // host echoes of the program change are ignored
@@ -1889,6 +1913,11 @@ void KeysKillaProcessor::labBreedAudio()
     if (ps.size() < 2) return;
     pairSeed = kk::hash32 (pairSeed + (uint32_t) juce::Time::getMillisecondCounter());
     pairKids = kk::PairLab::breed (ps, pairSeed, pairFlavor, sr > 0 ? sr : 44100.0);
+    pairKidGenes.assign (pairKids.size(), {});
+    {
+        juce::Random r ((juce::int64) pairSeed);
+        for (auto& g : pairKidGenes) for (int k = 0; k < numGenes; ++k) g[(size_t) k] = geneLock[(size_t) k] ? geneLockSrc[(size_t) k] : r.nextInt (2);
+    }
     pairSel = -1; pairLoopKid = -1;
     if (loopOn.load() && loopOwner == 2) loopOn = false;
     ++pairVer; ++labVer;
@@ -1947,6 +1976,27 @@ bool KeysKillaProcessor::evoSeedFromFile (const juce::File& f)
     evoSeedFile = f.getFullPathName();
     evoFocus (0);
     return true;
+}
+
+void KeysKillaProcessor::evoSeedSound (kk::PairPtr snd)
+{
+    if (snd == nullptr) return;
+    auto f = sessionDir().getChildFile (juce::File::createLegalFileName (snd->name).substring (0, 60) + " seed " + juce::String ((juce::int64) juce::Time::currentTimeMillis() % 100000) + ".wav");
+    evoReset();
+    EvoNode n; n.audio = snd; n.name = snd->name; evo.push_back (n);
+    if (writeWavFile (snd->audio, sr > 0 ? sr : 44100.0, f)) evoSeedFile = f.getFullPathName();   // kept with the project
+    evoFocus (0);
+}
+
+void KeysKillaProcessor::evoNewMelody (int node)
+{
+    if (! juce::isPositiveAndBelow (node, (int) evo.size())) return;
+    auto& n = evo[(size_t) node];
+    const auto base = n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode());
+    n.g.loop = kk::rerollLoop (base, kk::hash32 ((uint32_t) juce::Time::getHighResolutionTicks() ^ (uint32_t) (node * 7919 + 1)));
+    n.g.loop.valid = true;
+    if (node == evoCenter) setCurrentLoop (n.g.loop);
+    ++evoVer;
 }
 
 void KeysKillaProcessor::evoSeedRandom()
@@ -2026,15 +2076,11 @@ void KeysKillaProcessor::evoAudition (int node, bool preview)
     const auto& n = evo[(size_t) node];
     if (n.isAudio())
     {
-        pairPlayer.setSound (n.audio);
-        if (auto* q = apvts.getParameter (ID::playMode))
-        { const float v = q->convertTo0to1 ((float) playPair); if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); } }
-        if (preview) previewNote = n.audio->rootNote;
+        useSample (n.audio, preview);
+        setCurrentLoop (n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode()));
     }
     else
     {
-        if (auto* q = apvts.getParameter (ID::playMode))
-        { const float v = q->convertTo0to1 ((float) playKeys); if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); } }
         applyGenome (n.g, true);
         setCurrentLoop (n.g.loop.valid ? n.g.loop : kk::loopFromSeed ((uint32_t) n.name.hashCode()));
         if (preview) previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
@@ -2110,14 +2156,7 @@ juce::File KeysKillaProcessor::exportChildWav (int i)
 void KeysKillaProcessor::auditionParent (int slot)
 {
     const auto s = (size_t) juce::jlimit (0, 1, slot);
-    if (labWav[s] && labAudioParents[s] != nullptr)
-    {
-        pairPlayer.setSound (labAudioParents[s]);
-        if (auto* q = apvts.getParameter (ID::playMode))
-        { const float v = q->convertTo0to1 ((float) playPair); if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); } }
-        previewNote = labAudioParents[s]->rootNote;
-        return;
-    }
+    if (labWav[s] && labAudioParents[s] != nullptr) { useSample (labAudioParents[s], true); return; }
     if (! parents[s].valid()) return;
     applyGenome (parents[s], true);   // the parent becomes the sound on the keys - hear it, play it
     previewNote = raw[(size_t) ix->bassMode]->load() > 0.5f ? 36 : 60;
@@ -2267,6 +2306,7 @@ void KeysKillaProcessor::applyGenome (const Genome& g, bool asPreset)
 {
     if (! g.valid()) return;
     presetJump = true;
+    setPlayMode (playKeys);   // v0.37: a bank / bred sound you pick is what the keys play
     for (size_t i = 0; i < params.size(); ++i)
         if (geneOfParam[i] >= 0 && std::abs (params[i]->getValue() - g.v[i]) > 1.0e-6f) params[i]->setValueNotifyingHost (g.v[i]);
     if (asPreset)
@@ -2289,6 +2329,22 @@ void KeysKillaProcessor::selectChild (int i)
 
 void KeysKillaProcessor::setChildGene (int c, int gene, int src)
 {
+    if (labAudioMode())   // v0.37: your own sounds - the child is spliced from A and B, gene by gene
+    {
+        if (! juce::isPositiveAndBelow (c, (int) pairKids.size()) || ! juce::isPositiveAndBelow (gene, (int) numGenes)) return;
+        if ((int) pairKidGenes.size() != (int) pairKids.size()) pairKidGenes.resize (pairKids.size());
+        auto genes = pairKidGenes[(size_t) c];
+        genes[(size_t) gene] = juce::jlimit (0, 1, src);
+        auto A = labParentAudio (0), B = labParentAudio (1);
+        if (A == nullptr || B == nullptr) return;
+        const std::array<int, 6> g6 { genes[0], genes[1], genes[2], genes[3], genes[4], genes[5] };
+        auto kid = kk::PairLab::splice (*A, *B, g6, sr > 0 ? sr : 44100.0, A->name.substring (0, 14) + " x " + B->name.substring (0, 14));
+        if (kid == nullptr) return;
+        pairKids[(size_t) c] = kid; pairKidGenes[(size_t) c] = genes;
+        if (geneLock[(size_t) gene]) geneLockSrc[(size_t) gene] = genes[(size_t) gene];
+        selectPairKid (c, true);
+        return;
+    }
     if (! juce::isPositiveAndBelow (c, (int) children.size()) || ! juce::isPositiveAndBelow (gene, (int) numGenes)) return;
     auto genes = children[(size_t) c].genes;
     genes[(size_t) gene] = juce::jlimit (0, 1, src);
@@ -2306,7 +2362,7 @@ void KeysKillaProcessor::toggleGeneLock (int gene)
 {
     if (! juce::isPositiveAndBelow (gene, (int) numGenes)) return;
     geneLock[(size_t) gene] = ! geneLock[(size_t) gene];
-    if (juce::isPositiveAndBelow (selChild, (int) children.size())) geneLockSrc[(size_t) gene] = children[(size_t) selChild].genes[(size_t) gene];
+    if (const int src = geneOfSelected (gene); src >= 0) geneLockSrc[(size_t) gene] = src;
     ++labVer;
 }
 
@@ -2364,7 +2420,9 @@ int KeysKillaProcessor::effectiveLoopKey (const kk::LoopGenes& l) const
 {
     if (loopKeyN >= 0) return loopKeyN;
     if (raw[(size_t) ix->keyLock]->load() > 0.5f) return (int) raw[(size_t) ix->key]->load();
-    return l.key;
+    juce::ignoreUnused (l);
+    return 0;   // v0.37: every melody in C minor - the sounds sit on C, so melodies and sounds layer in the channel rack
+
 }
 
 std::vector<kk::LoopNote> KeysKillaProcessor::loopNotes (const Genome& g) const
@@ -3031,6 +3089,22 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
             }
         state.appendChild (et, nullptr);
     }
+    {   // v0.37: SAMPLE EDIT, STEP FX, MONO pads and the sample on the keys (kept as a file, so FL's notes play it after a reload)
+        juce::StringArray se; for (auto& v : sampleEdit) se.add (juce::String (v.load(), 4));
+        state.setProperty ("sampleEdit", se.joinIntoString (","), nullptr);
+        state.setProperty ("steps", stepToString(), nullptr);
+        state.setProperty ("choke", chopChoke.load(), nullptr);
+        if (auto smp = pairPlayer.sound())
+        {
+            if (smp.get() != activeSampleSaved)
+            {
+                auto f = sessionDir().getChildFile (juce::File::createLegalFileName (smp->name).substring (0, 60) + " "
+                                                    + juce::String::toHexString ((juce::int64) smp->audio.getNumSamples() * 31 + (juce::int64) (smp->audio.getRMSLevel (0, 0, smp->audio.getNumSamples()) * 1.0e6f)) + ".wav");
+                if (f.existsAsFile() || writeWavFile (smp->audio, sr > 0 ? sr : 44100.0, f)) { activeSampleFile = f.getFullPathName(); activeSampleSaved = smp.get(); }
+            }
+            state.setProperty ("activeSample", activeSampleFile, nullptr);
+        }
+    }
     saveLab (state);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, destData);
 }
@@ -3050,6 +3124,13 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             macroLabels = juce::StringArray::fromTokens (vt.getProperty ("macroNames", "").toString(), "|", "");
             macroLabels.removeEmptyStrings();
             loadLab (vt);
+            {   // v0.37
+                const auto se = juce::StringArray::fromTokens (vt.getProperty ("sampleEdit", "").toString(), ",", "");
+                resetSampleEdit();
+                if (se.size() == numSampleEdit) for (int i = 0; i < numSampleEdit; ++i) sampleEdit[(size_t) i] = se[i].getFloatValue();
+                if (vt.hasProperty ("steps")) stepFromString (vt.getProperty ("steps").toString());
+                chopChoke = (bool) vt.getProperty ("choke", true);
+            }
             {   // v0.36 EVOLVE
                 evo.clear(); evoCenter = -1; evoSeedFile.clear();
                 const auto et = vt.getChildWithName ("EVOLVE");
@@ -3091,6 +3172,9 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (! curLoop.valid) curLoop = kk::loopFromSeed ((uint32_t) presetName.hashCode());
             rebuildLoopSeq();   // bass / mono of the restored sound decide which lines the loop plays
             rack.reset(); rack.fromString (vt.getProperty ("rack", "").toString());
+            if (const juce::File af (vt.getProperty ("activeSample", "").toString()); af.existsAsFile())   // v0.37: the sample on the keys
+                if (auto smp = kk::PairLab::fromFile (af, sr > 0 ? sr : 44100.0)) { pairPlayer.setSound (smp); activeSampleFile = af.getFullPathName(); activeSampleSaved = smp.get(); }
+            previewNote = -1;   // restoring a project never plays a note
             if (const juce::File cf (vt.getProperty ("chopFile", "").toString()); cf.existsAsFile() && chopLoadFile (cf))
             {
                 std::vector<int> mk;
@@ -3177,6 +3261,7 @@ bool KeysKillaProcessor::saveUserPreset (const juce::File& f)
 
 bool KeysKillaProcessor::loadUserPreset (const juce::File& f)
 {
+    setPlayMode (playKeys);
     const auto v = juce::JSON::parse (f);
     if (! v.isObject() || v["format"].toString() != "KEYS KILLA preset") return false;
     std::vector<std::pair<juce::String, float>> vals;
@@ -3239,7 +3324,7 @@ bool KeysKillaProcessor::exportPack (const juce::File& zipFile, const juce::Stri
     auto* info = new juce::DynamicObject();
     info->setProperty ("format", "KEYS KILLA pack"); info->setProperty ("version", 1);
     info->setProperty ("name", packName); info->setProperty ("author", "");
-    info->setProperty ("info", "Sounds made with BREED LAB");
+    info->setProperty ("info", "Sounds made with EVOLVE");
     const auto json = juce::JSON::toString (juce::var (info), false);
     auto tmp = juce::File::createTempFile ("json");
     tmp.replaceWithText (json);
@@ -3345,3 +3430,618 @@ juce::AudioProcessorEditor* KeysKillaProcessor::createEditor() { return new Keys
 #if ! KK_TEST_BUILD
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new KeysKillaProcessor(); }
 #endif
+
+//==============================================================================
+// v0.37 THE SOUND ON THE KEYS: what you picked last plays - pages never take it away
+void KeysKillaProcessor::setPlayMode (int mode)
+{
+    if (auto* q = apvts.getParameter (ID::playMode))
+    {
+        const float v = q->convertTo0to1 ((float) mode);
+        if (std::abs (q->getValue() - v) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
+    }
+}
+
+void KeysKillaProcessor::useSample (kk::PairPtr s, bool audition)
+{
+    if (s == nullptr) return;
+    const bool wasSample = (int) raw[(size_t) ix->playMode]->load() == playPair;
+    pairPlayer.setSound (s);
+    if (! wasSample) sampleMacrosNeutral();   // the big knobs now colour this sound - start them neutral
+    setPlayMode (playPair);
+    if (audition) previewNote = s->rootNote;
+    ++pairVer;
+}
+
+int KeysKillaProcessor::geneOfSelected (int gene) const
+{
+    gene = juce::jlimit (0, (int) numGenes - 1, gene);
+    if (labAudioMode()) return juce::isPositiveAndBelow (pairSel, (int) pairKidGenes.size()) && pairSel < (int) pairKids.size() ? pairKidGenes[(size_t) pairSel][(size_t) gene] : -1;
+    return juce::isPositiveAndBelow (selChild, (int) children.size()) ? children[(size_t) selChild].genes[(size_t) gene] : -1;
+}
+
+// ---------------- SAMPLE EDIT ----------------
+const char* KeysKillaProcessor::sampleEditName (int i)
+{
+    static const char* n[] { "TUNE", "FINE", "START", "ATTACK", "RELEASE", "REVERSE", "TONE", "LOW CUT", "DRIVE", "CRUSH", "CHORUS", "SPACE", "ECHO", "WIDTH", "GAIN" };
+    return n[juce::jlimit (0, (int) numSampleEdit - 1, i)];
+}
+float KeysKillaProcessor::sampleEditDefault (int i)
+{
+    static const float d[] { 0, 0, 0, 0, 0.12f, 0, 0, 0, 0, 0, 0, 0, 0, 0.5f, 0 };
+    return d[juce::jlimit (0, (int) numSampleEdit - 1, i)];
+}
+void KeysKillaProcessor::resetSampleEdit() { for (int i = 0; i < numSampleEdit; ++i) sampleEdit[(size_t) i] = sampleEditDefault (i); }
+void KeysKillaProcessor::sampleMacrosNeutral()
+{
+    const char* ids[] { ID::m1, ID::m2, ID::m3, ID::m4, ID::m5, ID::m6, ID::m7, ID::m8 };
+    for (auto* id : ids)
+        if (auto* q = apvts.getParameter (id))
+            if (std::abs (q->getValue() - q->getDefaultValue()) > 1.0e-6f) { q->beginChangeGesture(); q->setValueNotifyingHost (q->getDefaultValue()); q->endChangeGesture(); }
+}
+
+// the knobs + SAMPLE EDIT as effect settings for samples: neutral = nothing happens (the sample already has its sound)
+kk::FxParams KeysKillaProcessor::sampleFxParams (bool& any) const
+{
+    const auto& I = *ix;
+    auto se = [this] (int i) { return sampleEdit[(size_t) i].load(); };
+    const float m1 = raw[(size_t) I.m1]->load(), m2 = raw[(size_t) I.m2]->load(), m3 = raw[(size_t) I.m3]->load(), m4 = raw[(size_t) I.m4]->load();
+    const float m5 = raw[(size_t) I.m5]->load(), m6 = raw[(size_t) I.m6]->load(), m7 = raw[(size_t) I.m7]->load(), m8 = raw[(size_t) I.m8]->load();
+    const float wet = 0.2f + 1.6f * m8;
+    kk::FxParams p;
+    p.revMix = juce::jlimit (0.0f, 1.0f, (se (seSpace) * 0.55f + std::max (0.0f, m2 - 0.25f) * 0.7f) * wet);
+    p.revSize = 0.55f + 0.35f * se (seSpace); p.revType = 0;
+    p.delayMix = juce::jlimit (0.0f, 1.0f, se (seEcho) * 0.45f * wet); p.delayFb = 0.38f; p.delayBeats = 0.75; p.delayMode = 1;
+    p.drive = juce::jlimit (0.0f, 1.0f, se (seDrive) + m3 * 0.8f); p.driveType = 0;
+    p.crush = juce::jlimit (0.0f, 1.0f, se (seCrush) * 0.6f + m4 * 0.45f); p.wow = m4 * 0.5f;
+    p.chorus = juce::jlimit (0.0f, 1.0f, (se (seChorus) + std::max (0.0f, m5 - 0.2f) * 0.7f) * wet);
+    p.width = juce::jlimit (0.0f, 1.0f, se (seWidth) + (m6 - 0.5f));
+    p.punch = m7 * 0.9f;
+    const float tilt = se (seTone) + (0.5f - m1) * 2.0f;
+    p.eqHigh = tilt > 0 ? tilt * 6.0f : 0.0f;
+    p.outGain = juce::Decibels::decibelsToGain (se (seGain));
+    p.revMix = p.revMix < 0.004f ? 0.0f : p.revMix;
+    p.master = 0.0f; p.monoLows = false; p.cleanLow = false;
+    any = p.revMix > 0 || p.delayMix > 0.003f || p.drive > 0.003f || p.crush > 0.003f || p.wow > 0.003f || p.chorus > 0.003f
+       || std::abs (p.width - 0.5f) > 0.01f || p.punch > 0.01f || std::abs (tilt) > 0.02f || se (seLowCut) > 0.01f || std::abs (se (seGain)) > 0.05f;
+    return p;
+}
+
+void KeysKillaProcessor::processSampleFx (float* L, float* R, int n, double beatPos, double bps)
+{
+    bool any = false;
+    auto p = sampleFxParams (any);
+    if (any) extTail = (int) (sr * 6.0);
+    else if (extTail <= 0) return;
+    else extTail -= n;
+    p.bpm = bps * 60.0 * sr;
+    const float tilt = sampleEdit[seTone].load() + (0.5f - raw[(size_t) ix->m1]->load()) * 2.0f;
+    const float lpHz = tilt < 0 ? 20000.0f * std::exp2 (tilt * 3.2f) : 20000.0f;
+    const float lc = sampleEdit[seLowCut].load(), hpHz = lc > 0.01f ? 20.0f * std::pow (50.0f, lc) : 0.0f;
+    if (std::abs (lpHz - extLpHz) > 1.0f) { extLpHz = lpHz; extLpC.set (std::min (lpHz, (float) sr * 0.45f), 1.2f, (float) sr); }
+    if (std::abs (hpHz - extHpHz) > 0.5f) { extHpHz = hpHz; extHpC.set (std::max (10.0f, hpHz), 1.3f, (float) sr); }
+    for (int c0 = 0; c0 < n; c0 += kChunk)
+    {
+        const int len = std::min (kChunk, n - c0);
+        std::copy (L + c0, L + c0 + len, extL.begin()); std::copy (R + c0, R + c0 + len, extR.begin());
+        for (int i = 0; i < len; ++i)
+        {
+            float* ch[2] { &extL[(size_t) i], &extR[(size_t) i] };
+            for (int c = 0; c < 2; ++c)
+            {
+                if (lpHz < 19000.0f) { extLp[c].tick (extLpC, *ch[c]); *ch[c] = extLp[c].lp; }
+                if (hpHz > 0.0f) { extHp[c].tick (extHpC, *ch[c]); *ch[c] = extHp[c].hp; }
+            }
+        }
+        std::fill_n (extG.begin(), len, 0.0f);
+        p.beatPos = beatPos + bps * c0;
+        extFx->process (extL.data(), extR.data(), extG.data(), len, p);
+        for (int i = 0; i < len; ++i)
+        {
+            const float l = extL[(size_t) i], r = extR[(size_t) i];
+            if (std::isfinite (l) && std::isfinite (r)) { L[c0 + i] = l; R[c0 + i] = r; }
+        }
+    }
+}
+
+juce::AudioBuffer<float> KeysKillaProcessor::renderEditedSample (kk::PairPtr s)
+{
+    juce::AudioBuffer<float> out;
+    if (s == nullptr || s->audio.getNumSamples() < 4) return out;
+    const double rate = sr > 0 ? sr : 44100.0;
+    auto se = [this] (int i) { return sampleEdit[(size_t) i].load(); };
+    // shape: start, reverse, tune, attack
+    juce::AudioBuffer<float> a (2, s->audio.getNumSamples());
+    for (int c = 0; c < 2; ++c) a.copyFrom (c, 0, s->audio, std::min (c, s->audio.getNumChannels() - 1), 0, a.getNumSamples());
+    if (se (seReverse) > 0.5f) a.reverse (0, a.getNumSamples());
+    const int st = (int) (juce::jlimit (0.0f, 0.95f, se (seStart)) * (float) a.getNumSamples());
+    const double ratio = std::exp2 ((se (seTune) + se (seFine) / 100.0f) / 12.0);
+    const int srcLen = a.getNumSamples() - st, len = std::max (8, (int) std::floor ((srcLen - 4) / ratio));
+    bool any = false;
+    auto p = sampleFxParams (any);
+    const int tail = any && (p.revMix > 0 || p.delayMix > 0) ? (int) (rate * 2.5) : 0;
+    out.setSize (2, len + tail); out.clear();
+    for (int c = 0; c < 2; ++c)
+    {
+        juce::LagrangeInterpolator li;
+        li.process (ratio, a.getReadPointer (c, st), out.getWritePointer (c), len, srcLen, 0);
+    }
+    const int atk = std::max (16, (int) (rate * std::max (0.0008f, se (seAttack))));
+    for (int c = 0; c < 2; ++c) out.applyGainRamp (c, 0, std::min (len, atk), 0.0f, 1.0f);
+    if (any)
+    {
+        kk::FxRack fx; fx.prepare (rate, kChunk);
+        p.bpm = lastBpm.load();
+        const float tilt = se (seTone) + (0.5f - raw[(size_t) ix->m1]->load()) * 2.0f;
+        const float lpHz = tilt < 0 ? 20000.0f * std::exp2 (tilt * 3.2f) : 20000.0f;
+        const float lc = se (seLowCut), hpHz = lc > 0.01f ? 20.0f * std::pow (50.0f, lc) : 0.0f;
+        kk::SvfCoef lpC, hpC; lpC.set (std::min (lpHz, (float) rate * 0.45f), 1.2f, (float) rate); hpC.set (std::max (10.0f, hpHz), 1.3f, (float) rate);
+        kk::SvfState lpS[2], hpS[2];
+        std::vector<float> g ((size_t) kChunk, 0.0f);
+        const double bps = p.bpm / 60.0 / rate;
+        for (int c0 = 0; c0 < out.getNumSamples(); c0 += kChunk)
+        {
+            const int n = std::min (kChunk, out.getNumSamples() - c0);
+            float* L = out.getWritePointer (0, c0); float* R = out.getWritePointer (1, c0);
+            for (int i = 0; i < n; ++i)
+            {
+                float* ch[2] { L + i, R + i };
+                for (int c = 0; c < 2; ++c)
+                {
+                    if (lpHz < 19000.0f) { lpS[c].tick (lpC, *ch[c]); *ch[c] = lpS[c].lp; }
+                    if (hpHz > 0.0f) { hpS[c].tick (hpC, *ch[c]); *ch[c] = hpS[c].hp; }
+                }
+            }
+            p.beatPos = bps * c0;
+            fx.process (L, R, g.data(), n, p);
+        }
+    }
+    // end: trim the silent tail, short fade
+    int last = out.getNumSamples() - 1;
+    while (last > (int) (rate * 0.05) && out.getMagnitude (last - 63 > 0 ? last - 63 : 0, 64) < 1.0e-4f) last -= 64;
+    out.setSize (2, std::max (8, last + 1), true);
+    const float pk = out.getMagnitude (0, out.getNumSamples());
+    if (pk > 0.995f) out.applyGain (0.89f / pk);
+    const int fade = std::min (out.getNumSamples() / 4, (int) (rate * 0.01));
+    for (int c = 0; c < 2; ++c) out.applyGainRamp (c, out.getNumSamples() - fade, fade, 1.0f, 0.0f);
+    return out;
+}
+
+kk::PairPtr KeysKillaProcessor::editedSample()
+{
+    auto s = pairPlayer.sound();
+    if (s == nullptr) return nullptr;
+    const double rate = sr > 0 ? sr : 44100.0;
+    auto b = renderEditedSample (s);
+    if (b.getNumSamples() < 8) return s;
+    auto out = kk::PairLab::fromBuffer (b, rate, rate, s->name + " edit");
+    return out;
+}
+
+juce::File KeysKillaProcessor::exportEditedSample()
+{
+    auto e = editedSample();
+    return e != nullptr ? kk::PairLab::exportWav (*e, sr > 0 ? sr : 44100.0, e->name) : juce::File();
+}
+
+// ---------------- FX EVOLVE ----------------
+KeysKillaProcessor::FxGenome KeysKillaProcessor::fxCurrent() const
+{
+    FxGenome g;
+    for (int i = 0; i < kk::numRackSlots; ++i) g.on[(size_t) i] = rack.on[(size_t) i].load();
+    for (int i = 0; i < kk::numRackValues; ++i) g.v[(size_t) i] = rack.v[(size_t) i].load();
+    return g;
+}
+void KeysKillaProcessor::fxApply (const FxGenome& g)
+{
+    for (int i = 0; i < kk::numRackValues; ++i) rack.v[(size_t) i] = g.v[(size_t) i];
+    for (int i = 0; i < kk::numRackSlots; ++i) rack.on[(size_t) i] = g.on[(size_t) i];
+}
+namespace
+{
+// tasteful ranges per rack value (lo, hi): never a broken sound
+const float fxRange[kk::numRackValues][2] { { 0.1f, 0.6f }, { 0, 3 }, { 0.15f, 0.55f }, { 0.2f, 0.7f }, { 0.2f, 0.6f }, { 0.25f, 0.7f }, { 0.3f, 0.7f },
+                                             { 0, 2 }, { 0.4f, 0.95f }, { 0.12f, 0.42f }, { 0.2f, 0.55f }, { 0, 4 }, { 0.15f, 0.5f }, { 0.35f, 0.9f },
+                                             { 0, 3 }, { -6, 6 }, { -8, 6 }, { 0.55f, 1.0f } };
+const bool fxDiscrete[kk::numRackValues] { false, true, false, false, false, false, false, true, false, false, false, true, false, false, true, false, false, false };
+juce::String fxNameOf (uint32_t seed)
+{
+    static const char* a[] { "Tape", "Glass", "Dust", "Neon", "Velvet", "Ghost", "Smoke", "Chrome", "Lunar", "Broken", "Liquid", "Midnight", "Haze", "Ice", "Rust", "Silk" };
+    static const char* b[] { "Room", "Echo", "Wash", "Drive", "Bloom", "Drift", "Space", "Grit", "Halo", "Pulse", "Mirror", "Wave", "Fog", "Glow", "Trail", "Stutter" };
+    return juce::String (a[seed % 16]) + " " + b[(seed >> 5) % 16];
+}
+}
+KeysKillaProcessor::FxGenome KeysKillaProcessor::fxSurprise (uint32_t seed) const
+{
+    FxGenome g;
+    juce::Random r ((juce::int64) seed);
+    for (int i = 0; i < kk::numRackValues; ++i)
+    {
+        const float lo = fxRange[i][0], hi = fxRange[i][1];
+        g.v[(size_t) i] = fxDiscrete[i] ? (float) (int) (lo + r.nextFloat() * (hi - lo + 0.999f)) : lo + r.nextFloat() * (hi - lo);
+    }
+    // 2-4 effects, a space effect most of the time (it sounds finished)
+    const int count = 2 + r.nextInt (3);
+    if (r.nextFloat() < 0.75f) g.on[(size_t) (r.nextBool() ? kk::rkReverb : kk::rkDelay)] = true;
+    for (int k = 0, guard = 0; k < count && guard < 40; ++guard)
+    {
+        const int s = r.nextInt (kk::numRackSlots);
+        if (g.on[(size_t) s]) continue;
+        if (s == kk::rkHalf && r.nextFloat() < 0.7f) continue;   // half-time only sometimes
+        g.on[(size_t) s] = true; ++k;
+    }
+    g.name = fxNameOf (seed);
+    return g;
+}
+KeysKillaProcessor::FxGenome KeysKillaProcessor::fxMutate (const FxGenome& src, float wild, uint32_t seed) const
+{
+    FxGenome g = src;
+    juce::Random r ((juce::int64) seed);
+    wild = juce::jlimit (0.0f, 1.0f, wild);
+    for (int i = 0; i < kk::numRackValues; ++i)
+    {
+        const float lo = fxRange[i][0], hi = fxRange[i][1];
+        if (fxDiscrete[i]) { if (r.nextFloat() < 0.15f + 0.4f * wild) g.v[(size_t) i] = (float) (int) (lo + r.nextFloat() * (hi - lo + 0.999f)); continue; }
+        const float j = (r.nextFloat() * 2.0f - 1.0f) * (hi - lo) * (0.12f + 0.45f * wild);
+        g.v[(size_t) i] = juce::jlimit (std::min (lo, g.v[(size_t) i]), std::max (hi, g.v[(size_t) i]), g.v[(size_t) i] + j);
+    }
+    const int flips = 1 + (int) (wild * 3.0f + r.nextFloat());
+    for (int k = 0; k < flips; ++k)
+    {
+        const int s = r.nextInt (kk::numRackSlots);
+        if (s == kk::rkHalf && ! g.on[(size_t) s] && r.nextFloat() < 0.7f) continue;
+        g.on[(size_t) s] = ! g.on[(size_t) s];
+    }
+    int count = 0; for (auto o : g.on) count += o ? 1 : 0;
+    if (count == 0) g.on[(size_t) kk::rkReverb] = true;
+    g.name = fxNameOf (seed);
+    return g;
+}
+
+// ---------------- STEP FX ----------------
+const char* KeysKillaProcessor::stepFxName (int i)
+{
+    static const char* n[] { "STUTTER", "REVERSE", "TAPE STOP", "FILTER", "GATE", "ECHO", "OCTAVE UP", "CRUSH" };
+    return n[juce::jlimit (0, (int) numStepFx - 1, i)];
+}
+void KeysKillaProcessor::stepClear() { for (auto& row : stepGrid) for (auto& c : row) c = false; }
+void KeysKillaProcessor::stepRandom (uint32_t seed, float density)
+{
+    juce::Random r ((juce::int64) seed);
+    stepClear();
+    // musical: effects land on the off-beats and the ends of the bar more than on the 1
+    for (int st = 0; st < numSteps; ++st)
+    {
+        const float weight = st == 0 ? 0.15f : (st % 4 == 0 ? 0.6f : 1.0f) * (st >= 12 ? 1.5f : 1.0f);
+        if (r.nextFloat() > density * 0.55f * weight) continue;
+        static const int pool[] { sfStutter, sfStutter, sfReverse, sfTape, sfFilter, sfGate, sfGate, sfEcho, sfPitchUp, sfCrush };
+        int fx = pool[r.nextInt (10)];
+        if (fx == sfTape && st % 4 != 3) fx = sfGate;   // a tape stop only before a beat
+        stepGrid[(size_t) fx][(size_t) st] = true;
+        if (fx == sfStutter && st + 1 < numSteps && r.nextFloat() < 0.4f) stepGrid[(size_t) fx][(size_t) st + 1] = true;
+    }
+}
+void KeysKillaProcessor::stepPreset (int which)
+{
+    stepClear();
+    auto set = [this] (int fx, std::initializer_list<int> steps) { for (int s : steps) stepGrid[(size_t) fx][(size_t) s] = true; };
+    switch (which)
+    {
+        case 0: set (sfStutter, { 6, 7, 14, 15 }); set (sfReverse, { 11 }); break;                    // ROLL
+        case 1: set (sfGate, { 1, 3, 5, 7, 9, 11, 13, 15 }); break;                                    // CHOP
+        case 2: set (sfTape, { 7, 15 }); set (sfFilter, { 12, 13, 14 }); break;                        // BRAKE
+        case 3: set (sfReverse, { 3, 7, 11, 15 }); set (sfEcho, { 4, 12 }); break;                      // MIRROR
+        case 4: set (sfPitchUp, { 10, 11 }); set (sfStutter, { 14, 15 }); set (sfCrush, { 2, 6 }); break; // GLITCH
+        default: set (sfFilter, { 0, 1, 2, 3, 8, 9, 10, 11 }); set (sfEcho, { 7, 15 }); break;          // SWEEP
+    }
+}
+juce::String KeysKillaProcessor::stepToString() const
+{
+    juce::String t;
+    for (auto& row : stepGrid) { for (auto& c : row) t << (c.load() ? "1" : "0"); t << "."; }
+    return t + juce::String (stepRate.load()) + "." + juce::String (stepOn.load() ? 1 : 0) + "." + juce::String (stepMix.load(), 3);
+}
+void KeysKillaProcessor::stepFromString (const juce::String& s)
+{
+    const auto a = juce::StringArray::fromTokens (s, ".", "");
+    if (a.size() < numStepFx + 2) return;
+    for (int f = 0; f < numStepFx; ++f)
+        for (int st = 0; st < numSteps; ++st) stepGrid[(size_t) f][(size_t) st] = a[f].length() > st && a[f][st] == '1';
+    stepRate = juce::jlimit (0, 2, a[numStepFx].getIntValue());
+    stepOn = a[numStepFx + 1].getIntValue() != 0;
+    if (a.size() > numStepFx + 2) stepMix = juce::jlimit (0.0f, 1.0f, a[numStepFx + 2].getFloatValue());
+}
+
+void KeysKillaProcessor::processStepFx (juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps)
+{
+    if (buffer.getNumChannels() < 2 || stepBufL.empty()) return;
+    const bool on = stepOn.load();
+    float* L = buffer.getWritePointer (0); float* R = buffer.getWritePointer (1);
+    const int size = (int) stepBufL.size(), mask = size - 1;
+    const double stepBeats = stepRate.load() == 0 ? 0.5 : stepRate.load() == 1 ? 0.25 : 0.125;
+    const int stepLen = std::max (64, (int) std::round (stepBeats / std::max (1.0e-9, bps)));
+    const float ramp = 1.0f / (0.003f * (float) sr);
+    const float mix = stepMix.load();
+    if (! on)
+    {
+        stepNow = -1;
+        bool idle = echoTail <= 0;
+        for (auto e : stepEnv) idle = idle && e <= 0.0f;
+        if (idle) { stepLast = -1; return; }
+        echoTail -= n;
+    }
+    else echoTail = (int) (sr * 5.0);
+    kk::SvfCoef fc;
+    bool act[numStepFx] {}; int actStep = -99;
+    for (int i = 0; i < n; ++i)
+    {
+        const float dl = L[i], dr = R[i];
+        stepBufL[(size_t) stepW] = dl; stepBufR[(size_t) stepW] = dr;
+        const double beat = beatPos + bps * i;
+        const double sx = beat / stepBeats;
+        const int step = ((int) std::floor (sx)) % numSteps;
+        const float frac = (float) (sx - std::floor (sx));
+        const int pos = (int) (frac * (float) stepLen);
+        if (step != stepLast)
+        {
+            stepLast = step;
+            stepRevStart = stepW;
+            stepTapePos = 0; stepRevPos = 0;
+            stepNow = on ? step : -1;
+        }
+        if (i == 0 || pos == 0 || step != actStep)
+        {
+            actStep = step;
+            for (int f = 0; f < numStepFx; ++f) act[f] = on && stepGrid[(size_t) f][(size_t) (step < 0 ? 0 : step)].load();
+        }
+        // one "read" effect at a time (STUTTER > REVERSE > TAPE > OCTAVE UP), 3 ms crossfades
+        const int read = act[sfStutter] ? sfStutter : act[sfReverse] ? sfReverse : act[sfTape] ? sfTape : act[sfPitchUp] ? sfPitchUp : -1;
+        float wl = 0, wr = 0, dryW = 1.0f;
+        const int start = (int) stepRevStart;
+        for (int f : { (int) sfStutter, (int) sfReverse, (int) sfTape, (int) sfPitchUp })
+        {
+            auto& e = stepEnv[f];
+            e = f == read ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            if (e <= 0.0f) continue;
+            int idx = stepW;
+            if (f == sfStutter) { const int slice = std::max (32, stepLen / 4); idx = (start + (pos % slice)) & mask; }
+            else if (f == sfReverse) idx = (start - 1 - pos + size * 4) & mask;
+            else if (f == sfTape) { stepTapePos += std::max (0.0f, 1.0f - frac * 1.05f); idx = (start + (int) stepTapePos) & mask; }
+            else idx = (start - stepLen + (2 * pos) % stepLen + size * 4) & mask;   // the step before, twice as fast = an octave up
+            // short window at the slice edges: no clicks
+            float w = 1.0f;
+            if (f == sfStutter) { const int slice = std::max (32, stepLen / 4), ph = pos % slice, ed = std::min (slice / 4, (int) (0.002 * sr)); w = std::min (1.0f, std::min ((float) ph / (float) std::max (1, ed), (float) (slice - ph) / (float) std::max (1, ed))); }
+            wl += stepBufL[(size_t) idx] * e * w; wr += stepBufR[(size_t) idx] * e * w;
+            dryW -= e;
+        }
+        float l = dl * std::max (0.0f, dryW) + wl, r = dr * std::max (0.0f, dryW) + wr;
+        // FILTER: a low-pass that closes over the step
+        {
+            auto& e = stepEnv[sfFilter];
+            e = act[sfFilter] ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            if (e > 0.0f)
+            {
+                fc.set (7000.0f * std::exp2 (-frac * 4.5f), 2.2f, (float) sr);
+                stepLp[0].tick (fc, l); stepLp[1].tick (fc, r);
+                l = l + (stepLp[0].lp - l) * e; r = r + (stepLp[1].lp - r) * e;
+            }
+        }
+        // CRUSH: 10 bits, a quarter of the rate
+        {
+            auto& e = stepEnv[sfCrush];
+            e = act[sfCrush] ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            if (e > 0.0f)
+            {
+                if ((stepW & 3) == 0) { stepHold[0] = std::round (l * 512.0f) / 512.0f; stepHold[1] = std::round (r * 512.0f) / 512.0f; }
+                l = l + (stepHold[0] - l) * e; r = r + (stepHold[1] - r) * e;
+            }
+        }
+        // GATE: the second half of the step is silent
+        {
+            auto& e = stepEnv[sfGate];
+            const bool mute = act[sfGate] && frac >= 0.5f;
+            e = mute ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            l *= 1.0f - e; r *= 1.0f - e;
+        }
+        // ECHO: this step is thrown into a dotted 1/8 echo that keeps ringing
+        {
+            auto& e = stepEnv[sfEcho];
+            e = act[sfEcho] ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            const int d = std::min (size - 2, (int) std::round (0.75 / std::max (1.0e-9, bps)));
+            const int ri = (echoW - d + size * 4) & mask;
+            const float el = echoL[(size_t) ri], er = echoR[(size_t) ri];
+            echoL[(size_t) echoW] = l * e + er * 0.45f;   // ping-pong
+            echoR[(size_t) echoW] = r * e + el * 0.45f;
+            echoW = (echoW + 1) & mask;
+            l += el * 0.7f; r += er * 0.7f;
+        }
+        stepW = (stepW + 1) & mask;
+        L[i] = dl + (l - dl) * mix; R[i] = dr + (r - dr) * mix;
+    }
+}
+
+// ---------------- SAMPLER FLIPS: EVOLVE for beats ----------------
+// A flip = 32 steps of 1/16 (2 bars). Each step plays a chop (or rests). The first flip comes from your slices;
+// every flip grows 6 children: swapped chops, rolls, reversed hits, octave hits, shifted halves, more / fewer hits.
+namespace
+{
+juce::String flipName (int gen, int k, uint32_t seed)
+{
+    static const char* w[] { "Bounce", "Skip", "Roll", "Flip", "Swing", "Shuffle", "Stomp", "Glide", "Chop", "Stutter", "Knock", "Drift" };
+    return juce::String (w[(seed + (uint32_t) k * 5u) % 12]) + " " + juce::String (gen) + "." + juce::String (k + 1);
+}
+}
+void KeysKillaProcessor::flipSeed()
+{
+    auto d = chop.current();
+    flips.clear(); flipCenter = -1;
+    if (d == nullptr || d->src == nullptr || d->numSlices() == 0) { ++flipVer; return; }
+    juce::Random r ((juce::int64) juce::Time::getMillisecondCounter());
+    Flip f; f.steps.resize (32); f.name = "Seed flip";
+    const int ns = std::min (d->numSlices(), 16);
+    for (int st = 0; st < 32; st += 2)   // 1/8 grid, the 1 keeps the first chop
+    {
+        if (st % 8 != 0 && r.nextFloat() < 0.25f) continue;
+        auto& s = f.steps[(size_t) st];
+        s.slice = st % 16 == 0 ? 0 : r.nextInt (ns);
+        s.len = 2; s.vel = st % 8 == 0 ? 1.0f : 0.75f + 0.2f * r.nextFloat();
+    }
+    flips.push_back (f);
+    flipCenter = 0;
+    flipGrow (0, false, 0.35f);
+    ++flipVer;
+}
+
+void KeysKillaProcessor::flipGrow (int node, bool reroll, float wild)
+{
+    if (! juce::isPositiveAndBelow (node, (int) flips.size())) return;
+    if (! flips[(size_t) node].kids.empty() && ! reroll) return;
+    flips[(size_t) node].kids.clear();
+    auto d = chop.current();
+    const int ns = d != nullptr ? std::max (1, std::min (d->numSlices(), 16)) : 1;
+    const auto base = flips[(size_t) node];
+    const uint32_t seed = kk::hash32 ((uint32_t) juce::Time::getMillisecondCounter() + (uint32_t) node * 131u);
+    juce::Random r ((juce::int64) seed);
+    wild = juce::jlimit (0.0f, 1.0f, wild);
+    for (int k = 0; k < 6; ++k)
+    {
+        Flip f = base; f.kids.clear(); f.parent = node; f.gen = base.gen + 1;
+        auto& st = f.steps;
+        const int changes = 2 + (int) (wild * 6.0f) + r.nextInt (2);
+        auto hits = [&] { std::vector<int> h; for (int i = 0; i < 32; ++i) if (st[(size_t) i].slice >= 0) h.push_back (i); return h; };
+        switch (k)
+        {
+            case 0:   // SWAP: other chops on some hits
+                for (int c = 0; c < changes; ++c) { auto h = hits(); if (h.empty()) break; st[(size_t) h[(size_t) r.nextInt ((int) h.size())]].slice = r.nextInt (ns); }
+                break;
+            case 1:   // ROLL: 1/16 doubles and a roll into the next bar
+                for (int c = 0; c < changes; ++c) { const int i = r.nextInt (32); if (st[(size_t) i].slice < 0 && i > 0 && st[(size_t) i - 1].slice >= 0) { st[(size_t) i] = st[(size_t) i - 1]; st[(size_t) i].len = 1; st[(size_t) i - 1].len = 1; st[(size_t) i].vel *= 0.8f; } }
+                for (int i = 12; i < 16; ++i) if (r.nextFloat() < 0.4f + wild * 0.4f) { st[(size_t) i].slice = st[(size_t) 12].slice >= 0 ? st[(size_t) 12].slice : 0; st[(size_t) i].len = 1; st[(size_t) i].vel = 0.55f + 0.1f * (float) (i - 12); }
+                break;
+            case 2:   // REVERSE some hits
+                for (int c = 0; c < std::max (1, changes / 2); ++c) { auto h = hits(); if (h.empty()) break; auto& s = st[(size_t) h[(size_t) r.nextInt ((int) h.size())]]; s.rev = ! s.rev; s.len = std::max (s.len, 2); }
+                break;
+            case 3:   // OCTAVES: some hits up / down
+                for (int c = 0; c < std::max (1, changes / 2); ++c) { auto h = hits(); if (h.empty()) break; auto& s = st[(size_t) h[(size_t) r.nextInt ((int) h.size())]]; static const int sm[] { 12, -12, 7, 5 }; s.semi = sm[r.nextInt (wild > 0.5f ? 4 : 2)]; }
+                break;
+            case 4:   // SHIFT: the second bar answers the first, shifted by a 1/16 or 1/8
+            {
+                const int sh = r.nextBool() ? 1 : 2;
+                std::vector<FlipStep> b2 (st.begin() + 16, st.end());
+                for (int i = 0; i < 16; ++i) st[(size_t) (16 + i)] = b2[(size_t) ((i + 16 - sh) % 16)];
+                if (r.nextFloat() < 0.5f) for (int i = 0; i < 16; ++i) if (st[(size_t) i].slice >= 0 && r.nextFloat() < 0.3f) st[(size_t) (16 + i)] = st[(size_t) i];
+                break;
+            }
+            default:  // DENSITY: more hits (or fewer when it is busy)
+            {
+                const int count = (int) hits().size();
+                for (int c = 0; c < changes; ++c)
+                {
+                    const int i = r.nextInt (32);
+                    if (count > 18) { if (i % 8 != 0) st[(size_t) i].slice = -1; }
+                    else if (st[(size_t) i].slice < 0) { st[(size_t) i].slice = r.nextInt (ns); st[(size_t) i].len = r.nextBool() ? 1 : 2; st[(size_t) i].vel = 0.7f; }
+                }
+                break;
+            }
+        }
+        f.name = flipName (f.gen, k, seed);
+        flips.push_back (f);
+        flips[(size_t) node].kids.push_back ((int) flips.size() - 1);
+    }
+    ++flipVer;
+}
+
+void KeysKillaProcessor::flipPlay (int node)
+{
+    if (! juce::isPositiveAndBelow (node, (int) flips.size())) { flipOn = false; flipPlaying = -1; chop.allOff(); ++flipVer; return; }
+    {
+        const juce::SpinLock::ScopedLockType sl (flipLock);
+        flipSeq = flips[(size_t) node].steps;
+    }
+    flipPlaying = node;
+    if (! flipOn.load()) { flipLastStep = -1; flipOrigin = -1.0; }
+    setPlayMode (playChop);
+    flipOn = true;
+    ++flipVer;
+}
+
+juce::File KeysKillaProcessor::flipMidiFile (int node) const
+{
+    if (! juce::isPositiveAndBelow (node, (int) flips.size())) return {};
+    const auto& f = flips[(size_t) node];
+    const int ppq = 960;
+    juce::MidiMessageSequence seq;
+    const double bpm = lastBpm.load();
+    auto tempo = juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / bpm)); tempo.setTimeStamp (0); seq.addEvent (tempo);
+    for (int i = 0; i < (int) f.steps.size(); ++i)
+    {
+        const auto& s = f.steps[(size_t) i];
+        if (s.slice < 0 || s.slice >= 128 - kk::ChopLab::firstNote) continue;
+        const double b = i * 0.25, len = s.len * 0.25 * 0.95;
+        const int note = kk::ChopLab::firstNote + s.slice;
+        seq.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) juce::jlimit (1, 127, (int) (s.vel * 120))), std::round (b * ppq));
+        seq.addEvent (juce::MidiMessage::noteOff (1, note), std::round ((b + len) * ppq));
+    }
+    seq.updateMatchedPairs();
+    juce::MidiFile mf; mf.setTicksPerQuarterNote (ppq); mf.addTrack (seq);
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("EVOLVE Flips");
+    dir.createDirectory();
+    auto file = dir.getChildFile (juce::File::createLegalFileName ("Flip - " + f.name + " - " + juce::String (juce::roundToInt (bpm)) + "BPM") + ".mid");
+    file.deleteFile();
+    if (juce::FileOutputStream os { file }; os.openedOk()) mf.writeTo (os, 1);
+    return file;
+}
+
+juce::AudioBuffer<float> KeysKillaProcessor::renderFlip (int node, double bpm)
+{
+    juce::AudioBuffer<float> out;
+    auto d = chop.current();
+    if (d == nullptr || d->src == nullptr || ! juce::isPositiveAndBelow (node, (int) flips.size())) return out;
+    const double rate = d->rate;
+    const double stepS = rate * 60.0 / juce::jlimit (40.0, 300.0, bpm) / 4.0;
+    const auto& f = flips[(size_t) node];
+    const int total = (int) std::ceil (stepS * (double) f.steps.size());
+    out.setSize (2, total); out.clear();
+    for (int i = 0; i < (int) f.steps.size(); ++i)
+    {
+        const auto& s = f.steps[(size_t) i];
+        if (s.slice < 0 || s.slice >= d->numSlices()) continue;
+        auto b = chop.slice (s.slice);
+        if (b.getNumSamples() < 8) continue;
+        if (s.rev) b.reverse (0, b.getNumSamples());
+        double ratio = std::exp2 (s.semi / 12.0);
+        // until the next hit (or its length), 6 ms fade out
+        int next = i + 1; while (next < (int) f.steps.size() && f.steps[(size_t) next].slice < 0 && next < i + s.len) ++next;
+        const int maxLen = (int) (stepS * std::max (1, std::min (s.len, next - i)) + rate * 0.004);
+        const int n = std::min ({ maxLen, (int) ((b.getNumSamples() - 2) / ratio), total - (int) (i * stepS) });
+        const int o0 = (int) (i * stepS);
+        const int fade = std::min (n / 4, (int) (rate * 0.006));
+        for (int c = 0; c < 2; ++c)
+            for (int k = 0; k < n; ++k)
+            {
+                const double p = k * ratio; const int i0 = (int) p; const float fr = (float) (p - i0);
+                float y = b.getSample (c, i0) + (b.getSample (c, i0 + 1) - b.getSample (c, i0)) * fr;
+                if (k >= n - fade) y *= (float) (n - k) / (float) std::max (1, fade);
+                out.addSample (c, o0 + k, y * s.vel);
+            }
+    }
+    const float pk = out.getMagnitude (0, out.getNumSamples());
+    if (pk > 0.99f) out.applyGain (0.95f / pk);
+    return out;
+}
+
+juce::File KeysKillaProcessor::flipWavFile (int node)
+{
+    auto d = chop.current();
+    if (d == nullptr || ! juce::isPositiveAndBelow (node, (int) flips.size())) return {};
+    auto b = renderFlip (node, lastBpm.load());
+    if (b.getNumSamples() < 8) return {};
+    auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("EVOLVE Flips")
+                 .getChildFile (juce::File::createLegalFileName ("Flip - " + flips[(size_t) node].name + " - " + juce::String (juce::roundToInt (lastBpm.load())) + "BPM") + ".wav");
+    return writeWavFile (b, d->rate, f) ? f : juce::File();
+}
+
+juce::File KeysKillaProcessor::sessionDir() const
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("Session Sounds");
+}

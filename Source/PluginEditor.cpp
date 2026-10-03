@@ -375,7 +375,7 @@ public:
         if (over && ! selected) { g.setColour (s.accent.withAlpha (down ? 0.25f : 0.12f)); g.fillRoundedRectangle (r, corner); }
         if (const auto text = getButtonText(); text.isNotEmpty())
         {
-            g.setColour (hero || selected ? kk::theme().accent : kk::theme().text);
+            g.setColour (hero || selected ? kk::accentText() : kk::theme().text);
             g.setFont (serif (framed ? std::min (r.getHeight() * 0.5f, 20.0f) : r.getHeight() * 0.5f, false, 0.12f));
             g.drawFittedText (text, r.reduced (4, 0).toNearestInt(), Justification::centred, text.containsChar ('\n') ? 2 : 1, 0.7f);
         }
@@ -997,7 +997,14 @@ public:
             for (int b = 0; b < 64 && ! k->peaks.empty(); ++b) w[(size_t) b] = k->peaks[(size_t) (b * (int) k->peaks.size() / 64)];
         }
         else { const auto& c = proc.kids()[(size_t) index]; ready = c.waveReady; if (ready) w = c.wave; }
-        if (! audio() && proc.mainLoopMode)
+        if (audio() && proc.mainLoopMode && proc.loopPlaying() && proc.pairLoopKid == index)   // v0.37: your sound's melody loop
+        {
+            KeysKillaProcessor::Genome lg; lg.loop = proc.currentLoop();
+            drawLoopRoll (g, wv, proc.loopNotes (lg), (float) proc.loopBars() * 4.0f, col, proc.loopBeat.load());
+            g.setColour (s.accent); g.setFont (serif (11.0f, true, 0.2f));
+            g.drawText ("LOOP PLAYING", Rectangle<float> (14, 24, 126, 14), Justification::centredLeft);
+        }
+        else if (! audio() && proc.mainLoopMode)
         {
             const auto& c = proc.kids()[(size_t) index];
             const bool playing = proc.loopIsChild (index);
@@ -1020,7 +1027,8 @@ public:
         if (audio())
         {
             g.setColour (th.dim); g.setFont (serif (10.5f, true, 0.12f));
-            g.drawFittedText (proc.pairKids[(size_t) index]->method, Rectangle<int> (12, 95, 128, 16), Justification::centredLeft, 1, 0.7f);
+            g.drawFittedText (proc.mainLoopMode && ! (proc.loopPlaying() && proc.pairLoopKid == index) ? String ("LOOP - press play") : proc.pairKids[(size_t) index]->method,
+                              Rectangle<int> (12, 95, 128, 16), Justification::centredLeft, 1, 0.7f);
         }
         else
             for (int st = 0; st < 5; ++st)
@@ -1100,9 +1108,7 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        const auto& kids = proc.kids();
-        const int sel = proc.selectedChild();
-        const int src = juce::isPositiveAndBelow (sel, (int) kids.size()) ? kids[(size_t) sel].genes[(size_t) gene] : -1;
+        const int src = proc.geneOfSelected (gene);   // v0.37: works for your own sounds too (the child is spliced)
         for (int k = 0; k < 2; ++k)
         {
             if (src != k) continue;
@@ -1124,7 +1130,7 @@ public:
     void mouseUp (const MouseEvent& e) override
     {
         if (lockRect().expanded (4).contains (e.position)) { proc.toggleGeneLock (gene); getParentComponent()->repaint(); return; }
-        const int sel = proc.selectedChild();
+        const int sel = proc.labAudioMode() ? proc.pairSel : proc.selectedChild();
         if (sel < 0) return;
         for (int k = 0; k < 2; ++k) if (half (k).contains (e.position)) proc.setChildGene (sel, gene, k);
         if (auto* p = getParentComponent()) p->repaint();
@@ -2101,6 +2107,166 @@ private:
 };
 
 // ---------------- SAMPLER / CHOP (v0.32): your sample on a big waveform, movable slices, MPC pads, keys, drag out ----------------
+//==============================================================================
+// v0.37 FLIPS: EVOLVE for beats. Your chops in a 2-bar pattern in the middle, six children around it.
+// Hover = hear it (in time).  Click = it becomes the middle and six new flips grow.  Drag = MIDI / WAV into FL.
+class FlipView : public Component, private Timer
+{
+public:
+    FlipView (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (seedBtn, "NEW FLIP", "A new first flip from your chops", [this] { proc.flipSeed(); repaint(); });
+        btn (againBtn, "6 NEW KIDS", "Six new children of the middle flip", [this] { if (proc.flipCenter >= 0) proc.flipGrow (proc.flipCenter, true, wild); repaint(); });
+        btn (playBtn, "PLAY", "Play / stop the middle flip (in time with FL)", [this]
+        {
+            if (proc.flipOn.load() && proc.flipPlaying == proc.flipCenter) proc.flipPlay (-1); else proc.flipPlay (proc.flipCenter);
+            latched = proc.flipOn.load(); repaint();
+        });
+        btn (backBtn, "BACK", "Back to the flip it came from", [this]
+        {
+            if (! isPositiveAndBelow (proc.flipCenter, (int) proc.flips.size())) return;
+            const int pa = proc.flips[(size_t) proc.flipCenter].parent;
+            if (pa >= 0) { proc.flipCenter = pa; ++proc.flipVer; if (proc.flipOn.load()) proc.flipPlay (pa); repaint(); }
+        });
+        wildSl.setSliderStyle (Slider::LinearBar); wildSl.setRange (0.0, 1.0, 0.01); wildSl.setValue (0.35, dontSendNotification);
+        wildSl.textFromValueFunction = [] (double v) { return v < 0.34 ? String ("SAFE") : v < 0.67 ? String ("MIXED") : String ("WILD"); };
+        wildSl.setColour (Slider::trackColourId, lnf.skin->accent.withAlpha (0.5f));
+        wildSl.setColour (Slider::textBoxTextColourId, kk::theme().text);
+        wildSl.onValueChange = [this] { wild = (float) wildSl.getValue(); };
+        wildSl.setTooltip ("SAFE = the children stay close to the middle flip.  WILD = they change a lot");
+        wildSl.updateText();
+        addAndMakeVisible (wildSl);
+        startTimerHz (30);
+    }
+    void resized() override
+    {
+        int x = 196;   // the PADS / FLIPS switch sits left of the buttons
+        for (auto* b : { &seedBtn, &againBtn, &playBtn, &backBtn }) { b->setBounds (x, 0, b == &againBtn ? 120 : 92, 32); x += b->getWidth() + 6; }
+        wildSl.setBounds (x + 6, 2, 150, 28);
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        if (proc.flips.empty() || ! isPositiveAndBelow (proc.flipCenter, (int) proc.flips.size()))
+        {
+            g.setColour (t.text); g.setFont (kk::modern::font (20.0f, true, 0.12f));
+            g.drawText ("FLIPS: press NEW FLIP", getLocalBounds().withTrimmedTop (40).withTrimmedBottom (20), Justification::centred);
+            g.setColour (t.dim); g.setFont (kk::modern::font (13.0f, false, 0.05f));
+            g.drawText ("a beat from your chops grows in the middle - hover a child to hear it, click it to keep evolving", getLocalBounds().withTrimmedTop (100), Justification::centred);
+            return;
+        }
+        const auto& c = proc.flips[(size_t) proc.flipCenter];
+        drawFlip (g, centreRect(), proc.flipCenter, true);
+        for (int k = 0; k < (int) c.kids.size(); ++k) drawFlip (g, kidRect (k), c.kids[(size_t) k], false);
+        ignoreUnused (lnf);
+    }
+    void mouseMove (const MouseEvent& e) override
+    {
+        const int h = nodeAt (e.position);
+        if (h != hovered) { hovered = h; hoverSince = Time::getMillisecondCounter(); heard = false; repaint(); }
+    }
+    void mouseExit (const MouseEvent&) override
+    {
+        hovered = -1; repaint();
+        if (proc.flipOn.load() && proc.flipPlaying != proc.flipCenter) { if (latched) proc.flipPlay (proc.flipCenter); else proc.flipPlay (-1); }
+    }
+    void mouseDown (const MouseEvent& e) override { downNode = nodeAt (e.position); dragged = false; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || downNode < 0 || e.getDistanceFromDragStart() < 8) return;
+        dragged = true;
+        const auto f = e.mods.isShiftDown() ? proc.flipWavFile (downNode) : proc.flipMidiFile (downNode);
+        if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (dragged || e.mouseWasDraggedSinceMouseDown()) return;
+        const int n = nodeAt (e.position);
+        if (n < 0) return;
+        if (n == proc.flipCenter) { playBtn.triggerClick(); return; }
+        proc.flipCenter = n;
+        proc.flipGrow (n, false, wild);
+        proc.flipPlay (n); latched = true;
+        ++proc.flipVer; repaint();
+    }
+    int centreNode() const { return proc.flipCenter; }
+private:
+    Rectangle<float> area() const { return getLocalBounds().toFloat().withTrimmedTop (42); }
+    Rectangle<float> centreRect() const { auto a = area(); return a.removeFromLeft (a.getWidth() * 0.36f).reduced (4); }
+    Rectangle<float> kidRect (int k) const
+    {
+        auto a = area(); a.removeFromLeft (a.getWidth() * 0.36f + 8);
+        const float w = a.getWidth() / 3.0f, h = a.getHeight() / 2.0f;
+        return { a.getX() + w * (float) (k % 3), a.getY() + h * (float) (k / 3), w, h };
+    }
+    int nodeAt (Point<float> p) const
+    {
+        if (! isPositiveAndBelow (proc.flipCenter, (int) proc.flips.size())) return -1;
+        if (centreRect().contains (p)) return proc.flipCenter;
+        const auto& c = proc.flips[(size_t) proc.flipCenter];
+        for (int k = 0; k < (int) c.kids.size(); ++k) if (kidRect (k).reduced (4).contains (p)) return c.kids[(size_t) k];
+        return -1;
+    }
+    void drawFlip (Graphics& g, Rectangle<float> r, int node, bool centre)
+    {
+        const auto& t = kk::theme();
+        const auto& f = proc.flips[(size_t) node];
+        const bool hot = node == hovered, playing = proc.flipOn.load() && proc.flipPlaying == node;
+        r = r.reduced (4);
+        g.setColour (t.glass.withMultipliedAlpha (centre ? 1.4f : 1.0f)); g.fillRoundedRectangle (r, 10);
+        g.setColour (centre || playing ? t.accent : hot ? t.accent.withAlpha (0.7f) : t.text.withAlpha (0.25f));
+        g.drawRoundedRectangle (r, 10, centre ? 2.0f : 1.3f);
+        g.setColour (t.text); g.setFont (kk::modern::font (centre ? 17.0f : 13.0f, true, 0.06f));
+        g.drawText (f.name, r.reduced (12, 6).removeFromTop (22), Justification::centredLeft);
+        if (playing) { g.setColour (kk::accentText()); g.setFont (kk::modern::font (11.0f, true, 0.2f)); g.drawText ("PLAYING", r.reduced (12, 6).removeFromTop (22), Justification::centredRight); }
+        // the steps like a piano roll: 32 columns (1/16), one row per chop - you see the beat
+        auto grid = r.reduced (12, 8).withTrimmedTop (24).withTrimmedBottom (centre ? 22 : 4);
+        const int steps = (int) f.steps.size();
+        auto dch = proc.chop.current();
+        const int rows = jlimit (1, 8, dch != nullptr ? dch->numSlices() : 8);
+        const float cw = grid.getWidth() / (float) std::max (1, steps), rh = grid.getHeight() / (float) rows;
+        g.setColour (t.well); g.fillRoundedRectangle (grid, 4);
+        for (int i = 0; i < steps; ++i)
+        {
+            const float x = grid.getX() + cw * (float) i;
+            if (i % 4 == 0) { g.setColour (t.text.withAlpha (i % 16 == 0 ? 0.3f : 0.1f)); g.fillRect (x, grid.getY(), 1.0f, grid.getHeight()); }
+            const auto& s = f.steps[(size_t) i];
+            if (s.slice < 0) continue;
+            const int row = s.slice % rows;
+            const float y = grid.getBottom() - rh * (float) (row + 1);
+            g.setColour ((s.rev ? t.text : t.accent).withAlpha (0.45f + 0.55f * s.vel));
+            g.fillRoundedRectangle (x + 1, y + 1, std::max (2.0f, cw * (float) s.len - 2.0f), std::max (2.0f, rh - 2.0f), 2.0f);
+            if (s.semi != 0) { g.setColour (Colours::white.withAlpha (0.9f)); g.fillRect (x + 1, s.semi > 0 ? y + 1 : y + rh - 3, std::max (2.0f, cw - 2.0f), 2.0f); }
+        }
+        if (playing && proc.flipStepNow.load() >= 0)
+        {
+            g.setColour (t.text); g.fillRect (grid.getX() + cw * (float) proc.flipStepNow.load(), grid.getY(), 2.0f, grid.getHeight());
+        }
+        if (centre)
+        {
+            g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.1f));
+            g.drawText ("GEN " + String (f.gen) + "   click = play / stop   drag = MIDI  (shift-drag = WAV)", r.reduced (12, 6).removeFromBottom (16), Justification::centredLeft);
+        }
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        const auto now = Time::getMillisecondCounter();
+        if (hovered >= 0 && hovered != proc.flipCenter && ! heard && now - hoverSince > 220) { heard = true; proc.flipPlay (hovered); }
+        if (proc.flipVer.load() != lastVer || proc.flipOn.load()) { lastVer = proc.flipVer.load(); repaint(); }
+        playBtn.setButtonText (proc.flipOn.load() && proc.flipPlaying == proc.flipCenter ? "STOP" : "PLAY");
+        backBtn.setEnabled (isPositiveAndBelow (proc.flipCenter, (int) proc.flips.size()) && proc.flips[(size_t) proc.flipCenter].parent >= 0);
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton seedBtn { lnf }, againBtn { lnf }, playBtn { lnf }, backBtn { lnf };
+    Slider wildSl;
+    float wild = 0.35f;
+    int hovered = -1, downNode = -1, lastVer = -1;
+    uint32 hoverSince = 0;
+    bool heard = false, dragged = false, latched = false;
+};
+
 class ChopPanel : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -2115,7 +2281,9 @@ public:
     }
     void loadSample (const File& f)
     {
-        note = proc.chopLoadFile (f) ? "loaded - cut at the hits.  Wheel = zoom,  drag in the wave = select a part,  SPACE = play / stop" : "could not read " + f.getFileName();
+        const bool ok = proc.chopLoadFile (f);
+        if (ok) proc.setPlayMode (KeysKillaProcessor::playChop);   // the keys / FL's notes play the chops now
+        note = ok ? "loaded - cut at the hits.  Wheel = zoom,  drag in the wave = select a part,  SPACE = play / stop" : "could not read " + f.getFileName();
         mode = 0; sel = 0; selA = selB = -1; resetView(); refresh();
     }
     void browse()
@@ -2162,15 +2330,15 @@ public:
         bar (fadeSl, 0.001, 0.2, 0.001, [] (double v) { return "FADE " + String (roundToInt (v * 1000)) + " ms"; }, "Fade in / out - no clicks when you trigger fast");
         pitchSl.setDoubleClickReturnValue (true, 0); volSl.setDoubleClickReturnValue (true, 1); panSl.setDoubleClickReturnValue (true, 0); fadeSl.setDoubleClickReturnValue (true, 0.004);
         revBtn.setButtonText ("REVERSE"); revBtn.framed = true; revBtn.setTooltip ("Play this slice backwards");
-        revBtn.onClick = [this] { revBtn.selected = ! revBtn.selected; revBtn.repaint(); pushFx(); proc.chopPad = sel; };
+        revBtn.onClick = [this] { revBtn.selected = ! revBtn.selected; revBtn.repaint(); pushFx(); hitPad (sel); };
         addChildComponent (revBtn);
         flipBtn.setButtonText ("FLIP IT"); flipBtn.framed = true;
         flipBtn.setTooltip ("A new trap pattern from your chops - then drag it into FL (FLIP MIDI)");
-        flipBtn.onClick = [this] { flipSeed = (uint32_t) Random::getSystemRandom().nextInt (1 << 30); flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); note = "new flip ready - drag FLIP MIDI into FL"; repaint(); };
-        addAndMakeVisible (flipBtn);
-        dragFlip.makeFile = [this] { if (! flipFile.existsAsFile()) flipFile = proc.chop.flipMidi (proc.lastBpm.load(), flipSeed); return flipFile; };
-        dragFlip.setTooltip ("Drag the FLIP pattern into FL as MIDI (open the SAMPLER page: the keys play the chops)");
-        addAndMakeVisible (dragFlip);
+        flipBtn.onClick = [this] { setView (1); if (proc.flips.empty()) proc.flipSeed(); };
+        addChildComponent (flipBtn);
+        dragFlip.makeFile = [this] { return proc.flipMidiFile (proc.flipCenter); };
+        dragFlip.setTooltip ("Drag the middle flip into FL as MIDI - it plays the chops on this SAMPLER (C5 = slice 1)");
+        addChildComponent (dragFlip);
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (keysBtn, "", "KEYS: the keyboard / FL piano roll plays the slices - C5 = slice 1, C#5 = slice 2 ...",
              [this] { setParamFromUi (proc, ID::playMode, keysOn() ? 0.0f : (float) KeysKillaProcessor::playChop); refresh(); });
@@ -2193,12 +2361,26 @@ public:
         addAndMakeVisible (dragWav); addAndMakeVisible (dragMidi);
         // v0.35: CLEAR + the selection tools (work on the selected part - nothing selected = the whole sample)
         btn (clearBtn, "CLEAR", "Remove the sample from the SAMPLER", [this] { proc.chopClear(); selA = selB = -1; note = "empty - drop a new sample"; resetView(); refresh(); });
-        btn (playSelBtn, "PLAY", "Play the selected part (SPACE = play / stop)", [this] { playSelection(); });
-        btn (loopSelBtn, "LOOP", "Play the selected part as a loop - drag it out as a loop WAV", [this] { loopOn = ! loopOn; loopSelBtn.selected = loopOn; loopSelBtn.repaint(); if (proc.chop.regionPlaying()) playSelection(); });
+        btn (playSelBtn, "PLAY PART", "Play the selected part (nothing selected = the whole sample).  SPACE = play / stop", [this] { playSelection(); });
+        btn (loopSelBtn, "LOOP OFF", "LOOP ON: PLAY PART repeats the part, and DRAG PART / SAVE PART give a clean loop.  LOOP OFF: once", [this] { loopOn = ! loopOn; loopSelBtn.selected = loopOn; loopSelBtn.setButtonText (loopOn ? "LOOP ON" : "LOOP OFF"); loopSelBtn.repaint(); if (proc.chop.regionPlaying()) playSelection(); });
+        btn (savePartBtn, "SAVE PART", "Save the selected part (or the selected slice) as a sound into your folders / sound kits", [this]
+        {
+            saveToFolderMenu (proc, { partSound() }, &savePartBtn, [safe = Component::SafePointer<ChopPanel> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
+        });
+        btn (padsTab, "PADS", "The 16 pads: click = play a slice, right-click = save it, drag a pad = the slice into FL", [this] { setView (0); });
+        btn (flipsTab, "FLIPS", "FLIPS: beats from your chops that evolve - hover = hear, click = grow", [this] { setView (1); });
+        btn (monoBtn, "MONO PADS", "MONO PADS on: a new pad stops the one that plays (no overlapping).  Off: pads ring out over each other", [this]
+        { proc.chopChoke = ! proc.chopChoke.load(); monoBtn.selected = proc.chopChoke.load(); monoBtn.repaint(); });
+        monoBtn.selected = proc.chopChoke.load();
+        flipView = std::make_unique<FlipView> (proc, lnf);
+        addChildComponent (*flipView);
+        dragFlipWav.makeFile = [this] { return proc.flipWavFile (proc.flipCenter); };
+        dragFlipWav.setTooltip ("Drag the middle flip into FL as audio (a WAV at the project tempo)");
+        addChildComponent (dragFlipWav);
         btn (toABtn, "> PARENT A", "The selected part becomes PARENT A in BREED LAB - breed it", [this] { toParent (0); });
         btn (toBBtn, "> PARENT B", "The selected part becomes PARENT B in BREED LAB - breed it", [this] { toParent (1); });
-        btn (mutateBtn, "MUTATE", "MUTATE: the part (or the whole sample) turns into something new - the melody still shows through. Again = a new one", [this] { doMutate (false); });
-        btn (killBtn, "KILL", "KILL: mutated beyond recognition - only a trace of the original stays. Again = a new one", [this] { doMutate (true); });
+        btn (mutateBtn, "MUTATE", "MUTATE: a few 1/8 pieces get reversed, stuttered, filtered - the melody stays. Again = a new one", [this] { doMutate (false); });
+        btn (killBtn, "KILL", "KILL: most 1/8 pieces get a move - backwards, stutters, tape stops, octaves - the groove stays. Again = a new one", [this] { doMutate (true); });
         btn (undoBtn, "UNDO", "Back to the sample before the last MUTATE / KILL", [this] { if (proc.chopUndoMutate()) { note = "undone"; peaksKey = {}; repaint(); } });
         btn (allBtn, "SELECT ALL", "Select the whole sample (again = no selection)", [this] { auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return; if (hasSel()) selA = selB = -1; else { selA = 0; selB = c->src->getNumSamples(); } repaint(); refreshSelButtons(); });
         dragSel.makeFile = [this] { auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return File(); return hasSel() ? proc.exportChopRegion (selA, selB, loopOn) : proc.exportChopRegion (0, c->src->getNumSamples(), loopOn); };
@@ -2297,10 +2479,10 @@ public:
         if (sel < c->numSlices())
             g.drawText ("SLICE " + String (sel + 1) + "  " + MidiMessage::getMidiNoteName (kk::ChopLab::firstNote + sel, true, true, 5) + "  "
                         + String ((double) (c->sliceEnd (sel) - c->sliceStart (sel)) / c->rate, 2) + " s", selRow.withWidth (240), Justification::centredLeft);
-        g.setColour (s.accent); g.setFont (Font (FontOptions (13.0f, Font::bold)));
+        g.setColour (kk::accentText()); g.setFont (Font (FontOptions (13.0f, Font::bold)));
         g.drawText (note, selRow.withY (selRow.getBottom() + 6).withHeight (18), Justification::centredLeft);
         // MPC pads (16)
-        for (int i = 0; i < 16; ++i)
+        for (int i = 0; i < 16 && viewMode == 0; ++i)
         {
             const auto r = pad (i).toFloat();
             const bool has = i < c->numSlices();
@@ -2328,11 +2510,12 @@ public:
         // selection tools row
         {
             auto row = Rectangle<int> (14, wave.getBottom() + 34, W - 28, 36);
-            for (auto* b : { &allBtn, &playSelBtn, &loopSelBtn }) { b->setBounds (row.removeFromLeft (b == &allBtn ? 112 : 76)); row.removeFromLeft (6); }
-            dragSel.setBounds (row.removeFromLeft (190)); row.removeFromLeft (14);
+            for (auto* b : { &allBtn, &playSelBtn, &loopSelBtn }) { b->setBounds (row.removeFromLeft (b == &allBtn ? 112 : 100)); row.removeFromLeft (6); }
+            dragSel.setBounds (row.removeFromLeft (180)); row.removeFromLeft (6);
+            savePartBtn.setBounds (row.removeFromLeft (104)); row.removeFromLeft (14);
             for (auto* b : { &toABtn, &toBBtn }) { b->setBounds (row.removeFromLeft (112)); row.removeFromLeft (6); }
             row.removeFromLeft (14);
-            for (auto* b : { &mutateBtn, &killBtn, &undoBtn }) { b->setBounds (row.removeFromLeft (b == &undoBtn ? 76 : 100)); row.removeFromLeft (6); }
+            for (auto* b : { &mutateBtn, &killBtn, &undoBtn }) { b->setBounds (row.removeFromLeft (b == &undoBtn ? 76 : 110)); row.removeFromLeft (6); }
         }
         selRow = { 18, wave.getBottom() + 34 + 36 + 12, W - 36, 40 };
         int cx = selRow.getX() + 250;
@@ -2341,11 +2524,16 @@ public:
         dragWav.setBounds (W - 18 - 180, selRow.getY() - 4, 180, 46);
         bankBtn.setBounds (dragWav.getX() - 136, selRow.getY(), 128, 38);
         pairBtn.setBounds (bankBtn.getX() - 136, selRow.getY(), 128, 38); pairBtn.setVisible (false);   // v0.35: > PARENT A / B above does it
-        padArea = { 14, selRow.getBottom() + 34, W - 28 - 210, H - selRow.getBottom() - 48 };
-        const int colX = padArea.getRight() + 12, colW = W - 14 - colX;
-        dragMidi.setBounds (colX, padArea.getY(), colW, 48);
-        flipBtn.setBounds (colX, padArea.getY() + 58, colW, 40);
-        dragFlip.setBounds (colX, padArea.getY() + 106, colW, 48);
+        padsTab.setBounds (14, selRow.getBottom() + 28, 90, 32);
+        flipsTab.setBounds (110, selRow.getBottom() + 28, 90, 32);
+        padArea = { 14, selRow.getBottom() + 68, W - 28 - 230, H - selRow.getBottom() - 80 };
+        flipView->setBounds (padArea.withTop (selRow.getBottom() + 28));
+        const int colX = padArea.getRight() + 14, colW = W - 14 - colX;
+        monoBtn.setBounds (colX, padArea.getY(), colW, 38);
+        dragMidi.setBounds (colX, padArea.getY() + 48, colW, 46);
+        dragFlip.setBounds (colX, padArea.getY() + 48, colW, 46);
+        dragFlipWav.setBounds (colX, padArea.getY() + 102, colW, 46);
+        flipBtn.setBounds (0, 0, 0, 0);
     }
     void mouseMove (const MouseEvent& e) override
     {
@@ -2357,7 +2545,13 @@ public:
     {
         dragMark = -1;
         auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
-        for (int i = 0; i < 16; ++i) if (i < c->numSlices() && pad (i).contains (e.getPosition())) { sel = i; loadFx(); proc.chopPad = i; repaint(); return; }
+        for (int i = 0; i < 16 && viewMode == 0; ++i)
+            if (i < c->numSlices() && pad (i).contains (e.getPosition()))
+            {
+                sel = i; loadFx();
+                if (e.mods.isPopupMenu()) { padMenu (i); repaint(); return; }
+                hitPad (i); padDown = i; repaint(); return;
+            }
         if (! wave.contains (e.getPosition())) return;
         const int m = markAt (e.position);
         if (m > 0 && e.mods.isPopupMenu()) { auto mk = c->marks; mk.erase (mk.begin() + m); proc.chop.setMarks (mk); refresh(); return; }
@@ -2388,6 +2582,16 @@ public:
     }
     void mouseDrag (const MouseEvent& e) override
     {
+        if (padDown >= 0)   // drag a pad = that slice into FL as a WAV
+        {
+            if (e.getDistanceFromDragStart() > 8)
+            {
+                const int i = padDown; padDown = -1;
+                const auto f = proc.chop.exportSlice (i);
+                if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+            }
+            return;
+        }
         if (draggingBar || (dragMark <= 0 && scrollBar().contains (e.getMouseDownPosition())))
         {
             auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return;
@@ -2416,6 +2620,7 @@ public:
     }
     void mouseUp (const MouseEvent& e) override
     {
+        padDown = -1;
         if (draggingBar) { draggingBar = false; return; }
         if (dragMark > 0) refresh();
         else if (inWave && ! selecting && ! e.mods.isPopupMenu() && e.getNumberOfClicks() == 1)   // a click: play that slice
@@ -2425,7 +2630,7 @@ public:
                 const int smp = sampleAt (e.position.x);
                 if (! (hasSel() && smp >= selA && smp <= selB)) { selA = selB = -1; refreshSelButtons(); }
                 int si = 0; while (si + 1 < c->numSlices() && c->sliceStart (si + 1) <= smp) ++si;
-                sel = si; loadFx(); proc.chopPad = si; repaint();
+                sel = si; loadFx(); hitPad (si); repaint();
             }
         }
         dragMark = -1; inWave = false; selecting = false;
@@ -2433,12 +2638,49 @@ public:
 public:
     // v0.35: SPACE on the SAMPLER page: stop whatever plays - or play the selection / the selected slice
     void debugSelect (int a0, int a1, int v0, int vl) { selA = a0; selB = a1; viewStart = v0; viewLen = vl; peaksKey = {}; refreshSelButtons(); repaint(); }
+    void debugFlips() { setView (1); proc.flipGrow (proc.flipCenter, true, 0.5f); }
     void spacePressed()
     {
         if (proc.chop.anyPlaying()) { proc.chop.stopAll(); repaint(); return; }
-        if (hasSel()) playSelection(); else proc.chopPad = sel;
+        if (hasSel()) playSelection(); else hitPad (sel);
     }
 private:
+    void hitPad (int i) { proc.setPlayMode (KeysKillaProcessor::playChop); proc.chopPad = i; }
+    void padMenu (int i)
+    {
+        PopupMenu m;
+        m.addSectionHeader ("SLICE " + String (i + 1));
+        m.addItem (1, "Save this slice as a sound...");
+        m.addItem (2, "This slice > PARENT A (BREED LAB)");
+        m.addItem (3, "This slice > PARENT B (BREED LAB)");
+        m.addItem (4, "Play it");
+        m.showMenuAsync (PopupMenu::Options(), [this, i, safe = Component::SafePointer<ChopPanel> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1) saveToFolderMenu (proc, { sliceSound (i) }, this, [safe] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
+            if (r == 2 || r == 3) { auto c = proc.chop.current(); if (c != nullptr) { note = proc.chopRegionToParent (c->sliceStart (i), c->sliceEnd (i), r - 2) ? "slice " + String (i + 1) + " is in BREED LAB" : String(); repaint(); } }
+            if (r == 4) hitPad (i);
+        });
+    }
+    void setView (int v)
+    {
+        viewMode = v;
+        padsTab.selected = v == 0; flipsTab.selected = v == 1; padsTab.repaint(); flipsTab.repaint();
+        const bool has = proc.chop.hasSource();
+        flipView->setVisible (v == 1 && has);
+        dragMidi.setVisible (v == 0 && has); dragFlip.setVisible (v == 1 && has); dragFlipWav.setVisible (v == 1 && has);
+        if (v == 1 && has && proc.flips.empty()) proc.flipSeed();
+        if (v == 0 && proc.flipOn.load()) proc.flipPlay (-1);
+        repaint();
+    }
+    kk::PairPtr partSound() const
+    {
+        auto c = proc.chop.current(); if (c == nullptr || c->src == nullptr) return {};
+        const int a0 = hasSel() ? selA : c->sliceStart (sel), a1 = hasSel() ? selB : c->sliceEnd (sel);
+        auto b = proc.chopRegion (a0, a1, loopOn);
+        if (b.getNumSamples() < 64) return {};
+        return kk::PairLab::fromBuffer (b, c->rate, c->rate, c->name + (hasSel() ? " part" : " chop " + String (sel + 1)));
+    }
     bool hasSel() const { return selA >= 0 && selB > selA + 64; }
     void playSelection()
     {
@@ -2463,7 +2705,7 @@ private:
     void refreshSelButtons()
     {
         const bool any = proc.chop.current() != nullptr && proc.chop.current()->src != nullptr;
-        for (auto* b : { &playSelBtn, &loopSelBtn, &toABtn, &toBBtn, &mutateBtn, &killBtn, &undoBtn, &allBtn, &clearBtn }) b->setVisible (any);
+        for (auto* b : { &playSelBtn, &loopSelBtn, &toABtn, &toBBtn, &mutateBtn, &killBtn, &undoBtn, &allBtn, &clearBtn, &savePartBtn, &padsTab, &flipsTab, &monoBtn }) b->setVisible (any);
         dragSel.setVisible (any);
         mutateBtn.setButtonText (hasSel() ? "MUTATE" : "MUTATE ALL"); killBtn.setButtonText (hasSel() ? "KILL" : "KILL ALL");
         undoBtn.setEnabled (proc.chopCanUndo());
@@ -2509,9 +2751,9 @@ private:
     {
         const bool has = proc.chop.current() != nullptr && proc.chop.current()->src != nullptr;   // slice controls only with a sample
         for (Component* c : { (Component*) &pitchSl, (Component*) &volSl, (Component*) &panSl, (Component*) &fadeSl, (Component*) &revBtn,
-                              (Component*) &bankBtn, (Component*) &dragWav, (Component*) &dragMidi, (Component*) &flipBtn,
-                              (Component*) &dragFlip, (Component*) &bankAllBtn })
+                              (Component*) &bankBtn, (Component*) &dragWav, (Component*) &bankAllBtn })
             c->setVisible (has);
+        setView (viewMode);
         peaksKey = {};
         refreshSelButtons();
         for (int i = 0; i < (int) modeBtns.size(); ++i) { modeBtns[(size_t) i]->selected = i == mode; modeBtns[(size_t) i]->repaint(); }
@@ -2558,7 +2800,10 @@ private:
     DragFileButton dragWav { "DRAG SLICE WAV", TC (0xff36ff6a) }, dragMidi { "DRAG CHOP MIDI", TC (0xff36ff6a) }, dragFlip { "DRAG FLIP MIDI", TC (0xff36ff6a) };
     Slider pitchSl, volSl, panSl, fadeSl;
     HotButton revBtn { lnf }, flipBtn { lnf };
-    uint32_t flipSeed = 1; File flipFile;
+    HotButton savePartBtn { lnf }, padsTab { lnf }, flipsTab { lnf }, monoBtn { lnf };
+    std::unique_ptr<FlipView> flipView;
+    DragFileButton dragFlipWav { "DRAG FLIP WAV", TC (0xff36ff6a) };
+    int viewMode = 0;
     HotButton clearBtn { lnf }, playSelBtn { lnf }, loopSelBtn { lnf }, toABtn { lnf }, toBBtn { lnf }, mutateBtn { lnf }, killBtn { lnf }, undoBtn { lnf }, allBtn { lnf };
     DragFileButton dragSel { "DRAG PART WAV", TC (0xff36ff6a) };
     bool loadingFx = false;
@@ -2582,7 +2827,7 @@ private:
     std::vector<float> peaks;
     std::array<float, 16> padLit {};
     String note;
-    int sel = 0, mode = 0, dragMark = -1, hoverMark = -1;
+    int sel = 0, mode = 0, dragMark = -1, hoverMark = -1, padDown = -1;
     bool wasPlaying = false;
 };
 
@@ -4195,10 +4440,11 @@ public:
         onValueChange = [this] { target = (float) getValue(); };
     }
     void sync() { setValue (target.load(), dontSendNotification); }
+    std::function<String (double)> valueText;
     void paint (Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
-        auto lab = r.removeFromBottom (16);
+        auto lab = r.removeFromBottom (18);
         const float rad = jmin (r.getWidth(), r.getHeight()) * 0.5f - 4;
         const auto c = r.getCentre();
         const auto rp = getRotaryParameters();
@@ -4221,8 +4467,8 @@ public:
         g.setColour (TC (0xffffffff));
         g.drawLine (c.x + std::sin (to) * cr * 0.25f, c.y - std::cos (to) * cr * 0.25f, c.x + std::sin (to) * cr * 0.85f, c.y - std::cos (to) * cr * 0.85f, 2.0f);
         g.setColour (isMouseOverOrDragging() ? ca.brighter (0.4f) : TC (0xffe6e3ff));
-        g.setFont (Font (FontOptions (11.0f, Font::bold)).withExtraKerningFactor (0.08f));
-        const String txt = isMouseOverOrDragging() ? (bip ? String (getValue(), 1) + " dB" : String (roundToInt (getValue() * 100)) + " %") : label;
+        g.setFont (Font (FontOptions (12.5f, Font::bold)).withExtraKerningFactor (0.08f));
+        const String txt = isMouseOverOrDragging() ? (valueText ? valueText (getValue()) : bip ? String (getValue(), 1) + " dB" : String (roundToInt (getValue() * 100)) + " %") : label;
         g.drawFittedText (txt, lab.toNearestInt(), Justification::centred, 1, 0.7f);
     }
     void mouseEnter (const MouseEvent& e) override { Slider::mouseEnter (e); repaint(); }
@@ -4324,6 +4570,295 @@ private:
     int chipVal = 0;
 };
 
+//==============================================================================
+// v0.37 SURPRISE FX: EVOLVE for effects. The effect chain on your sound sits in the middle, six other chains around it.
+// Hover = hear your sound through it.  Click = keep it, six new chains grow from it.  SURPRISE ME = six wild new ones.
+class FxEvolveView : public Component, private Timer
+{
+public:
+    FxEvolveView (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (surpriseBtn, "SURPRISE ME", "Six brand-new effect chains around your sound", [this] { surprise(); });
+        btn (againBtn, "6 NEW KIDS", "Six new chains grown from the middle one", [this] { grow (centre, true); });
+        btn (dryBtn, "DRY", "No effects: your sound as it is (a new start)", [this] { KeysKillaProcessor::FxGenome g; g.name = "Dry"; startFrom (g); });
+        btn (hearBtn, "HEAR IT", "Play a melody loop with your sound (in time) so you hear every chain - again = stop", [this] { proc.toggleLoop(); });
+        wildSl.setSliderStyle (Slider::LinearBar); wildSl.setRange (0.0, 1.0, 0.01); wildSl.setValue (0.4, dontSendNotification);
+        wildSl.textFromValueFunction = [] (double v) { return v < 0.34 ? String ("SAFE") : v < 0.67 ? String ("MIXED") : String ("WILD"); };
+        wildSl.setColour (Slider::trackColourId, lnf.skin->accent.withAlpha (0.5f));
+        wildSl.setColour (Slider::textBoxTextColourId, kk::theme().text);
+        wildSl.setTooltip ("SAFE = the new chains stay close.  WILD = they change a lot");
+        wildSl.updateText();
+        addAndMakeVisible (wildSl);
+        startTimerHz (30);
+    }
+    void visibilityChanged() override
+    {
+        if (isVisible() && nodes.empty()) { auto g = proc.fxCurrent(); g.name = "Your FX now"; startFrom (g); }
+        if (! isVisible() && hovered >= 0) { proc.fxApply (nodes[(size_t) centre].g); hovered = -1; }
+    }
+    void resized() override
+    {
+        int x = 0;
+        for (auto* b : { &surpriseBtn, &againBtn, &dryBtn, &hearBtn }) { b->setBounds (x, 0, b == &dryBtn ? 70 : 130, 34); x += b->getWidth() + 8; }
+        wildSl.setBounds (x + 8, 3, 160, 28);
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        if (nodes.empty()) return;
+        const auto c = centrePos();
+        const auto& cn = nodes[(size_t) centre];
+        for (int k = 0; k < (int) cn.kids.size(); ++k)
+        {
+            const auto kp = kidPos (k);
+            g.setGradientFill (ColourGradient (t.accent.withAlpha (0.5f), c.x, c.y, t.accent.withAlpha (0.1f), kp.x, kp.y, false));
+            g.drawLine (Line<float> (c, kp), 1.5f);
+        }
+        for (int k = 0; k < (int) cn.kids.size(); ++k) bubble (g, cn.kids[(size_t) k], kidPos (k), kidR, false);
+        bubble (g, centre, c, centreR, true);
+        g.setColour (t.dim); g.setFont (kk::modern::font (12.5f, true, 0.08f));
+        g.drawText ("play the keys (or HEAR IT) - hover a bubble = hear your sound through it - click = keep it and grow",
+                    Rectangle<float> (0, (float) getHeight() - 22, (float) getWidth(), 20), Justification::centred);
+    }
+    void mouseMove (const MouseEvent& e) override
+    {
+        const int h = nodeAt (e.position);
+        if (h == hovered) return;
+        hovered = h;
+        if (h >= 0 && h != centre) proc.fxApply (nodes[(size_t) h].g);   // hear it now
+        else proc.fxApply (nodes[(size_t) centre].g);
+        repaint();
+    }
+    void mouseExit (const MouseEvent&) override { if (hovered >= 0) { hovered = -1; proc.fxApply (nodes[(size_t) centre].g); repaint(); } }
+    void mouseUp (const MouseEvent& e) override
+    {
+        const int n = nodeAt (e.position);
+        if (n < 0 || n == centre) return;
+        centre = n; proc.fxApply (nodes[(size_t) n].g);
+        grow (n, false);
+    }
+    std::function<void()> onApplied;
+private:
+    struct Node { KeysKillaProcessor::FxGenome g; int parent = -1; std::vector<int> kids; };
+    std::vector<Node> nodes;
+    int centre = 0, hovered = -1;
+    static constexpr float centreR = 92.0f, kidR = 66.0f;
+    Point<float> centrePos() const { return { (float) getWidth() * 0.5f, 44.0f + ((float) getHeight() - 70.0f) * 0.5f }; }
+    Point<float> kidPos (int k) const
+    {
+        const float ang = MathConstants<float>::twoPi * (float) k / 6.0f - MathConstants<float>::halfPi + 0.52f;
+        const float ry = std::min (230.0f, ((float) getHeight() - 70.0f) * 0.5f - kidR - 4.0f), rx = std::min ((float) getWidth() * 0.36f, ry * 1.55f);
+        return { centrePos().x + std::cos (ang) * rx, centrePos().y + std::sin (ang) * ry };
+    }
+    int nodeAt (Point<float> p) const
+    {
+        if (nodes.empty()) return -1;
+        if (p.getDistanceFrom (centrePos()) < centreR) return centre;
+        const auto& cn = nodes[(size_t) centre];
+        for (int k = 0; k < (int) cn.kids.size(); ++k) if (p.getDistanceFrom (kidPos (k)) < kidR) return cn.kids[(size_t) k];
+        return -1;
+    }
+    void startFrom (const KeysKillaProcessor::FxGenome& g)
+    {
+        nodes.clear(); Node n; n.g = g; nodes.push_back (n); centre = 0; hovered = -1;
+        proc.fxApply (g);
+        grow (0, false);
+    }
+    void surprise()
+    {
+        auto& cn = nodes[(size_t) centre];
+        cn.kids.clear();
+        const uint32_t base = (uint32_t) Time::getMillisecondCounter() * 2654435761u;
+        for (int k = 0; k < 6; ++k) { Node n; n.g = proc.fxSurprise (kk::hash32 (base + (uint32_t) k * 7919u)); n.parent = centre; nodes.push_back (n); nodes[(size_t) centre].kids.push_back ((int) nodes.size() - 1); }
+        repaint(); if (onApplied) onApplied();
+    }
+    void grow (int node, bool reroll)
+    {
+        auto& cn = nodes[(size_t) node];
+        if (! cn.kids.empty() && ! reroll) { repaint(); return; }
+        nodes[(size_t) node].kids.clear();
+        const uint32_t base = (uint32_t) Time::getMillisecondCounter() * 2246822519u + (uint32_t) node;
+        const auto parentG = nodes[(size_t) node].g;
+        int empty = 0; for (auto o : parentG.on) empty += o ? 0 : 1;
+        for (int k = 0; k < 6; ++k)
+        {
+            Node n;
+            // a dry middle gets surprises, a chain gets its variations (two of them wilder)
+            n.g = empty == kk::numRackSlots ? proc.fxSurprise (kk::hash32 (base + (uint32_t) k * 31u))
+                                            : proc.fxMutate (parentG, jlimit (0.0f, 1.0f, (float) wildSl.getValue() + (k >= 4 ? 0.3f : 0.0f)), kk::hash32 (base + (uint32_t) k * 131u));
+            n.parent = node; nodes.push_back (n);
+            nodes[(size_t) node].kids.push_back ((int) nodes.size() - 1);
+        }
+        if (nodes.size() > 2000) { auto keep = nodes[(size_t) centre].g; startFrom (keep); return; }
+        repaint(); if (onApplied) onApplied();
+    }
+    void bubble (Graphics& g, int node, Point<float> c, float r, bool isCentre)
+    {
+        const auto& t = kk::theme();
+        const auto& n = nodes[(size_t) node];
+        const bool hot = node == hovered;
+        g.setColour (Colours::black.withAlpha (t.night ? 0.4f : 0.14f)); g.fillEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c.translated (5, 10)));
+        g.setGradientFill (ColourGradient (t.night ? Colour (0xd8262a31) : Colour (0xe6ffffff), c.x - r * 0.4f, c.y - r * 0.6f,
+                                           t.night ? Colour (0xd0101215) : Colour (0xd6d9dde2), c.x + r * 0.5f, c.y + r, true));
+        g.fillEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c));
+        if (isCentre || hot) { g.setGradientFill (ColourGradient (t.accent.withAlpha (0.22f), c.x, c.y, t.accent.withAlpha (0.0f), c.x + r * 1.4f, c.y, true)); g.fillEllipse (Rectangle<float> (r * 2.8f, r * 2.8f).withCentre (c)); }
+        g.setColour (isCentre || hot ? t.accent : t.text.withAlpha (0.3f));
+        g.drawEllipse (Rectangle<float> (r * 2, r * 2).withCentre (c).reduced (0.5f), isCentre ? 2.4f : hot ? 2.0f : 1.2f);
+        g.setColour (t.text); g.setFont (kk::modern::font (isCentre ? 16.0f : 13.5f, true, 0.04f));
+        g.drawFittedText (n.g.name.isEmpty() ? String ("FX") : n.g.name, Rectangle<int> ((int) (c.x - r), (int) (c.y - r * 0.62f), (int) (r * 2), 22), Justification::centred, 1, 0.7f);
+        // the effects in it, as little chips
+        StringArray on;
+        for (int s = 0; s < kk::numRackSlots; ++s) if (n.g.on[(size_t) s]) on.add (kk::rackSlotName (s));
+        g.setFont (kk::modern::font (isCentre ? 11.5f : 10.5f, true, 0.06f));
+        float y = c.y - r * 0.22f;
+        for (int i = 0; i < on.size() && i < 4; ++i)
+        {
+            const auto cr = Rectangle<float> (c.x - r * 0.7f, y, r * 1.4f, isCentre ? 18.0f : 15.0f);
+            g.setColour (t.accent.withAlpha (0.16f)); g.fillRoundedRectangle (cr, 7);
+            g.setColour (t.text.withAlpha (0.9f)); g.drawText (on[i], cr, Justification::centred);
+            y += cr.getHeight() + 3;
+        }
+        if (on.isEmpty()) { g.setColour (t.dim); g.drawText ("DRY", Rectangle<float> (c.x - r, c.y - 8, r * 2, 16), Justification::centred); }
+        if (isCentre) { g.setColour (kk::accentText()); g.setFont (kk::modern::font (10.5f, true, 0.3f)); g.drawText ("ON YOUR SOUND", Rectangle<float> (c.x - r, c.y + r * 0.48f, r * 2, 14), Justification::centred); }
+    }
+    void timerCallback() override { if (isShowing()) hearBtn.setButtonText (proc.loopPlaying() ? "STOP" : "HEAR IT"); }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton surpriseBtn { lnf }, againBtn { lnf }, dryBtn { lnf }, hearBtn { lnf };
+    Slider wildSl;
+};
+
+//==============================================================================
+// v0.37 STEP FX: effects that play in time - paint them into 16 steps (stutter, reverse, tape stop, filter, gate, echo, octave, crush)
+class StepFxView : public Component, private Timer
+{
+public:
+    StepFxView (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (powerBtn, "OFF", "Switch STEP FX on / off (it runs in time with FL)", [this] { proc.stepOn = ! proc.stepOn.load(); refresh(); });
+        btn (diceBtn, "DICE", "A new pattern", [this] { proc.stepRandom ((uint32_t) Time::getMillisecondCounter(), 0.55f); proc.stepOn = true; refresh(); });
+        btn (mutateBtn, "MUTATE", "Change a few steps of the pattern", [this] { mutate(); });
+        btn (clearBtn, "CLEAR", "Empty grid", [this] { proc.stepClear(); refresh(); });
+        btn (hearBtn, "HEAR IT", "Play a melody loop with your sound so you hear the steps - again = stop", [this] { proc.toggleLoop(); });
+        static const char* presets[] { "ROLL", "CHOP", "BRAKE", "MIRROR", "GLITCH", "SWEEP" };
+        for (int i = 0; i < 6; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, presets[i]); b->framed = true;
+            b->setTooltip ("A ready pattern: " + String (presets[i]));
+            b->onClick = [this, i] { proc.stepPreset (i); proc.stepOn = true; refresh(); };
+            addAndMakeVisible (*b); presetBtns.push_back (std::move (b));
+        }
+        static const char* rates[] { "1/8", "1/16", "1/32" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, rates[i]); b->framed = true;
+            b->setTooltip ("How long one step is");
+            b->onClick = [this, i] { proc.stepRate = i; refresh(); };
+            addAndMakeVisible (*b); rateBtns.push_back (std::move (b));
+        }
+        mixSl.setSliderStyle (Slider::LinearBar); mixSl.setRange (0.0, 1.0, 0.01); mixSl.setValue (proc.stepMix.load(), dontSendNotification);
+        mixSl.textFromValueFunction = [] (double v) { return "MIX " + String (roundToInt (v * 100)) + "%"; };
+        mixSl.setColour (Slider::trackColourId, lnf.skin->accent.withAlpha (0.5f));
+        mixSl.setColour (Slider::textBoxTextColourId, kk::theme().text);
+        mixSl.onValueChange = [this] { proc.stepMix = (float) mixSl.getValue(); };
+        mixSl.updateText();
+        addAndMakeVisible (mixSl);
+        startTimerHz (30);
+        refresh();
+    }
+    void resized() override
+    {
+        int x = 0;
+        for (auto* b : { &powerBtn, &diceBtn, &mutateBtn, &clearBtn, &hearBtn }) { b->setBounds (x, 0, b == &hearBtn ? 104 : 84, 34); x += b->getWidth() + 6; }
+        x += 10;
+        for (auto& b : rateBtns) { b->setBounds (x, 0, 58, 34); x += 62; }
+        mixSl.setBounds (x + 10, 3, 150, 28);
+        x = 0;
+        for (auto& b : presetBtns) { b->setBounds (x, 44, 96, 30); x += 102; }
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        const auto gr = grid();
+        const float cw = gr.getWidth() / (float) KeysKillaProcessor::numSteps, rh = gr.getHeight() / (float) KeysKillaProcessor::numStepFx;
+        const int now = proc.stepNow.load();
+        for (int f = 0; f < KeysKillaProcessor::numStepFx; ++f)
+        {
+            const float y = gr.getY() + rh * (float) f;
+            g.setColour (t.text); g.setFont (kk::modern::font (13.0f, true, 0.08f));
+            g.drawText (KeysKillaProcessor::stepFxName (f), Rectangle<float> (0, y, labelW - 10, rh), Justification::centredRight);
+            for (int st = 0; st < KeysKillaProcessor::numSteps; ++st)
+            {
+                const auto cell = Rectangle<float> (gr.getX() + cw * (float) st, y, cw, rh).reduced (3);
+                const bool on = proc.stepGrid[(size_t) f][(size_t) st].load();
+                const bool beat = st % 4 == 0;
+                g.setColour (on ? t.accent : (beat ? t.glass.withMultipliedAlpha (1.6f) : t.glass));
+                g.fillRoundedRectangle (cell, 5);
+                if (st == now && proc.stepOn.load()) { g.setColour (t.text.withAlpha (on ? 0.9f : 0.35f)); g.drawRoundedRectangle (cell, 5, 2.0f); }
+                else { g.setColour (t.text.withAlpha (0.12f)); g.drawRoundedRectangle (cell, 5, 1.0f); }
+            }
+        }
+        g.setColour (t.dim); g.setFont (kk::modern::font (12.5f, true, 0.06f));
+        g.drawText ("click / drag = paint steps   -   it plays in time with FL on every melody (your sound, the SAMPLER)   -   drums stay dry",
+                    Rectangle<float> (0, (float) getHeight() - 20, (float) getWidth(), 18), Justification::centred);
+    }
+    void mouseDown (const MouseEvent& e) override
+    {
+        const auto c = cellAt (e.position);
+        if (c.x < 0) return;
+        paintValue = ! proc.stepGrid[(size_t) c.y][(size_t) c.x].load();
+        proc.stepGrid[(size_t) c.y][(size_t) c.x] = paintValue;
+        if (paintValue) proc.stepOn = true;
+        refresh();
+    }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        const auto c = cellAt (e.position);
+        if (c.x < 0) return;
+        if (proc.stepGrid[(size_t) c.y][(size_t) c.x].load() != paintValue) { proc.stepGrid[(size_t) c.y][(size_t) c.x] = paintValue; repaint(); }
+    }
+private:
+    static constexpr float labelW = 120.0f;
+    Rectangle<float> grid() const { return { labelW, 86.0f, (float) getWidth() - labelW, (float) getHeight() - 86.0f - 26.0f }; }
+    Point<int> cellAt (Point<float> p) const
+    {
+        const auto gr = grid();
+        if (! gr.contains (p)) return { -1, -1 };
+        return { jlimit (0, KeysKillaProcessor::numSteps - 1, (int) ((p.x - gr.getX()) / gr.getWidth() * KeysKillaProcessor::numSteps)),
+                 jlimit (0, KeysKillaProcessor::numStepFx - 1, (int) ((p.y - gr.getY()) / gr.getHeight() * KeysKillaProcessor::numStepFx)) };
+    }
+    void mutate()
+    {
+        Random r;
+        for (int k = 0; k < 4; ++k)
+        {
+            const int f = r.nextInt (KeysKillaProcessor::numStepFx), st = r.nextInt (KeysKillaProcessor::numSteps);
+            proc.stepGrid[(size_t) f][(size_t) st] = ! proc.stepGrid[(size_t) f][(size_t) st].load();
+        }
+        proc.stepOn = true; refresh();
+    }
+    void refresh()
+    {
+        powerBtn.setButtonText (proc.stepOn.load() ? "ON" : "OFF"); powerBtn.selected = proc.stepOn.load(); powerBtn.repaint();
+        for (int i = 0; i < 3; ++i) { rateBtns[(size_t) i]->selected = proc.stepRate.load() == i; rateBtns[(size_t) i]->repaint(); }
+        repaint();
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        const int now = proc.stepNow.load();
+        if (now != lastNow) { lastNow = now; repaint (grid().toNearestInt().expanded (4)); }
+        hearBtn.setButtonText (proc.loopPlaying() ? "STOP" : "HEAR IT");
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton powerBtn { lnf }, diceBtn { lnf }, mutateBtn { lnf }, clearBtn { lnf }, hearBtn { lnf };
+    std::vector<std::unique_ptr<HotButton>> presetBtns, rateBtns;
+    Slider mixSl;
+    bool paintValue = true;
+    int lastNow = -2;
+};
+
 class FxRackPage : public Component
 {
 public:
@@ -4343,9 +4878,35 @@ public:
         reset.setTooltip ("Every effect off, every knob back to its start");
         reset.onClick = [this] { proc.rack.reset(); for (auto& c : cards) c->sync(); repaint(); };
         addAndMakeVisible (reset);
+        static const char* tabNames[] { "SURPRISE FX", "STEP FX", "RACK" };
+        static const char* tabTips[] { "EVOLVE for effects: hover = hear a chain on your sound, click = keep it and grow",
+                                       "Effects in time: stutter, reverse, tape stop, filter, gate, echo - paint them into 16 steps",
+                                       "Every effect with its knobs" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, tabNames[i]); b->framed = true; b->setTooltip (tabTips[i]);
+            b->onClick = [this, i] { setMode (i); };
+            addAndMakeVisible (*b); tabs.push_back (std::move (b));
+        }
+        evolveView = std::make_unique<FxEvolveView> (proc, lnf);
+        evolveView->onApplied = [this] { for (auto& c : cards) c->sync(); repaint(); };
+        addChildComponent (*evolveView);
+        stepView = std::make_unique<StepFxView> (proc, lnf);
+        addChildComponent (*stepView);
         setOpaque (true);
+        setMode (lastMode());
     }
-    void visibilityChanged() override { if (isVisible()) for (auto& c : cards) c->sync(); }
+    void visibilityChanged() override { if (isVisible()) { for (auto& c : cards) c->sync(); setMode (lastMode()); } }
+    static int& lastMode() { static int m = 0; return m; }
+    void setMode (int m)
+    {
+        lastMode() = m;
+        for (int i = 0; i < 3; ++i) { tabs[(size_t) i]->selected = i == m; tabs[(size_t) i]->repaint(); }
+        evolveView->setVisible (m == 0); stepView->setVisible (m == 1);
+        for (auto& c : cards) { c->setVisible (m == 2); if (m == 2) c->sync(); }
+        allOff.setVisible (m == 2); reset.setVisible (m == 2);
+        repaint();
+    }
     void paint (Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
@@ -4355,19 +4916,18 @@ public:
         kk::modern::waves (g, { r.getWidth() * 0.35f, 46.0f }, { r.getWidth(), 6.0f }, 20.0f, TC (0xffff3fd2), TC (0xff9b4dff), 5, 0.22f);
         g.setColour (TC (0xffffffff)); g.setFont (Font (FontOptions (30.0f, Font::bold)).withExtraKerningFactor (0.06f));
         g.drawText ("FX", 24, 10, 60, 40, Justification::centredLeft);
-        g.setGradientFill (ColourGradient (TC (0xffff3fd2), 70, 0, TC (0xff9b4dff), 200, 0, false));
-        g.drawText ("RACK", 70, 10, 160, 40, Justification::centredLeft);
         int on = 0; for (auto& o : proc.rack.on) on += o.load() ? 1 : 0;
-        g.setColour (TC (0xffc8c4e8)); g.setFont (Font (FontOptions (13.0f)));
-        g.drawText ("on every melody: the BREED LAB sound, VST and SAMPLER  -  drums stay dry  -  it stays when you change sounds",
-                    200, 12, getWidth() - 460, 20, Justification::centredLeft);
-        g.setColour (on > 0 ? TC (0xff36ff6a) : TC (0xff6a6290)); g.setFont (Font (FontOptions (13.0f, Font::bold)));
-        g.drawText (String (on) + (on == 1 ? " EFFECT ON" : " EFFECTS ON") + "   -   click a name to switch it on / off", 200, 32, getWidth() - 460, 18, Justification::centredLeft);
+        g.setColour (on > 0 ? TC (0xff36ff6a) : TC (0xff6a6290)); g.setFont (Font (FontOptions (14.0f, Font::bold)));
+        g.drawText (String (on) + (on == 1 ? " EFFECT ON" : " EFFECTS ON") + (proc.stepOn.load() ? "   +   STEP FX ON" : ""), 470, 16, getWidth() - 740, 26, Justification::centredLeft);
     }
     void resized() override
     {
         reset.setBounds (getWidth() - 132, 14, 116, 36);
         allOff.setBounds (getWidth() - 256, 14, 116, 36);
+        int tx = 84;
+        for (auto& b : tabs) { b->setBounds (tx, 14, b.get() == tabs[1].get() ? 104 : 124, 36); tx += b->getWidth() + 8; }
+        evolveView->setBounds (getLocalBounds().reduced (16).withTrimmedTop (56));
+        stepView->setBounds (getLocalBounds().reduced (16).withTrimmedTop (60));
         auto r = getLocalBounds().reduced (14).withTrimmedTop (56);
         const int cols = 4, rows = 3, gap = 10;
         const int cw = (r.getWidth() - gap * (cols - 1)) / cols, ch = (r.getHeight() - gap * (rows - 1)) / rows;
@@ -4379,6 +4939,181 @@ private:
     KKLookAndFeel& lnf;
     std::vector<std::unique_ptr<RackCard>> cards;
     HotButton allOff { lnf }, reset { lnf };
+    std::vector<std::unique_ptr<HotButton>> tabs;
+    std::unique_ptr<FxEvolveView> evolveView;
+    std::unique_ptr<StepFxView> stepView;
+};
+
+//==============================================================================
+// v0.37 EDIT for samples: when the sound on the keys is a sample (your sound, an audio child, a bank sound you clicked,
+// the SAMPLER), EDIT shows this page. Turn a knob, play the keys: you hear it at once. SAVE / DRAG give the edited sound.
+class SampleEditPage : public Component, private Timer
+{
+public:
+    SampleEditPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        using P = KeysKillaProcessor;
+        const auto a = lnf.skin->accent, b = lnf.skin->accent.brighter (0.3f);
+        auto knob = [&] (int id, double lo, double hi, std::function<String (double)> txt)
+        {
+            auto k = std::make_unique<RackKnob> (proc.sampleEdit[(size_t) id], P::sampleEditName (id), lo, hi, P::sampleEditDefault (id), a, b);
+            k->valueText = std::move (txt);
+            addAndMakeVisible (*k);
+            knobs.push_back (std::move (k)); knobIds.push_back (id);
+        };
+        auto pct = [] (double v) { return String (roundToInt (v * 100)) + " %"; };
+        knob (P::seTune, -24, 24, [] (double v) { return (v > 0 ? "+" : "") + String (roundToInt (v)) + " st"; });
+        knob (P::seFine, -100, 100, [] (double v) { return (v > 0 ? "+" : "") + String (roundToInt (v)) + " ct"; });
+        knob (P::seStart, 0, 0.9, pct);
+        knob (P::seAttack, 0, 1.0, [] (double v) { return String (roundToInt (v * 1000)) + " ms"; });
+        knob (P::seRelease, 0.01, 4.0, [] (double v) { return String (v, 2) + " s"; });
+        knob (P::seTone, -1, 1, [] (double v) { return v < -0.02 ? "DARK " + String (roundToInt (-v * 100)) : v > 0.02 ? "BRIGHT " + String (roundToInt (v * 100)) : String ("FLAT"); });
+        knob (P::seLowCut, 0, 1, [] (double v) { return v < 0.01 ? String ("OFF") : String (roundToInt (20.0 * std::pow (50.0, v))) + " Hz"; });
+        knob (P::seDrive, 0, 1, pct);
+        knob (P::seCrush, 0, 1, pct);
+        knob (P::seChorus, 0, 1, pct);
+        knob (P::seSpace, 0, 1, pct);
+        knob (P::seEcho, 0, 1, pct);
+        knob (P::seWidth, 0, 1, pct);
+        knob (P::seGain, -12, 12, [] (double v) { return String (v, 1) + " dB"; });
+        auto btn = [this] (HotButton& bt, const String& t, const String& tip, std::function<void()> fn) { bt.setButtonText (t); bt.framed = true; bt.setTooltip (tip); bt.onClick = std::move (fn); addAndMakeVisible (bt); };
+        btn (revBtn, "REVERSE", "Play the sample backwards", [this] { proc.sampleEdit[P::seReverse] = proc.sampleEdit[P::seReverse].load() > 0.5f ? 0.0f : 1.0f; sync(); });
+        btn (resetBtn, "RESET", "Every control back to the start (the sound as it was)", [this] { proc.resetSampleEdit(); sync(); });
+        btn (surpriseBtn, "SURPRISE ME", "Random settings that still sound good - again = another one", [this] { surprise(); });
+        btn (saveBtn, "SAVE", "Save the edited sound into your folders / sound kits", [this]
+        { saveToFolderMenu (proc, { proc.editedSample() }, &saveBtn, [safe = Component::SafePointer<SampleEditPage> (this)] (String m) { if (safe != nullptr) { safe->note = m; safe->repaint(); } }); });
+        btn (evolveBtn, "EVOLVE IT", "The edited sound becomes a new seed in EVOLVE - six children grow from it", [this]
+        { if (auto e = proc.editedSample()) { proc.evoSeedSound (e); if (onEvolve) onEvolve(); } });
+        btn (closeBtn, "CLOSE", "Back", [this] { if (onClose) onClose(); });
+        dragWav.makeFile = [this] { return proc.exportEditedSample(); };
+        dragWav.setTooltip ("Drag the edited sound into FL Studio as a WAV (tuned to C: FL's sampler plays it at C5)");
+        addAndMakeVisible (dragWav);
+        startTimerHz (15);
+    }
+    std::function<void()> onClose, onEvolve;
+    void visibilityChanged() override { if (isVisible()) sync(); }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        g.setColour (t.text); g.setFont (kk::modern::font (28.0f, true, 0.08f));
+        g.drawText ("EDIT", 24, 12, 100, 40, Justification::centredLeft);
+        const bool chop = proc.chopActive();
+        auto smp = proc.activeSample();
+        g.setColour (kk::accentText()); g.setFont (kk::modern::font (16.0f, true, 0.06f));
+        g.drawText (chop ? String ("THE SAMPLER") : smp != nullptr ? smp->name : String ("no sample on the keys"), 112, 14, 520, 22, Justification::centredLeft);
+        g.setColour (t.dim); g.setFont (kk::modern::font (12.5f, false, 0.04f));
+        g.drawText (chop ? "TONE and SPACE colour the chops - play the pads or the keys" : "turn a knob and play the keys - you hear it at once.  SAVE / DRAG give you the edited sound",
+                    112, 36, 640, 18, Justification::centredLeft);
+        // the sample, with START and REVERSE shown
+        const auto w = waveRect();
+        kk::modern::well (g, w, 10.0f);
+        if (smp != nullptr && ! smp->peaks.empty())
+        {
+            const bool rev = proc.sampleEdit[KeysKillaProcessor::seReverse].load() > 0.5f;
+            const float st = proc.sampleEdit[KeysKillaProcessor::seStart].load();
+            const int n = (int) smp->peaks.size();
+            for (int i = 0; i < n; ++i)
+            {
+                const float v = smp->peaks[(size_t) (rev ? n - 1 - i : i)];
+                const float x = w.getX() + 8 + (w.getWidth() - 16) * (float) i / (float) n, h = std::max (1.0f, v * (w.getHeight() * 0.42f));
+                g.setColour ((float) i / (float) n < st ? t.dim.withAlpha (0.35f) : t.accent.withAlpha (0.9f));
+                g.fillRect (x, w.getCentreY() - h, std::max (1.0f, (w.getWidth() - 16) / (float) n - 0.5f), h * 2);
+            }
+            const float sx = w.getX() + 8 + (w.getWidth() - 16) * st;
+            g.setColour (t.text); g.fillRect (sx - 1, w.getY() + 4, 2.0f, w.getHeight() - 8);
+            g.setFont (kk::modern::font (11.0f, true, 0.1f)); g.drawText ("START", Rectangle<float> (sx + 4, w.getY() + 4, 60, 14), Justification::centredLeft);
+            if (rev) { g.setColour (kk::accentText()); g.drawText ("REVERSED", w.reduced (10, 6), Justification::topRight); }
+        }
+        // group captions
+        static const char* groups[] { "SHAPE", "TONE", "SPACE" };
+        for (int gI = 0; gI < 3; ++gI)
+        {
+            const auto gr = groupRect (gI);
+            kk::modern::plate (g, gr, 14.0f);
+            g.setColour (t.text); g.setFont (kk::modern::font (13.0f, true, 0.3f));
+            g.drawText (groups[gI], gr.reduced (16, 8).removeFromTop (20), Justification::centredLeft);
+        }
+        if (note.isNotEmpty()) { g.setColour (kk::accentText()); g.setFont (kk::modern::font (13.0f, true, 0.05f)); g.drawText (note, 24, getHeight() - 28, getWidth() - 48, 20, Justification::centredLeft); }
+    }
+    void resized() override
+    {
+        const int W = getWidth();
+        closeBtn.setBounds (W - 110, 14, 96, 38);
+        dragWav.setBounds (W - 110 - 196, 12, 186, 42);
+        saveBtn.setBounds (dragWav.getX() - 94, 14, 86, 38);
+        evolveBtn.setBounds (saveBtn.getX() - 124, 14, 116, 38);
+        surpriseBtn.setBounds (evolveBtn.getX() - 140, 14, 132, 38);
+        resetBtn.setBounds (surpriseBtn.getX() - 92, 14, 84, 38);
+        // knobs: SHAPE (tune, fine, start, attack, release + reverse) / TONE (tone, low cut, drive, crush) / SPACE (chorus, space, echo, width, gain)
+        const int per[3] { 5, 4, 5 };
+        int k = 0;
+        for (int gI = 0; gI < 3; ++gI)
+        {
+            auto gr = groupRect (gI).reduced (12, 10).withTrimmedTop (24).toNearestInt();
+            if (gI == 0) { revBtn.setBounds (gr.removeFromBottom (40).withSizeKeepingCentre (150, 34)); }
+            const int kw = gr.getWidth() / per[gI], kh = std::min (gr.getHeight(), std::min (kw, 120) + 26);
+            const int ky = gr.getY() + (gr.getHeight() - kh) / 2;
+            for (int i = 0; i < per[gI]; ++i, ++k) knobs[(size_t) k]->setBounds (gr.getX() + i * kw, ky, kw, kh);
+        }
+    }
+private:
+    Rectangle<float> waveRect() const { return { 20.0f, 66.0f, (float) getWidth() - 40.0f, 210.0f }; }
+    Rectangle<float> groupRect (int gI) const
+    {
+        const float top = 292.0f, h = std::min (300.0f, (float) getHeight() - top - 34.0f), W = (float) getWidth() - 40.0f;
+        const float w0 = W * 0.38f, w1 = W * 0.28f, w2 = W - w0 - w1 - 20.0f;
+        const float x0 = 20.0f, x1 = x0 + w0 + 10.0f, x2 = x1 + w1 + 10.0f;
+        return gI == 0 ? Rectangle<float> (x0, top, w0, h) : gI == 1 ? Rectangle<float> (x1, top, w1, h) : Rectangle<float> (x2, top, w2, h);
+    }
+    void sync()
+    {
+        for (auto& k : knobs) k->sync();
+        revBtn.selected = proc.sampleEdit[KeysKillaProcessor::seReverse].load() > 0.5f; revBtn.repaint();
+        const bool chop = proc.chopActive();
+        for (size_t i = 0; i < knobs.size(); ++i)   // the SAMPLER: only the colour / space controls do something
+        {
+            const int id = knobIds[i];
+            knobs[i]->setEnabled (! chop || id >= KeysKillaProcessor::seTone);
+            knobs[i]->setAlpha (! chop || id >= KeysKillaProcessor::seTone ? 1.0f : 0.35f);
+        }
+        revBtn.setEnabled (! chop); saveBtn.setEnabled (! chop); evolveBtn.setEnabled (! chop); dragWav.setVisible (! chop);
+        repaint();
+    }
+    void surprise()
+    {
+        Random r;
+        using P = KeysKillaProcessor;
+        auto set = [this] (int id, float v) { proc.sampleEdit[(size_t) id] = v; };
+        proc.resetSampleEdit();
+        static const float tunes[] { 0, 0, 0, 12, -12, 7, -5, 5 };
+        set (P::seTune, tunes[r.nextInt (8)]);
+        if (r.nextFloat() < 0.25f) set (P::seReverse, 1.0f);
+        if (r.nextFloat() < 0.35f) set (P::seStart, r.nextFloat() * 0.3f);
+        if (r.nextFloat() < 0.4f) set (P::seAttack, r.nextFloat() * 0.25f);
+        set (P::seRelease, 0.08f + r.nextFloat() * 1.2f);
+        set (P::seTone, (r.nextFloat() * 2.0f - 1.0f) * 0.7f);
+        if (r.nextFloat() < 0.4f) set (P::seDrive, r.nextFloat() * 0.45f);
+        if (r.nextFloat() < 0.3f) set (P::seCrush, r.nextFloat() * 0.5f);
+        if (r.nextFloat() < 0.4f) set (P::seChorus, r.nextFloat() * 0.6f);
+        set (P::seSpace, r.nextFloat() * 0.55f);
+        if (r.nextFloat() < 0.4f) set (P::seEcho, r.nextFloat() * 0.45f);
+        set (P::seWidth, 0.4f + r.nextFloat() * 0.5f);
+        sync();
+        if (! proc.chopActive()) if (auto smp = proc.activeSample()) proc.previewNote = smp->rootNote;   // hear it
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        auto smp = proc.activeSample().get();
+        const bool chop = proc.chopActive();
+        if (smp != lastSmp || chop != lastChop) { lastSmp = smp; lastChop = chop; sync(); }
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    std::vector<std::unique_ptr<RackKnob>> knobs; std::vector<int> knobIds;
+    HotButton revBtn { lnf }, resetBtn { lnf }, surpriseBtn { lnf }, saveBtn { lnf }, evolveBtn { lnf }, closeBtn { lnf };
+    DragFileButton dragWav { "DRAG WAV", TC (0xff36ff6a) };
+    String note;
+    const void* lastSmp = nullptr; bool lastChop = false;
 };
 
 // left tiles: each one a small colour badge (its own two colours) with a white symbol
@@ -4556,7 +5291,7 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER\n/ CHOP", "DRUM\nKIT", "FX\nRACK", "EVOLVE" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -4576,7 +5311,7 @@ public:
             if (v == 4)
             {
                 const auto lr = r.withY (r.getY() - 15).withHeight (13);
-                g.setColour (TC (0xffc8c4e8)); g.setFont (serif (10.0f, true, 0.3f));
+                g.setColour (TC (0xffc8c4e8)); g.setFont (serif (11.5f, true, 0.3f));
                 g.drawText ("STUDIO", lr.toNearestInt(), Justification::centred);
                 g.setGradientFill (ColourGradient (TC (0x00ff3fd2), lr.getX(), 0, TC (0xccff3fd2), lr.getCentreX() - 30, 0, false));
                 g.fillRect (lr.getX() + 4, lr.getCentreY(), lr.getWidth() * 0.5f - 34, 1.2f);
@@ -4603,8 +5338,8 @@ public:
             const auto ic = Rectangle<float> (r.getX() + 7, r.getCentreY() - bs * 0.5f, bs, bs);
             drawTileIcon (g, k, ic, on);
             g.setColour (on ? TC (0xffffffff) : TC (0xffe6e3ff));
-            g.setFont (serif (13.0f, true, 0.12f));
-            g.drawFittedText (String (names[k]), r.withTrimmedLeft (bs + 14).toNearestInt(), Justification::centredLeft, 2);
+            g.setFont (serif (16.0f, true, 0.1f));   // v0.37: readable at FL's usual size
+            g.drawFittedText (String (names[k]), r.withTrimmedLeft (bs + 12).toNearestInt(), Justification::centredLeft, 2, 0.8f);
             if (k == 7 && isOn && isOn (k))   // FX RACK: lit when an effect is on
             {
                 g.setColour (TC (0xff36ff6a)); g.fillEllipse (r.getRight() - 14, r.getY() + 6, 8, 8);
@@ -4658,8 +5393,12 @@ public:
         dragWav.makeFile = [this] { return proc.evoExportWav (proc.evoCenter); };
         dragWav.setTooltip ("Drag the middle sound into FL Studio as a WAV");
         dragMidi.makeFile = [this] { return proc.evoExportMidi (proc.evoCenter); };
-        dragMidi.setTooltip ("Drag a melody for the middle sound into FL Studio (MIDI)");
+        dragMidi.setTooltip ("Drag the melody you see (C minor, the notes on the right) into FL Studio as MIDI");
         addAndMakeVisible (dragWav); addAndMakeVisible (dragMidi);
+        btn (melodyBtn, "PLAY MELODY", "Hear the melody with the middle sound (in time) - again = stop.  NEW MELODY = another one", [this]
+        { if (proc.loopPlaying()) proc.stopLoop(); else { proc.evoAudition (proc.evoCenter, false); proc.toggleLoop(); } repaint(); });
+        btn (newMelodyBtn, "NEW", "Another melody for the middle sound", [this]
+        { if (isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size())) { proc.evoNewMelody (proc.evoCenter); repaint(); } });
         setWantsKeyboardFocus (false);
         startTimerHz (30);
     }
@@ -4685,15 +5424,14 @@ public:
         pageBackdrop (g, *this, 0.7f);
         // header
         kk::modern::plate (g, { 12, 12, (float) getWidth() - 24, 70 }, 18.0f);
-        kk::modern::wordmark (g, { 40, 22, 420, 44 }, 32.0f);
-        g.setColour (t.accent); g.setFont (kk::modern::font (13.0f, true, 0.5f));
-        g.drawText ("EVOLVE", Rectangle<float> (392, 30, 160, 30), Justification::centredLeft);
-        g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.14f));
-        g.drawText (proc.evo.empty() ? "drop a sound  -  or pick a seed" : "hover = hear   click = grow   drag from the middle = blend",
-                    Rectangle<float> (560, 30, 600, 30), Justification::centredLeft);
+        kk::modern::wordmark (g, { 40, 22, 420, 44 }, 34.0f);
+        g.setColour (t.text.withAlpha (0.85f)); g.setFont (kk::modern::font (16.5f, true, 0.06f));
+        g.drawText (proc.evo.empty() ? "drop any sound  -  or pick a seed from the bank" : "hover = hear it     click = it grows     drag from the middle = blend",
+                    Rectangle<float> (420, 26, 780, 36), Justification::centredLeft);
         // bottom bar
         kk::modern::plate (g, bottomBar().toFloat(), 18.0f);
         drawWild (g);
+        paintMelody (g);
         if (proc.evo.empty()) { paintEmpty (g); return; }
 
         const auto path = proc.evoPath();
@@ -4952,7 +5690,7 @@ private:
         g.drawFittedText (n.name, Rectangle<int> ((int) (c.x - r * 1.5f), (int) (c.y + r + 6), (int) (r * 3.0f), isCentre ? 24 : 30), Justification::centredTop, 2, 0.75f);
         if (isCentre)
         {
-            g.setColour (t.accent); g.setFont (kk::modern::font (11.0f, true, 0.3f));
+            g.setColour (kk::accentText()); g.setFont (kk::modern::font (11.0f, true, 0.3f));
             g.drawText ("GEN " + String (n.gen) + (n.isAudio() ? "  .  YOUR SOUND" : ""), Rectangle<float> (c.x - 100, c.y + r * 0.42f, 200, 16), Justification::centred);
         }
         if (tag.isNotEmpty())
@@ -4998,12 +5736,15 @@ private:
         themeBtn.setBounds (W - 92, 24, 56, 46);
         studioBtn.setBounds (W - 92 - 132, 26, 124, 42);
         const auto b = bottomBar();
-        int x = b.getX() + 520;
-        againBtn.setBounds (x, b.getY() + 18, 150, 40); x += 160;
-        seedBtn.setBounds (x, b.getY() + 18, 120, 40); x += 150;
-        saveBtn.setBounds (x, b.getY() + 18, 100, 40); x += 110;
-        dragWav.setBounds (x, b.getY() + 16, 170, 44); x += 180;
-        dragMidi.setBounds (x, b.getY() + 16, 190, 44);
+        int x = b.getX() + 470;
+        againBtn.setBounds (x, b.getY() + 18, 146, 40); x += 152;
+        seedBtn.setBounds (x, b.getY() + 18, 112, 40); x += 122;
+        saveBtn.setBounds (x, b.getY() + 18, 84, 40); x += 92;
+        dragWav.setBounds (x, b.getY() + 16, 140, 44); x += 148;
+        melodyBtn.setBounds (x, b.getY() + 18, 130, 40); x += 136;
+        newMelodyBtn.setBounds (x, b.getY() + 18, 56, 40); x += 62;
+        dragMidi.setBounds (x, b.getY() + 16, 120, 44); x += 128;
+        melodyRoll = { (float) x, (float) b.getY() + 10, (float) (b.getRight() - 12 - x), (float) b.getHeight() - 20 };
         const auto c = centrePos();
         bankBtn.setBounds ((int) c.x - 330, (int) c.y + 190, 210, 42);
         diceBtn.setBounds ((int) c.x - 105, (int) c.y + 190, 210, 42);
@@ -5012,6 +5753,7 @@ private:
         for (auto* bt : { &bankBtn, &diceBtn, &currentBtn }) bt->setVisible (empty);
         for (auto* bt : { &againBtn, &saveBtn }) bt->setVisible (! empty);
         dragWav.setVisible (! empty); dragMidi.setVisible (! empty);
+        melodyBtn.setVisible (! empty); newMelodyBtn.setVisible (! empty);
     }
     void timerCallback() override
     {
@@ -5024,6 +5766,8 @@ private:
         { proc.evoAudition (proc.evoCenter, false); lastHeard = proc.evoCenter; }
         const bool empty = proc.evo.empty();
         if (empty != wasEmpty) { wasEmpty = empty; layoutButtons(); }
+        melodyBtn.setButtonText (proc.loopPlaying() ? "STOP MELODY" : "PLAY MELODY");
+        if (proc.loopPlaying()) repaint (melodyRoll.toNearestInt().expanded (2));
         if (proc.evoVer.load() != lastVer || animStart != 0 || empty)
         {
             lastVer = proc.evoVer.load();
@@ -5090,7 +5834,31 @@ private:
 
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     HotButton studioBtn { lnf }, themeBtn { lnf }, seedBtn { lnf }, againBtn { lnf }, saveBtn { lnf }, bankBtn { lnf }, diceBtn { lnf }, currentBtn { lnf };
-    DragFileButton dragWav { "DRAG WAV", TC (0xff36ff6a) }, dragMidi { "DRAG MELODY", TC (0xff36ff6a) };
+    DragFileButton dragWav { "DRAG WAV", TC (0xff36ff6a) }, dragMidi { "MIDI", TC (0xff36ff6a) };
+    HotButton melodyBtn { lnf }, newMelodyBtn { lnf };
+    Rectangle<float> melodyRoll;
+    void paintMelody (Graphics& g)
+    {
+        if (proc.evo.empty() || ! isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size()) || melodyRoll.getWidth() < 40) return;
+        const auto& t = kk::theme();
+        kk::modern::well (g, melodyRoll, 6.0f);
+        KeysKillaProcessor::Genome lg = proc.evo[(size_t) proc.evoCenter].g;
+        if (! lg.loop.valid) lg.loop = kk::loopFromSeed ((uint32_t) proc.evo[(size_t) proc.evoCenter].name.hashCode());
+        const auto notes = proc.loopNotes (lg);
+        if (notes.empty()) return;
+        int lo = 127, hi = 0; for (auto& n : notes) { lo = std::min (lo, n.note); hi = std::max (hi, n.note); }
+        const float beats = (float) proc.loopBars() * 4.0f;
+        const auto r = melodyRoll.reduced (6, 5);
+        for (auto& n : notes)
+        {
+            const float x = r.getX() + r.getWidth() * n.start / beats, w = std::max (2.0f, r.getWidth() * n.len / beats - 1.0f);
+            const float y = r.getBottom() - r.getHeight() * (float) (n.note - lo + 1) / (float) (hi - lo + 2);
+            g.setColour ((n.low ? t.text.withAlpha (0.5f) : t.accent).withAlpha (0.95f));
+            g.fillRoundedRectangle (x, y - 2.0f, w, 4.0f, 1.5f);
+        }
+        if (proc.loopPlaying() && proc.loopBeat.load() >= 0)
+        { g.setColour (t.text); g.fillRect (r.getX() + r.getWidth() * proc.loopBeat.load() / beats, r.getY(), 1.5f, r.getHeight()); }
+    }
     std::unique_ptr<FileChooser> chooser;
     int hovered = -1, lastHeard = -1, downNode = -1, downAction = -1, actionNode = -1, morphKid = -1, lastVer = -1;
     uint32 hoverSince = 0, animStart = 0, lastMorph = 0;
@@ -5444,7 +6212,9 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
-        if (v == 31)   // SAMPLER with a sample, zoomed in, a part selected
+        if (v == 37) { FxRackPage::lastMode() = 0; openTab (tabFxRack); }   // v0.37 SURPRISE FX
+        if (v == 38) { FxRackPage::lastMode() = 1; proc.stepPreset (4); proc.stepOn = true; openTab (tabFxRack); }   // STEP FX
+        if (v == 31 || v == 36 || v == 39)   // SAMPLER with a sample, zoomed in, a part selected (36: FLIPS, 39: EDIT of a sample)
         {
             auto f = File::getSpecialLocation (File::tempDirectory).getChildFile ("kk_shot_sample.wav");
             AudioBuffer<float> b (2, 44100 * 4);
@@ -5460,7 +6230,8 @@ public:
             openTab (tabSampler);
             std::function<ChopPanel* (Component*)> find = [&find] (Component* c) -> ChopPanel*
             { if (auto* cp = dynamic_cast<ChopPanel*> (c)) return cp; for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r; return nullptr; };
-            if (auto* m = module (tabSampler)) if (auto* cp = find (m)) cp->debugSelect (44100 / 2, 44100 * 2, 0, 44100 * 3);
+            if (auto* m = module (tabSampler)) if (auto* cp = find (m)) { cp->debugSelect (44100 / 2, 44100 * 2, 0, 44100 * 3); if (v == 36) cp->debugFlips(); }
+            if (v == 39) { proc.useSample (kk::PairLab::fromFile (f, 44100.0), false); proc.sampleEdit[KeysKillaProcessor::seStart] = 0.12f; proc.sampleEdit[KeysKillaProcessor::seSpace] = 0.4f; openTab (tabEdit); }
         }
         if (v == 30) { openTab (0); setTheme (1 - kk::themeIndex()); }          // ... and with a drum page open
         if (v == 29) { openTab (tabEdit); setTheme (1 - kk::themeIndex()); }   // switch the skin with SOUND EDIT open
@@ -5519,7 +6290,7 @@ public:
         // and reopen the page that was open (SOUND EDIT, drum pages, library, tree ...)
         const int open = isPanelVisible() ? openTabIndex : -1;
         hidePanels(); openTabIndex = -1;
-        soundEdit.reset(); advanced.reset(); browser.reset(); treePanel.reset();
+        soundEdit.reset(); sampleEdit.reset(); advanced.reset(); browser.reset(); treePanel.reset();
         for (auto& m : modules) m.reset();
         for (int i = 0; i < (int) tabs.size() && i < numTabs; ++i) tabs[(size_t) i]->tint = drumTheme (i).accent;
         if (open >= 0) openTab (open);
@@ -5579,6 +6350,7 @@ public:
         if (browser) browser->setBounds (R (150, 8, 1662, 612));   // the left tiles never cover the preset names
         if (treePanel) treePanel->setBounds (R (150, 96, 1662, 612));
         if (soundEdit) soundEdit->setBounds (R (10, 8, 1662, 806));   // SOUND EDIT: everything above the keyboard, the tiles stay
+        if (sampleEdit) sampleEdit->setBounds (R (10, 8, 1662, 806));
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
@@ -5620,7 +6392,7 @@ private:
     }
     std::vector<Component*> panels() const
     {
-        std::vector<Component*> v { advanced.get(), browser.get(), treePanel.get(), soundEdit.get() };
+        std::vector<Component*> v { advanced.get(), browser.get(), treePanel.get(), soundEdit.get(), sampleEdit.get() };
         for (auto& m : modules) v.push_back (m.get());
         return v;
     }
@@ -5665,6 +6437,18 @@ private:
                 case tabBrowser: ensureBrowser(); browser->open (proc.uiCat, proc.uiEra, false); break;
                 case tabParams: ensureAdvanced(); advanced->showTab (0); advanced->setVisible (true); break;
                 case tabEdit:
+                    if (proc.sampleActive() || proc.chopActive())   // v0.37: a sample plays - EDIT edits that sample
+                    {
+                        if (! sampleEdit)
+                        {
+                            auto pg = std::make_unique<SampleEditPage> (proc, lnf);
+                            pg->onClose = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr && safe->openTabIndex == tabEdit) safe->openTab (tabEdit); }); };
+                            pg->onEvolve = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr) safe->showEvolve (true); }); };
+                            sampleEdit = std::make_unique<InsetPage> (std::move (pg));
+                            addChildComponent (*sampleEdit); noFocus (*sampleEdit); resized();
+                        }
+                        sampleEdit->setVisible (true); break;
+                    }
                     if (! soundEdit)
                     {
                         soundEdit = std::make_unique<kkedit::SoundEditPage> (proc, lnf);
@@ -6056,13 +6840,15 @@ private:
                                      "CLICK: punchy pitch click on the attack", "GLIDE: slide time between notes", "KNOCK: transient boost",
                                      "DIRT: distortion above the clean low end", "MIX: effect balance" };
         const auto custom = proc.macroNames();
+        const bool sampleMode = proc.sampleActive() || proc.chopActive();   // v0.37: the knobs colour your sample / the SAMPLER too
+        lastSampleMode = sampleMode;
         for (int i = 0; i < 8; ++i)
         {
-            const String t = custom.size() == 8 ? custom[i] : String (bass ? bassL[i] : normal[i]);
+            const String t = sampleMode ? String (normal[i]) : custom.size() == 8 ? custom[i] : String (bass ? bassL[i] : normal[i]);
             captions[(size_t) i]->text = t;
             captions[(size_t) i]->custom = t != normal[i];
             captions[(size_t) i]->repaint();
-            macros[(size_t) i]->setTooltip (bass ? tipsB[i] : tipsN[i]);
+            macros[(size_t) i]->setTooltip (sampleMode ? String (tipsN[i]) + "  (on the sample that plays)" : String (bass ? tipsB[i] : tipsN[i]));
         }
         if (proc.labVersion() != lastLab || proc.pairVer.load() != lastPairVer)
         {
@@ -6073,7 +6859,7 @@ private:
             for (auto& gsw : genes) gsw->repaint();
             soundModeBtn.selected = ! proc.mainLoopMode; loopModeBtn.selected = proc.mainLoopMode; soundModeBtn.repaint(); loopModeBtn.repaint();
         }
-        if (proc.mainLoopMode && proc.loopPlaying() && proc.loopOwnerId() == 3) for (auto& c : childCards) c->repaint();   // loop playhead
+        if (proc.mainLoopMode && proc.loopPlaying() && (proc.loopOwnerId() == 3 || proc.loopOwnerId() == 2)) for (auto& c : childCards) c->repaint();   // loop playhead
         wildRail.repaint();
         updateTabs();
     }
@@ -6130,6 +6916,8 @@ private:
         if (breedBtn.flash > 0) { breedBtn.flash = std::max (0.0f, breedBtn.flash - 0.08f); breedBtn.repaint(); }
         proc.renderNextThumbnail();   // one child waveform per tick keeps the UI smooth
         syncKeysToPage();
+        if (! isPanelVisible() && ! evolveOpen() && proc.mainLoopMode && proc.loopPlaying() && (proc.loopOwnerId() == 3 || proc.loopOwnerId() == 2) && (++loopTick & 1))
+            for (auto& c : childCards) c->repaint();   // the loop playhead in the cards
 
         const bool mouseDown = ModifierKeys::currentModifiers.isAnyMouseButtonDown();
         if (++slowTick % 10 == 0)
@@ -6141,7 +6929,7 @@ private:
         const bool bassNow = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f;
         const float eraNow = proc.breedWild;
         if (proc.currentName() != lastName || proc.currentPresetIndex() != lastIndex || modifiedNow != modified || bassNow != lastBass
-            || proc.labVersion() != lastLab || eraNow != lastEra)
+            || proc.labVersion() != lastLab || eraNow != lastEra || (proc.sampleActive() || proc.chopActive()) != lastSampleMode)
         {
             lastName = proc.currentName(); lastIndex = proc.currentPresetIndex(); modified = modifiedNow; lastBass = bassNow; lastEra = eraNow;
             refreshState();
@@ -6179,6 +6967,7 @@ private:
     KKKeyboard keyboard;
     std::unique_ptr<AdvancedPage> advanced;
     std::unique_ptr<kkedit::SoundEditPage> soundEdit;
+    std::unique_ptr<InsetPage> sampleEdit;
     HotButton editBtn { lnf };
     std::unique_ptr<PresetBrowser> browser;
     std::array<std::unique_ptr<Component>, numPages> modules;
@@ -6193,41 +6982,52 @@ private:
         evolve->setVisible (on);
         if (on) evolve->toFront (false);
         settings->setValue ("evolveOpen", on);
-        lastKeysPage = -99;   // the keys follow the page
     }
 
-    // v0.35 BREED LAB: no "KEYS PLAY ..." switches any more - the page you are on is what the PC keys, your MIDI
-    // keyboard and FL's piano roll play (BREED LAB / TREE / EDIT = the BREED LAB sound, SAMPLER = the chops, VST = the VST)
-    int pageKeysMode() const
+    // v0.37 THE SOUND ON THE KEYS: what you picked last plays (the PC keys, your MIDI keyboard, FL's piano roll).
+    // Opening a page that HAS its own sound hands the keys to it once (BREED LAB, FAMILY TREE, SAMPLER, EVOLVE);
+    // EDIT, FX, MY SOUNDS and the bank never take the keys away - they work on the sound that plays.
+    int currentPageId() const { return isPanelVisible() ? openTabIndex : evolveOpen() ? -50 : -1; }
+    void takeKeysForPage (int page)
     {
-        if (evolveOpen() && ! isPanelVisible())
-            return isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size()) && proc.evo[(size_t) proc.evoCenter].isAudio() ? KeysKillaProcessor::playPair : KeysKillaProcessor::playKeys;
-        if (! isPanelVisible() && openTabIndex < 0) return proc.labAudioMode() ? KeysKillaProcessor::playPair : KeysKillaProcessor::playKeys;
-        switch (openTabIndex)
+        switch (page)
         {
-            case tabSampler: return KeysKillaProcessor::playChop;
-            case tabVst:     return KeysKillaProcessor::playVst;
-            case tabPair:    return KeysKillaProcessor::playPair;
-            case tabSounds:  return -1;   // MY SOUNDS: the sound you click plays (it sets the mode itself)
-            default: break;
+            case -50:   // EVOLVE: the middle sound
+                if (isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size()))
+                {
+                    const auto& n = proc.evo[(size_t) proc.evoCenter];
+                    if (n.isAudio()) { if (proc.activeSample() != n.audio || ! proc.sampleActive()) proc.useSample (n.audio, false); }
+                    else proc.setPlayMode (KeysKillaProcessor::playKeys);
+                }
+                break;
+            case -1:    // BREED LAB: its selected child (your sounds = the audio child)
+                if (proc.labAudioMode() && isPositiveAndBelow (proc.pairSel, (int) proc.pairKids.size()))
+                { if (proc.activeSample() != proc.pairKids[(size_t) proc.pairSel] || ! proc.sampleActive()) proc.useSample (proc.pairKids[(size_t) proc.pairSel], false); }
+                else if (! proc.labAudioMode() && proc.selectedChild() >= 0) proc.setPlayMode (KeysKillaProcessor::playKeys);
+                break;
+            case tabTree:
+                if (! proc.treeKids().empty() && proc.treeSelected() >= 0) proc.setPlayMode (KeysKillaProcessor::playKeys);
+                break;
+            case tabSampler:
+                if (proc.chop.hasSource()) proc.setPlayMode (KeysKillaProcessor::playChop);
+                break;
+            case tabVst: proc.setPlayMode (KeysKillaProcessor::playVst); break;
+            default: break;   // EDIT, FX, MY SOUNDS, the bank: the sound stays
         }
-        if (openTabIndex >= 0 && openTabIndex < numTabs) return KeysKillaProcessor::modeOfDrum (openTabIndex);
-        return proc.labAudioMode() ? KeysKillaProcessor::playPair : KeysKillaProcessor::playKeys;
     }
     void syncKeysToPage()
     {
-        const int want = pageKeysMode();
-        const int page = isPanelVisible() ? openTabIndex : evolveOpen() ? -50 - (proc.evoCenter >= 0 && proc.evoCenter < (int) proc.evo.size() && proc.evo[(size_t) proc.evoCenter].isAudio() ? 1 : 0) : -1;
-        if (page == lastKeysPage && want == lastKeysMode) return;
-        lastKeysPage = page; lastKeysMode = want;
-        if (want < 0) return;
-        if ((int) proc.apvts.getRawParameterValue (ID::playMode)->load() != want)
-        {
-            proc.panic();   // nothing keeps ringing from the page you left
-            setParamFromUi (proc, ID::playMode, (float) want);
-        }
+        const int page = currentPageId();
+        if (page == lastKeysPage) return;
+        if (lastKeysPage == -99) { lastKeysPage = page; return; }   // the editor just opened: the sound on the keys stays
+        lastKeysPage = page;
+        const int before = (int) proc.apvts.getRawParameterValue (ID::playMode)->load();
+        takeKeysForPage (page);
+        if ((int) proc.apvts.getRawParameterValue (ID::playMode)->load() != before) proc.panic();   // nothing keeps ringing from the sound you left
     }
-    int lastKeysPage = -99, lastKeysMode = -99, lastPairVer = -1;
+    int lastKeysPage = -99, lastPairVer = -1;
+    bool lastSampleMode = false;
+    int loopTick = 0;
 
     void spaceAction()
     {

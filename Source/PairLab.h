@@ -22,6 +22,7 @@ struct PairSound
     juce::String name, method;           // method: how a child was made ("MORPH A>B 60%" ...)
     int rootNote = 60;                   // detected pitch (C5 when unpitched)
     bool pitched = false;
+    double hz = 0;                       // the detected pitch, exact (0 = unpitched)
 };
 using PairPtr = std::shared_ptr<const PairSound>;
 
@@ -115,6 +116,7 @@ public:
             kid->name = A.name.substring (0, 14) + (ia == ib ? String() : " x " + B.name.substring (0, 14));
             kid->method = how;
             finish (*kid, rate);
+            tuneToC (*kid, rate);
             kids.push_back (kid);
         }
         return kids;
@@ -144,12 +146,22 @@ public:
     {
         Voice* v = nullptr;
         for (auto& x : voices) if (! x.active) { v = &x; break; }
-        if (v == nullptr) v = &voices[(size_t) (rr++ % voices.size())];
+        if (v == nullptr)   // all busy: steal the quietest releasing one, else the oldest - it fades out as a ghost (no click)
+        {
+            for (auto& x : voices) if (x.rel && (v == nullptr || x.relGain < v->relGain)) v = &x;
+            if (v == nullptr) { v = &voices[0]; for (auto& x : voices) if (x.age > v->age) v = &x; }
+            auto& gh = ghosts[(size_t) (gr++ % ghosts.size())];
+            gh = *v; gh.rel = true; gh.fast = true;
+        }
         *v = {};
         v->active = true; v->note = note; v->vel = 0.25f + 0.75f * vel; v->delay = offset;
+        for (auto& x : voices) ++x.age;
+        v->age = 0;
     }
     void noteOff (int note) { for (auto& v : voices) if (v.active && v.note == note && ! v.rel) { v.rel = true; break; } }
     void allOff() { for (auto& v : voices) v.rel = true; }
+    std::atomic<float> shTune { 0 }, shStart { 0 }, shAttack { 0 }, shRelease { 0.12f };
+    std::atomic<bool> shRev { false };
     void render (float* L, float* R, int n, double rate)
     {
         const juce::SpinLock::ScopedTryLockType tl (lock);
@@ -157,28 +169,162 @@ public:
         const auto& s = *playing;
         const int total = s.audio.getNumSamples();
         const float* a = s.audio.getReadPointer (0); const float* b = s.audio.getReadPointer (1);
-        const float relStep = 1.0f / (0.12f * (float) rate);
-        for (auto& v : voices)
+        // SAMPLE EDIT shape: tune, start, attack, release, reverse
+        const float relStep = 1.0f / (std::max (0.01f, shRelease.load()) * (float) rate), fastStep = 1.0f / (0.006f * (float) rate);
+        const float atkStep = 1.0f / (std::max (0.0015f, shAttack.load()) * (float) rate);   // 1.5 ms minimum: no click, the attack stays sharp
+        const double tuneMul = std::exp2 (shTune.load() / 12.0);
+        const bool rev = shRev.load();
+        const double startAt = juce::jlimit (0.0, 0.95, (double) shStart.load()) * total;
+        auto run = [&] (Voice& v)
         {
-            if (! v.active) continue;
-            const double inc = std::exp2 ((v.note - s.rootNote) / 12.0);
+            if (! v.active) return;
+            const double inc = std::exp2 ((v.note - s.rootNote) / 12.0) * tuneMul;
+            if (! v.started) { v.started = true; v.pos = startAt; }
             for (int i = 0; i < n; ++i)
             {
                 if (v.delay > 0) { --v.delay; continue; }
-                const int i0 = (int) v.pos;
-                if (i0 + 1 >= total) { v.active = false; break; }
-                const float fr = (float) (v.pos - i0);
-                float g = v.vel * 0.8f;
-                if (v.rel) { v.relGain -= relStep; if (v.relGain <= 0) { v.active = false; break; } g *= v.relGain; }
+                const double rp = rev ? (double) total - 2.0 - v.pos : v.pos;
+                const int i0 = (int) rp;
+                if (i0 + 1 >= total || i0 < 0) { v.active = false; break; }
+                const float fr = (float) (rp - i0);
+                if (v.atk < 1.0f) v.atk = std::min (1.0f, v.atk + atkStep);
+                float g = v.vel * 0.8f * v.atk;
+                if (v.rel) { v.relGain -= v.fast ? fastStep : relStep; if (v.relGain <= 0) { v.active = false; break; } g *= v.relGain; }
                 L[i] += (a[i0] + (a[i0 + 1] - a[i0]) * fr) * g;
                 R[i] += (b[i0] + (b[i0 + 1] - b[i0]) * fr) * g;
                 v.pos += inc;
             }
-        }
+        };
+        for (auto& v : voices) run (v);
+        for (auto& v : ghosts) run (v);
     }
 
+    // v0.37 TUNE: every made sound sits on C (FL's sampler plays it at C5 in tune), so sounds and melodies layer in the channel rack
+    static void tuneToC (PairSound& s, double rate)
+    {
+        if (! s.pitched || s.audio.getNumSamples() < 64) return;
+        const double hz = s.hz > 0 ? s.hz : 440.0 * std::exp2 ((s.rootNote - 69) / 12.0);
+        const double midi = 69.0 + 12.0 * std::log2 (hz / 440.0);
+        const double target = 12.0 * std::round ((midi - 60.0) / 12.0) + 60.0;   // the nearest C (at most 6 semitones away)
+        const double shift = target - midi;
+        s.rootNote = (int) target;
+        s.hz = 440.0 * std::exp2 ((target - 69.0) / 12.0);
+        if (std::abs (shift) < 0.03) return;   // already in tune (3 cents)
+        const double ratio = std::exp2 (shift / 12.0);   // read faster = higher
+        const int len = s.audio.getNumSamples(), nl = std::max (2, (int) std::floor ((len - 4) / ratio));
+        juce::AudioBuffer<float> o (2, nl);
+        for (int c = 0; c < 2; ++c)
+        {
+            juce::LagrangeInterpolator li;
+            li.process (ratio, s.audio.getReadPointer (c), o.getWritePointer (c), nl, len, 0);
+        }
+        s.audio = std::move (o);
+        const float pk = s.audio.getMagnitude (0, s.audio.getNumSamples());
+        if (pk > 1.0e-6f) s.audio.applyGain (0.89f / pk);
+        overviewOf (s);
+        juce::ignoreUnused (rate);
+    }
+    static PairPtr tuned (PairPtr p, double rate)
+    {
+        if (p == nullptr || ! p->pitched) return p;
+        auto c = std::make_shared<PairSound> (*p);
+        tuneToC (*c, rate);
+        return c;
+    }
+
+    // v0.37 GENES for your own sounds: a child spliced from A and B - BODY (the lows), ATTACK (the first hit), TEXTURE (the highs),
+    // SPACE (the stereo side), MOVEMENT (the loudness shape over time), CHARACTER (the mids). genes[g] = 0 (A) or 1 (B).
+    static PairPtr splice (const PairSound& A0, const PairSound& B0, const std::array<int, 6>& genes, double rate, const juce::String& name)
+    {
+        const PairSound* src[2] { &A0, &B0 };
+        // B tuned to A's root so the layers agree
+        PairSound Bt = B0;
+        if (A0.pitched && B0.pitched && A0.rootNote != B0.rootNote)
+        {
+            const double ratio = std::exp2 ((A0.rootNote - B0.rootNote) / 12.0);
+            const int len = B0.audio.getNumSamples(), nl = std::max (2, (int) std::floor ((len - 4) / ratio));
+            Bt.audio.setSize (2, nl);
+            for (int c = 0; c < 2; ++c) { juce::LagrangeInterpolator li; li.process (ratio, B0.audio.getReadPointer (c), Bt.audio.getWritePointer (c), nl, len, 0); }
+        }
+        src[1] = &Bt;
+        const int len = std::max (src[genes[4] & 1]->audio.getNumSamples(), (int) (rate * 0.2));
+        // 3 bands per parent: low < 250 Hz, mid, high > 3.5 kHz
+        auto bands = [&] (const PairSound& p, juce::AudioBuffer<float>* out)   // out[0] low, out[1] mid, out[2] high
+        {
+            for (int b = 0; b < 3; ++b) { out[b].setSize (2, len); out[b].clear(); }
+            for (int c = 0; c < 2; ++c)
+            {
+                SvfCoef lo, hi; lo.set (250.0f, 1.0f, (float) rate); hi.set (3500.0f, 1.0f, (float) rate);
+                SvfState s1, s2, s3, s4;
+                const int pl = p.audio.getNumSamples();
+                for (int i = 0; i < len; ++i)
+                {
+                    const float x = i < pl ? p.audio.getSample (c, i) : 0.0f;
+                    s1.tick (lo, x); s2.tick (lo, s1.lp);          // 4-pole low
+                    s3.tick (hi, x); s4.tick (hi, s3.hp);          // 4-pole high
+                    const float l = s2.lp, h = s4.hp;
+                    out[0].setSample (c, i, l); out[2].setSample (c, i, h); out[1].setSample (c, i, x - l - h);
+                }
+            }
+        };
+        juce::AudioBuffer<float> bA[3], bB[3];
+        bands (*src[0], bA); bands (*src[1], bB);
+        auto band = [&] (int which, int gene) -> const juce::AudioBuffer<float>& { return (genes[(size_t) gene] & 1) ? bB[which] : bA[which]; };
+        auto kid = std::make_shared<PairSound>();
+        auto& o = kid->audio; o.setSize (2, len); o.clear();
+        for (int c = 0; c < 2; ++c)
+        {
+            o.addFrom (c, 0, band (0, 0), c, 0, len);   // BODY
+            o.addFrom (c, 0, band (1, 5), c, 0, len);   // CHARACTER
+            o.addFrom (c, 0, band (2, 2), c, 0, len);   // TEXTURE
+        }
+        // ATTACK: the first 40 ms from that parent, crossfaded in 25 ms
+        {
+            const auto& at = *src[genes[1] & 1];
+            const int a0 = std::min (len, (int) (rate * 0.04)), xf = std::min (len - a0, (int) (rate * 0.025));
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < a0 + xf && i < at.audio.getNumSamples(); ++i)
+                {
+                    const float w = i < a0 ? 1.0f : 1.0f - (float) (i - a0) / (float) std::max (1, xf);
+                    o.setSample (c, i, o.getSample (c, i) * (1.0f - w) + at.audio.getSample (c, i) * w);
+                }
+        }
+        // MOVEMENT: the loudness shape of that parent (smooth)
+        {
+            const auto& mv = *src[genes[4] & 1];
+            float eo = 0, em = 0, gs = 1;
+            const float k = 1.0f - std::exp (-1.0f / (0.02f * (float) rate));
+            for (int i = 0; i < len; ++i)
+            {
+                const float vo = std::max (std::abs (o.getSample (0, i)), std::abs (o.getSample (1, i)));
+                const float vm = i < mv.audio.getNumSamples() ? std::max (std::abs (mv.audio.getSample (0, i)), std::abs (mv.audio.getSample (1, i))) : 0.0f;
+                eo += (vo - eo) * k; em += (vm - em) * k;
+                const float g = std::min (3.0f, (em + 1.0e-4f) / (eo + 1.0e-3f));
+                gs += (g - gs) * 0.002f;
+                o.setSample (0, i, o.getSample (0, i) * gs); o.setSample (1, i, o.getSample (1, i) * gs);
+            }
+        }
+        // SPACE: the stereo side of that parent
+        {
+            const auto& sp = *src[genes[3] & 1];
+            const int sl = sp.audio.getNumSamples();
+            for (int i = 0; i < len; ++i)
+            {
+                const float m = 0.5f * (o.getSample (0, i) + o.getSample (1, i));
+                const float sd = i < sl ? 0.5f * (sp.audio.getSample (0, i) - sp.audio.getSample (1, i)) : 0.0f;
+                o.setSample (0, i, m + sd); o.setSample (1, i, m - sd);
+            }
+        }
+        kid->name = name;
+        juce::String how = "GENES ";
+        for (int g = 0; g < 6; ++g) how += (genes[(size_t) g] & 1) ? "B" : "A";
+        kid->method = how;
+        finish (*kid, rate);
+        tuneToC (*kid, rate);
+        return kid;
+    }
 private:
-    struct Voice { bool active = false, rel = false; int note = 60, delay = 0; double pos = 0; float vel = 1, relGain = 1; };
+    struct Voice { bool active = false, rel = false, fast = false, started = false; int note = 60, delay = 0, age = 0; double pos = 0; float vel = 1, relGain = 1, atk = 0; };
     using String = juce::String;
     static constexpr int fftOrder = 11, N = 1 << fftOrder, hop = N / 4;
 
@@ -189,9 +335,10 @@ private:
         static const std::vector<float> w = [] { std::vector<float> v ((size_t) N); for (int i = 0; i < N; ++i) v[(size_t) i] = 0.5f - 0.5f * std::cos (twoPi * (float) i / (float) N); return v; }();
         return w;
     }
-    static Spectrum analyse (const juce::AudioBuffer<float>& a)
+    static Spectrum analyse (const juce::AudioBuffer<float>& a, int ch = -1)
     {
         Spectrum sp; sp.length = a.getNumSamples();
+        const int nch = a.getNumChannels();
         juce::dsp::FFT fft (fftOrder);
         const auto& w = window();
         std::vector<std::complex<float>> in ((size_t) N), out ((size_t) N);
@@ -200,7 +347,8 @@ private:
             for (int i = 0; i < N; ++i)
             {
                 const int s = pos + i;
-                const float x = s >= 0 && s < sp.length ? 0.5f * (a.getSample (0, s) + a.getSample (1, s)) : 0.0f;
+                const float x = s < 0 || s >= sp.length ? 0.0f
+                              : ch < 0 ? 0.5f * (a.getSample (0, s) + a.getSample (std::min (1, nch - 1), s)) : a.getSample (std::min (ch, nch - 1), s);
                 in[(size_t) i] = { x * w[(size_t) i], 0.0f };
             }
             fft.perform (in.data(), out.data(), false);
@@ -208,9 +356,10 @@ private:
         }
         return sp;
     }
-    static void synth (const Spectrum& sp, int length, juce::AudioBuffer<float>& out)
+    static void synth (const Spectrum& sp, int length, juce::AudioBuffer<float>& out, int ch = -1)
     {
-        out.setSize (2, length); out.clear();
+        if (ch <= 0) { out.setSize (2, length); out.clear(); }
+        const int dst = ch < 0 ? 0 : ch;
         juce::dsp::FFT fft (fftOrder);
         const auto& w = window();
         std::vector<std::complex<float>> in ((size_t) N), res ((size_t) N);
@@ -223,11 +372,28 @@ private:
             for (int i = 0; i < N; ++i)
             {
                 const int s = pos + i;
-                if (s >= 0 && s < length) out.addSample (0, s, res[(size_t) i].real() * w[(size_t) i] * (2.0f / 3.0f));
+                if (s >= 0 && s < length) out.addSample (dst, s, res[(size_t) i].real() * w[(size_t) i] * (2.0f / 3.0f));
             }
             pos += hop;
         }
-        out.copyFrom (1, 0, out, 0, 0, length);
+        if (ch < 0) out.copyFrom (1, 0, out, 0, 0, length);
+    }
+    // v0.37: stereo - the gains are worked out on the mid signal, then applied to the left and the right spectrum alike
+    template <typename GainFn>
+    static void stereoApply (const juce::AudioBuffer<float>& src, juce::AudioBuffer<float>& out, GainFn&& gainOf)
+    {
+        auto mid = analyse (src);
+        std::vector<std::vector<float>> gains (mid.frames.size(), std::vector<float> ((size_t) (N / 2 + 1), 1.0f));
+        for (size_t f = 0; f < mid.frames.size(); ++f) gainOf (mid, f, gains[f]);
+        const int len = src.getNumSamples();
+        out.setSize (2, len); out.clear();
+        for (int c = 0; c < 2; ++c)
+        {
+            auto sp = analyse (src, c);
+            for (size_t f = 0; f < sp.frames.size() && f < gains.size(); ++f)
+                for (int k = 0; k <= N / 2; ++k) sp.frames[f][(size_t) k] *= gains[f][(size_t) k];
+            synth (sp, len, out, c);
+        }
     }
     static float magAt (const Spectrum& sp, float frame, int bin)
     {
@@ -254,29 +420,28 @@ private:
     // MORPH: magnitudes blended geometrically, A's phases (A's timing, a sound between both)
     static void morph (const PairSound& A, const PairSound& B, float t, juce::AudioBuffer<float>& out)
     {
-        auto a = analyse (A.audio); const auto b = analyse (B.audio);
-        const float scale = (float) b.frames.size() / (float) std::max<size_t> (1, a.frames.size());
-        for (size_t f = 0; f < a.frames.size(); ++f)
+        const auto b = analyse (B.audio);
+        stereoApply (A.audio, out, [&] (const Spectrum& a, size_t f, std::vector<float>& g)
+        {
+            const float scale = (float) b.frames.size() / (float) std::max<size_t> (1, a.frames.size());
             for (int k = 0; k <= N / 2; ++k)
             {
-                auto& c = a.frames[f][(size_t) k];
-                const float ma = std::abs (c) + 1.0e-9f, mb = magAt (b, (float) f * scale, k) + 1.0e-9f;
-                c *= std::pow (mb / ma, t);
+                const float ma = std::abs (a.frames[f][(size_t) k]) + 1.0e-9f, mb = magAt (b, (float) f * scale, k) + 1.0e-9f;
+                g[(size_t) k] = std::min (24.0f, std::pow (mb / ma, t));
             }
-        synth (a, A.audio.getNumSamples(), out);
+        });
     }
     // CROSS: A's notes / fine structure through B's spectral envelope (talkbox-style cross synthesis)
     static void cross (const PairSound& A, const PairSound& B, juce::AudioBuffer<float>& out)
     {
-        auto a = analyse (A.audio); const auto b = analyse (B.audio);
-        const float scale = (float) b.frames.size() / (float) std::max<size_t> (1, a.frames.size());
-        for (size_t f = 0; f < a.frames.size(); ++f)
+        const auto b = analyse (B.audio);
+        stereoApply (A.audio, out, [&] (const Spectrum& a, size_t f, std::vector<float>& g)
         {
+            const float scale = (float) b.frames.size() / (float) std::max<size_t> (1, a.frames.size());
             const auto ea = envelope (a.frames[f]);
             const auto eb = envelope (b.frames[(size_t) std::clamp ((int) ((float) f * scale), 0, (int) b.frames.size() - 1)]);
-            for (int k = 0; k <= N / 2; ++k) a.frames[f][(size_t) k] *= std::min (40.0f, eb[(size_t) k] / ea[(size_t) k]);
-        }
-        synth (a, A.audio.getNumSamples(), out);
+            for (int k = 0; k <= N / 2; ++k) g[(size_t) k] = std::min (16.0f, eb[(size_t) k] / ea[(size_t) k]);
+        });
     }
     // LAYER: B tuned to A's pitch, stacked, B slightly later and wider
     static void layer (const PairSound& A, const PairSound& B, float t, double rate, juce::AudioBuffer<float>& out)
@@ -301,16 +466,19 @@ private:
     {
         const int len = A.audio.getNumSamples();
         out.setSize (2, len); out.clear();
-        auto env = [] (const juce::AudioBuffer<float>& x, int i, float& e)
-        { const float v = std::max (std::abs (x.getSample (0, i)), std::abs (x.getSample (1, i))); e = v > e ? v : e * 0.9993f; return e; };
-        float ea = 0, eb = 0;
+        // smooth followers (2 ms attack, 60 ms release) and a smoothed gain: the shape moves over, no zipper / crackle
+        const float att = 1.0f - std::exp (-1.0f / (0.002f * 44100.0f)), rel = 1.0f - std::exp (-1.0f / (0.06f * 44100.0f));
+        auto follow = [&] (const juce::AudioBuffer<float>& x, int i, float& e)
+        { const float v = std::max (std::abs (x.getSample (0, i)), std::abs (x.getSample (1, i))); e += (v - e) * (v > e ? att : rel); return e; };
+        float ea = 0, eb = 0, gs = 0;
         const int bl = B.audio.getNumSamples();
         for (int i = 0; i < len; ++i)
         {
             const int j = bl > 0 ? i % bl : 0;
-            const float ga = env (A.audio, i, ea), gb = env (B.audio, j, eb);
-            const float g = ga / (gb + 0.02f);
-            for (int c = 0; c < 2; ++c) out.setSample (c, i, B.audio.getSample (c, j) * std::min (g, 8.0f));
+            const float ga = follow (A.audio, i, ea), gb = follow (B.audio, j, eb);
+            const float g = std::min (ga / (gb + 0.03f), 4.0f);
+            gs += (g - gs) * 0.004f;
+            for (int c = 0; c < 2; ++c) out.setSample (c, i, B.audio.getSample (c, j) * gs);
         }
     }
     // ---------------- flavours ----------------
@@ -331,7 +499,7 @@ private:
             case 2:          // BRIGHT: low cut + a little drive
             {
                 OnePole lp[2]; for (auto& l : lp) l.setHz (350.0f + rng.uni() * 300.0f, (float) rate);
-                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i) { const float x = a.getSample (c, i); a.setSample (c, i, std::tanh ((x - lp[c].lp (x)) * 2.2f)); }
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i) { const float x = a.getSample (c, i); a.setSample (c, i, std::tanh ((x - 0.7f * lp[c].lp (x)) * 1.5f) * 0.8f); }
                 how += " BRIGHT"; break;
             }
             case 3:          // SOFT: slow swell in
@@ -352,8 +520,8 @@ private:
                 for (int i = 0; i < n; ++i)
                 {
                     d.push (a.getSample (1, i));
-                    a.setSample (0, i, std::tanh (a.getSample (0, i) * 2.5f));
-                    a.setSample (1, i, std::tanh (d.read ((float) (0.012 * rate)) * 2.5f));
+                    a.setSample (0, i, std::tanh (a.getSample (0, i) * 1.4f));
+                    a.setSample (1, i, std::tanh (d.read ((float) (0.012 * rate)) * 1.4f));
                 }
                 how += " WIDE"; break;
             }
@@ -361,15 +529,17 @@ private:
     }
     static void bit (juce::AudioBuffer<float>& a, Rng& rng, double rate)
     {
-        const float bits = 3.5f + rng.uni() * 3.5f, q = std::exp2 (bits - 1.0f);   // really crunchy, clearly BIT
-        const int hold = std::max (1, (int) (rate / (3500.0 + rng.uni() * 6000.0)));
+        const float bits = 7.0f + rng.uni() * 3.0f, q = std::exp2 (bits - 1.0f);   // lo-fi, not broken
+        const int hold = std::max (1, (int) (rate / (11000.0 + rng.uni() * 9000.0)));
+        OnePole lp[2]; for (auto& l : lp) l.setHz (9000.0f, (float) rate);           // the aliasing fizz is smoothed away
         for (int c = 0; c < 2; ++c)
         {
             float held = 0;
             for (int i = 0; i < a.getNumSamples(); ++i)
             {
-                if (i % hold == 0) held = std::round (a.getSample (c, i) * q) / q;
-                a.setSample (c, i, held);
+                const float x = a.getSample (c, i);
+                if (i % hold == 0) held = std::round (x * q) / q;
+                a.setSample (c, i, x * 0.45f + lp[c].lp (held) * 0.55f);
             }
         }
     }
@@ -429,7 +599,14 @@ private:
         if (pk > 1.0e-6f) a.applyGain (0.89f / pk);
         const int fade = std::min (a.getNumSamples() / 4, (int) (rate * 0.02));
         for (int c = 0; c < 2; ++c) a.applyGainRamp (c, a.getNumSamples() - fade, fade, 1.0f, 0.0f);
-        // overview
+        const int fin = std::min (a.getNumSamples() / 8, (int) (rate * 0.0008));   // a sound never starts with a step
+        for (int c = 0; c < 2 && fin > 1; ++c) a.applyGainRamp (c, 0, fin, 0.0f, 1.0f);
+        overviewOf (s);
+        detectPitch (s, rate);
+    }
+    static void overviewOf (PairSound& s)
+    {
+        const auto& a = s.audio;
         const int cols = 200, len = a.getNumSamples();
         s.peaks.assign ((size_t) cols, 0.0f);
         for (int c = 0; c < cols && len > 0; ++c)
@@ -437,7 +614,6 @@ private:
             const int s0 = (int) ((juce::int64) len * c / cols), s1 = std::max (s0 + 1, (int) ((juce::int64) len * (c + 1) / cols));
             s.peaks[(size_t) c] = std::max (a.getMagnitude (0, s0, s1 - s0), a.getMagnitude (1, s0, s1 - s0));
         }
-        detectPitch (s, rate);
     }
     // pitch: autocorrelation of the steadiest 150 ms after the attack, 55 - 1100 Hz
     static void detectPitch (PairSound& s, double rate)
@@ -465,14 +641,23 @@ private:
             if (best > 0 && d[(size_t) lag] < d[(size_t) best]) best = lag;
         }
         if (best <= 0) return;
-        const double hz = rate / best;
+        // parabolic interpolation of the dip: the exact pitch (cents matter when sounds are layered)
+        double fb = best;
+        if (best > 1 && best < maxLag && best + 1 < (int) d.size() && d[(size_t) best + 1] > 0)
+        {
+            const double y0 = d[(size_t) best - 1], y1 = d[(size_t) best], y2 = d[(size_t) best + 1], den = y0 - 2 * y1 + y2;
+            if (std::abs (den) > 1e-12) fb = best + 0.5 * (y0 - y2) / den;
+        }
+        const double hz = rate / fb;
+        s.hz = hz;
         s.rootNote = std::clamp ((int) std::lround (69.0 + 12.0 * std::log2 (hz / 440.0)), 24, 108);
         s.pitched = true;
     }
 
     mutable juce::SpinLock lock;
     PairPtr playing;
-    std::array<Voice, 12> voices;
-    unsigned rr = 0;
+    std::array<Voice, 16> voices;
+    std::array<Voice, 4> ghosts;
+    unsigned rr = 0, gr = 0;
 };
 } // namespace kk

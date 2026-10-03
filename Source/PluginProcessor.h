@@ -32,7 +32,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "BREED LAB"; }
+    const juce::String getName() const override { return "EVOLVE"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -156,6 +156,8 @@ public:
     void evoSeedCurrent();
     bool evoSeedFromFile (const juce::File& f);
     void evoSeedRandom();
+    void evoSeedSound (kk::PairPtr s);
+    void evoNewMelody (int node);                               // another melody for that sound                          // any sound (an edited sample ...) becomes the seed
     void evoGrow (int node, bool reroll);                       // 6 new children of this node
     void evoFocus (int node);                                   // the node becomes the middle (its kids grow), the keys play it
     void evoAudition (int node, bool preview = true);           // hear it - the keys play it, the middle stays
@@ -175,7 +177,7 @@ public:
     void stepParent (int slot, int dir);
     int  breed();                                       // 6 children from the two parents
     void selectChild (int i);                           // loads it as the current sound
-    void setChildGene (int child, int gene, int parentSlot);
+    void setChildGene (int child, int gene, int parentSlot);   // audio mode: the child is spliced from A and B
     void toggleGeneLock (int gene);
     void rateChild (int child, int stars);
     void restoreGeneration (int h);
@@ -298,6 +300,62 @@ public:
     juce::File exportPairLoop() const;
     std::array<kk::PairPtr, kk::PairLab::maxParents> pairParents;
     std::vector<kk::PairPtr> pairKids;
+    std::vector<std::array<int, numGenes>> pairKidGenes;         // v0.37: GENES for your own sounds (A / B per gene)
+    int geneOfSelected (int gene) const;                         // the selected child's gene source (synth or audio), -1 = none
+
+    // ---------------- v0.37 THE SOUND ON THE KEYS ----------------
+    // One "active sound" for the keys / FL's piano roll: the last thing you picked (a bank child, your sound, the SAMPLER).
+    // Pages never take it away - EDIT / FX / MY SOUNDS work on whatever is active.
+    void setPlayMode (int mode);
+    void useSample (kk::PairPtr s, bool audition);               // your sound / an audio child becomes the active sound
+    kk::PairPtr activeSample() const { return pairPlayer.sound(); }
+    bool sampleActive() const { return (int) apvts.getRawParameterValue (ID::playMode)->load() == playPair && pairPlayer.sound() != nullptr; }
+    bool chopActive() const { return (int) apvts.getRawParameterValue (ID::playMode)->load() == playChop; }
+    // SAMPLE EDIT: what EDIT does when the active sound is a sample (your sound, an audio child, the SAMPLER)
+    enum SampleEditId { seTune, seFine, seStart, seAttack, seRelease, seReverse, seTone, seLowCut, seDrive, seCrush, seChorus, seSpace, seEcho, seWidth, seGain, numSampleEdit };
+    static const char* sampleEditName (int i);
+    static float sampleEditDefault (int i);
+    std::array<std::atomic<float>, numSampleEdit> sampleEdit;
+    void resetSampleEdit();
+    void sampleMacrosNeutral();                                  // the 8 big knobs back to neutral (they now colour the sample)
+    juce::AudioBuffer<float> renderEditedSample (kk::PairPtr s);  // the sample with SAMPLE EDIT + the knobs, offline (drag / save)
+    kk::PairPtr editedSample();                                  // the active sample as edited (for SAVE / DRAG)
+    juce::File exportEditedSample();
+
+    // ---------------- v0.37 FX EVOLVE (SURPRISE FX) + STEP FX ----------------
+    struct FxGenome { std::array<bool, kk::numRackSlots> on {}; std::array<float, kk::numRackValues> v {}; juce::String name; };
+    FxGenome fxCurrent() const;
+    void fxApply (const FxGenome& g);
+    FxGenome fxMutate (const FxGenome& g, float wild, uint32_t seed) const;
+    FxGenome fxSurprise (uint32_t seed) const;
+    // STEP FX: a 16-step grid of effects that play in time on the melody bus (stutter, reverse, tape stop, filter ...)
+    enum StepFx { sfStutter, sfReverse, sfTape, sfFilter, sfGate, sfEcho, sfPitchUp, sfCrush, numStepFx };
+    static const char* stepFxName (int i);
+    static constexpr int numSteps = 16;
+    std::array<std::array<std::atomic<bool>, numSteps>, numStepFx> stepGrid;
+    std::atomic<bool> stepOn { false };
+    std::atomic<int> stepNow { -1 };                             // the playing step (UI)
+    std::atomic<int> stepRate { 1 };                             // 0 = 1/8, 1 = 1/16, 2 = 1/32
+    std::atomic<float> stepMix { 1.0f };
+    void stepClear();
+    void stepRandom (uint32_t seed, float density);
+    void stepPreset (int which);
+    juce::String stepToString() const;
+    void stepFromString (const juce::String& s);
+    // SAMPLER FLIPS (EVOLVE for beats): a pattern of chops on a 1/16 grid, played in time; it grows like EVOLVE
+    struct FlipStep { int slice = -1; int len = 1; float vel = 0.9f; bool rev = false; int semi = 0; };
+    struct Flip { std::vector<FlipStep> steps; juce::String name; int parent = -1; std::vector<int> kids; int gen = 0; };
+    std::vector<Flip> flips;
+    int flipCenter = -1, flipPlaying = -1;
+    std::atomic<int> flipVer { 0 }, flipStepNow { -1 };
+    std::atomic<bool> flipOn { false };
+    void flipSeed();                                             // a first flip from the slices
+    void flipGrow (int node, bool reroll, float wild);
+    void flipPlay (int node);                                    // -1 = stop
+    juce::File flipMidiFile (int node) const;
+    juce::File flipWavFile (int node);                           // the flip rendered as audio (drag into FL)
+    juce::AudioBuffer<float> renderFlip (int node, double bpm);
+    std::atomic<bool> chopChoke { true };                        // MONO pads: a new pad stops the one before
     int pairSel = -1, pairFlavor = 0, pairLoopKid = -1;
     std::atomic<int> pairVer { 0 };
     // HARVEST: sounds collected from your songs / samples (bank by character)
@@ -400,6 +458,21 @@ private:
     int modBlock = 0, lastPlayMode = 0, reportedLatency = 0;
     kk::WorldStage worldStage;
     kk::PairLab pairPlayer;
+    std::unique_ptr<kk::FxRack> extFx { std::make_unique<kk::FxRack>() };   // v0.37: the knobs / SAMPLE EDIT on your sounds
+    std::vector<float> extL, extR, extG;
+    int extTail = 0;
+    kk::SvfCoef extLpC, extHpC; kk::SvfState extLp[2], extHp[2]; float extLpHz = -1, extHpHz = -1;
+    kk::FxParams sampleFxParams (bool& any) const;
+    void processSampleFx (float* L, float* R, int n, double beatPos, double bps);
+    // STEP FX state (audio thread)
+    std::vector<float> stepBufL, stepBufR, echoL, echoR; int stepW = 0, echoW = 0, echoTail = 0; float stepEnv[numStepFx] {}; kk::SvfState stepLp[2]; float stepTapePos = 0, stepRevPos = 0;
+    int stepLast = -1; double stepRevStart = 0; float stepHold[2] {};
+    void processStepFx (juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps);
+    // flip player
+    juce::SpinLock flipLock; std::vector<FlipStep> flipSeq; double flipOrigin = 0; int flipLastStep = -1;
+    juce::File sessionDir() const;
+    juce::String activeSampleFile;                               // the active sample, kept with the project
+    const void* activeSampleSaved = nullptr;
     juce::ThreadPool harvestPool { 1 };
     std::atomic<int> harvestJobs { 0 };
     juce::SpinLock harvestLock;

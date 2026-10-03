@@ -1,6 +1,6 @@
 name: build
 
-# Builds, tests and packages BREED LAB for Windows (VST3 + Standalone) and macOS (VST3 + AU + Standalone).
+# Builds, tests and packages EVOLVE for Windows (VST3 + Standalone) and macOS (VST3 + AU + Standalone).
 on:
   push:
   pull_request:
@@ -45,10 +45,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item (Get-ChildItem build\installer\*.exe | Select-Object -First 1).FullName out\KEYS-KILLA-Setup-Windows.exe
-          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\BREED LAB.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
+          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
           $notes = "Latest test build`n`nCommit: ${{ github.sha }}`nBranch: ${{ github.ref_name }}`nBuilt: $(Get-Date -Format u)"
           gh release view test *> $null
-          if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "BREED LAB - latest test build" --notes $notes --target ${{ github.sha }} }
+          if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "EVOLVE - latest test build" --notes $notes --target ${{ github.sha }} }
           else { gh release edit test --notes $notes }
           gh release upload test out\KEYS-KILLA-Setup-Windows.exe out\KEYS-KILLA-VST3-Windows.zip --clobber
 
@@ -77,7 +77,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
-          & .\pluginval\pluginval.exe --strictness-level 10 --verbose --output-dir pluginval-logs --validate "build\KeysKilla_artefacts\Release\VST3\BREED LAB.vst3" 2>&1 | ForEach-Object {
+          & .\pluginval\pluginval.exe --strictness-level 10 --verbose --output-dir pluginval-logs --validate "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3" 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { "[stderr] $($_.ToString())" } else { "$_" }
           }
           $code = $LASTEXITCODE
@@ -96,11 +96,11 @@ jobs:
           Expand-Archive procdump.zip -DestinationPath procdump
           New-Item -ItemType Directory -Force dumps | Out-Null
           for ($run = 1; $run -le 3; $run++) {
-            .\procdump\procdump64.exe -accepteula -ma -e 1 -f C0000005 -f C0000409 -f C00000FD -f C0000374 -x dumps .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --validate "build\KeysKilla_artefacts\Release\VST3\BREED LAB.vst3" | Select-String -Pattern "Starting tests|Exception|Dump|FAILED|SUCCESS"
+            .\procdump\procdump64.exe -accepteula -ma -e 1 -f C0000005 -f C0000409 -f C00000FD -f C0000374 -x dumps .\pluginval\pluginval.exe --strictness-level 10 --validate-in-process --validate "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3" | Select-String -Pattern "Starting tests|Exception|Dump|FAILED|SUCCESS"
             if (Get-ChildItem dumps\*.dmp -ErrorAction SilentlyContinue) { break }
           }
           $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-          $sym = (Resolve-Path "build\KeysKilla_artefacts\Release\VST3\BREED LAB.vst3\Contents\x86_64-win").Path
+          $sym = (Resolve-Path "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3\Contents\x86_64-win").Path
           foreach ($d in Get-ChildItem dumps\*.dmp) {
             Write-Host "=== DUMP $($d.Name) ==="
             & $cdb -z $d.FullName -y "$sym;srv*" -c ".ecxr;kb 60;.echo ===ALL THREADS===;~*kb 20;q" | Select-Object -Last 250
@@ -149,7 +149,7 @@ jobs:
       - name: auval
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
-          cp -R "build/KeysKilla_artefacts/Release/AU/BREED LAB.component" ~/Library/Audio/Plug-Ins/Components/
+          cp -R "build/KeysKilla_artefacts/Release/AU/EVOLVE.component" ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
           sleep 5
           auval -v aumu Kkey Kila
@@ -158,7 +158,7 @@ jobs:
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip
-          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/KeysKilla_artefacts/Release/VST3/BREED LAB.vst3"
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/KeysKilla_artefacts/Release/VST3/EVOLVE.vst3"
 
       - name: Installer (pkg; signed + notarized when secrets exist)
         if: ${{ !cancelled() }}

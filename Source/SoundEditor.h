@@ -664,7 +664,7 @@ public:
         // ---- header
         auto hb = [this] (HotButton& b, const String& t, const String& tip, Colour tint, std::function<void()> f)
         { b.setButtonText (t); b.framed = true; b.tint = tint; b.setTooltip (tip); b.onClick = std::move (f); addAndMakeVisible (b); };
-        hb (closeBtn, "CLOSE", "Back to BREED LAB", TC (0xffff2f6d), [this] { if (onClose) onClose(); });
+        hb (closeBtn, "CLOSE", "Back", TC (0xffff2f6d), [this] { if (onClose) onClose(); });
         hb (saveBtn, "SAVE", "Save this sound as your preset", TC (0xffffb020), [this] { if (onSave) onSave(); });
         hb (resetBtn, "RESET", "Put every control on this page back to how the sound was loaded", TC (0xff22d3ee), [this] { proc.resetParams (allIds()); repaint(); });
         hb (synthBtn, "PLAY THIS SOUND", "The keys play a sample sound now (PAIR / VST / DIGGA / drums). Click: the keys play this synth sound again.", TC (0xff36ff6a),
@@ -884,7 +884,7 @@ private:
         float h = 0; int n = 1;
         for (auto& id : allIds()) h += proc.apvts.getRawParameterValue (id)->load() * (float) (n++ % 97 + 1) * 0.013f;
         const bool sp = (int) proc.apvts.getRawParameterValue (ID::playMode)->load() != 0;
-        if (sp != samplePlays) { samplePlays = sp; synthBtn.setVisible (sp); repaint(); }
+        if (sp != samplePlays) { samplePlays = sp; synthBtn.setVisible (false); repaint(); }   // v0.37: EDIT opens the sample editor for samples
         if (proc.currentName() != lastName) { lastName = proc.currentName(); repaint(); }
         if (h != lastHash)
         {

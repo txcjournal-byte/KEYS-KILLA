@@ -20,9 +20,9 @@ inline const Theme& theme()
 {
     using C = juce::Colour;
     static const Theme glass { false, C (0xffe3e6ea), C (0xffc7ccd2), C (0xff5f6974), C (0x8cffffff), C (0xd9ffffff), C (0x598a939e),
-                               C (0xff1a1e23), C (0xff59616b), C (0xffff8a3d), C (0xffd8661f), C (0xff2a3038), C (0xfff6f7f8), C (0xffb4bac2), C (0x33505a66) };
+                               C (0xff1a1e23), C (0xff4a525c), C (0xffff8a3d), C (0xffd8661f), C (0xff2a3038), C (0xfff6f7f8), C (0xffb4bac2), C (0x33505a66) };
     static const Theme night { true, C (0xff15171b), C (0xff07080a), C (0xff9aa4b1), C (0x9e1d2026), C (0x24ffffff), C (0x1fffffff),
-                               C (0xffeef0f2), C (0xff8c939b), C (0xffff8a3d), C (0xffc9601f), C (0xff000000), C (0xff3c4148), C (0xff101215), C (0x66000000) };
+                               C (0xffeef0f2), C (0xffa8afb7), C (0xffff8a3d), C (0xffc9601f), C (0xff000000), C (0xff3c4148), C (0xff101215), C (0x66000000) };
     return themeIndex() == 1 ? night : glass;
 }
 
@@ -50,6 +50,8 @@ inline juce::Colour themed (juce::uint32 argb)
     }
     return juce::Colour::fromHSL (0.58f, 0.07f, juce::jlimit (0.0f, 1.0f, 0.95f - 0.85f * lum), a);
 }
+// v0.37: amber TEXT that reads on both skins (the light glass needs a deeper amber)
+inline juce::Colour accentText() { const auto& t = theme(); return t.night ? t.accent : t.accentDeep.darker (0.45f); }
 } // namespace kk
 
 // short name for the drawing code

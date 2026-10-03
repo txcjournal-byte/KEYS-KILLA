@@ -218,18 +218,22 @@ public:
 
     // ---------- audio thread ----------
     void prepare (double sampleRate) { outRate = sampleRate; }
-    void noteOn (int note, float vel, int offset)
+    void noteOn (int note, float vel, int offset, bool rev = false, int semi = 0)
     {
         const int i = note - firstNote;
         if (i < 0) return;
+        // MONO pads (choke, on by default): a new pad stops the one before - like an MPC / FL slicer in mono.
+        // Either way the old voice fades out in 8 ms (never a hard cut = no click)
+        for (auto& x : voices)
+            if (x.active && ! x.rel && (choke.load() || x.slice == i)) { x.rel = true; x.fast = true; }
         Voice* v = nullptr;
-        for (auto& x : voices) if (x.active && x.slice == i) { v = &x; break; }   // a slice chokes itself (MPC mono pads)
-        if (v == nullptr) for (auto& x : voices) if (! x.active) { v = &x; break; }
-        if (v == nullptr) v = &voices[(size_t) (rr++ % voices.size())];
+        for (auto& x : voices) if (! x.active) { v = &x; break; }
+        if (v == nullptr) { v = &voices[0]; for (auto& x : voices) if (x.rel && x.relGain < v->relGain) v = &x; }
         *v = {};
-        v->active = true; v->slice = i; v->note = note; v->vel = 0.3f + 0.7f * vel; v->delay = offset;
+        v->active = true; v->slice = i; v->note = note; v->vel = 0.3f + 0.7f * vel; v->delay = offset; v->vrev = rev; v->vsemi = semi;
         lastHit = i;
     }
+    std::atomic<bool> choke { true };
     void noteOff (int note) { for (auto& v : voices) if (v.active && v.note == note) v.rel = true; }
     void allOff() { for (auto& v : voices) v.rel = true; }
     void render (float* L, float* R, int n)
@@ -263,14 +267,15 @@ public:
             playPos = (float) ((reg.s0 + reg.pos) / std::max (1, a.getNumSamples()));
             regActive = reg.on;
         }
-        const float relStep = 1.0f / (0.012f * (float) outRate);
+        const float relStep = 1.0f / (0.012f * (float) outRate), fastStep = 1.0f / (0.008f * (float) outRate);
         for (auto& v : voices)
         {
             if (! v.active) continue;
             if (v.slice >= d.numSlices()) { v.active = false; continue; }
             const double s0 = d.sliceStart (v.slice), s1 = d.sliceEnd (v.slice), slen = s1 - s0;
-            const auto fx = d.fxOf (v.slice);
-            const double vinc = inc * std::exp2 (fx.semi / 12.0);
+            auto fx = d.fxOf (v.slice);
+            fx.rev = fx.rev != v.vrev;
+            const double vinc = inc * std::exp2 ((fx.semi + v.vsemi) / 12.0);
             const double fadeS = std::max (8.0, d.rate * fx.fade);
             const float gl = fx.vol * std::cos ((fx.pan + 1.0f) * 0.25f * juce::MathConstants<float>::pi) * 1.41421356f;
             const float gr = fx.vol * std::sin ((fx.pan + 1.0f) * 0.25f * juce::MathConstants<float>::pi) * 1.41421356f;
@@ -282,7 +287,7 @@ public:
                 const int i0 = std::max ((int) s0, std::min ((int) s1 - 2, (int) p));
                 const float fr = (float) (p - std::floor (p));
                 float g = v.vel * (float) std::min (1.0, std::min (v.pos / fadeS, (slen - v.pos) / fadeS));
-                if (v.rel) { v.relGain -= relStep; if (v.relGain <= 0) { v.active = false; break; } g *= v.relGain; }
+                if (v.rel) { v.relGain -= v.fast ? fastStep : relStep; if (v.relGain <= 0) { v.active = false; break; } g *= v.relGain; }
                 L[i] += (l[i0] + (l[i0 + 1] - l[i0]) * fr) * g * gl;
                 R[i] += (r[i0] + (r[i0 + 1] - r[i0]) * fr) * g * gr;
                 v.pos += vinc;
@@ -292,71 +297,74 @@ public:
     }
     float playhead() const { if (regActive.load()) return playPos.load(); for (auto& v : voices) if (v.active) return playPos.load(); return -1.0f; }
 
-    // v0.35 MUTATE / KILL: the part turns into something new - grains move, jump octaves, play backwards, get crushed -
-    // but a bit of the original stays underneath, so the melody still shows through. Same length, new every press.
-    static void mutate (juce::AudioBuffer<float>& a, int start, int end, double rate, bool kill, uint32_t seed)
+    // v0.37 MUTATE / KILL: musical, in time. The part is cut into 1/8 notes (at the project tempo); each piece gets a move -
+    // played backwards, stuttered, slowed like a tape stop, an octave down / up, filtered, gated. The pieces stay where they
+    // were, so the melody and the groove survive. MUTATE: a few pieces.  KILL: most pieces, bigger moves, a little crush.
+    static void mutate (juce::AudioBuffer<float>& a, int start, int end, double rate, bool kill, uint32_t seed, double bpm = 140.0)
     {
         start = juce::jlimit (0, a.getNumSamples(), start); end = juce::jlimit (start, a.getNumSamples(), end);
         const int len = end - start, ch = a.getNumChannels();
         if (len < 256) return;
         juce::AudioBuffer<float> src (ch, len);
         for (int c = 0; c < ch; ++c) src.copyFrom (c, 0, a, c, start, len);
-        juce::AudioBuffer<float> wet (ch, len); wet.clear();
         juce::Random rnd ((juce::int64) seed);
-        const int grain = (int) (rate * (kill ? 0.045 + rnd.nextFloat() * 0.06 : 0.07 + rnd.nextFloat() * 0.09));
-        const int hop = std::max (32, grain / 2);
-        static const float ratiosM[] { 1.0f, 1.0f, 2.0f, 0.5f, 1.5f, 1.0f, 0.75f };
-        static const float ratiosK[] { 0.5f, 2.0f, 0.25f, 1.5f, 0.6667f, 3.0f, 1.0f };
-        const float scatter = (float) rate * (kill ? 0.6f : 0.25f);
-        for (int pos = -grain; pos < len; pos += hop)
+        const int piece = std::max (256, (int) (rate * 60.0 / juce::jlimit (60.0, 200.0, bpm) * 0.5));   // 1/8 note
+        const float pChange = kill ? 0.72f : 0.34f;
+        enum { keep, reverse, stutter, tape, octDown, octUp, filter, gate };
+        const int xf = std::max (16, (int) (rate * 0.003));
+        for (int p0 = 0; p0 < len; p0 += piece)
         {
-            const float ratio = kill ? ratiosK[rnd.nextInt (7)] : ratiosM[rnd.nextInt (7)];
-            const bool rev = rnd.nextFloat() < (kill ? 0.45f : 0.25f);
-            const double from = juce::jlimit (0.0, (double) std::max (1, len - 2), (double) pos + (rnd.nextFloat() * 2.0f - 1.0f) * scatter);
-            const float gain = 0.6f + 0.6f * rnd.nextFloat();
-            for (int k = 0; k < grain; ++k)
+            const int n = std::min (piece, len - p0);
+            if (n < 64) break;
+            int mv = keep;
+            if (rnd.nextFloat() < pChange)
             {
-                const int o = pos + k;
-                if (o < 0 || o >= len) continue;
-                const double rp = rev ? from + (grain - k) * ratio : from + k * ratio;
-                const int i0 = (int) std::fmod (std::max (0.0, rp), (double) (len - 1));
-                const float fr = (float) (rp - std::floor (rp));
-                const float w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) k / (float) grain);
-                for (int c = 0; c < ch; ++c)
-                {
-                    const float* x = src.getReadPointer (c);
-                    wet.addSample (c, o, (x[i0] + (x[std::min (len - 1, i0 + 1)] - x[i0]) * fr) * w * gain);
-                }
+                static const int mild[] { reverse, stutter, filter, gate, reverse, stutter };
+                static const int wild[] { reverse, stutter, tape, octDown, octUp, filter, gate, stutter, reverse, tape };
+                mv = kill ? wild[rnd.nextInt (10)] : mild[rnd.nextInt (6)];
             }
-        }
-        if (kill)   // crush + ring: it really dies
-        {
-            const float bits = 6.0f + rnd.nextFloat() * 3.0f, q = std::pow (2.0f, bits), ringHz = 40.0f + rnd.nextFloat() * 180.0f;
-            const int hold = 2 + rnd.nextInt (4);
+            if (mv == keep) continue;
+            juce::AudioBuffer<float> o (ch, n);
+            auto at = [&] (int c, double pos) { const int i0 = juce::jlimit (0, len - 2, (int) pos); const float fr = (float) (pos - std::floor (pos)); const float* x = src.getReadPointer (c); return x[i0] + (x[i0 + 1] - x[i0]) * fr; };
+            const float cut = 600.0f + rnd.nextFloat() * 1400.0f;
+            const int rep = rnd.nextBool() ? 4 : 8;
             for (int c = 0; c < ch; ++c)
             {
-                float* x = wet.getWritePointer (c); float held = 0;
-                for (int i = 0; i < len; ++i)
+                float lp = 0, held = 0;
+                const float k = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * cut / (float) rate);
+                double tp = 0;
+                for (int i = 0; i < n; ++i)
                 {
-                    if (i % hold == 0) held = std::round (x[i] * q) / q;
-                    const float ring = std::sin (juce::MathConstants<float>::twoPi * ringHz * (float) i / (float) rate);
-                    x[i] = held * (0.55f + 0.45f * ring);
+                    float y = src.getSample (c, p0 + i);
+                    switch (mv)
+                    {
+                        case reverse: y = src.getSample (c, p0 + n - 1 - i); break;
+                        case stutter: { const int sl = std::max (32, n / rep); const int ph = i % sl; const float w = std::min (1.0f, std::min ((float) ph, (float) (sl - ph)) / (float) xf); y = src.getSample (c, p0 + ph) * w; break; }
+                        case tape: { tp += std::max (0.0, 1.0 - (double) i / n * 1.1); y = at (c, p0 + tp) * std::min (1.0f, (float) (n - i) / (float) (n / 6 + 1)); break; }
+                        case octDown: y = at (c, p0 + i * 0.5); break;
+                        case octUp: y = at (c, p0 + (i * 2) % n); break;
+                        case filter: lp += (y - lp) * k; y = lp; break;
+                        case gate: y *= (i % (n / 2) < n / 4) ? 1.0f : 0.0f; break;
+                        default: break;
+                    }
+                    if (kill && (mv == octDown || mv == stutter)) { if (i % 3 == 0) held = std::round (y * 256.0f) / 256.0f; y = y * 0.5f + held * 0.5f; }
+                    o.setSample (c, i, y);
                 }
             }
-        }
-        // the original stays a little underneath, same loudness as before, soft edges
-        const float dry = kill ? 0.18f : 0.32f;
-        const float rmsIn = src.getRMSLevel (0, 0, len) + 1.0e-6f, rmsWet = wet.getRMSLevel (0, 0, len) + 1.0e-6f;
-        const float wg = rmsIn / rmsWet;
-        const int edge = std::min (len / 4, (int) (rate * 0.01));
-        for (int c = 0; c < ch; ++c)
-        {
-            const float* x = src.getReadPointer (c); const float* w = wet.getReadPointer (c); float* out = a.getWritePointer (c, start);
-            for (int i = 0; i < len; ++i)
+            if (mv == gate)   // soften the gate edges
+                for (int c = 0; c < ch; ++c) { float sm = o.getSample (c, 0); const float g = 1.0f / (float) xf; for (int i = 0; i < n; ++i) { sm += (o.getSample (c, i) - sm) * std::min (1.0f, g * 4.0f); o.setSample (c, i, sm); } }
+            // match the piece's loudness, crossfade the edges into the neighbours
+            const float rIn = src.getRMSLevel (0, p0, n) + 1.0e-6f, rOut = o.getRMSLevel (0, 0, n) + 1.0e-6f;
+            const float gm = juce::jlimit (0.3f, 2.5f, rIn / rOut);
+            for (int c = 0; c < ch; ++c)
             {
-                const float m = juce::jlimit (-1.0f, 1.0f, x[i] * dry + w[i] * wg * (1.0f - dry));
-                const float e = edge > 0 ? std::min (1.0f, std::min ((float) i / (float) edge, (float) (len - 1 - i) / (float) edge)) : 1.0f;
-                out[i] = x[i] + (m - x[i]) * e;
+                float* out = a.getWritePointer (c, start + p0);
+                for (int i = 0; i < n; ++i)
+                {
+                    const float e = std::min (1.0f, std::min ((float) i / (float) xf, (float) (n - 1 - i) / (float) xf));
+                    const float y = juce::jlimit (-1.0f, 1.0f, o.getSample (c, i) * gm);
+                    out[i] = src.getSample (c, p0 + i) + (y - src.getSample (c, p0 + i)) * e;
+                }
             }
         }
     }
@@ -438,13 +446,13 @@ private:
         data = std::move (d);
         for (auto& v : voices) v.active = false;
     }
-    struct Voice { bool active = false, rel = false; int slice = 0, note = 60, delay = 0; double pos = 0; float vel = 1, relGain = 1; };
+    struct Voice { bool active = false, rel = false, fast = false, vrev = false; int slice = 0, note = 60, delay = 0, vsemi = 0; double pos = 0; float vel = 1, relGain = 1; };
     struct Region { bool on = false, loop = false; int s0 = 0, s1 = 0; double pos = 0; } reg;
     std::atomic<int> regStart { 0 }, regEnd { 0 };
     std::atomic<bool> regLoop { false }, regReq { false }, stopReq { false }, regActive { false };
     mutable juce::SpinLock lock;
     ChopPtr data;
-    std::array<Voice, 8> voices {};
+    std::array<Voice, 12> voices {};
     unsigned rr = 0;
     double outRate = 44100.0;
     std::atomic<float> playPos { 0 };

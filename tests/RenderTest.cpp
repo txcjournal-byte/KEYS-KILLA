@@ -547,6 +547,142 @@ static int unitTests()
         p.playChild (1);
         check (! p.loopPlaying(), "BREED LAB LOOP: second press stops it");
     }
+    // v0.37 EVOLVE: the sound on the keys, GENES for your sounds, sounds on C, SAMPLE EDIT, STEP FX, FLIPS, musical KILL
+    {
+        auto makeWav = [] (const char* name, float hz, bool stereoSaw)
+        {
+            auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile (name);
+            juce::AudioBuffer<float> b (2, 44100);
+            float ph = 0;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                ph += hz / 44100.0f; ph -= std::floor (ph);
+                const float v = stereoSaw ? 2.0f * ph - 1.0f : std::sin (kk::twoPi * ph);
+                b.setSample (0, i, 0.5f * v * std::exp (-(float) i / 25000.0f));
+                b.setSample (1, i, 0.5f * (stereoSaw ? -v : v) * std::exp (-(float) i / 20000.0f));
+            }
+            f.deleteFile();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), 44100, 2, 24, {}, 0));
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+            return f;
+        };
+        auto renderFor = [] (KeysKillaProcessor& p, int blocks, int note, std::vector<float>* outL = nullptr)
+        {
+            juce::AudioBuffer<float> b (2, 512); float peak = 0; bool fin = true;
+            for (int k = 0; k < blocks; ++k)
+            {
+                juce::MidiBuffer m;
+                if (note >= 0 && k == 0) m.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+                if (note >= 0 && k == blocks / 2) m.addEvent (juce::MidiMessage::noteOff (1, note), 0);
+                p.processBlock (b, m);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < 512; ++i) { const float v = b.getSample (c, i); fin &= std::isfinite (v); peak = std::max (peak, std::abs (v)); }
+                if (outL) outL->insert (outL->end(), b.getReadPointer (0), b.getReadPointer (0) + 512);
+            }
+            return fin ? peak : -1.0f;
+        };
+        const auto fa = makeWav ("kk37_a.wav", 233.08f, false), fb = makeWav ("kk37_b.wav", 196.0f, true);   // A#3, G3: not on C
+        KeysKillaProcessor p; p.setCurrentProgram (0); p.prepareToPlay (44100, 512);
+        check (p.labDropFile (0, fa) && p.labDropFile (1, fb), "v0.37: two WAVs into BREED LAB");
+        p.labBreedAudio();
+        check (p.pairKids.size() == 6 && p.pairKidGenes.size() == 6, "v0.37: your sounds breed 6 children with genes");
+        int onC = 0, pitched = 0; bool stereoOk = true;
+        for (auto& k : p.pairKids) { if (k->pitched) { ++pitched; onC += k->rootNote % 12 == 0 ? 1 : 0; } stereoOk &= k->audio.getNumChannels() == 2; }
+        check (pitched == 0 || onC == pitched, "v0.37: every pitched child sits on C (layers in FL's channel rack)");
+        std::printf ("TUNE: %d of %d pitched children on C\n", onC, pitched);
+        check ((int) p.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playPair, "v0.37: an audio child takes the keys");
+        // GENES on your sounds: A/B splices a new child
+        p.setChildGene (0, KeysKillaProcessor::geneBody, 1 - p.pairKidGenes[0][0]);
+        check (p.pairKids[0]->method.startsWith ("GENES") && p.geneOfSelected (0) == p.pairKidGenes[0][0], "v0.37: a GENE click splices the audio child");
+        {
+            const auto& a = p.pairKids[0]->audio;
+            float pk = a.getMagnitude (0, a.getNumSamples()); bool fin = true; double side = 0;
+            for (int i = 0; i < a.getNumSamples(); ++i) { fin &= std::isfinite (a.getSample (0, i)) && std::isfinite (a.getSample (1, i)); side += std::abs (a.getSample (0, i) - a.getSample (1, i)); }
+            check (fin && pk > 0.3f && pk < 0.95f, "v0.37: the spliced child is clean and loud");
+            check (side > 1.0, "v0.37: the spliced child is stereo");
+        }
+        // the keys play it; the knobs colour it (SPACE up = a longer, wider tail)
+        const float dry = renderFor (p, 120, 60);
+        check (dry > 0.05f, "v0.37: the audio child plays on the keys");
+        std::vector<float> a0, a1;
+        renderFor (p, 40, -1); renderFor (p, 160, 60, &a0);
+        set (p, ID::m2, 1.0f); set (p, ID::m3, 0.6f);
+        renderFor (p, 40, -1); renderFor (p, 160, 60, &a1);
+        double tail0 = 0, tail1 = 0;
+        for (size_t i = a0.size() * 3 / 4; i < a0.size(); ++i) tail0 += std::abs (a0[i]);
+        for (size_t i = a1.size() * 3 / 4; i < a1.size(); ++i) tail1 += std::abs (a1[i]);
+        check (tail1 > tail0 * 1.5 + 1.0e-3, "v0.37: SPACE / DIRT knobs work on your sound");
+        std::printf ("KNOBS ON SAMPLES: tail %.3f -> %.3f\n", tail0, tail1);
+        // a bank child takes the keys back
+        p.breed(); p.selectChild (1);
+        check ((int) p.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playKeys, "v0.37: a bank child takes the keys back");
+        // the audio loop plays
+        p.labBreedAudio();
+        p.togglePairLoop (2);
+        const float loopPk = renderFor (p, 400, -1);
+        check (p.loopPlaying() && loopPk > 0.02f, "v0.37: BREED LAB LOOP plays your audio child");
+        p.stopLoop(); renderFor (p, 60, -1);
+        // SAMPLE EDIT: tune / reverse / start, rendered for SAVE / DRAG
+        p.useSample (p.pairKids[0], false);
+        p.sampleEdit[KeysKillaProcessor::seReverse] = 1.0f; p.sampleEdit[KeysKillaProcessor::seTune] = 12.0f; p.sampleEdit[KeysKillaProcessor::seSpace] = 0.5f;
+        auto ed = p.editedSample();
+        check (ed != nullptr && ed->audio.getNumSamples() > 1000 && ed->audio.getMagnitude (0, ed->audio.getNumSamples()) > 0.1f, "v0.37: SAMPLE EDIT renders the edited sound");
+        const float edPk = renderFor (p, 100, 60);
+        check (edPk > 0.02f, "v0.37: SAMPLE EDIT plays on the keys (reversed, tuned)");
+        // state round trip: SAMPLE EDIT, STEP FX, the sample on the keys
+        p.stepPreset (2); p.stepOn = true; p.stepRate = 2;
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        KeysKillaProcessor q; q.prepareToPlay (44100, 512); q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (std::abs (q.sampleEdit[KeysKillaProcessor::seTune].load() - 12.0f) < 0.01f && q.stepOn.load() && q.stepRate.load() == 2 && q.stepToString() == p.stepToString(),
+               "v0.37: SAMPLE EDIT and STEP FX come back with the project");
+        check (q.activeSample() != nullptr && (int) q.apvts.getRawParameterValue (ID::playMode)->load() == KeysKillaProcessor::playPair, "v0.37: the sample on the keys comes back with the project");
+        // STEP FX change the sound in time, stay finite
+        {
+            KeysKillaProcessor s; s.setCurrentProgram (5); s.prepareToPlay (44100, 512);
+            std::vector<float> o0, o1;
+            renderFor (s, 200, 60, &o0);
+            s.panic(); renderFor (s, 100, -1);
+            for (int f = 0; f < KeysKillaProcessor::numStepFx; ++f) for (int st = 0; st < KeysKillaProcessor::numSteps; ++st) s.stepGrid[(size_t) f][(size_t) st] = (st + f) % 3 == 0;
+            s.stepOn = true;
+            const float pk = renderFor (s, 200, 60, &o1);
+            double diff = 0; for (size_t i = 0; i < std::min (o0.size(), o1.size()); ++i) diff += std::abs (o0[i] - o1[i]);
+            check (pk > 0.0f && pk <= 1.0f && diff > 1.0, "v0.37: STEP FX change the sound and stay clean");
+            int fxOn = 0; for (int k = 0; k < 6; ++k) { auto g = s.fxSurprise ((uint32_t) k * 77u); for (auto o : g.on) fxOn += o ? 1 : 0; }
+            check (fxOn >= 12, "v0.37: SURPRISE FX makes chains with effects in them");
+            auto g0 = s.fxSurprise (5); auto g1 = s.fxMutate (g0, 0.5f, 9); s.fxApply (g1);
+            check (s.fxCurrent().name.isEmpty() && s.rack.anyOn(), "v0.37: an FX chain goes onto the rack");
+            const float rk = renderFor (s, 200, 60);
+            check (rk > 0.0f && rk <= 1.0f, "v0.37: FX chains stay clean");
+        }
+        // SAMPLER: MONO pads, FLIPS, a musical KILL
+        {
+            KeysKillaProcessor c; c.prepareToPlay (44100, 512);
+            check (c.chopLoadFile (makeWav ("kk37_chop.wav", 110.0f, true)), "v0.37: SAMPLER loads");
+            c.chop.autoSlice (8);
+            c.flipSeed();
+            check (c.flips.size() == 7 && c.flipCenter == 0 && c.flips[0].kids.size() == 6, "v0.37: FLIPS: a seed and 6 children");
+            c.flipGrow (c.flips[0].kids[3], false, 0.8f);
+            check (c.flips.size() == 13, "v0.37: FLIPS grow from a child");
+            c.flipPlay (c.flips[0].kids[1]);
+            const float fpk = renderFor (c, 300, -1);
+            check (fpk > 0.02f && c.flipStepNow.load() >= 0, "v0.37: a FLIP plays the chops in time");
+            c.flipPlay (-1);
+            check (c.flipMidiFile (0).existsAsFile() && c.flipWavFile (0).existsAsFile(), "v0.37: FLIP drags out as MIDI and WAV");
+            auto src = c.chop.current()->src;
+            const float rmsBefore = src->getRMSLevel (0, 0, src->getNumSamples());
+            check (c.chopMutate (0, 0, true), "v0.37: KILL runs");
+            auto after = c.chop.current()->src;
+            const float rmsAfter = after->getRMSLevel (0, 0, after->getNumSamples());
+            bool fin = true; for (int i = 0; i < after->getNumSamples(); ++i) fin &= std::isfinite (after->getSample (0, i));
+            check (fin && after->getNumSamples() == src->getNumSamples() && rmsAfter > rmsBefore * 0.4f && rmsAfter < rmsBefore * 2.5f, "v0.37: KILL keeps the length and the loudness (musical, not broken)");
+            // MONO pads: the second pad stops the first
+            c.chopChoke = true;
+            c.chopPad = 0; renderFor (c, 4, -1); c.chopPad = 3; renderFor (c, 8, -1);
+            check (c.chop.lastHit.load() == 3 || c.chop.lastHit.load() == -1, "v0.37: MONO pads");
+            c.chopClear();
+        }
+        for (auto f : { fa, fb }) f.deleteFile();
+    }
     // PAIR flavours change the children (same children, new flavour)
     {
         KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);

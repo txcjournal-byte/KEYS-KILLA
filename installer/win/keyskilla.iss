@@ -1,4 +1,4 @@
-; Inno Setup script for BREED LAB (Windows, VST3 + Standalone)
+; Inno Setup script for EVOLVE by TrapVST (Windows, VST3 + Standalone)
 ; Build: ISCC.exe /DAppVersion=0.2.0 installer\win\keyskilla.iss
 #ifndef AppVersion
   #define AppVersion "0.2.0"
@@ -6,10 +6,10 @@
 
 [Setup]
 AppId={{4C1E9A77-5B2D-4E0A-9F61-6B3E2A7D0C11}
-AppName=BREED LAB
+AppName=EVOLVE by TrapVST
 AppVersion={#AppVersion}
-AppPublisher=808 KILLA
-DefaultDirName={commonpf64}\BREED LAB
+AppPublisher=TrapVST
+DefaultDirName={commonpf64}\EVOLVE
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 Uninstallable=yes
@@ -23,16 +23,18 @@ Compression=lzma2
 SolidCompression=yes
 
 [InstallDelete]
-; the plugin used to be called KEYS KILLA - the old bundle goes, so FL Studio sees one plugin
+; the plugin used to be called KEYS KILLA, then BREED LAB - the old bundles go, so FL Studio sees one plugin
 Type: filesandordirs; Name: "{commoncf64}\VST3\KEYS KILLA.vst3"
+Type: filesandordirs; Name: "{commoncf64}\VST3\BREED LAB.vst3"
+Type: filesandordirs; Name: "{commonpf64}\BREED LAB"
 
 [Files]
-Source: "..\..\build\KeysKilla_artefacts\Release\VST3\BREED LAB.vst3\*"; DestDir: "{commoncf64}\VST3\BREED LAB.vst3"; Excludes: "*.pdb,*.ilk"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\build\KeysKilla_artefacts\Release\Standalone\BREED LAB.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3\*"; DestDir: "{commoncf64}\VST3\EVOLVE.vst3"; Excludes: "*.pdb,*.ilk"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\build\KeysKilla_artefacts\Release\Standalone\EVOLVE.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{commonprograms}\BREED LAB"; Filename: "{app}\BREED LAB.exe"
+Name: "{commonprograms}\EVOLVE"; Filename: "{app}\EVOLVE.exe"
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{commoncf64}\VST3\BREED LAB.vst3"
+Type: filesandordirs; Name: "{commoncf64}\VST3\EVOLVE.vst3"

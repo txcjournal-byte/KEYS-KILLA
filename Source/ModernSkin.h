@@ -13,7 +13,8 @@ using namespace juce;
 
 inline Font font (float size, bool bold = true, float kern = 0.1f)
 {
-    return Font (FontOptions (Font::getDefaultSansSerifFontName(), size, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern);
+    const float sz = size < 14.0f ? size * 1.12f : size;   // v0.37: small text reads at FL's usual plugin size
+    return Font (FontOptions (Font::getDefaultSansSerifFontName(), sz, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern);
 }
 
 //==============================================================================
@@ -390,11 +391,12 @@ inline void sun (Graphics& g, Point<float> c, Colour col)
 inline void wordmark (Graphics& g, Rectangle<float> r, float size)
 {
     const auto& t = theme();
-    const auto f1 = font (size, false, 0.55f), f2 = font (size, true, 0.55f);
-    GlyphArrangement a; a.addLineOfText (f1, "BREED", 0, 0);
+    // v0.37: EVOLVE by TrapVST
+    const auto f1 = font (size, true, 0.5f), f2 = font (size * 0.42f, true, 0.12f);
+    GlyphArrangement a; a.addLineOfText (f1, "EVOLVE", 0, 0);
     const float w1 = a.getBoundingBox (0, -1, true).getWidth();
-    g.setColour (t.text); g.setFont (f1); g.drawText ("BREED", r, Justification::centredLeft);
-    g.setFont (f2); g.drawText ("LAB", r.withTrimmedLeft (w1 + size * 0.7f), Justification::centredLeft);
+    g.setColour (t.text); g.setFont (f1); g.drawText ("EVOLVE", r, Justification::centredLeft);
+    g.setColour (t.accent); g.setFont (f2); g.drawText ("by TrapVST", r.withTrimmedLeft (w1 + size * 0.45f).withTrimmedTop (size * 0.32f), Justification::centredLeft);
 }
 
 //==============================================================================
@@ -409,7 +411,7 @@ inline Image makeBackground()
     // ---- header: one long pane of glass, then wordmark, preset pill, buttons
     plate (g, { 10, 12, 1652, 80 }, 18.0f);
     wordmark (g, { 140, 26, 470, 44 }, 34.0f);
-    label (g, "DON'T BROWSE SOUNDS, BREED THEM.", { 141, 70, 440, 18 }, 10.5f, t.dim, Justification::centredLeft);
+    label (g, "DON'T BROWSE SOUNDS, EVOLVE THEM.", { 141, 70, 440, 18 }, 12.0f, t.dim, Justification::centredLeft);
     plate (g, { 616, 30, 520, 52 }, 26.0f);
     chevron (g, { 626, 34, 42, 44 }, true); chevron (g, { 1044, 34, 40, 44 }, false);
     {   // heart

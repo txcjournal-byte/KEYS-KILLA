@@ -83,6 +83,12 @@ public:
         closeBtn.setButtonText ("CLOSE");
         closeBtn.onClick = [this] { setVisible (false); };
         addAndMakeVisible (closeBtn);
+        // v0.37 choosing (a seed / a parent): click = hear it, USE IT (or a double-click) = take it
+        useBtn.setButtonText ("USE IT");
+        useBtn.setColour (TextButton::buttonColourId, kk::theme().accent);
+        useBtn.setColour (TextButton::textColourOffId, Colours::white);
+        useBtn.onClick = [this] { if (pickRow >= 0) activate (pickRow, true); };
+        addChildComponent (useBtn);
         count.setFont (serif (18.0f, false, 0.1f));
         addAndMakeVisible (count);
     }
@@ -90,6 +96,7 @@ public:
     void open (int cat, int eraIdx, bool exclusive, std::function<void (int)> pick = nullptr, const String& heading = "PRESETS")
     {
         pickHandler = std::move (pick); title = heading;
+        pickRow = -1; useBtn.setVisible (false);
         proc.rescanPacks(); updatePackCount(); packsOnly = false; packSel = -1;
         category.setSelectedId (cat >= 0 ? cat + 2 : 1, dontSendNotification);
         fillSubs();
@@ -164,6 +171,7 @@ public:
     {
         closeBtn.setBounds (getWidth() - 140, 14, 116, 36);
         installBtn.setBounds (getWidth() - 300, 14, 150, 36);
+        useBtn.setBounds (getWidth() - 560, 12, 250, 40);
         search.setBounds (300, 14, getWidth() - 300 - 320, 36);
         auto r = getLocalBounds().reduced (20).withTrimmedTop (chipsBottom() - 10);
         auto row2 = r.removeFromTop (34);
@@ -297,6 +305,7 @@ private:
         {
             if (en.factoryIndex < 0) proc.loadUserPreset (en.file);   // user sound: load it, then it becomes the parent
             auto h = pickHandler; pickHandler = nullptr; title = "PRESETS";
+            pickRow = -1; useBtn.setVisible (false);
             h (en.factoryIndex);
             setVisible (false);
             return;
@@ -333,6 +342,17 @@ private:
                 else if (r == 3 && toggleFavourite) { toggleFavourite (en.name); list.repaint(); }
                 else if (r == 6) askDelete (row);
             });
+            return;
+        }
+        if (pickHandler)   // choosing: hear it first - USE IT (or double-click) takes it
+        {
+            const auto en = entries[(size_t) row];
+            if (en.factoryIndex >= 0) proc.loadPreset (en.factoryIndex); else proc.loadUserPreset (en.file);
+            proc.previewNote = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f ? 36 : 60;
+            pickRow = row;
+            useBtn.setButtonText ("USE  " + en.name.toUpperCase().substring (0, 22));
+            useBtn.setVisible (true);
+            if (focusKeys) focusKeys();
             return;
         }
         activate (row, false);
@@ -380,7 +400,8 @@ private:
         subcat.setSelectedId (1, dontSendNotification);
         subcat.setEnabled (c >= 0);
     }
-    TextButton exclusiveOnly, favOnly, userOnly, closeBtn, installBtn;
+    TextButton exclusiveOnly, favOnly, userOnly, closeBtn, installBtn, useBtn;
+    int pickRow = -1;
     struct Chip { String name; int cat; int special; int count = 0; };   // special: 1 my presets, 2 favourites, 3 NEW, 4 PACKS
     std::vector<Chip> chips;
     int chipSel = 0, chipHot = -1;

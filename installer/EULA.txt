@@ -1,6 +1,6 @@
-BREED LAB - END USER LICENSE AGREEMENT
+EVOLVE by TrapVST - END USER LICENSE AGREEMENT
 
-1. LICENSE. You may install and use BREED LAB on computers you own or control
+1. LICENSE. You may install and use EVOLVE by TrapVST on computers you own or control
    for creating music, including commercial releases. Music you make with the
    plugin is yours; no royalties are due.
 

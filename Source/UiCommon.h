@@ -9,7 +9,9 @@ using namespace juce;
 // v0.26: one clean sans font everywhere (the name stays for the old call sites)
 inline Font serif (float h, bool bold = false, float kern = 0.12f)
 {
-    return Font (FontOptions (Font::getDefaultSansSerifFontName(), h * 0.92f, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern * 0.6f);
+    // v0.37: small text is bigger (it has to read at FL's usual plugin size)
+    const float sz = h < 15.0f ? h * 1.1f : h;
+    return Font (FontOptions (Font::getDefaultSansSerifFontName(), sz, bold ? Font::bold : Font::plain)).withExtraKerningFactor (kern * 0.6f);
 }
 
 inline std::unique_ptr<PropertiesFile> openSettings()
