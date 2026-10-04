@@ -2141,6 +2141,8 @@ public:
         addAndMakeVisible (wildSl);
         startTimerHz (30);
     }
+    // the PADS / FLIPS switch of the sampler sits in our top-left corner: clicks there go to it, not to us
+    bool hitTest (int x, int y) override { return ! (x < 196 && y < 34) && Component::hitTest (x, y); }
     void resized() override
     {
         int x = 196;   // the PADS / FLIPS switch sits left of the buttons
@@ -2670,6 +2672,7 @@ private:
         padsTab.selected = v == 0; flipsTab.selected = v == 1; padsTab.repaint(); flipsTab.repaint();
         const bool has = proc.chop.hasSource();
         flipView->setVisible (v == 1 && has);
+        padsTab.toFront (false); flipsTab.toFront (false);   // never under the FLIPS view
         dragMidi.setVisible (false); dragFlip.setVisible (false); dragFlipWav.setVisible (v == 1 && has);   // v0.40: no MIDI here - melodies have their own page
         if (v == 1 && has && proc.flips.empty()) proc.flipSeed();
         if (v == 0 && proc.flipOn.load()) proc.flipPlay (-1);
@@ -5600,7 +5603,7 @@ public:
     {
         const auto& t = kk::theme();
         auto r = getLocalBounds().toFloat();
-        g.setColour (t.night ? Colour (0xf20d1014) : Colour (0xf2f3f5f7)); g.fillRoundedRectangle (r, 16);
+        g.setColour (t.night ? Colour (0xff0d1014) : Colour (0xfff3f5f7)); g.fillRoundedRectangle (r, 16);   // solid: nothing of EVOLVE shows through
         g.setColour (Colour (0xff36ff6a).withAlpha (0.6f)); g.drawRoundedRectangle (r.reduced (1), 16, 1.6f);
         g.setColour (t.text); g.setFont (kk::modern::font (26.0f, true, 0.12f));
         g.drawText ("MATCH", 28, 18, 200, 34, Justification::centredLeft);
