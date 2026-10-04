@@ -2142,10 +2142,10 @@ public:
         startTimerHz (30);
     }
     // the PADS / FLIPS switch of the sampler sits in our top-left corner: clicks there go to it, not to us
-    bool hitTest (int x, int y) override { return ! (x < 196 && y < 34) && Component::hitTest (x, y); }
+    bool hitTest (int x, int y) override { return ! (x < 290 && y < 34) && Component::hitTest (x, y); }
     void resized() override
     {
-        int x = 196;   // the PADS / FLIPS switch sits left of the buttons
+        int x = 290;   // the PADS / FLIPS / MELODY switch sits left of the buttons
         for (auto* b : { &seedBtn, &againBtn, &playBtn, &backBtn }) { b->setBounds (x, 0, b == &againBtn ? 120 : 92, 32); x += b->getWidth() + 6; }
         wildSl.setBounds (x + 6, 2, 150, 28);
     }
@@ -2271,6 +2271,172 @@ private:
     bool heard = false, dragged = false, latched = false;
 };
 
+// v0.42 SAMPLER MELODY: the sound in the sampler becomes an instrument and plays melodies that grow (genre, key, tempo)
+class SamplerMelodyView : public Component, private Timer
+{
+public:
+    SamplerMelodyView (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (newBtn, "NEW MELODIES", "Melodies for the sound in the sampler (genre, key and tempo you choose)", [this] { generate(); });
+        btn (againBtn, "6 NEW KIDS", "Six new children of the middle melody", [this] { if (centre >= 0) { proc.melEvolve (centre, true); proc.melPlay (centre); } repaint(); });
+        btn (playBtn, "PLAY", "Play / stop the middle melody (in time with FL)", [this] { if (proc.loopPlaying() && proc.melPlaying == centre) proc.melPlay (-1); else if (centre >= 0) proc.melPlay (centre); });
+        btn (backBtn, "BACK", "Back to the melody it came from", [this]
+        {
+            if (! isPositiveAndBelow (centre, (int) proc.mels.size())) return;
+            const int pa = proc.mels[(size_t) centre].parent;
+            if (pa >= 0) { centre = pa; proc.melEvolve (pa, false); proc.melPlay (pa); repaint(); }
+        });
+        for (int g = -1; g < kk::mel::numGenres; ++g) genreBox.addItem (kk::mel::genreName (g), g + 2);
+        genreBox.onChange = [this] { proc.melSetGenre (genreBox.getSelectedId() - 2); };
+        genreBox.setTooltip ("The style of the melodies");
+        addAndMakeVisible (genreBox);
+        for (int k = 0; k < 12; ++k) keyBox.addItem (String (kk::mel::keyName (k)) + " MINOR", k + 1);
+        for (int k = 0; k < 12; ++k) keyBox.addItem (String (kk::mel::keyName (k)) + " MAJOR", k + 13);
+        keyBox.onChange = [this] { const int id = keyBox.getSelectedId() - 1; proc.melKey = id % 12; proc.melScale = id >= 12 ? kk::mel::scMajor : kk::mel::scMinor; };
+        keyBox.setTooltip ("The key of the melodies");
+        addAndMakeVisible (keyBox);
+        startTimerHz (30);
+    }
+    std::function<kk::PairPtr()> soundToUse;   // the selected chop / part
+    std::function<void (const String&)> onNote;
+    void syncBoxes()
+    {
+        genreBox.setSelectedId (proc.melGenre + 2, dontSendNotification);
+        keyBox.setSelectedId (proc.melKey + (proc.melScale == kk::mel::scMajor ? 13 : 1), dontSendNotification);
+    }
+    // the chop / part goes on the keys (tuned to C) - the melodies play it
+    bool takeSound()
+    {
+        auto s = soundToUse ? soundToUse() : kk::PairPtr();
+        if (s == nullptr) return false;
+        proc.useSample (kk::PairLab::tuned (s, proc.getSampleRate() > 0 ? proc.getSampleRate() : 44100.0), false);
+        soundName = s->name;
+        return true;
+    }
+    void generate()
+    {
+        if (! takeSound()) { if (onNote) onNote ("select a chop (or a part) first - it becomes the instrument"); return; }
+        proc.melFromMine = false;
+        proc.melGenerate();
+        centre = proc.melShown.empty() ? -1 : proc.melShown[0];
+        if (centre >= 0) { proc.melEvolve (centre, false); proc.melPlay (centre); }
+        repaint();
+    }
+    int centreMelody() const { return centre; }
+    void visibilityChanged() override
+    {
+        if (! isVisible()) { if (proc.melPlaying >= 0) proc.melPlay (-1); return; }
+        syncBoxes();
+        if (centre < 0 || ! isPositiveAndBelow (centre, (int) proc.mels.size())) generate(); else takeSound();
+    }
+    bool hitTest (int x, int y) override { return ! (x < 290 && y < 34) && Component::hitTest (x, y); }
+    void resized() override
+    {
+        int x = 290;
+        for (auto* b : { &newBtn, &againBtn, &playBtn, &backBtn }) { b->setBounds (x, 0, b == &newBtn ? 130 : b == &againBtn ? 112 : 76, 32); x += b->getWidth() + 6; }
+        genreBox.setBounds (x + 4, 2, 120, 28); keyBox.setBounds (x + 130, 2, 120, 28);
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        if (! isPositiveAndBelow (centre, (int) proc.mels.size()))
+        {
+            g.setColour (t.text); g.setFont (kk::modern::font (20.0f, true, 0.12f));
+            g.drawText ("MELODY: select a chop, then NEW MELODIES", getLocalBounds().withTrimmedTop (40).withTrimmedBottom (20), Justification::centred);
+            return;
+        }
+        draw (g, centreRect(), centre, true);
+        const auto& kids = proc.mels[(size_t) centre].kids;
+        for (int k = 0; k < (int) kids.size() && k < 6; ++k) draw (g, kidRect (k), kids[(size_t) k], false);
+    }
+    void mouseMove (const MouseEvent& e) override { const int h = nodeAt (e.position); if (h != hovered) { hovered = h; hoverSince = Time::getMillisecondCounter(); heard = false; repaint(); } }
+    void mouseExit (const MouseEvent&) override { hovered = -1; repaint(); if (proc.loopPlaying() && proc.melPlaying != centre && centre >= 0) proc.melPlay (centre); }
+    void mouseDown (const MouseEvent& e) override { downNode = nodeAt (e.position); dragged = false; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragged || downNode < 0 || e.getDistanceFromDragStart() < 8) return;
+        dragged = true;
+        const auto f = e.mods.isAltDown() ? proc.melExportWav (downNode) : proc.melExport (downNode);   // drag = MIDI, ALT + drag = WAV
+        if (f.existsAsFile()) DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+    }
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (dragged || e.mouseWasDraggedSinceMouseDown()) return;
+        const int n = nodeAt (e.position);
+        if (n < 0) return;
+        if (n == centre) { playBtn.triggerClick(); return; }
+        centre = n; proc.melEvolve (n, false); proc.melPlay (n);
+        repaint();
+    }
+private:
+    Rectangle<float> area() const { return getLocalBounds().toFloat().withTrimmedTop (42); }
+    Rectangle<float> centreRect() const { auto a = area(); return a.removeFromLeft (a.getWidth() * 0.36f).reduced (4); }
+    Rectangle<float> kidRect (int k) const
+    {
+        auto a = area(); a.removeFromLeft (a.getWidth() * 0.36f + 8);
+        const float w = a.getWidth() / 3.0f, h = a.getHeight() / 2.0f;
+        return { a.getX() + w * (float) (k % 3), a.getY() + h * (float) (k / 3), w, h };
+    }
+    int nodeAt (Point<float> p) const
+    {
+        if (! isPositiveAndBelow (centre, (int) proc.mels.size())) return -1;
+        if (centreRect().contains (p)) return centre;
+        const auto& kids = proc.mels[(size_t) centre].kids;
+        for (int k = 0; k < (int) kids.size() && k < 6; ++k) if (kidRect (k).reduced (4).contains (p)) return kids[(size_t) k];
+        return -1;
+    }
+    void draw (Graphics& g, Rectangle<float> r, int idx, bool isCentre)
+    {
+        const auto& t = kk::theme();
+        const auto& m = proc.mels[(size_t) idx];
+        const bool hot = idx == hovered, playing = proc.loopPlaying() && proc.melPlaying == idx;
+        r = r.reduced (4);
+        g.setColour (t.glass.withMultipliedAlpha (isCentre ? 1.4f : 1.0f)); g.fillRoundedRectangle (r, 10);
+        g.setColour (isCentre || playing ? t.accent : hot ? t.accent.withAlpha (0.7f) : t.text.withAlpha (0.25f));
+        g.drawRoundedRectangle (r, 10, isCentre ? 2.0f : 1.3f);
+        g.setColour (t.text); g.setFont (kk::modern::font (isCentre ? 17.0f : 13.0f, true, 0.06f));
+        g.drawText (m.name, r.reduced (12, 6).removeFromTop (22), Justification::centredLeft);
+        g.setColour (kk::accentText()); g.setFont (kk::modern::font (10.5f, true, 0.18f));
+        g.drawText (playing ? String ("PLAYING") : m.how, r.reduced (12, 6).removeFromTop (22), Justification::centredRight);
+        auto roll = r.reduced (12, 8).withTrimmedTop (24).withTrimmedBottom (isCentre ? 22 : 4);
+        g.setColour (t.well); g.fillRoundedRectangle (roll, 4);
+        if (m.notes.empty()) return;
+        int lo = 127, hi = 0; for (auto& n : m.notes) { lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); }
+        lo -= 1; hi += 1;
+        const float beats = m.beats(), rows = (float) std::max (6, hi - lo + 1);
+        for (int b = 0; b <= m.bars; ++b) { g.setColour (t.text.withAlpha (b % 4 == 0 ? 0.2f : 0.07f)); g.fillRect (roll.getX() + roll.getWidth() * (float) b * 4.0f / beats, roll.getY(), 1.0f, roll.getHeight()); }
+        const float now = playing ? proc.loopBeat.load() : -1.0f;
+        for (auto& n : m.notes)
+        {
+            const float x = roll.getX() + roll.getWidth() * n.start / beats, w = std::max (2.0f, roll.getWidth() * n.len / beats - 1.0f);
+            const float y = roll.getBottom() - roll.getHeight() * (float) (n.pitch - lo + 1) / rows, h = std::max (2.5f, roll.getHeight() / rows - 1.0f);
+            g.setColour (now >= n.start && now < n.start + n.len ? t.text : t.accent.withAlpha (0.55f + 0.4f * n.vel));
+            g.fillRoundedRectangle (x, y, w, h, 1.5f);
+        }
+        if (now >= 0) { g.setColour (t.text.withAlpha (0.8f)); g.fillRect (roll.getX() + roll.getWidth() * now / beats, roll.getY(), 1.5f, roll.getHeight()); }
+        if (isCentre)
+        {
+            g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.1f));
+            g.drawText (String (kk::mel::keyName (m.key)) + " " + kk::mel::scaleName (m.scale) + "   plays: " + soundName + "   drag = MIDI  /  ALT + drag = WAV", r.reduced (12, 6).removeFromBottom (16), Justification::centredLeft);
+        }
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        const auto now = Time::getMillisecondCounter();
+        if (hovered >= 0 && hovered != centre && ! heard && now - hoverSince > 220) { heard = true; proc.melPlay (hovered); }
+        playBtn.setButtonText (proc.loopPlaying() && proc.melPlaying == centre ? "STOP" : "PLAY");
+        if (proc.loopPlaying()) repaint();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton newBtn { lnf }, againBtn { lnf }, playBtn { lnf }, backBtn { lnf };
+    ComboBox genreBox, keyBox;
+    String soundName;
+    int centre = -1, hovered = -1, downNode = -1;
+    uint32 hoverSince = 0; bool heard = false, dragged = false;
+};
+
 class ChopPanel : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -2373,11 +2539,22 @@ public:
         });
         btn (padsTab, "PADS", "The 16 pads: click = play a slice, right-click = save it, drag a pad = the slice into FL as a WAV", [this] { setView (0); });
         btn (flipsTab, "FLIPS", "FLIPS: beats from your chops that evolve - hover = hear, click = grow", [this] { setView (1); });
+        btn (melTab, "MELODY", "MELODY: the selected chop becomes an instrument and plays melodies that grow (genre, key, tempo) - drag MIDI or WAV", [this] { setView (2); });
         btn (monoBtn, "MONO PADS", "MONO PADS on: a new pad stops the one that plays (no overlapping).  Off: pads ring out over each other", [this]
         { proc.chopChoke = ! proc.chopChoke.load(); monoBtn.selected = proc.chopChoke.load(); monoBtn.repaint(); });
         monoBtn.selected = proc.chopChoke.load();
         flipView = std::make_unique<FlipView> (proc, lnf);
         addChildComponent (*flipView);
+        melView = std::make_unique<SamplerMelodyView> (proc, lnf);
+        melView->soundToUse = [this] { return partSound(); };
+        melView->onNote = [this] (const String& m) { note = m; repaint(); };
+        addChildComponent (*melView);
+        dragMelMidi.makeFile = [this] { return proc.melExport (melView->centreMelody()); };
+        dragMelMidi.setTooltip ("Drag the middle melody into FL as MIDI (put it on EVOLVE - it plays this sound)");
+        addChildComponent (dragMelMidi);
+        dragMelWav.makeFile = [this] { return proc.melExportWav (melView->centreMelody()); };
+        dragMelWav.setTooltip ("Drag the middle melody into FL as audio - played by this sound, at the project tempo");
+        addChildComponent (dragMelWav);
         dragFlipWav.makeFile = [this] { return proc.flipWavFile (proc.flipCenter); };
         dragFlipWav.setTooltip ("Drag the middle flip into FL as audio (a WAV at the project tempo)");
         addChildComponent (dragFlipWav);
@@ -2530,13 +2707,17 @@ public:
         pairBtn.setBounds (bankBtn.getX() - 136, selRow.getY(), 128, 38); pairBtn.setVisible (false);   // v0.35: > PARENT A / B above does it
         padsTab.setBounds (14, selRow.getBottom() + 28, 90, 32);
         flipsTab.setBounds (110, selRow.getBottom() + 28, 90, 32);
+        melTab.setBounds (206, selRow.getBottom() + 28, 90, 32);
         padArea = { 14, selRow.getBottom() + 68, W - 28 - 230, H - selRow.getBottom() - 80 };
         flipView->setBounds (padArea.withTop (selRow.getBottom() + 28));
+        melView->setBounds (padArea.withTop (selRow.getBottom() + 28));
         const int colX = padArea.getRight() + 14, colW = W - 14 - colX;
         monoBtn.setBounds (colX, padArea.getY(), colW, 38);
         dragMidi.setBounds (colX, padArea.getY() + 48, colW, 46);
         dragFlip.setBounds (colX, padArea.getY() + 48, colW, 46);
-        dragFlipWav.setBounds (colX, padArea.getY() + 48, colW, 46);
+        dragFlipWav.setBounds (colX, padArea.getY() + 100, colW, 46);
+        dragMelMidi.setBounds (colX, padArea.getY() + 48, colW, 46);
+        dragMelWav.setBounds (colX, padArea.getY() + 100, colW, 46);
         flipBtn.setBounds (0, 0, 0, 0);
     }
     void mouseMove (const MouseEvent& e) override
@@ -2642,6 +2823,7 @@ public:
 public:
     // v0.35: SPACE on the SAMPLER page: stop whatever plays - or play the selection / the selected slice
     void debugSelect (int a0, int a1, int v0, int vl) { selA = a0; selB = a1; viewStart = v0; viewLen = vl; peaksKey = {}; refreshSelButtons(); repaint(); }
+    void debugMelody() { setView (2); proc.melPlay (-1); }
     void debugFlips() { setView (1); proc.flipGrow (proc.flipCenter, true, 0.5f); }
     void spacePressed()
     {
@@ -2669,13 +2851,18 @@ private:
     void setView (int v)
     {
         viewMode = v;
-        padsTab.selected = v == 0; flipsTab.selected = v == 1; padsTab.repaint(); flipsTab.repaint();
+        padsTab.selected = v == 0; flipsTab.selected = v == 1; melTab.selected = v == 2; padsTab.repaint(); flipsTab.repaint(); melTab.repaint();
         const bool has = proc.chop.hasSource();
         flipView->setVisible (v == 1 && has);
-        padsTab.toFront (false); flipsTab.toFront (false);   // never under the FLIPS view
-        dragMidi.setVisible (false); dragFlip.setVisible (false); dragFlipWav.setVisible (v == 1 && has);   // v0.40: no MIDI here - melodies have their own page
+        melView->setVisible (v == 2 && has);
+        padsTab.toFront (false); flipsTab.toFront (false); melTab.toFront (false);   // never under the FLIPS / MELODY views
+        dragMidi.setVisible (false);
+        dragFlip.setVisible (v == 1 && has); dragFlipWav.setVisible (v == 1 && has);   // v0.42: the flip as MIDI again (C5 = chop 1)
+        dragMelMidi.setVisible (v == 2 && has); dragMelWav.setVisible (v == 2 && has);
         if (v == 1 && has && proc.flips.empty()) proc.flipSeed();
         if (v == 0 && proc.flipOn.load()) proc.flipPlay (-1);
+        if (v != 2 && has && viewWasMelody) proc.setPlayMode (KeysKillaProcessor::playChop);   // back from MELODY: the keys play the pads again
+        viewWasMelody = v == 2;
         repaint();
     }
     kk::PairPtr partSound() const
@@ -2807,6 +2994,9 @@ private:
     HotButton revBtn { lnf }, flipBtn { lnf };
     HotButton savePartBtn { lnf }, padsTab { lnf }, flipsTab { lnf }, monoBtn { lnf };
     std::unique_ptr<FlipView> flipView;
+    std::unique_ptr<SamplerMelodyView> melView;
+    HotButton melTab { lnf }; bool viewWasMelody = false;
+    DragFileButton dragMelMidi { "DRAG MELODY MIDI", TC (0xff36ff6a) }, dragMelWav { "DRAG MELODY WAV", TC (0xff36ff6a) };
     DragFileButton dragFlipWav { "DRAG FLIP WAV", TC (0xff36ff6a) };
     int viewMode = 0;
     HotButton clearBtn { lnf }, playSelBtn { lnf }, loopSelBtn { lnf }, toABtn { lnf }, toBBtn { lnf }, mutateBtn { lnf }, killBtn { lnf }, undoBtn { lnf }, allBtn { lnf };
@@ -5581,6 +5771,7 @@ public:
             chooser = std::make_unique<FileChooser> ("The sound to match", File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
             chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc) { if (fc.getResult().existsAsFile()) start (fc.getResult()); });
         });
+        btn (pluginBtn, "FROM THE PLUGIN", "A sound from EVOLVE itself: the sound on the keys right now, or one from MY SOUNDS / the BANK / SOUND KITS", [this] { pluginMenu(); });
         btn (stopBtn, "STOP", "Stop growing (the strands stay)", [this] { proc.evoMatchStop(); repaint(); });
         btn (closeBtn, "CLOSE", "Back to EVOLVE", [this] { if (onClose) onClose(); });
         for (int i = 0; i < 4; ++i)
@@ -5667,6 +5858,7 @@ public:
     {
         closeBtn.setBounds (getWidth() - 120, 18, 96, 36); stopBtn.setBounds (getWidth() - 210, 18, 84, 36);
         fileBtn.setBounds (42, getHeight() - 84, 270, 40);
+        pluginBtn.setBounds (42, getHeight() - 132, 270, 40);
         for (int i = 0; i < 4; ++i)
         {
             const auto lane = strandRect (i).toNearestInt();
@@ -5681,6 +5873,22 @@ private:
         g.setColour (c.withAlpha (0.85f));
         const float bw = r.getWidth() / 64.0f;
         for (int k = 0; k < 64; ++k) { const float h = jmax (1.0f, r.getHeight() * w[(size_t) k]); g.fillRect (r.getX() + bw * (float) k, r.getCentreY() - h * 0.5f, jmax (1.0f, bw - 1.0f), h); }
+    }
+    void pluginMenu()
+    {
+        PopupMenu m;
+        m.addItem (1, "THE SOUND ON THE KEYS  (" + (proc.sampleActive() && proc.activeSample() != nullptr ? proc.activeSample()->name : proc.currentName()) + ")");
+        m.addItem (2, "FROM MY SOUNDS ...");
+        m.addItem (3, "FROM THE BANK (harvested / VST sounds) ...");
+        m.addItem (4, "FROM SOUND KITS ...");
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&pluginBtn), [this, safe = SafePointer<MatchView> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1) { heard = -1; if (! proc.evoMatchFromKeys()) proc.matchTargetName = "nothing on the keys"; repaint(); return; }
+            const File dir = r == 2 ? kk::Library::root() : r == 3 ? KeysKillaProcessor::bankFolder() : kk::SoundKits::root();
+            chooser = std::make_unique<FileChooser> ("The sound to match", dir, "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc) { if (fc.getResult().existsAsFile()) start (fc.getResult()); });
+        });
     }
     void start (const File& f)
     {
@@ -5699,7 +5907,7 @@ private:
         if (v != lastVer || proc.matchRunning.load()) { lastVer = v; repaint(); }
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    HotButton fileBtn { lnf }, stopBtn { lnf }, closeBtn { lnf };
+    HotButton fileBtn { lnf }, stopBtn { lnf }, closeBtn { lnf }, pluginBtn { lnf };
     std::vector<std::unique_ptr<HotButton>> hearBtns, plantBtns;
     std::unique_ptr<FileChooser> chooser;
     bool dropHot = false; int heard = -1, lastVer = -1; float phase = 0;
@@ -6483,11 +6691,20 @@ public:
             b->onClick = [this, i] { proc.melLayers = i; if (proc.melPlaying >= 0) proc.melPlay (proc.melPlaying); refresh(); };
             addAndMakeVisible (*b); layerBtns.push_back (std::move (b));
         }
-        btn (curSoundBtn, "THE SOUND ON THE KEYS", "The melodies play with the sound that is on the keys right now (pick one in EVOLVE, BREED LAB, MY SOUNDS ...)", [this] { repaint(); });
-        btn (pickSoundBtn, "PICK FROM THE BANK", "Choose the sound the melodies play with (hear it first, then USE IT)", [this] { if (onPickSound) onPickSound(); });
-        btn (listenBtn, "LISTEN", "LISTEN: press it, then play your melody in FL (this plugin's piano roll, or your keyboard) - press it again when it has played once", [this]
+        // v0.42 quick sound: a family + < > right here (the melody keeps playing while you flip through sounds)
+        static const int cats[] { cBells, cPlucks, cPiano, cKeys, cMallets, cPads, cLead, cStrings, cWoodwind, cBrass, cChoir, cOrgan, cSynth, cArp, cGuitar, cTexture };
+        for (int i = 0; i < (int) std::size (cats); ++i) catBox.addItem (categoryNames()[cats[i]], cats[i] + 1);
+        catBox.setSelectedId (cBells + 1, dontSendNotification);
+        catBox.onChange = [this] { stepSound (0); };
+        catBox.setTooltip ("A family of sounds for the melodies - then < > flips through them while the melody plays");
+        addAndMakeVisible (catBox);
+        btn (prevSnd, "<", "Previous sound of this family", [this] { stepSound (-1); });
+        btn (nextSnd, ">", "Next sound of this family", [this] { stepSound (1); });
+        btn (curSoundBtn, "", "", [this] {}); curSoundBtn.setVisible (false);
+        btn (pickSoundBtn, "ALL SOUNDS", "Choose the sound the melodies play with (hear it first, then USE IT)", [this] { if (onPickSound) onPickSound(); });
+        btn (listenBtn, "LISTEN", "LISTEN: press it, then play your melody in FL - press it again when it has played once.  Notes on EVOLVE's channel are caught as MIDI.  Another plugin (Nexus ...)? Put EVOLVE as an EFFECT on that plugin's mixer track: LISTEN hears its sound and turns it into notes", [this]
         {
-            if (proc.melListening()) { proc.melListen (false); note = proc.melHasMine ? "got it: " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) : String ("nothing heard - play your melody in FL while LISTEN is on"); }
+            if (proc.melListening()) { proc.melListen (false); note = proc.melHasMine ? "got it" + String (proc.melListenSource == "AUDIO" ? " (from the sound)" : "") + ": " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) : String ("nothing heard - play your melody in FL while LISTEN is on (or EVOLVE as an effect on the plugin's track)"); }
             else { proc.melListen (true); note = "listening... press PLAY in FL (your pattern in this plugin's piano roll)"; }
             refresh();
         });
@@ -6610,7 +6827,9 @@ public:
         for (int i = 0; i < 3; ++i) rangeBtns[(size_t) i]->setBounds (L.getX() + 14 + i * 100, y, 94, 30);
         y += 30 + 26;
         wildSl.setBounds (L.getX() + 14, y, L.getWidth() - 28, 26); y += 26 + 50;
-        curSoundBtn.setBounds (L.getX() + 14, y, 180, 32); pickSoundBtn.setBounds (L.getX() + 198, y, 114, 32);
+        prevSnd.setBounds (L.getX() + 14, y, 34, 32); catBox.setBounds (L.getX() + 52, y + 2, 132, 28); nextSnd.setBounds (L.getX() + 188, y, 34, 32);
+        pickSoundBtn.setBounds (L.getX() + 228, y, 84, 32);
+        curSoundBtn.setBounds (L.getX() + 14, y, 180, 32);
         y += 32 + 30;
         listenBtn.setBounds (L.getX() + 14, y, 100, 32); hearMineBtn.setBounds (L.getX() + 118, y, 96, 32); dragMine.setBounds (L.getX() + 218, y - 2, 94, 36);
         mineY = y + 40;
@@ -6767,6 +6986,20 @@ private:
         startAnim();
     }
     void startAnim() { animStart = Time::getMillisecondCounter(); refresh(); }
+    void stepSound (int dir)
+    {
+        const int cat = catBox.getSelectedId() - 1;
+        std::vector<int> list;
+        const auto& ps = factoryPresets();
+        for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].cat == cat) list.push_back (i);
+        if (list.empty()) return;
+        int& pos = catPos[cat];
+        pos = dir == 0 ? jlimit (0, (int) list.size() - 1, pos) : (pos + dir + (int) list.size()) % (int) list.size();
+        const int playing = proc.melPlaying;
+        proc.loadPreset (list[(size_t) pos]);
+        if (playing >= 0) proc.melPlay (playing); else if (playing == -2) proc.melPlayMine();   // keep the melody going on the new sound
+        repaint();
+    }
     void refresh()
     {
         surpriseTab.selected = ! proc.melFromMine; mineTab.selected = proc.melFromMine; surpriseTab.repaint(); mineTab.repaint();
@@ -6792,6 +7025,8 @@ private:
         if (hoverCard >= 0 && ! heard && now - hoverSince > 220 && hoverCard < (int) proc.melShown.size())
         { heard = true; const int idx = proc.melShown[(size_t) hoverCard]; if (proc.melPlaying != idx) proc.melPlay (idx); lastHover = idx; }
         if (proc.melListening() && proc.melHeardNotes() != lastHeardCount) { lastHeardCount = proc.melHeardNotes(); note = "listening... " + String (lastHeardCount) + " notes - press LISTEN again when your melody has played once"; repaint(); }
+        if (proc.melListening() && lastHeardCount <= 0 && proc.melHeardAudio() > 0.01f && ! heardAudioShown) { heardAudioShown = true; note = "listening to the SOUND coming in (EVOLVE as an effect) - press LISTEN again when the melody has played once"; repaint(); }
+        if (! proc.melListening()) heardAudioShown = false;
         if (proc.melVer.load() != lastVer) { lastVer = proc.melVer.load(); refresh(); }
         if (proc.loopPlaying() || now - animStart < 900) repaint();
         stopBtn.setEnabled (proc.loopPlaying());
@@ -6800,13 +7035,15 @@ private:
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     HotButton surpriseTab { lnf }, mineTab { lnf }, curSoundBtn { lnf }, pickSoundBtn { lnf }, listenBtn { lnf }, hearMineBtn { lnf }, generateBtn { lnf }, backBtn { lnf }, againBtn { lnf }, stopBtn { lnf };
     std::vector<std::unique_ptr<HotButton>> keyBtns, barBtns, rangeBtns, genreBtns, layerBtns;
-    ComboBox scaleBox;
+    ComboBox scaleBox, catBox;
+    HotButton prevSnd { lnf }, nextSnd { lnf };
+    std::map<int, int> catPos;
     Slider busySl, wildSl, bpmSl;
     DragFileButton dragMine { "MIDI", TC (0xff36ff6a) };
     String note;
     int mineY = 600, hoverCard = -1, downCard = -1, lastHover = -1, lastVer = -1, lastHeardCount = -1, blink = 0;
     uint32 hoverSince = 0, animStart = 0;
-    bool heard = false, dragged = false, dropHot = false;
+    bool heard = false, dragged = false, dropHot = false, heardAudioShown = false;
 };
 
 #include "MixLabPage.h"
@@ -7198,7 +7435,7 @@ public:
         }
         if (v == 37) { FxRackPage::lastMode() = 0; openTab (tabFxRack); }   // v0.37 SURPRISE FX
         if (v == 38) { FxRackPage::lastMode() = 1; proc.stepPreset (4); proc.stepOn = true; openTab (tabFxRack); }   // STEP FX
-        if (v == 31 || v == 36 || v == 39)   // SAMPLER with a sample, zoomed in, a part selected (36: FLIPS, 39: EDIT of a sample)
+        if (v == 31 || v == 36 || v == 39 || v == 47)   // SAMPLER with a sample, zoomed in, a part selected (36: FLIPS, 39: EDIT of a sample)
         {
             auto f = File::getSpecialLocation (File::tempDirectory).getChildFile ("kk_shot_sample.wav");
             AudioBuffer<float> b (2, 44100 * 4);
@@ -7214,7 +7451,7 @@ public:
             openTab (tabSampler);
             std::function<ChopPanel* (Component*)> find = [&find] (Component* c) -> ChopPanel*
             { if (auto* cp = dynamic_cast<ChopPanel*> (c)) return cp; for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r; return nullptr; };
-            if (auto* m = module (tabSampler)) if (auto* cp = find (m)) { cp->debugSelect (44100 / 2, 44100 * 2, 0, 44100 * 3); if (v == 36) cp->debugFlips(); }
+            if (auto* m = module (tabSampler)) if (auto* cp = find (m)) { cp->debugSelect (44100 / 2, 44100 * 2, 0, 44100 * 3); if (v == 36) cp->debugFlips(); if (v == 47) { if (proc.getSampleRate() <= 0) proc.prepareToPlay (44100, 512); cp->debugMelody(); } }
             if (v == 39) { proc.useSample (kk::PairLab::fromFile (f, 44100.0), false); proc.sampleEdit[KeysKillaProcessor::seStart] = 0.12f; proc.sampleEdit[KeysKillaProcessor::seSpace] = 0.4f; openTab (tabEdit); }
         }
         if (v == 30) { openTab (0); setTheme (1 - kk::themeIndex()); }          // ... and with a drum page open

@@ -1063,6 +1063,45 @@ static int unitTests()
         wf.deleteFile();
         juce::ignoreUnused (g);
     }
+    // v0.42 LISTEN AUDIO: EVOLVE as an effect on another plugin's track - its sound becomes the melody
+    {
+        KeysKillaProcessor p; p.enableAllBuses(); p.prepareToPlay (44100, 512);
+        const int ap[] { 69, 72, 76, 74, 72, 71, 69, 64, 69, 72, 76, 79, 77, 76, 74, 72 };
+        const double spb = 44100.0 * 60.0 / 140.0;
+        const int total = (int) (spb * 0.5 * 17);
+        std::vector<float> a ((size_t) total, 0.0f);
+        for (int i = 0; i < 16; ++i)
+        {
+            const int s0 = (int) (i * 0.5 * spb), len = (int) (0.42 * spb);
+            const double f = 440.0 * std::pow (2.0, (ap[i] - 69) / 12.0);
+            for (int k = 0; k < len; ++k) { const double env = std::min (1.0, k / 200.0) * std::min (1.0, (len - k) / 400.0); double v = 0; for (int h = 1; h <= 4; ++h) v += std::sin (2 * juce::MathConstants<double>::pi * f * h * k / 44100.0) / h; a[(size_t) (s0 + k)] = (float) (0.3 * env * v); }
+        }
+        p.melListen (true);
+        juce::AudioBuffer<float> b (2, 512);
+        for (int o = 0; o < total; o += 512)
+        {
+            b.clear();
+            for (int i = 0; i < 512 && o + i < total; ++i) { b.setSample (0, i, a[(size_t) (o + i)]); b.setSample (1, i, a[(size_t) (o + i)]); }
+            juce::MidiBuffer mb; p.processBlock (b, mb);
+        }
+        p.melListen (false);
+        std::printf ("LISTEN AUDIO: inputs %d, %d notes, key %d, from %s\n", p.getTotalNumInputChannels(), (int) p.melMine.notes.size(), p.melMine.key, p.melListenSource.toRawUTF8());
+        check (p.melHasMine && p.melListenSource == "AUDIO" && p.melMine.notes.size() >= 15 && p.melMine.key == 9, "v0.42 LISTEN AUDIO: the sound of another plugin becomes the melody (A minor)");
+    }
+    // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        juce::AudioBuffer<float> b (2, 22050);
+        for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.5f * std::sin (kk::twoPi * 261.63f * (float) i / 44100.0f) * std::exp (-(float) i / 8000.0f); b.setSample (0, i, v); b.setSample (1, i, v); }
+        auto snd = kk::PairLab::tuned (kk::PairLab::fromBuffer (b, 44100.0, 44100.0, "test pluck"), 44100.0);
+        p.useSample (snd, false);
+        p.melSetGenre (kk::mel::gTrap); p.melGenerate();
+        const auto f = p.melExportWav (p.melShown[0]);
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
+        check (f.existsAsFile() && rd != nullptr && rd->lengthInSamples > 44100 * 10, "v0.42 SAMPLER MELODY: the melody played by the sample drags out as a WAV");
+        f.deleteFile();
+    }
     // PAIR flavours change the children (same children, new flavour)
     {
         KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);

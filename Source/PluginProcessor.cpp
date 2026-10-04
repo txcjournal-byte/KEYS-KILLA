@@ -640,6 +640,23 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
                     if (m.isNoteOn()) ++melHeard;
                 }
             }
+        // v0.42 LISTEN AUDIO: EVOLVE as an effect on another plugin's track hears its sound (turned into notes when LISTEN stops)
+        const int cap = (int) audRec.size(), have = audRecN.load();
+        if (hasInput && cap > 0 && have < cap)
+        {
+            if (have == 0) audRecBeat = beatPos;
+            const int m = std::min (n, cap - have);
+            float pk = audRecPeak.load();
+            for (int i = 0; i < m; ++i) { const float v = 0.5f * (fxIn.getSample (0, i) + fxIn.getSample (1, i)); audRec[(size_t) (have + i)] = v; pk = std::max (pk, std::abs (v)); }
+            audRecPeak = pk;
+            audRecN = have + m;
+        }
+        else if (have > 0 && have < cap)   // silence between the notes counts too (timing)
+        {
+            const int m = std::min (n, cap - have);
+            for (int i = 0; i < m; ++i) audRec[(size_t) (have + i)] = 0.0f;
+            audRecN = have + m;
+        }
     }
     freeBeat = beatPos + bps * n;
 
@@ -4745,6 +4762,44 @@ juce::File KeysKillaProcessor::melExport (int idx)
     return f;
 }
 
+juce::File KeysKillaProcessor::melExportWav (int idx)
+{
+    if (! juce::isPositiveAndBelow (idx, (int) mels.size())) return {};
+    auto snd = pairPlayer.sound();
+    if (snd == nullptr || snd->audio.getNumSamples() < 64) return {};
+    const auto& m = mels[(size_t) idx];
+    const double rate = sr > 0 ? sr : 44100.0, bpm = lastBpm.load() > 30 ? lastBpm.load() : 140.0, spb = rate * 60.0 / bpm;
+    const int total = (int) (m.beats() * spb) + (int) (rate * 1.0);
+    juce::AudioBuffer<float> out (2, total); out.clear();
+    const int srcLen = snd->audio.getNumSamples(), fadeIn = (int) (rate * 0.002), rel = (int) (rate * 0.12);
+    for (auto& n : kk::mel::layerNotes (m, melLayers))
+    {
+        const double ratio = std::exp2 ((n.pitch - snd->rootNote) / 12.0);
+        const int start = (int) (std::max (0.0f, n.start) * spb), hold = (int) (n.len * spb);
+        for (int c = 0; c < 2; ++c)
+        {
+            const float* src = snd->audio.getReadPointer (std::min (c, snd->audio.getNumChannels() - 1));
+            float* dst = out.getWritePointer (c);
+            double pos = 0;
+            for (int i = 0; i < hold + rel && start + i < total; ++i, pos += ratio)
+            {
+                const int p0 = (int) pos; if (p0 + 1 >= srcLen) break;
+                const float fr = (float) (pos - p0);
+                float g = n.vel * 0.8f * std::min (1.0f, (float) i / (float) std::max (1, fadeIn));
+                if (i >= hold) g *= 1.0f - (float) (i - hold) / (float) rel;
+                dst[start + i] += (src[p0] + (src[p0 + 1] - src[p0]) * fr) * g;
+            }
+        }
+    }
+    const float pk = out.getMagnitude (0, total);
+    if (pk > 1.0e-6f) out.applyGain (0.89f / pk);
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("EVOLVE Melodies");
+    dir.createDirectory();
+    auto f = dir.getChildFile (juce::File::createLegalFileName (m.name + " - " + snd->name.substring (0, 24) + " - " + kk::mel::keyName (m.key) + " " + kk::mel::scaleName (m.scale) + " - " + juce::String (juce::roundToInt (bpm)) + "BPM") + ".wav");
+    f.deleteFile();
+    return writeWavFile (out, rate, f) ? f : juce::File();
+}
+
 juce::File KeysKillaProcessor::melSave (int idx)
 {
     auto t = melExport (idx);
@@ -4759,11 +4814,37 @@ void KeysKillaProcessor::melListen (bool on)
 {
     if (on)
     {
-        { const juce::SpinLock::ScopedLockType rl (recLock); rec.clear(); }
+        { const juce::SpinLock::ScopedLockType rl (recLock); rec.clear(); rec.reserve (4096); }
+        audRecN = 0; audRecPeak = 0;
+        if (const size_t want = (size_t) ((sr > 0 ? sr : 44100.0) * 64.0); audRec.size() != want) audRec.assign (want, 0.0f);   // up to 64 s of the other plugin's sound (kept, never freed while the audio thread may write)
         melHeard = 0; melListenOn = true;
         return;
     }
     melListenOn = false;
+    if (melHeard.load() < 3 && audRecN.load() > 4096 && audRecPeak.load() > 0.01f)   // no notes came in, but sound did: AUDIO -> MIDI
+    {
+        const int len = audRecN.load();
+        juce::AudioBuffer<float> b (1, len);
+        b.copyFrom (0, 0, audRec.data(), len);
+        const double bpm = lastBpm.load() > 30 ? lastBpm.load() : 140.0;
+        auto notes = kk::mel::notesFromAudio (b, sr > 0 ? sr : 44100.0, bpm);
+        const float origin = (float) audRecBeat.load();
+        for (auto& x : notes) x.start += origin;   // back on FL's grid: the melody starts on its bar
+        audRecN = 0;
+        if (notes.size() >= 3)
+        {
+            const float first = notes.front().start;
+            notes.erase (std::remove_if (notes.begin(), notes.end(), [&] (const kk::mel::Note& x) { return x.start - first >= 64.0f; }), notes.end());
+            melMine = kk::mel::fromNotes (notes, 0);
+            melHasMine = melMine.notes.size() >= 3;
+            if (melHasMine) { melFromMine = true; melKey = melMine.key; melScale = melMine.scale; melBars = melMine.bars; }
+            melListenSource = "AUDIO";
+        }
+        ++melVer;
+        return;
+    }
+    audRecN = 0;
+    melListenSource = "MIDI";
     std::vector<RecEv> ev;
     { const juce::SpinLock::ScopedLockType rl (recLock); ev.swap (rec); }
     // note on / off pairs -> notes (FL loops the pattern: keep the first time each bar plays)
@@ -4985,12 +5066,30 @@ bool KeysKillaProcessor::evoMatchStart (const juce::File& f)
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
     if (rd == nullptr || rd->lengthInSamples < 2048) return false;
-    const double rate = 44100.0;
     const int len = (int) std::min<juce::int64> (rd->lengthInSamples, (juce::int64) (rd->sampleRate * 3.0));
     juce::AudioBuffer<float> raw ((int) std::max (1u, std::min (2u, rd->numChannels)), len);
     rd->read (&raw, 0, len, 0, true, raw.getNumChannels() > 1);
+    return evoMatchStartBuffer (raw, rd->sampleRate, f.getFileNameWithoutExtension());
+}
+
+bool KeysKillaProcessor::evoMatchFromKeys()
+{
+    const double rate = sr > 0 ? sr : 44100.0;
+    if (sampleActive())
+        if (auto s = pairPlayer.sound(); s != nullptr && s->audio.getNumSamples() > 2048)
+            return evoMatchStartBuffer (s->audio, rate, s->name);
+    auto g = genomeFromCurrent();
+    if (! g.valid()) return false;
+    return evoMatchStartBuffer (renderGenomeAudio (g, rate, 1.6), rate, currentName());
+}
+
+bool KeysKillaProcessor::evoMatchStartBuffer (const juce::AudioBuffer<float>& raw, double srcRate, const juce::String& name)
+{
+    if (raw.getNumSamples() < 2048 || srcRate <= 0) return false;
+    const double rate = 44100.0;
+    const int len = std::min (raw.getNumSamples(), (int) (srcRate * 3.0));
     // to 44.1 kHz (linear is enough for comparing)
-    const double ratio = rd->sampleRate / rate;
+    const double ratio = srcRate / rate;
     juce::AudioBuffer<float> target (1, (int) (len / ratio));
     for (int i = 0; i < target.getNumSamples(); ++i)
     {
@@ -5009,7 +5108,7 @@ bool KeysKillaProcessor::evoMatchStart (const juce::File& f)
         std::nth_element (ps.begin(), ps.begin() + (long) ps.size() / 2, ps.end()); note = juce::jlimit (28, 96, ps[ps.size() / 2]);
     }
     evoMatchStop();
-    matchTargetName = f.getFileNameWithoutExtension(); matchTargetWave = peaks64 (target);
+    matchTargetName = name; matchTargetWave = peaks64 (target);
     { const juce::SpinLock::ScopedLockType sl (matchLock); matchStrandsData.clear(); }
     matchStop = false; matchRunning = true; matchProgress = 0; ++matchVer;
     std::vector<Genome> seeds; for (int i = 0; i < (int) factoryPresets().size(); ++i) seeds.push_back (genomeFromPreset (i));

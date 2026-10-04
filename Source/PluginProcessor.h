@@ -202,6 +202,8 @@ public:
     // v0.41 MATCH: drop a WAV - four strands of synth sounds grow toward it in the background (any strand can be planted at any time)
     struct MatchStrand { Genome g; float match = 0; std::array<float, 64> wave {}; int gen = 0; };
     bool evoMatchStart (const juce::File& f);
+    bool evoMatchStartBuffer (const juce::AudioBuffer<float>& audio, double rate, const juce::String& name);
+    bool evoMatchFromKeys();                                     // v0.42: the sound on the keys right now (a preset, a sample, an EVOLVE sound)
     void evoMatchStop();
     std::vector<MatchStrand> matchStrands() const;               // a copy (the search writes them)
     std::atomic<bool> matchRunning { false };
@@ -275,9 +277,12 @@ public:
     void melPlayMine();
     juce::File melExport (int idx);            // a .mid for FL (the name says key, scale, tempo)
     juce::File melSave (int idx);              // into Documents/KEYS KILLA/Melodies
+    juce::File melExportWav (int idx);         // v0.42: the melody played by the sample on the keys (SAMPLER MELODY), as a WAV
     void melListen (bool on);                  // LISTEN: catch the melody FL plays into this plugin
     bool melListening() const { return melListenOn.load(); }
     int  melHeardNotes() const { return melHeard.load(); }
+    float melHeardAudio() const { return audRecPeak.load(); }   // v0.42: audio coming in while LISTEN is on (EVOLVE as an effect)
+    juce::String melListenSource;                               // "MIDI" or "AUDIO": what the last LISTEN used
     bool melLoadMidiFile (const juce::File& f);
     bool melLoadAudioFile (const juce::File& f);   // v0.41 AUDIO -> MIDI: a WAV (vocal, sample, melody) becomes your melody
     void playCustomLoop (const std::vector<kk::LoopNote>& notes, double lenBeats);
@@ -568,6 +573,7 @@ private:
     bool customLoop = false; std::vector<kk::LoopNote> customSeq; double customLen = 32.0;
     struct RecEv { double beat; int note; bool on; float vel; };
     juce::SpinLock recLock; std::vector<RecEv> rec; std::atomic<bool> melListenOn { false }; std::atomic<int> melHeard { 0 };
+    std::vector<float> audRec; std::atomic<int> audRecN { 0 }; std::atomic<double> audRecBeat { 0.0 }; std::atomic<float> audRecPeak { 0 };   // v0.42 LISTEN AUDIO
     juce::String activeSampleFile;                               // the active sample, kept with the project
     const void* activeSampleSaved = nullptr;
     juce::ThreadPool harvestPool { 1 };
