@@ -5493,6 +5493,16 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             g.drawLine (n1.x + rr * 1.1f, q.getY() + 2, n2.x + rr * 1.1f, q.getY() - 2 + rr, 3.0f);
             break;
         }
+        case 11:  // SOUND WORLD: a globe
+        {
+            const float rr = w * 0.48f;
+            g.drawEllipse (cx - rr, cy - rr, rr * 2, rr * 2, 1.5f);
+            g.drawEllipse (cx - rr * 0.45f, cy - rr, rr * 0.9f, rr * 2, 1.0f);
+            g.drawLine (cx - rr, cy, cx + rr, cy, 1.0f);
+            g.drawLine (cx - rr * 0.85f, cy - rr * 0.5f, cx + rr * 0.85f, cy - rr * 0.5f, 0.8f);
+            g.drawLine (cx - rr * 0.85f, cy + rr * 0.5f, cx + rr * 0.85f, cy + rr * 0.5f, 0.8f);
+            break;
+        }
         case 10:  // MIX LAB: an EQ curve over three faders
         {
             Path c;
@@ -5560,13 +5570,13 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 8;
+    static constexpr int numTiles = 9;
     // v0.40: EVOLVE / MELODY / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX (the ids stay as before; 9 = MELODY)
-    static int tileId (int v) { static const int ids[numTiles] { 8, 9, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static int tileId (int v) { static const int ids[numTiles] { 8, 9, 11, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB", "SOUND\nWORLD" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -5583,7 +5593,7 @@ public:
                 g.drawFittedText (dropHover ? "DROP\n= PARENT" : flashText, r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
-            if (v == 5)
+            if (v == 6)
             {
                 const auto lr = r.withY (r.getY() - 15).withHeight (13);
                 g.setColour (TC (0xffc8c4e8)); g.setFont (serif (11.5f, true, 0.3f));
@@ -5631,7 +5641,7 @@ private:
     {
         const float gap = 5.0f, extra = 18.0f;
         const float h = ((float) getHeight() - gap * (numTiles - 1) - extra) / (float) numTiles;
-        return { 3.0f, (float) k * (h + gap) + (k >= 5 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
+        return { 3.0f, (float) k * (h + gap) + (k >= 6 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
     }
     void timerCallback() override { flash -= 0.012f; if (flash <= 0) { flash = 0; stopTimer(); } repaint (part (0).expanded (4).toNearestInt()); }
     KKLookAndFeel& lnf;
@@ -6622,6 +6632,83 @@ private:
 // v0.40 MELODY: the melody page. SURPRISE ME = 8 melodies in your key / scale / bars, played with the sound you choose.
 // FROM MY MELODY = your melody from FL (LISTEN while FL plays it, or drop a .mid) -> its key is found -> 8 variations.
 // Hover = hear it in time.  Click = it becomes the parent and 8 children grow.  Drag = the MIDI into FL.
+// v0.42 MIDI SHRED: the loop goes into the shredder, notes fall out into the bin
+class ShredView : public Component, private Timer
+{
+public:
+    void start (const juce::AudioBuffer<float>* audio, const std::vector<kk::mel::Note>& notes, const String& name)
+    {
+        wave.fill (0.0f);
+        if (audio != nullptr && audio->getNumSamples() > 0)
+        {
+            const int n = audio->getNumSamples();
+            float mx = 1e-6f;
+            for (int k = 0; k < 64; ++k) { float pk = 0; for (int i = k * n / 64; i < (k + 1) * n / 64; ++i) pk = std::max (pk, std::abs (audio->getSample (0, i))); wave[(size_t) k] = pk; mx = std::max (mx, pk); }
+            for (auto& v : wave) v /= mx;
+        }
+        noteCount = (int) notes.size(); title = name;
+        pitches.clear(); for (auto& x : notes) pitches.push_back (x.pitch);
+        t0 = Time::getMillisecondCounter();
+        setVisible (true); toFront (false); startTimerHz (60);
+    }
+    std::function<void()> onDone;
+    void paint (Graphics& g) override
+    {
+        const auto& th = kk::theme();
+        const float t = (float) (Time::getMillisecondCounter() - t0) / 2400.0f;
+        auto r = getLocalBounds().toFloat();
+        g.setColour (th.night ? Colour (0xf00d1014) : Colour (0xf0eef0f2)); g.fillRoundedRectangle (r, 14);
+        const float cx = r.getCentreX();
+        // the shredder
+        const auto body = Rectangle<float> (cx - 170, r.getY() + r.getHeight() * 0.36f, 340, 70);
+        // the paper with the loop's wave goes down into it
+        const float feed = jlimit (0.0f, 1.0f, t / 0.55f);
+        const auto paper = Rectangle<float> (cx - 120, body.getY() - 150 + 150 * feed, 240, 150);
+        {
+            Graphics::ScopedSaveState ss (g); g.reduceClipRegion (Rectangle<float> (r.getX(), r.getY(), r.getWidth(), body.getY() - r.getY()).toNearestInt());
+            g.setColour (Colour (0xffeef7ea)); g.fillRect (paper);
+            g.setColour (Colour (0xff1b5e20)); g.setFont (kk::modern::font (13.0f, true, 0.12f));
+            g.drawText ("MIDI SHRED", paper.withHeight (26), Justification::centred);
+            const auto wr = paper.reduced (14, 34);
+            for (int k = 0; k < 64; ++k) { const float h = std::max (1.0f, wr.getHeight() * wave[(size_t) k]); g.fillRect (wr.getX() + wr.getWidth() * (float) k / 64.0f, wr.getCentreY() - h * 0.5f, wr.getWidth() / 64.0f - 0.5f, h); }
+        }
+        g.setColour (Colour (0xff2b2f36)); g.fillRoundedRectangle (body, 10);
+        g.setColour (Colour (0xff111316)); g.fillRoundedRectangle (body.reduced (40, 28).withHeight (8), 3);
+        g.setColour (Colour (0xff3a3f48)); g.drawRoundedRectangle (body, 10, 2.0f);
+        g.setColour (Colours::white.withAlpha (0.8f)); g.setFont (kk::modern::font (12.0f, true, 0.3f));
+        g.drawText (title.isEmpty() ? String ("SHREDDING ...") : title, body.withTrimmedTop (44), Justification::centred);
+        // strips and notes fall
+        const auto bin = Rectangle<float> (cx - 110, r.getBottom() - 120, 220, 100);
+        const float fall = jlimit (0.0f, 1.0f, (t - 0.35f) / 0.6f);
+        for (int k = 0; k < 14 && t > 0.3f; ++k)
+        {
+            const float x = body.getX() + 50 + (float) k * 17.0f, y = body.getBottom() + 4 + (bin.getY() - body.getBottom() - 30) * jlimit (0.0f, 1.0f, fall * (0.7f + 0.03f * (float) (k % 5)));
+            g.setColour (Colour (0xffeef7ea).withAlpha (0.8f)); g.fillRect (x, body.getBottom() + 2, 9.0f, std::max (4.0f, (y - body.getBottom()) * 0.4f));
+        }
+        Random rr (noteCount * 31 + 7);
+        const int shown = std::min (noteCount, 40);
+        for (int i = 0; i < shown; ++i)
+        {
+            const float delay = 0.4f + 0.5f * (float) i / (float) std::max (1, shown);
+            const float u = jlimit (0.0f, 1.0f, (t - delay) / 0.45f);
+            if (u <= 0) continue;
+            const float x0 = body.getX() + 40 + rr.nextFloat() * 260, xt = bin.getX() + 20 + rr.nextFloat() * 180;
+            const float y = body.getBottom() + (bin.getY() + 30 + rr.nextFloat() * 50 - body.getBottom()) * u * u;
+            g.setColour (Colour (0xff36ff6a).withAlpha (0.9f)); g.fillRoundedRectangle (x0 + (xt - x0) * u, y, 16, 7, 2);
+        }
+        g.setColour (Colour (0xff1d4ed8)); g.fillRoundedRectangle (bin, 12);
+        g.setColour (Colours::white); g.setFont (kk::modern::font (16.0f, true, 0.1f));
+        g.drawText (t > 1.0f ? String (noteCount) + " NOTES" : String ("MIDI"), bin.withTrimmedTop (60), Justification::centred);
+    }
+    void mouseUp (const MouseEvent&) override { finish(); }
+private:
+    void timerCallback() override { repaint(); if (Time::getMillisecondCounter() - t0 > 2900) finish(); }
+    void finish() { stopTimer(); setVisible (false); if (onDone) onDone(); }
+    std::array<float, 64> wave {};
+    std::vector<int> pitches;
+    int noteCount = 0; uint32 t0 = 0; String title;
+};
+
 class MelodyPage : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -6709,6 +6796,13 @@ public:
             refresh();
         });
         btn (hearMineBtn, "HEAR MINE", "Hear your melody with the sound on the keys", [this] { if (proc.melPlaying == -2) proc.melPlay (-1); else proc.melPlayMine(); });
+        btn (shredBtn, "MIDI SHRED", "MIDI SHRED: feed it a loop (a WAV / MP3 of a melody) - it shreds it into MIDI notes", [this]
+        {
+            chooser = std::make_unique<FileChooser> ("A loop to shred into MIDI", File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc) { if (fc.getResult().existsAsFile()) shredFile (fc.getResult()); });
+        });
+        addChildComponent (shredView);
+        shredView.onDone = [this] { refresh(); };
         btn (generateBtn, "GENERATE", "8 new melodies (SURPRISE ME) - or 8 variations of your melody (FROM MY MELODY)", [this] { generate(); });
         generateBtn.hero = true;
         btn (backBtn, "BACK", "Back to the melody this one came from", [this] { proc.melBack(); startAnim(); });
@@ -6738,10 +6832,9 @@ public:
                                                        : String ("could not read melody notes from ") + File (x).getFileName();
                 break;
             }
-            else if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"))   // v0.41 AUDIO -> MIDI
+            else if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"))   // v0.41 AUDIO -> MIDI, v0.42 with the shredder
             {
-                note = proc.melLoadAudioFile (File (x)) ? "heard in the audio: " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) + " - drag MIDI, or GENERATE variations"
-                                                        : String ("no clear melody in ") + File (x).getFileName() + " (one voice / one instrument works best)";
+                shredFile (File (x));
                 break;
             }
         refresh();
@@ -6834,6 +6927,8 @@ public:
         listenBtn.setBounds (L.getX() + 14, y, 100, 32); hearMineBtn.setBounds (L.getX() + 118, y, 96, 32); dragMine.setBounds (L.getX() + 218, y - 2, 94, 36);
         mineY = y + 40;
         generateBtn.setBounds (L.getX() + 14, L.getBottom() - 64, L.getWidth() - 28, 50);
+        shredBtn.setBounds (getWidth() - 170, 14, 150, 34);
+        shredView.setBounds (360, 110, getWidth() - 376, getHeight() - 126);
         {   // the genre row
             int x = 360; const int y = 66, h = 34;
             const int avail = getWidth() - 16 - x, lw = 92, bw = 112;
@@ -6951,6 +7046,18 @@ private:
             if (r == 3) { const auto f = proc.melSave (idx); note = f.existsAsFile() ? "saved: " + f.getFileName() : String ("could not save"); repaint(); }
         });
     }
+    void shredFile (const File& f)
+    {
+        AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<AudioFormatReader> rd (fm.createReaderFor (f));
+        AudioBuffer<float> peek;
+        if (rd != nullptr) { const int n = (int) std::min<juce::int64> (rd->lengthInSamples, (juce::int64) (rd->sampleRate * 20)); peek.setSize (1, jmax (1, n)); rd->read (&peek, 0, n, 0, true, false); }
+        const bool ok = proc.melLoadAudioFile (f);
+        note = ok ? "shredded: " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) + " - drag MIDI, or GENERATE variations"
+                  : String ("no clear melody in ") + f.getFileName() + " (one voice / one instrument works best)";
+        shredView.start (rd != nullptr ? &peek : nullptr, ok ? proc.melMine.notes : std::vector<kk::mel::Note>(), f.getFileNameWithoutExtension().substring (0, 28));
+        refresh();
+    }
     void setKey (int k)
     {
         if (proc.melFromMine && proc.melHasMine)   // your melody moves into the new key
@@ -7036,6 +7143,9 @@ private:
     HotButton surpriseTab { lnf }, mineTab { lnf }, curSoundBtn { lnf }, pickSoundBtn { lnf }, listenBtn { lnf }, hearMineBtn { lnf }, generateBtn { lnf }, backBtn { lnf }, againBtn { lnf }, stopBtn { lnf };
     std::vector<std::unique_ptr<HotButton>> keyBtns, barBtns, rangeBtns, genreBtns, layerBtns;
     ComboBox scaleBox, catBox;
+    HotButton shredBtn { lnf };
+    ShredView shredView;
+    std::unique_ptr<FileChooser> chooser;
     HotButton prevSnd { lnf }, nextSnd { lnf };
     std::map<int, int> catPos;
     Slider busySl, wildSl, bpmSl;
@@ -7047,6 +7157,7 @@ private:
 };
 
 #include "MixLabPage.h"
+#include "SoundWorldPage.h"
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7072,6 +7183,9 @@ public:
         editBtn.setTooltip ("SOUND EDIT: the whole sound on one page - oscillator, LFO, pitch, filter, envelopes and effects, with graphs you can drag.");
         editBtn.onClick = [this] { openTab (tabEdit); };
         addAndMakeVisible (editBtn);
+        keysPill.framed = true; keysPill.setTooltip ("What the keys play now.  Playing a sample / a child?  Click = back to the preset");
+        keysPill.onClick = [this] { if (proc.sampleActive() || proc.chopActive()) { proc.loadPreset (proc.getCurrentProgram()); labChanged(); } };
+        addAndMakeVisible (keysPill);
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
         worldBtn.setTooltip ("SOUND WORLD: one click colours the whole sound (rompler, analog, glassy, hi-fi, organic ...).  TRANCE GATE and CLIPPER are here too.");
         addAndMakeVisible (worldBtn);
@@ -7177,6 +7291,7 @@ public:
             if (k == 8) { showEvolve (true); return; }
             if (k == 9) { if (! (openTabIndex == tabMelody && isPanelVisible())) openTab (tabMelody); return; }
             if (k == 10) { if (! (openTabIndex == tabMix && isPanelVisible())) openTab (tabMix); return; }
+            if (k == 11) { if (! (openTabIndex == tabWorld && isPanelVisible())) openTab (tabWorld); return; }
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
             const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
@@ -7414,6 +7529,15 @@ public:
                 proc.melPlay (-1);
             }
         }
+        if (v == 48 || v == 49)   // v0.42 SOUND WORLD: a kept dot (49: two regions connected)
+        {
+            if (proc.getSampleRate() <= 0) proc.prepareToPlay (44100, 512);
+            const auto& ds = kk::world::dots();
+            int dot = 0; for (int i = 0; i < (int) ds.size(); ++i) if (ds[(size_t) i].region == 3) { dot = i; break; }
+            proc.worldDot = dot; proc.worldRegion = 3; proc.worldRegionB = v == 49 ? 9 : -1;
+            proc.worldPlay (v == 49 ? proc.worldConnect (3, 9, 7) : proc.worldSound (dot), false);
+            openTab (tabWorld);
+        }
         if (v >= 43 && v <= 46)   // v0.41 MIX LAB: EQ / COMP / TIME MACHINE / SPACE with a melody playing through it
         {
             if (proc.getSampleRate() <= 0) proc.prepareToPlay (44100, 512);
@@ -7564,6 +7688,8 @@ public:
         meter.setBounds (R (1337, 716, 1595, 761));
         pitchWheel.setBounds (R (70, 808, 110, 894)); modWheel.setBounds (R (124, 808, 164, 894));
         keyboard.setBounds (R (200, 815, 1640, 923));
+        keysPill.setBounds (R (1180, 921, 1640, 941));
+        updateKeysPill();
         keyboard.setKeyWidth (1440.0f / 40.0f);
 
         const auto panelArea = R (10, 8, 1662, 612);
@@ -7575,13 +7701,13 @@ public:
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
-                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
+                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
         labSwitch.setBounds (R (16, 100, 138, 600));
         if (evolve != nullptr) evolve->setBounds (R (0, 0, 1672, 806));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -7617,6 +7743,7 @@ private:
                     m = std::make_unique<InsetPage> (std::move (pg)); break;
                 }
                 case tabMix:      m = std::make_unique<InsetPage> (std::make_unique<MixLabPage> (proc, lnf)); break;   // v0.41
+                case tabWorld:    m = std::make_unique<InsetPage> (std::make_unique<SoundWorldPage> (proc, lnf)); break;   // v0.42
                 default:          m = std::make_unique<InsetPage> (std::make_unique<FxRackPage> (proc, lnf)); break;
             }
             addChildComponent (*m); noFocus (*m); resized();
@@ -7721,7 +7848,7 @@ private:
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
         const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabSampler ? 5
-                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : -1;
+                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : -1;
         if (openTabIndex >= tab808 && openTabIndex < numTabs) lastDrum = openTabIndex - tab808;
         else proc.kitPlay = false;   // PLAY KIT is a preview on the drum pages
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
@@ -8129,6 +8256,7 @@ private:
     void timerCallback() override
     {
         proc.moduleHousekeeping();
+        updateKeysPill();
         {
             const int w = (int) proc.apvts.getRawParameterValue (ID::world)->load(), gt = (int) proc.apvts.getRawParameterValue (ID::gate)->load();
             const int sig = w * 10 + gt;
@@ -8307,6 +8435,14 @@ private:
             return;
         }
         proc.previewNote = proc.apvts.getRawParameterValue (ID::bassMode)->load() > 0.5f ? 36 : 60;   // hear the current sound
+    }
+    HotButton keysPill { lnf };
+    void updateKeysPill()   // v0.42 KEYS: what the keys play now - click = back to the preset
+    {
+        const bool other = proc.sampleActive() || proc.chopActive();
+        const String txt = "KEYS:  " + (proc.chopActive() ? String ("THE SAMPLER") : proc.sampleActive() && proc.activeSample() != nullptr ? proc.activeSample()->name : proc.currentName())
+                         + (other ? String ("      < BACK TO THE PRESET") : String());
+        if (txt != keysPill.getButtonText()) { keysPill.setButtonText (txt); keysPill.repaint(); }
     }
     struct FocusGrabber : public MouseListener
     {

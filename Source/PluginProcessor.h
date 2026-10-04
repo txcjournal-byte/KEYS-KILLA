@@ -17,6 +17,7 @@
 #include "VstHost.h"
 #include "MelodyGen.h"
 #include "MixCoach.h"
+#include "SoundWorld.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -198,7 +199,12 @@ public:
     void evoSeedCurrent();
     bool evoSeedFromFile (const juce::File& f);
     void evoSeedRandom();
-    void evoSeedGenome (const Genome& g);                        // v0.41: a synth genome (a MATCH strand) starts the tree
+    void evoSeedGenome (const Genome& g);
+    // v0.42 SOUND WORLD: every dot of the map is a sound of its region, two regions connected = a hybrid
+    Genome worldSound (int dot);
+    Genome worldConnect (int regionA, int regionB, uint32_t seed);
+    void worldPlay (const Genome& g, bool preview);              // on the keys (and heard)
+    Genome worldCurrent; int worldRegion = -1, worldRegionB = -1, worldDot = -1;                        // v0.41: a synth genome (a MATCH strand) starts the tree
     // v0.41 MATCH: drop a WAV - four strands of synth sounds grow toward it in the background (any strand can be planted at any time)
     struct MatchStrand { Genome g; float match = 0; std::array<float, 64> wave {}; int gen = 0; };
     bool evoMatchStart (const juce::File& f);

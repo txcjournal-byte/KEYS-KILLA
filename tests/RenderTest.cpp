@@ -1124,6 +1124,25 @@ static int unitTests()
         check (f.existsAsFile() && p.chainLoad (f) && p.chainToTree ("mine").createXml()->toString() == before, "v0.42 CHAINS: a saved chain loads back exactly");
         f.deleteFile();
     }
+    // v0.42 SOUND WORLD: thousands of dots on land, every region has sounds, dots differ, regions connect
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        const auto& ds = kk::world::dots();
+        std::vector<int> perRegion (kk::world::regions().size(), 0);
+        for (auto& d : ds) ++perRegion[(size_t) d.region];
+        int emptyRegions = 0, noPresets = 0;
+        for (size_t r = 0; r < perRegion.size(); ++r) { emptyRegions += perRegion[r] < 50; noPresets += kk::world::regionPresets ((int) r).empty(); }
+        std::printf ("SOUND WORLD: %d dots, %d regions without dots, %d without sounds\n", (int) ds.size(), emptyRegions, noPresets);
+        check (ds.size() > 10000 && emptyRegions == 0 && noPresets == 0, "v0.42 SOUND WORLD: every region has many dots and its own sounds");
+        std::set<juce::String> names; int valid = 0;
+        for (int i = 0; i < (int) ds.size(); i += (int) ds.size() / 40) { auto g = p.worldSound (i); valid += g.valid(); names.insert (g.name); }
+        auto h = p.worldConnect (3, 9, 5);
+        check (valid >= 40 && names.size() >= 20 && h.valid() && h.name.contains ("EUROPE") && h.name.contains ("EAST ASIA"), "v0.42 SOUND WORLD: dots give many different sounds, two regions connect");
+        p.worldPlay (h, false);
+        float pk = 0; juce::AudioBuffer<float> b (2, 512);
+        for (int i = 0; i < 100; ++i) { juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, mb); pk = std::max (pk, b.getMagnitude (0, 512)); }
+        check (pk > 0.01f, "v0.42 SOUND WORLD: the hybrid plays on the keys");
+    }
     // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
     {
         KeysKillaProcessor p; p.prepareToPlay (44100, 512);

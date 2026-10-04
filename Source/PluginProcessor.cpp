@@ -5328,3 +5328,52 @@ bool KeysKillaProcessor::chainLoad (const juce::File& f)
     chainFromTree (juce::ValueTree::fromXml (*xml));
     return true;
 }
+
+//==============================================================================
+// v0.42 SOUND WORLD
+KeysKillaProcessor::Genome KeysKillaProcessor::worldSound (int dot)
+{
+    const auto& ds = kk::world::dots();
+    if (! juce::isPositiveAndBelow (dot, (int) ds.size())) return {};
+    const auto& d = ds[(size_t) dot];
+    auto pool = kk::world::regionPresets (d.region);
+    if (pool.empty()) pool.push_back (0);
+    const uint32_t h = kk::hash32 ((uint32_t) dot * 2654435761u + 77u);
+    auto base = genomeFromPreset (pool[(size_t) (h % pool.size())]);
+    const float wild = kk::world::distanceFromHeart (d);
+    Genome g = base;
+    if (wild > 0.12f && base.valid())
+    {
+        auto partner = genomeFromPreset (pool[(size_t) ((h >> 8) % pool.size())]);
+        const float keep = breedWild;
+        breedWild = juce::jlimit (0.0f, 1.0f, 0.15f + 0.6f * wild);
+        g = makeChildOf (base, partner, (int) ((h >> 16) % 6), h, nullptr, false).g;
+        breedWild = keep;
+        g.cat = base.cat;
+    }
+    g.name = base.name + " - " + kk::world::regions()[(size_t) d.region].name;
+    return g;
+}
+
+KeysKillaProcessor::Genome KeysKillaProcessor::worldConnect (int ra, int rb, uint32_t seed)
+{
+    auto pa = kk::world::regionPresets (ra), pb = kk::world::regionPresets (rb);
+    if (pa.empty() || pb.empty()) return {};
+    const uint32_t h = kk::hash32 (seed * 2246822519u + 13u);
+    auto a = genomeFromPreset (pa[(size_t) (h % pa.size())]), b = genomeFromPreset (pb[(size_t) ((h >> 9) % pb.size())]);
+    const float keep = breedWild;
+    breedWild = 0.45f;
+    auto g = makeChildOf (a, b, 2 + (int) ((h >> 18) % 4), h, nullptr, false).g;
+    breedWild = keep;
+    g.cat = a.cat;
+    g.name = juce::String (kk::world::regions()[(size_t) ra].name) + " x " + kk::world::regions()[(size_t) rb].name;
+    return g;
+}
+
+void KeysKillaProcessor::worldPlay (const Genome& g, bool preview)
+{
+    if (! g.valid()) return;
+    worldCurrent = g;
+    EvoNode n; n.g = g; n.name = g.name;
+    evoAuditionNode (n, preview);
+}
