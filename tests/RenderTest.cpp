@@ -1101,6 +1101,29 @@ static int unitTests()
         check (e != snd && e != nullptr && e->audio.getNumSamples() < snd->audio.getNumSamples() * 0.8, "v0.42 EDIT: the edited sound (tune +7) is what drags / saves");
         p.resetSampleEdit();
     }
+    // v0.42 EVOLVE FX CHAINS: every chain changes the sound and stays safe, a saved chain comes back the same
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        int changed = 0; bool safe = true;
+        for (int c = 0; c < KeysKillaProcessor::chainNames().size(); ++c)
+        {
+            p.chainApply (c);
+            const auto t = p.chainToTree ("x").createXml()->toString();
+            p.chainReset();
+            changed += p.chainToTree ("x").createXml()->toString() != t;
+            p.chainApply (c);
+            juce::AudioBuffer<float> b (2, 512); float pk = 0;
+            for (int i = 0; i < 200; ++i) { b.clear(); juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, mb); pk = std::max (pk, b.getMagnitude (0, 512)); }
+            safe &= std::isfinite (pk) && pk <= 1.0f;
+        }
+        check (changed == KeysKillaProcessor::chainNames().size() && safe, "v0.42 CHAINS: every chain sets something, the output stays safe");
+        p.chainApply (7); p.chainEvolve (0.5f);
+        const auto before = p.chainToTree ("mine").createXml()->toString();
+        const auto f = p.chainSave ("kk test chain");
+        p.chainReset();
+        check (f.existsAsFile() && p.chainLoad (f) && p.chainToTree ("mine").createXml()->toString() == before, "v0.42 CHAINS: a saved chain loads back exactly");
+        f.deleteFile();
+    }
     // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
     {
         KeysKillaProcessor p; p.prepareToPlay (44100, 512);
@@ -1846,6 +1869,16 @@ int main (int argc, char** argv)
         juce::PropertiesFile (o).setValue ("theme", th.containsIgnoreCase ("night") || th == "1" ? 1 : 0);
         juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..93: the EVOLVE FX pages
+        {
+            juce::Image kkFxSnapshot (KeysKillaProcessor&, int);
+            p.prepareToPlay (44100, 512);
+            if (juce::String (argv[4]).getIntValue() == 92) p.chainApply (5);
+            auto img = kkFxSnapshot (p, juce::String (argv[4]).getIntValue() - 90);
+            juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+            out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
+            return 0;
+        }
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
         if (argc > 4) dynamic_cast<KeysKillaEditor*> (ed.get())->showView (juce::String (argv[4]).getIntValue());
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);

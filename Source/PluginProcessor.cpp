@@ -5212,3 +5212,119 @@ std::vector<KeysKillaProcessor::MatchStrand> KeysKillaProcessor::matchStrands() 
     const juce::SpinLock::ScopedLockType sl (matchLock);
     return matchStrandsData;
 }
+
+//==============================================================================
+// v0.42 EVOLVE FX CHAINS
+const juce::StringArray& KeysKillaProcessor::chainNames()
+{
+    static const juce::StringArray n { "CLEAN GLUE", "TRAP MASTER", "LO-FI TAPE", "VINYL NIGHT", "OLD SAMPLER", "CLOUD DREAM",
+                                       "SHIMMER HEAVEN", "DARK DRILL", "RADIO", "STUTTER FX", "WIDE AIR", "HALF-TIME GHOST" };
+    return n;
+}
+const juce::StringArray& KeysKillaProcessor::chainHints()
+{
+    static const juce::StringArray h { "gentle bus glue, clean lows, a little air", "punchy master: tight lows, tamed 3-4 kHz, punch",
+                                       "worn cassette: wobble, hiss, warm and dark", "a dusty record in a small room", "12-bit grit of an old sampler",
+                                       "an endless space that waits for the gaps, tape echoes", "the tail rises an octave - angelic",
+                                       "dark top, punch, ghost echoes", "a small speaker from the other room", "rolls and glitches in time",
+                                       "open top, wide stereo", "a slowed ghost of the music underneath" };
+    return h;
+}
+
+void KeysKillaProcessor::chainReset()
+{
+    auto& m = mixLab;
+    m.resetEq(); m.eqOn = true;
+    m.compOn = false; m.compStyle = kk::csGlue; m.thresh = -18; m.ratio = 3; m.attack = 15; m.release = 120; m.knee = 6; m.compMix = 1; m.compOut = 0; m.autoGain = true; m.scHp = true;
+    m.tmOn = false; for (auto& o : m.tmModOn) o = false; for (auto& a : m.tmAmt) a = 0.4f;
+    m.magnitude = 1; m.tmMix = 1; m.tmLp = 20000; m.tmHp = 20; m.tmMono = 0; m.era = 5.0f / 7.0f;
+    m.spOn = false; m.spFreeze = false; m.spMode = kk::spPlate; m.spMix = 0.25f; m.spDecay = 0.5f; m.spPre = 20; m.spTone = 0.6f; m.spMod = 0.4f; m.spWidth = 1; m.spDuck = 0;
+    m.dlOn = false; m.dlMode = kk::dlTape; m.dlTime = 2; m.dlMix = 0.25f; m.dlFb = 0.4f; m.dlTone = 0.6f; m.dlDuck = 0;
+    rack.reset();
+    stepOn = false;
+}
+
+void KeysKillaProcessor::chainApply (int i)
+{
+    chainReset();
+    auto& m = mixLab;
+    auto band = [&m] (int b, int type, float f, float g, float q, float dyn = 0.0f, int slope = 1)
+    { auto& x = m.band[(size_t) b]; x.on = true; x.type = type; x.freq = f; x.gain = g; x.q = q; x.dyn = dyn; x.slope = slope; };
+    auto comp = [&m] (int style, float th, float ra, float at, float re, float mix = 1.0f) { m.compOn = true; m.compStyle = style; m.thresh = th; m.ratio = ra; m.attack = at; m.release = re; m.compMix = mix; m.autoGain = true; };
+    switch (i)
+    {
+        case 0: band (0, kk::eqLowCut, 25, 0, 0.71f, 0, 2); band (6, kk::eqHighShelf, 10000, 1.5f, 0.71f); comp (kk::csGlue, -20, 2, 30, 300); m.knee = 10; break;
+        case 1: band (0, kk::eqLowCut, 28, 0, 0.71f, 0, 2); band (1, kk::eqLowShelf, 70, 2, 0.71f); band (5, kk::eqBell, 3500, -2, 1.2f, 0.5f); comp (kk::csPunch, -18, 3, 18, 80); break;
+        case 2: kk::applyEra (m, 4.0f / 7.0f); m.tmOn = true; band (1, kk::eqLowShelf, 120, 2, 0.71f); band (6, kk::eqHighShelf, 8000, -4, 0.71f); comp (kk::csOpto, -22, 3, 10, 250); break;
+        case 3: kk::applyEra (m, 2.0f / 7.0f); m.tmOn = true; m.spOn = true; m.spMode = kk::spRoom; m.spMix = 0.15f; m.spDecay = 0.3f; break;
+        case 4: kk::applyEra (m, 3.0f / 7.0f); m.tmOn = true; comp (kk::csVintage, -16, 6, 1, 60, 0.7f); break;
+        case 5: m.spOn = true; m.spMode = kk::spCloud; m.spMix = 0.35f; m.spDecay = 0.7f; m.spDuck = 0.5f; m.dlOn = true; m.dlMode = kk::dlTape; m.dlTime = 0; m.dlMix = 0.2f; m.dlFb = 0.45f; m.dlDuck = 0.5f; break;
+        case 6: m.spOn = true; m.spMode = kk::spShimmer; m.spMix = 0.3f; m.spDecay = 0.6f; band (6, kk::eqHighShelf, 9000, 2, 0.71f); break;
+        case 7: band (6, kk::eqHighShelf, 7000, -3, 0.71f); comp (kk::csPunch, -20, 4, 15, 70); m.dlOn = true; m.dlMode = kk::dlGhost; m.dlTime = 2; m.dlMix = 0.18f; m.dlFb = 0.5f; break;
+        case 8: band (0, kk::eqLowCut, 300, 0, 0.71f, 0, 2); band (7, kk::eqHighCut, 4000, 0, 0.71f, 0, 2); m.tmOn = true; m.tmModOn[kk::tmDistort] = true; m.tmAmt[kk::tmDistort] = 0.35f; comp (kk::csVintage, -18, 5, 2, 60); break;
+        case 9: stepPreset (4); stepOn = true; m.dlOn = true; m.dlMode = kk::dlPingPong; m.dlTime = 3; m.dlMix = 0.15f; m.dlFb = 0.35f; break;
+        case 10: band (6, kk::eqHighShelf, 12000, 3, 0.71f); rack.on[kk::rkWidth] = true; rack.v[kk::rvWidth] = 0.9f; break;
+        default: rack.on[kk::rkHalf] = true; rack.v[kk::rvHalf] = 0.35f; m.spOn = true; m.spMode = kk::spHall; m.spMix = 0.2f; break;
+    }
+}
+
+void KeysKillaProcessor::chainEvolve (float wild)
+{
+    juce::Random r;
+    const auto seed = (uint32_t) juce::Time::getMillisecondCounter();
+    kk::coach::apply (mixLab, kk::coach::mutate (kk::coach::snap (mixLab), seed, wild));
+    fxApply (fxMutate (fxCurrent(), wild, seed * 7u + 3u));
+    auto& m = mixLab;
+    if (m.compOn.load()) { m.thresh = juce::jlimit (-40.0f, -6.0f, m.thresh.load() + (r.nextFloat() - 0.5f) * 8.0f * wild); m.ratio = juce::jlimit (1.5f, 10.0f, m.ratio.load() * std::exp2 ((r.nextFloat() - 0.5f) * wild)); }
+    if (m.tmOn.load() || r.nextFloat() < 0.25f * wild) { m.tmOn = true; kk::applyEra (m, juce::jlimit (0.0f, 1.0f, m.era.load() + (r.nextFloat() - 0.5f) * 0.4f * wild)); }
+    if (m.spOn.load()) { m.spMix = juce::jlimit (0.05f, 0.6f, m.spMix.load() + (r.nextFloat() - 0.5f) * 0.2f * wild); m.spDecay = juce::jlimit (0.0f, 1.0f, m.spDecay.load() + (r.nextFloat() - 0.5f) * 0.4f * wild); if (r.nextFloat() < 0.3f * wild) m.spMode = r.nextInt (kk::numSpaceModes); }
+    else if (r.nextFloat() < 0.3f * wild) { m.spOn = true; m.spMode = r.nextInt (kk::numSpaceModes); m.spMix = 0.15f + 0.2f * r.nextFloat(); }
+    if (m.dlOn.load() && r.nextFloat() < 0.4f * wild) { m.dlMode = r.nextInt (kk::numEchoModes); m.dlTime = r.nextInt (6); }
+}
+
+juce::ValueTree KeysKillaProcessor::chainToTree (const juce::String& name) const
+{
+    juce::ValueTree t ("EVOLVECHAIN");
+    t.setProperty ("name", name, nullptr);
+    t.appendChild (mixToTree(), nullptr);
+    juce::String rk;
+    for (int i = 0; i < kk::numRackSlots; ++i) rk << (rack.on[(size_t) i].load() ? "1" : "0");
+    rk << ";";
+    for (int i = 0; i < kk::numRackValues; ++i) rk << juce::String (rack.v[(size_t) i].load(), 4) << ",";
+    t.setProperty ("rack", rk, nullptr);
+    t.setProperty ("steps", stepToString(), nullptr);
+    return t;
+}
+
+void KeysKillaProcessor::chainFromTree (const juce::ValueTree& t)
+{
+    if (const auto m = t.getChildWithName ("MIXLAB"); m.isValid()) mixFromTree (m);
+    const auto rk = t.getProperty ("rack", "").toString();
+    const auto onPart = rk.upToFirstOccurrenceOf (";", false, false);
+    const auto vals = juce::StringArray::fromTokens (rk.fromFirstOccurrenceOf (";", false, false), ",", "");
+    for (int i = 0; i < kk::numRackSlots && i < onPart.length(); ++i) rack.on[(size_t) i] = onPart[i] == '1';
+    for (int i = 0; i < kk::numRackValues && i < vals.size(); ++i) if (vals[i].isNotEmpty()) rack.v[(size_t) i] = vals[i].getFloatValue();
+    if (t.hasProperty ("steps")) stepFromString (t.getProperty ("steps").toString());
+}
+
+juce::File KeysKillaProcessor::chainFolder()
+{
+    auto d = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("KEYS KILLA").getChildFile ("FX Chains");
+    d.createDirectory();
+    return d;
+}
+
+juce::File KeysKillaProcessor::chainSave (const juce::String& name) const
+{
+    auto f = chainFolder().getNonexistentChildFile (juce::File::createLegalFileName (name.isEmpty() ? juce::String ("My chain") : name), ".evochain", false);
+    if (auto xml = chainToTree (name).createXml()) return xml->writeTo (f) ? f : juce::File();
+    return {};
+}
+
+bool KeysKillaProcessor::chainLoad (const juce::File& f)
+{
+    auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! xml->hasTagName ("EVOLVECHAIN")) return false;
+    chainFromTree (juce::ValueTree::fromXml (*xml));
+    return true;
+}

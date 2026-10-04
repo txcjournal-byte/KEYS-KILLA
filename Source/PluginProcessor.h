@@ -269,6 +269,17 @@ public:
     int coachGenre = kk::mel::gTrap;
     juce::ValueTree mixToTree() const;
     void mixFromTree (const juce::ValueTree& t);
+    // v0.42 EVOLVE FX CHAINS: MIX LAB + FX RACK + STEP FX together, ready-made or your own
+    static const juce::StringArray& chainNames();
+    static const juce::StringArray& chainHints();
+    void chainApply (int i);
+    void chainReset();                                           // everything off / flat
+    void chainEvolve (float wild);                               // a mutation of what you have now
+    juce::ValueTree chainToTree (const juce::String& name) const;
+    void chainFromTree (const juce::ValueTree& t);
+    static juce::File chainFolder();
+    juce::File chainSave (const juce::String& name) const;
+    bool chainLoad (const juce::File& f);
     std::atomic<int> melVer { 0 };
     void melGenerate();                        // 8 new (SURPRISE ME or from your melody)
     void melEvolve (int idx, bool reroll);     // it becomes the parent: 8 children

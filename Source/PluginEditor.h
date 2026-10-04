@@ -48,7 +48,7 @@ public:
 
 private:
     KeysKillaProcessor& proc;
-    std::unique_ptr<MainPage> page;
+    std::unique_ptr<juce::Component> page;   // MainPage (EVOLVE) or FxMainPage (EVOLVE FX)
     juce::TooltipWindow tooltips { this, 600 };
     bool fitted = false, frameOn = true;
     int lastPct = 85;

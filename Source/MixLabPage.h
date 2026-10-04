@@ -1185,7 +1185,11 @@ private:
         if (view == 2) for (auto& c : cards) c->tick();
         if (view == 3) spaceView.tick();
         if (++frame % 8 == 0) { refreshReading(); repaint (coachArea()); }
+       #if KK_FX_BUILD
+        testBtn.setVisible (false);   // EVOLVE FX hears the track it sits on
+       #else
         testBtn.setVisible (reading.silent || proc.loopPlaying());
+       #endif
         testBtn.setButtonText (proc.loopPlaying() ? "STOP THE LOOP" : "PLAY A LOOP");
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;

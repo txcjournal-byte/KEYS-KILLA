@@ -8333,17 +8333,38 @@ private:
 };
 
 //==============================================================================
+#include "FxMainPage.h"
+
+#if KK_TEST_BUILD
+// test snapshots of the EVOLVE FX page (the test app is built as EVOLVE)
+juce::Image kkFxSnapshot (KeysKillaProcessor& p, int view)
+{
+    auto pg = std::make_unique<FxMainPage> (p);
+    pg->setBounds (0, 0, KeysKillaEditor::designW, KeysKillaEditor::designH);
+    pg->showView (view);
+    return pg->createComponentSnapshot (pg->getLocalBounds(), true, 0.8f);
+}
+#endif
+
 KeysKillaEditor::KeysKillaEditor (KeysKillaProcessor& p) : AudioProcessorEditor (p), proc (p)
 {
     setWantsKeyboardFocus (false);
     setMouseClickGrabsKeyboardFocus (false);
     kk::themeIndex() = jlimit (0, 1, openSettings()->getIntValue ("theme", 0));   // v0.34: GLASS (day) / NIGHT, remembered
     frameOn = openSettings()->getBoolValue ("frame", true);
-    page = std::make_unique<MainPage> (p);
+   #if KK_FX_BUILD
+    auto fx = std::make_unique<FxMainPage> (p);   // v0.42 EVOLVE FX: the mixer plugin
+    const int pref = fx->preferredScale();
+    page = std::move (fx);
+   #else
+    auto mp = std::make_unique<MainPage> (p);
+    const int pref = mp->preferredScale();
+    page = std::move (mp);
+   #endif
     addAndMakeVisible (*page);
     setResizable (true, true);
     setOpaque (true);
-    setScalePct (jmin (page->preferredScale(), fitScale()));
+    setScalePct (jmin (pref, fitScale()));
 }
 
 // v0.31: the window always fits the screen - the host puts its own toolbars above and its browser beside the plugin
@@ -8360,7 +8381,11 @@ int KeysKillaEditor::fitScale() const
 
 KeysKillaEditor::~KeysKillaEditor() { closeHostedEditor(); }
 
-void KeysKillaEditor::showView (int v) { page->showView (v); }
+void KeysKillaEditor::showView (int v)
+{
+    if (auto* mp = dynamic_cast<MainPage*> (page.get())) mp->showView (v);
+    else if (auto* fp = dynamic_cast<FxMainPage*> (page.get())) fp->showView (v);
+}
 
 // Windows: draw with the software renderer. The GUI is bitmap based, so it costs nothing, and it keeps the
 // plugin out of the host's Direct2D device - hosts can hang on exit when plugin windows hold GPU resources.
