@@ -16,6 +16,7 @@
 #include "Harvest.h"
 #include "VstHost.h"
 #include "MelodyGen.h"
+#include "MixCoach.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -197,6 +198,16 @@ public:
     void evoSeedCurrent();
     bool evoSeedFromFile (const juce::File& f);
     void evoSeedRandom();
+    void evoSeedGenome (const Genome& g);                        // v0.41: a synth genome (a MATCH strand) starts the tree
+    // v0.41 MATCH: drop a WAV - four strands of synth sounds grow toward it in the background (any strand can be planted at any time)
+    struct MatchStrand { Genome g; float match = 0; std::array<float, 64> wave {}; int gen = 0; };
+    bool evoMatchStart (const juce::File& f);
+    void evoMatchStop();
+    std::vector<MatchStrand> matchStrands() const;               // a copy (the search writes them)
+    std::atomic<bool> matchRunning { false };
+    std::atomic<float> matchProgress { 0 };
+    std::atomic<int> matchVer { 0 };
+    juce::String matchTargetName; std::array<float, 64> matchTargetWave {};
     void evoSeedSound (kk::PairPtr s);
     void evoNewMelody (int node);                               // another melody for that sound                          // any sound (an edited sample ...) becomes the seed
     void evoGrow (int node, bool reroll);                       // 6 new children of this node
@@ -247,6 +258,15 @@ public:
     kk::mel::Melody melMine; bool melHasMine = false, melFromMine = false;
     int melKey = 0, melScale = kk::mel::scMinor, melBars = 8;
     kk::mel::Style melStyle;
+    int melGenre = kk::mel::gTrap;             // v0.41: the style the melodies are made in (-1 = FREE)
+    float melBpm = 140.0f;                     // its tempo (written into the .mid; the rhythm follows it)
+    int melLayers = 0;                         // 0 = MELODY, 1 = MELODY + CHORDS, 2 = CHORDS
+    void melSetGenre (int g);                  // also picks the genre's scale and tempo
+    // v0.41 MIX LAB: SHAPE EQ + PUNCH COMP + TIME MACHINE on the output, the COACH reads its meters
+    kk::MixLabState mixLab;
+    int coachGenre = kk::mel::gTrap;
+    juce::ValueTree mixToTree() const;
+    void mixFromTree (const juce::ValueTree& t);
     std::atomic<int> melVer { 0 };
     void melGenerate();                        // 8 new (SURPRISE ME or from your melody)
     void melEvolve (int idx, bool reroll);     // it becomes the parent: 8 children
@@ -259,6 +279,7 @@ public:
     bool melListening() const { return melListenOn.load(); }
     int  melHeardNotes() const { return melHeard.load(); }
     bool melLoadMidiFile (const juce::File& f);
+    bool melLoadAudioFile (const juce::File& f);   // v0.41 AUDIO -> MIDI: a WAV (vocal, sample, melody) becomes your melody
     void playCustomLoop (const std::vector<kk::LoopNote>& notes, double lenBeats);
 
     // ---------------- FAMILY TREE: up to 4 sounds -> BREED -> 6 new sounds or 6 melody loops ----------------
@@ -394,7 +415,7 @@ public:
     FxGenome fxMutate (const FxGenome& g, float wild, uint32_t seed) const;
     FxGenome fxSurprise (uint32_t seed) const;
     // STEP FX: a 16-step grid of effects that play in time on the melody bus (stutter, reverse, tape stop, filter ...)
-    enum StepFx { sfStutter, sfReverse, sfTape, sfFilter, sfGate, sfEcho, sfPitchUp, sfCrush, numStepFx };
+    enum StepFx { sfStutter, sfReverse, sfTape, sfFilter, sfGate, sfEcho, sfPitchUp, sfCrush, sfRoll, sfPitchDown, sfPan, sfRiser, numStepFx };   // v0.41: + ROLL, OCTAVE DOWN, PAN, RISER
     static const char* stepFxName (int i);
     static constexpr int numSteps = 16;
     std::array<std::array<std::atomic<bool>, numSteps>, numStepFx> stepGrid;
@@ -530,9 +551,16 @@ private:
     kk::FxParams sampleFxParams (bool& any) const;
     void processSampleFx (float* L, float* R, int n, double beatPos, double bps);
     // STEP FX state (audio thread)
-    std::vector<float> stepBufL, stepBufR, echoL, echoR; int stepW = 0, echoW = 0, echoTail = 0; float stepEnv[numStepFx] {}; kk::SvfState stepLp[2]; float stepTapePos = 0, stepRevPos = 0;
+    std::vector<float> stepBufL, stepBufR, echoL, echoR; int stepW = 0, echoW = 0, echoTail = 0; float stepEnv[numStepFx] {}; kk::SvfState stepLp[2], stepHp[2]; float stepTapePos = 0, stepRevPos = 0;
     int stepLast = -1; double stepRevStart = 0; float stepHold[2] {};
     void processStepFx (juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps);
+    kk::MixLabDsp mixDsp;
+    // MATCH (background search)
+    juce::ThreadPool matchPool { 1 };
+    std::atomic<bool> matchStop { false };
+    mutable juce::SpinLock matchLock;
+    std::vector<MatchStrand> matchStrandsData;
+    static juce::AudioBuffer<float> renderWith (KeysKillaProcessor& r, const Genome& g, double rate, double seconds, int note);
     // flip player
     juce::SpinLock flipLock; std::vector<FlipStep> flipSeq; double flipOrigin = 0; int flipLastStep = -1;
     juce::File sessionDir() const;

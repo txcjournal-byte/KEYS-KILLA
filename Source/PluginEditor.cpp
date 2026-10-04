@@ -4743,8 +4743,8 @@ public:
         btn (mutateBtn, "MUTATE", "Change a few steps of the pattern", [this] { mutate(); });
         btn (clearBtn, "CLEAR", "Empty grid", [this] { proc.stepClear(); refresh(); });
         btn (hearBtn, "HEAR IT", "Play a melody loop with your sound so you hear the steps - again = stop", [this] { proc.toggleLoop(); });
-        static const char* presets[] { "ROLL", "CHOP", "BRAKE", "MIRROR", "GLITCH", "SWEEP" };
-        for (int i = 0; i < 6; ++i)
+        static const char* presets[] { "ROLL", "CHOP", "BRAKE", "MIRROR", "GLITCH", "SWEEP", "BUILD", "BOUNCE", "DARK" };
+        for (int i = 0; i < 9; ++i)
         {
             auto b = std::make_unique<HotButton> (lnf, presets[i]); b->framed = true;
             b->setTooltip ("A ready pattern: " + String (presets[i]));
@@ -4777,7 +4777,13 @@ public:
         for (auto& b : rateBtns) { b->setBounds (x, 0, 58, 34); x += 62; }
         mixSl.setBounds (x + 10, 3, 150, 28);
         x = 0;
-        for (auto& b : presetBtns) { b->setBounds (x, 44, 96, 30); x += 102; }
+        const int pw = jmin (96, (getWidth() - 8 * 6) / 9);
+        for (auto& b : presetBtns) { b->setBounds (x, 44, pw, 30); x += pw + 6; }
+    }
+    static Colour rowColour (int f)
+    {
+        static const uint32 c[] { 0xffff4d6d, 0xffa78bfa, 0xffff8a3d, 0xff22d3ee, 0xffffd23f, 0xff4d7dff, 0xff36ff6a, 0xffff4fd8, 0xffff3b5c, 0xff7c4dff, 0xff2ee6a6, 0xfff5f56a };
+        return Colour (c[jlimit (0, 11, f)]);
     }
     void paint (Graphics& g) override
     {
@@ -4785,30 +4791,79 @@ public:
         const auto gr = grid();
         const float cw = gr.getWidth() / (float) KeysKillaProcessor::numSteps, rh = gr.getHeight() / (float) KeysKillaProcessor::numStepFx;
         const int now = proc.stepNow.load();
+        const bool running = proc.stepOn.load();
+        // the playing column glows
+        if (running && now >= 0)
+        {
+            const auto col = Rectangle<float> (gr.getX() + cw * (float) now, gr.getY(), cw, gr.getHeight());
+            g.setGradientFill (ColourGradient (t.text.withAlpha (0.10f), col.getCentreX(), gr.getY(), t.text.withAlpha (0.02f), col.getCentreX(), gr.getBottom(), false));
+            g.fillRoundedRectangle (col, 6);
+        }
+        for (int st = 0; st < KeysKillaProcessor::numSteps; st += 4)
+        {
+            g.setColour (t.text.withAlpha (0.05f));
+            g.fillRoundedRectangle (Rectangle<float> (gr.getX() + cw * (float) st, gr.getY() - 2, cw * 4, gr.getHeight() + 4).reduced (2, 0), 6);
+            g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.1f));
+            g.drawText (String (st / 4 + 1), Rectangle<float> (gr.getX() + cw * (float) st, gr.getY() - 16, cw, 14), Justification::centredLeft);
+        }
         for (int f = 0; f < KeysKillaProcessor::numStepFx; ++f)
         {
             const float y = gr.getY() + rh * (float) f;
-            g.setColour (t.text); g.setFont (kk::modern::font (13.0f, true, 0.08f));
-            g.drawText (KeysKillaProcessor::stepFxName (f), Rectangle<float> (0, y, labelW - 10, rh), Justification::centredRight);
+            const auto c = rowColour (f);
+            g.setColour (c); g.fillRoundedRectangle (4, y + rh * 0.5f - 4, 8, 8, 3);
+            g.setColour (t.text); g.setFont (kk::modern::font (12.5f, true, 0.08f));
+            g.drawText (KeysKillaProcessor::stepFxName (f), Rectangle<float> (16, y, labelW - 24, rh), Justification::centredLeft);
             for (int st = 0; st < KeysKillaProcessor::numSteps; ++st)
             {
-                const auto cell = Rectangle<float> (gr.getX() + cw * (float) st, y, cw, rh).reduced (3);
-                const bool on = proc.stepGrid[(size_t) f][(size_t) st].load();
-                const bool beat = st % 4 == 0;
-                g.setColour (on ? t.accent : (beat ? t.glass.withMultipliedAlpha (1.6f) : t.glass));
-                g.fillRoundedRectangle (cell, 5);
-                if (st == now && proc.stepOn.load()) { g.setColour (t.text.withAlpha (on ? 0.9f : 0.35f)); g.drawRoundedRectangle (cell, 5, 2.0f); }
-                else { g.setColour (t.text.withAlpha (0.12f)); g.drawRoundedRectangle (cell, 5, 1.0f); }
+                const auto cell = Rectangle<float> (gr.getX() + cw * (float) st, y, cw, rh).reduced (2.5f);
+                g.setColour (t.glass.withMultipliedAlpha (st % 4 == 0 ? 1.5f : 1.0f)); g.fillRoundedRectangle (cell, 4);
+            }
+            // runs of steps become one long coloured block (an effect that lasts)
+            for (int st = 0; st < KeysKillaProcessor::numSteps;)
+            {
+                if (! proc.stepGrid[(size_t) f][(size_t) st].load()) { ++st; continue; }
+                int e = st; while (e + 1 < KeysKillaProcessor::numSteps && proc.stepGrid[(size_t) f][(size_t) e + 1].load()) ++e;
+                const auto blk = Rectangle<float> (gr.getX() + cw * (float) st, y, cw * (float) (e - st + 1), rh).reduced (2.5f);
+                const bool live = running && now >= st && now <= e;
+                if (live) { g.setColour (c.withAlpha (0.35f)); g.fillRoundedRectangle (blk.expanded (3), 7); }
+                g.setGradientFill (ColourGradient (c.brighter (live ? 0.5f : 0.15f), blk.getX(), blk.getY(), c.darker (0.25f), blk.getX(), blk.getBottom(), false));
+                g.fillRoundedRectangle (blk, 5);
+                g.setColour (Colours::white.withAlpha (live ? 0.9f : 0.35f)); g.drawRoundedRectangle (blk, 5, live ? 1.6f : 1.0f);
+                // a tiny picture of what it does
+                g.setColour (Colours::black.withAlpha (0.45f));
+                const float mx = blk.getX() + 6, my = blk.getCentreY(), w = jmin (blk.getWidth() - 12, 26.0f), hh = blk.getHeight() * 0.28f;
+                Path p;
+                switch (f)
+                {
+                    case KeysKillaProcessor::sfStutter: case KeysKillaProcessor::sfRoll: { const int nn = f == KeysKillaProcessor::sfRoll ? 6 : 3; for (int k = 0; k < nn; ++k) g.fillRect (mx + w * (float) k / (float) nn, my - hh, w / (float) nn * 0.6f, hh * 2); break; }
+                    case KeysKillaProcessor::sfReverse: p.startNewSubPath (mx, my + hh); p.lineTo (mx + w, my - hh); p.lineTo (mx + w, my + hh); p.closeSubPath(); g.fillPath (p); break;
+                    case KeysKillaProcessor::sfTape: p.startNewSubPath (mx, my - hh); p.quadraticTo (mx + w * 0.6f, my - hh, mx + w, my + hh); g.strokePath (p, PathStrokeType (2.0f)); break;
+                    case KeysKillaProcessor::sfFilter: p.startNewSubPath (mx, my - hh); p.lineTo (mx + w * 0.5f, my - hh); p.lineTo (mx + w, my + hh); g.strokePath (p, PathStrokeType (2.0f)); break;
+                    case KeysKillaProcessor::sfRiser: p.startNewSubPath (mx, my + hh); p.lineTo (mx + w * 0.5f, my - hh); p.lineTo (mx + w, my - hh); g.strokePath (p, PathStrokeType (2.0f)); break;
+                    case KeysKillaProcessor::sfGate: g.fillRect (mx, my - hh, w * 0.45f, hh * 2); break;
+                    case KeysKillaProcessor::sfEcho: for (int k = 0; k < 3; ++k) g.fillRect (mx + w * 0.35f * (float) k, my - hh * (1.0f - 0.3f * (float) k), 3.0f, hh * 2 * (1.0f - 0.3f * (float) k)); break;
+                    case KeysKillaProcessor::sfPitchUp: case KeysKillaProcessor::sfPitchDown:
+                    { const float d = f == KeysKillaProcessor::sfPitchUp ? -1.0f : 1.0f; p.startNewSubPath (mx + w * 0.5f, my + d * hh); p.lineTo (mx + w * 0.5f, my - d * hh); p.lineTo (mx + w * 0.2f, my - d * hh * 0.4f); g.strokePath (p, PathStrokeType (2.0f)); break; }
+                    case KeysKillaProcessor::sfPan: g.fillEllipse (mx, my - 3, 6, 6); g.fillEllipse (mx + w - 6, my - 3, 6, 6); break;
+                    default: for (int k = 0; k < 4; ++k) g.fillRect (mx + w * (float) k / 4.0f, my + hh - hh * 2 * (float) ((k * 3) % 4) / 3.0f, w / 4.0f, 2.5f); break;
+                }
+                st = e + 1;
+            }
+            if (running && now >= 0)
+            {
+                const auto cell = Rectangle<float> (gr.getX() + cw * (float) now, y, cw, rh).reduced (2.5f);
+                g.setColour (t.text.withAlpha (0.25f)); g.drawRoundedRectangle (cell, 4, 1.2f);
             }
         }
         g.setColour (t.dim); g.setFont (kk::modern::font (12.5f, true, 0.06f));
-        g.drawText ("click / drag = paint steps   -   it plays in time with FL on every melody (your sound, the SAMPLER)   -   drums stay dry",
+        g.drawText ("click / drag = paint steps (neighbours join into one long effect)   -   in time with FL on every melody   -   right-click a row = clear it",
                     Rectangle<float> (0, (float) getHeight() - 20, (float) getWidth(), 18), Justification::centred);
     }
     void mouseDown (const MouseEvent& e) override
     {
         const auto c = cellAt (e.position);
         if (c.x < 0) return;
+        if (e.mods.isPopupMenu()) { for (int st = 0; st < KeysKillaProcessor::numSteps; ++st) proc.stepGrid[(size_t) c.y][(size_t) st] = false; refresh(); return; }
         paintValue = ! proc.stepGrid[(size_t) c.y][(size_t) c.x].load();
         proc.stepGrid[(size_t) c.y][(size_t) c.x] = paintValue;
         if (paintValue) proc.stepOn = true;
@@ -4821,8 +4876,8 @@ public:
         if (proc.stepGrid[(size_t) c.y][(size_t) c.x].load() != paintValue) { proc.stepGrid[(size_t) c.y][(size_t) c.x] = paintValue; repaint(); }
     }
 private:
-    static constexpr float labelW = 120.0f;
-    Rectangle<float> grid() const { return { labelW, 86.0f, (float) getWidth() - labelW, (float) getHeight() - 86.0f - 26.0f }; }
+    static constexpr float labelW = 136.0f;
+    Rectangle<float> grid() const { return { labelW, 100.0f, (float) getWidth() - labelW, (float) getHeight() - 100.0f - 26.0f }; }
     Point<int> cellAt (Point<float> p) const
     {
         const auto gr = grid();
@@ -5245,6 +5300,20 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             g.drawLine (n1.x + rr * 1.1f, q.getY() + 2, n2.x + rr * 1.1f, q.getY() - 2 + rr, 3.0f);
             break;
         }
+        case 10:  // MIX LAB: an EQ curve over three faders
+        {
+            Path c;
+            c.startNewSubPath (q.getX(), cy + w * 0.1f);
+            c.cubicTo (q.getX() + w * 0.3f, cy - w * 0.45f, q.getX() + w * 0.55f, cy + w * 0.45f, q.getRight(), cy - w * 0.15f);
+            g.strokePath (c, PathStrokeType (1.8f, PathStrokeType::curved, PathStrokeType::rounded));
+            for (int i = 0; i < 3; ++i)
+            {
+                const float x = q.getX() + w * (0.2f + 0.3f * (float) i);
+                g.drawLine (x, q.getBottom() - w * 0.28f, x, q.getBottom(), 1.0f);
+                g.fillRoundedRectangle (x - 2.5f, q.getBottom() - w * (0.12f + 0.08f * (float) i), 5.0f, 3.0f, 1.0f);
+            }
+            break;
+        }
         case 8:   // EVOLVE: a seed with six children around it
         {
             const float rr = w * 0.42f;
@@ -5298,13 +5367,13 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 7;
+    static constexpr int numTiles = 8;
     // v0.40: EVOLVE / MELODY / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX (the ids stay as before; 9 = MELODY)
-    static int tileId (int v) { static const int ids[numTiles] { 8, 9, 0, 1, 4, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static int tileId (int v) { static const int ids[numTiles] { 8, 9, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -5497,6 +5566,142 @@ private:
     Point<float> pan, panStart;
 };
 
+// v0.41 MATCH: drop a sound, four strands of synth sounds grow toward it - hear any of them, plant one as the seed
+class MatchView : public Component, public FileDragAndDropTarget, private Timer
+{
+public:
+    MatchView (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (fileBtn, "CHOOSE A SOUND", "A WAV / MP3 / AIFF the synth should grow toward", [this]
+        {
+            chooser = std::make_unique<FileChooser> ("The sound to match", File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc) { if (fc.getResult().existsAsFile()) start (fc.getResult()); });
+        });
+        btn (stopBtn, "STOP", "Stop growing (the strands stay)", [this] { proc.evoMatchStop(); repaint(); });
+        btn (closeBtn, "CLOSE", "Back to EVOLVE", [this] { if (onClose) onClose(); });
+        for (int i = 0; i < 4; ++i)
+        {
+            auto h = std::make_unique<HotButton> (lnf, "HEAR"); h->framed = true; h->setTooltip ("Hear this strand on the keys");
+            h->onClick = [this, i] { auto st = proc.matchStrands(); if (i < (int) st.size()) { KeysKillaProcessor::EvoNode n; n.g = st[(size_t) i].g; n.name = st[(size_t) i].g.name; proc.evoAuditionNode (n, false); heard = i; repaint(); } };
+            addChildComponent (*h); hearBtns.push_back (std::move (h));
+            auto pl = std::make_unique<HotButton> (lnf, "PLANT"); pl->framed = true; pl->hero = true; pl->setTooltip ("Plant it: this sound becomes the seed of a new EVOLVE tree");
+            pl->onClick = [this, i] { auto st = proc.matchStrands(); if (i < (int) st.size()) { proc.evoSeedGenome (st[(size_t) i].g); if (onPlanted) onPlanted(); } };
+            addChildComponent (*pl); plantBtns.push_back (std::move (pl));
+        }
+        startTimerHz (20);
+    }
+    std::function<void()> onClose, onPlanted;
+    bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) return true; return false; }
+    void fileDragEnter (const StringArray&, int, int) override { dropHot = true; repaint(); }
+    void fileDragExit (const StringArray&) override { dropHot = false; repaint(); }
+    void filesDropped (const StringArray& f, int, int) override { dropHot = false; for (auto& x : f) if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) { start (File (x)); break; } }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        auto r = getLocalBounds().toFloat();
+        g.setColour (t.night ? Colour (0xf20d1014) : Colour (0xf2f3f5f7)); g.fillRoundedRectangle (r, 16);
+        g.setColour (Colour (0xff36ff6a).withAlpha (0.6f)); g.drawRoundedRectangle (r.reduced (1), 16, 1.6f);
+        g.setColour (t.text); g.setFont (kk::modern::font (26.0f, true, 0.12f));
+        g.drawText ("MATCH", 28, 18, 200, 34, Justification::centredLeft);
+        g.setColour (t.dim); g.setFont (kk::modern::font (13.0f, true, 0.03f));
+        g.drawText ("drop any sound - four strands of synth sounds grow toward it.  you do not need to wait: hear any strand, plant the one you like (60% often sounds better than a copy)",
+                    150, 22, getWidth() - 470, 28, Justification::centredLeft);
+        // the target
+        const auto tg = Rectangle<float> (28, 70, 300, (float) getHeight() - 100);
+        g.setColour (Colours::black.withAlpha (0.25f)); g.fillRoundedRectangle (tg, 12);
+        g.setColour (t.text); g.setFont (kk::modern::font (12.0f, true, 0.2f));
+        g.drawText ("THE SOUND", tg.reduced (14, 10).removeFromTop (16), Justification::centredLeft);
+        if (proc.matchTargetName.isNotEmpty())
+        {
+            g.setColour (kk::accentText()); g.setFont (kk::modern::font (15.0f, true, 0.03f));
+            g.drawFittedText (proc.matchTargetName, tg.reduced (14, 30).removeFromTop (22).toNearestInt(), Justification::centredLeft, 1, 0.7f);
+            drawWave (g, tg.reduced (14, 64).withHeight (110), proc.matchTargetWave, Colour (0xffffd23f));
+            const float pr = proc.matchProgress.load();
+            const auto bar = Rectangle<float> (tg.getX() + 14, tg.getY() + 200, tg.getWidth() - 28, 10);
+            g.setColour (t.text.withAlpha (0.12f)); g.fillRoundedRectangle (bar, 5);
+            g.setColour (Colour (0xff36ff6a)); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * pr), 5);
+            g.setColour (t.dim); g.setFont (kk::modern::font (12.0f, true, 0.05f));
+            g.drawText (proc.matchRunning.load() ? (pr < 0.4f ? "listening to the whole bank ... " : "growing ... ") + String (roundToInt (pr * 100)) + "%" : String ("done - plant one, or drop another sound"),
+                        bar.translated (0, 14).withHeight (16).toNearestInt(), Justification::centredLeft);
+        }
+        else
+        {
+            g.setColour (t.dim); g.setFont (kk::modern::font (15.0f, true, 0.05f));
+            g.drawFittedText ("DROP A SOUND HERE\n(a sample, a vocal chop,\na sound from another plugin)", tg.reduced (14, 40).toNearestInt(), Justification::centred, 4);
+        }
+        // the strands: green vines that grow with the match
+        const auto st = proc.matchStrands();
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto lane = strandRect (i);
+            g.setColour (Colours::black.withAlpha (0.18f)); g.fillRoundedRectangle (lane, 12);
+            if (i >= (int) st.size()) { g.setColour (t.dim); g.setFont (kk::modern::font (12.0f, true, 0.1f)); g.drawText ("STRAND " + String (i + 1), lane.reduced (10).removeFromTop (16), Justification::centred); continue; }
+            const auto& ms = st[(size_t) i];
+            const float m = jlimit (0.0f, 100.0f, ms.match) / 100.0f;
+            const float baseY = lane.getBottom() - 70, topY = lane.getY() + 60, h = (baseY - topY) * m;
+            const float cx = lane.getCentreX();
+            Path vine; vine.startNewSubPath (cx, baseY);
+            for (int k = 1; k <= 24; ++k) { const float u = (float) k / 24.0f; vine.lineTo (cx + std::sin (u * 7.0f + (float) i + phase * 0.6f) * 9.0f * u, baseY - h * u); }
+            g.setColour (Colour (0xff36ff6a).withAlpha (0.25f)); g.strokePath (vine, PathStrokeType (7.0f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour (Colour (0xff36ff6a)); g.strokePath (vine, PathStrokeType (2.6f, PathStrokeType::curved, PathStrokeType::rounded));
+            for (int k = 1; k <= jmin (6, 1 + ms.gen / 4); ++k)
+            {
+                const float u = (float) k / 7.0f; const auto pt = Point<float> (cx + std::sin (u * 7.0f + (float) i + phase * 0.6f) * 9.0f * u, baseY - h * u);
+                g.setColour (Colour (0xff7cf56a)); g.fillEllipse (pt.x + (k % 2 ? 4.0f : -14.0f), pt.y - 4, 10, 8);
+            }
+            const auto bud = Point<float> (cx + std::sin (7.0f + (float) i + phase * 0.6f) * 9.0f, baseY - h);
+            g.setColour (heard == i ? Colour (0xffffd23f) : Colour (0xff36ff6a)); g.fillEllipse (bud.x - 18, bud.y - 18, 36, 36);
+            g.setColour (Colours::black); g.setFont (kk::modern::font (12.5f, true, 0.0f));
+            g.drawText (String (roundToInt (ms.match)) + "%", Rectangle<float> (bud.x - 18, bud.y - 18, 36, 36), Justification::centred);
+            drawWave (g, Rectangle<float> (lane.getX() + 12, lane.getY() + 12, lane.getWidth() - 24, 40), ms.wave, Colour (0xff36ff6a));
+            g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.1f));
+            g.drawText ("GEN " + String (ms.gen), lane.toNearestInt().withTrimmedBottom (54).removeFromBottom (16), Justification::centred);
+        }
+        if (dropHot) { g.setColour (Colour (0xff36ff6a).withAlpha (0.12f)); g.fillRoundedRectangle (r, 16); }
+    }
+    void resized() override
+    {
+        closeBtn.setBounds (getWidth() - 120, 18, 96, 36); stopBtn.setBounds (getWidth() - 210, 18, 84, 36);
+        fileBtn.setBounds (42, getHeight() - 84, 270, 40);
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto lane = strandRect (i).toNearestInt();
+            hearBtns[(size_t) i]->setBounds (lane.getX() + 10, lane.getBottom() - 50, lane.getWidth() / 2 - 14, 38);
+            plantBtns[(size_t) i]->setBounds (lane.getCentreX() + 4, lane.getBottom() - 50, lane.getWidth() / 2 - 14, 38);
+        }
+    }
+private:
+    Rectangle<float> strandRect (int i) const { const float x0 = 350, w = ((float) getWidth() - x0 - 28 - 3 * 14) / 4.0f; return { x0 + (float) i * (w + 14), 70, w, (float) getHeight() - 100 }; }
+    static void drawWave (Graphics& g, Rectangle<float> r, const std::array<float, 64>& w, Colour c)
+    {
+        g.setColour (c.withAlpha (0.85f));
+        const float bw = r.getWidth() / 64.0f;
+        for (int k = 0; k < 64; ++k) { const float h = jmax (1.0f, r.getHeight() * w[(size_t) k]); g.fillRect (r.getX() + bw * (float) k, r.getCentreY() - h * 0.5f, jmax (1.0f, bw - 1.0f), h); }
+    }
+    void start (const File& f)
+    {
+        heard = -1;
+        if (! proc.evoMatchStart (f)) { proc.matchTargetName = "could not read " + f.getFileName(); }
+        repaint();
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        phase += 0.05f;
+        const int v = proc.matchVer.load();
+        const auto st = proc.matchStrands();
+        for (int i = 0; i < 4; ++i) { hearBtns[(size_t) i]->setVisible (i < (int) st.size()); plantBtns[(size_t) i]->setVisible (i < (int) st.size()); }
+        stopBtn.setEnabled (proc.matchRunning.load());
+        if (v != lastVer || proc.matchRunning.load()) { lastVer = v; repaint(); }
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton fileBtn { lnf }, stopBtn { lnf }, closeBtn { lnf };
+    std::vector<std::unique_ptr<HotButton>> hearBtns, plantBtns;
+    std::unique_ptr<FileChooser> chooser;
+    bool dropHot = false; int heard = -1, lastVer = -1; float phase = 0;
+};
+
 class EvolvePage : public Component, public FileDragAndDropTarget, private Timer
 {
 public:
@@ -5542,6 +5747,10 @@ public:
         btn (catchBtn, "CATCH", "Keep this moment: what you hear right now becomes the middle idea (and grows)", [this] { proc.evoCatch(); alive = false; aliveBtn.selected = false; aliveBtn.repaint(); startAnim(); });
         btn (mapBtn, "MAP", "The whole family you grew - click any idea to go back to it", [this] { showMap (! map.isVisible()); });
         btn (worldBtn, "WORLD", "Save this whole world of ideas to a file - or open one", [this] { worldMenu(); });
+        btn (matchBtn, "MATCH", "MATCH: drop any sound - the synth grows toward it (four strands), plant the one you like as the seed", [this] { showMatch (! match.isVisible()); });
+        addChildComponent (match);
+        match.onClose = [this] { showMatch (false); };
+        match.onPlanted = [this] { showMatch (false); layoutButtons(); startAnim(); };
         addChildComponent (map);
         map.onClose = [this] { showMap (false); startAnim(); };
         refreshLayers();
@@ -5552,6 +5761,12 @@ public:
     {
         static const int ids[] { KeysKillaProcessor::layerAll, KeysKillaProcessor::layerSound, KeysKillaProcessor::layerFx };
         for (int i = 0; i < (int) layerBtns.size(); ++i) { layerBtns[(size_t) i]->selected = proc.evoLayer == ids[i]; layerBtns[(size_t) i]->repaint(); }
+    }
+    void showMatch (bool on)
+    {
+        if (on) { showMap (false); match.setBounds (getLocalBounds().reduced (16).withTrimmedTop (80).withTrimmedBottom (84)); match.toFront (false); }
+        match.setVisible (on);
+        matchBtn.selected = on; matchBtn.repaint();
     }
     void showMap (bool on)
     {
@@ -6015,7 +6230,7 @@ private:
             for (auto& lb : layerBtns) { lb->setBounds (lx, 96, 80, 32); lx += lb->getWidth() + 5; }
             const int rx = W - 176;
             aliveBtn.setBounds (rx, 110, 150, 40); catchBtn.setBounds (rx, 156, 150, 40);
-            mapBtn.setBounds (rx, 230, 150, 40); worldBtn.setBounds (rx, 276, 150, 40);
+            mapBtn.setBounds (rx, 230, 150, 40); worldBtn.setBounds (rx, 276, 150, 40); matchBtn.setBounds (rx, 322, 150, 40);
         }
         const auto b = bottomBar();
         int x = b.getX() + 540;
@@ -6149,8 +6364,9 @@ private:
     bool auditioned = false, dropHot = false, dragFired = false, draggingWild = false, draggingTaste = false, wasEmpty = true;
     HotButton ideaBtn { lnf };
     std::vector<std::unique_ptr<HotButton>> layerBtns;
-    HotButton aliveBtn { lnf }, catchBtn { lnf }, mapBtn { lnf }, worldBtn { lnf };
+    HotButton aliveBtn { lnf }, catchBtn { lnf }, mapBtn { lnf }, worldBtn { lnf }, matchBtn { lnf };
     EvoMapView map { proc };
+    MatchView match { proc, lnf };
     bool alive = false; uint32 lastAlive = 0;
     // POCKET + carrying a bubble (drop it onto another = a cross, onto the POCKET = keep it)
     int carry = -1, carryPocket = -1, pocketHover = -1, downPocket = -1; Point<float> carryAt;
@@ -6202,7 +6418,7 @@ public:
     {
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
         btn (surpriseTab, "SURPRISE ME", "New melodies from nothing - in the key, scale and length you choose", [this] { proc.melFromMine = false; refresh(); });
-        btn (mineTab, "FROM MY MELODY", "Your own melody from FL: LISTEN while FL plays it (or drop a .mid here) - then GENERATE makes variations of it", [this] { proc.melFromMine = true; refresh(); });
+        btn (mineTab, "FROM MY MELODY", "Your own melody: LISTEN while FL plays it, drop a .mid - or drop AUDIO (a vocal, a sample, a recorded melody) and it becomes MIDI. Then GENERATE makes variations of it", [this] { proc.melFromMine = true; refresh(); });
         for (int k = 0; k < 12; ++k)
         {
             auto b = std::make_unique<HotButton> (lnf, kk::mel::keyName (k)); b->framed = true; b->setTooltip ("Key: " + String (kk::mel::keyName (k)));
@@ -6240,6 +6456,30 @@ public:
              "CALM = few long notes ... BUSY = many quick notes", [this] (double v) { proc.melStyle.density = (float) v; });
         bar (wildSl, proc.melStyle.wild, [] (double v) { return v < 0.34 ? String ("SAFE") : v < 0.67 ? String ("MIXED") : String ("WILD"); },
              "SAFE = the children stay close to the parent ... WILD = they change a lot", [this] (double v) { proc.melStyle.wild = (float) v; });
+        // v0.41 GENRES: the style + its tempo, and what the MIDI holds (melody / chords)
+        for (int gi = -1; gi < kk::mel::numGenres; ++gi)
+        {
+            auto b = std::make_unique<HotButton> (lnf, kk::mel::genreName (gi)); b->framed = true;
+            b->setTooltip (gi < 0 ? String ("FREE: no style rules - any key, any scale, any feel")
+                                  : String (kk::mel::genreName (gi)) + ": " + kk::mel::genreInfo (gi).hint + "  (" + String (kk::mel::genreInfo (gi).lo) + "-" + String (kk::mel::genreInfo (gi).hi) + " BPM)");
+            b->onClick = [this, gi] { proc.melSetGenre (gi); bpmSl.setValue (proc.melBpm, dontSendNotification); refresh(); };
+            addAndMakeVisible (*b); genreBtns.push_back (std::move (b));
+        }
+        bpmSl.setSliderStyle (Slider::LinearBar); bpmSl.setRange (60.0, 180.0, 1.0); bpmSl.setValue (proc.melBpm, dontSendNotification);
+        bpmSl.textFromValueFunction = [] (double v) { return String (roundToInt (v)) + " BPM"; };
+        bpmSl.setColour (Slider::trackColourId, lnf.skin->accent.withAlpha (0.5f));
+        bpmSl.setColour (Slider::textBoxTextColourId, kk::theme().text);
+        bpmSl.setTooltip ("The tempo of the melodies: the rhythm follows it (slow trap gets a finer grid) and the .mid carries it");
+        bpmSl.onValueChange = [this] { proc.melBpm = (float) bpmSl.getValue(); };
+        bpmSl.updateText(); addAndMakeVisible (bpmSl);
+        static const char* layerNames[] { "MELODY", "+ CHORDS", "CHORDS" };
+        static const char* layerTips[] { "Hear and drag only the melody", "The melody and its chords together (pad / stabs / arps of the genre)", "Only the chords" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto b = std::make_unique<HotButton> (lnf, layerNames[i]); b->framed = true; b->setTooltip (layerTips[i]);
+            b->onClick = [this, i] { proc.melLayers = i; if (proc.melPlaying >= 0) proc.melPlay (proc.melPlaying); refresh(); };
+            addAndMakeVisible (*b); layerBtns.push_back (std::move (b));
+        }
         btn (curSoundBtn, "THE SOUND ON THE KEYS", "The melodies play with the sound that is on the keys right now (pick one in EVOLVE, BREED LAB, MY SOUNDS ...)", [this] { repaint(); });
         btn (pickSoundBtn, "PICK FROM THE BANK", "Choose the sound the melodies play with (hear it first, then USE IT)", [this] { if (onPickSound) onPickSound(); });
         btn (listenBtn, "LISTEN", "LISTEN: press it, then play your melody in FL (this plugin's piano roll, or your keyboard) - press it again when it has played once", [this]
@@ -6265,7 +6505,7 @@ public:
     void visibilityChanged() override { if (isVisible()) refresh(); else if (proc.melPlaying != -1) proc.melPlay (-1); }
     void spacePressed() { if (proc.loopPlaying()) proc.melPlay (-1); else if (lastHover >= 0) proc.melPlay (lastHover); }
 
-    bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("mid;midi")) return true; return false; }
+    bool isInterestedInFileDrag (const StringArray& f) override { for (auto& x : f) if (File (x).hasFileExtension ("mid;midi;wav;aif;aiff;flac;mp3;ogg")) return true; return false; }
     void fileDragEnter (const StringArray&, int, int) override { dropHot = true; repaint(); }
     void fileDragExit (const StringArray&) override { dropHot = false; repaint(); }
     void filesDropped (const StringArray& files, int, int) override
@@ -6276,6 +6516,12 @@ public:
             {
                 note = proc.melLoadMidiFile (File (x)) ? "your melody: " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) + " - press GENERATE"
                                                        : String ("could not read melody notes from ") + File (x).getFileName();
+                break;
+            }
+            else if (File (x).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"))   // v0.41 AUDIO -> MIDI
+            {
+                note = proc.melLoadAudioFile (File (x)) ? "heard in the audio: " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) + " - drag MIDI, or GENERATE variations"
+                                                        : String ("no clear melody in ") + File (x).getFileName() + " (one voice / one instrument works best)";
                 break;
             }
         refresh();
@@ -6307,7 +6553,7 @@ public:
             const auto r = mineRoll().toFloat();
             kk::modern::well (g, r, 8.0f);
             if (proc.melHasMine) drawRoll (g, r.reduced (6, 5), proc.melMine, proc.melPlaying == -2, t.accent);
-            else { g.setColour (t.dim); g.setFont (kk::modern::font (12.0f, true, 0.04f)); g.drawFittedText ("LISTEN + play it in FL\nor drop a .mid file here", r.toNearestInt(), Justification::centred, 2); }
+            else { g.setColour (t.dim); g.setFont (kk::modern::font (12.0f, true, 0.04f)); g.drawFittedText ("LISTEN + play it in FL\nor drop a .mid or AUDIO file here", r.toNearestInt(), Justification::centred, 2); }
             if (proc.melHasMine) { g.setColour (t.text); g.setFont (kk::modern::font (11.5f, true, 0.1f)); g.drawText (String (kk::mel::keyName (proc.melMine.key)) + " " + kk::mel::scaleName (proc.melMine.scale) + "  .  " + String (proc.melMine.bars) + " BARS", r.toNearestInt().translated (0, (int) r.getHeight() + 2).withHeight (16), Justification::centredLeft); }
         }
         if (note.isNotEmpty()) { g.setColour (kk::accentText()); g.setFont (kk::modern::font (12.0f, true, 0.03f)); g.drawFittedText (note, Rectangle<int> (left().getX() + 16, generateBtn.getY() - 40, left().getWidth() - 32, 34), Justification::centredLeft, 2, 0.8f); }
@@ -6326,8 +6572,9 @@ public:
         else
         {
             g.setColour (t.dim); g.setFont (kk::modern::font (14.0f, true, 0.04f));
-            g.drawText (proc.melShown.empty() ? "choose the key and the scale, then GENERATE" : "click a melody = it becomes the parent and 8 children grow",
-                        ps.withTrimmedRight (240), Justification::centredLeft);
+            const String gh = proc.melGenre >= 0 ? String (kk::mel::genreName (proc.melGenre)) + ": " + kk::mel::genreInfo (proc.melGenre).hint + "  -  " : String();
+            g.drawFittedText (gh + (proc.melShown.empty() ? "choose the key, then GENERATE" : "click a melody = it becomes the parent and 8 children grow"),
+                              ps.withTrimmedRight (240).withTrimmedLeft (8), Justification::centredLeft, 2, 0.8f);
         }
         // the 8 melodies
         const auto now = Time::getMillisecondCounter();
@@ -6344,7 +6591,7 @@ public:
             g.setOpacity (e);
             drawCard (g, r, proc.mels[(size_t) idx], idx);
         }
-        if (dropHot) { g.setColour (t.accent.withAlpha (0.12f)); g.fillRect (getLocalBounds()); g.setColour (t.accent); g.setFont (kk::modern::font (26.0f, true, 0.2f)); g.drawText ("DROP = YOUR MELODY", getLocalBounds(), Justification::centred); }
+        if (dropHot) { g.setColour (t.accent.withAlpha (0.12f)); g.fillRect (getLocalBounds()); g.setColour (t.accent); g.setFont (kk::modern::font (26.0f, true, 0.2f)); g.drawText ("DROP = YOUR MELODY  (MIDI, or audio -> MIDI)", getLocalBounds(), Justification::centred); }
     }
     void resized() override
     {
@@ -6365,6 +6612,14 @@ public:
         listenBtn.setBounds (L.getX() + 14, y, 100, 32); hearMineBtn.setBounds (L.getX() + 118, y, 96, 32); dragMine.setBounds (L.getX() + 218, y - 2, 94, 36);
         mineY = y + 40;
         generateBtn.setBounds (L.getX() + 14, L.getBottom() - 64, L.getWidth() - 28, 50);
+        {   // the genre row
+            int x = 360; const int y = 66, h = 34;
+            const int avail = getWidth() - 16 - x, lw = 92, bw = 112;
+            const int cw = jmax (56, (avail - 3 * lw - bw - 24) / (int) genreBtns.size());
+            for (auto& b : genreBtns) { b->setBounds (x, y, cw - 4, h); x += cw; }
+            x += 8; bpmSl.setBounds (x, y + 4, bw, h - 8); x += bw + 12;
+            for (auto& b : layerBtns) { b->setBounds (x, y, lw - 4, h); x += lw; }
+        }
         const auto ps = parentStrip();
         stopBtn.setBounds (ps.getRight() - 84, ps.getCentreY() - 17, 72, 34);
         againBtn.setBounds (stopBtn.getX() - 82, ps.getCentreY() - 17, 76, 34);
@@ -6400,10 +6655,10 @@ public:
 private:
     Rectangle<int> left() const { return { 16, 66, 328, getHeight() - 82 }; }
     Rectangle<int> mineRoll() const { return { left().getX() + 14, mineY, left().getWidth() - 28, 62 }; }
-    Rectangle<int> parentStrip() const { return { 360, 66, getWidth() - 376, 66 }; }
+    Rectangle<int> parentStrip() const { return { 360, 110, getWidth() - 376, 62 }; }
     Rectangle<int> card (int i) const
     {
-        const int x0 = 360, y0 = 146, w = getWidth() - 376, h = getHeight() - 162;
+        const int x0 = 360, y0 = 184, w = getWidth() - 376, h = getHeight() - 200;
         const int cw = (w - 3 * 12) / 4, ch = (h - 12) / 2;
         return { x0 + (i % 4) * (cw + 12), y0 + (i / 4) * (ch + 12), cw, ch };
     }
@@ -6418,17 +6673,27 @@ private:
     {
         const auto& t = kk::theme();
         if (m.notes.empty()) return;
+        const bool withChords = proc.melLayers > 0 && ! m.chords.empty() && &m != &proc.melMine;
         int lo = 127, hi = 0; for (auto& n : m.notes) { lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); }
+        if (withChords) for (auto& n : m.chords) { lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); }
         lo -= 1; hi += 1;
         const float beats = m.beats(), rows = (float) std::max (6, hi - lo + 1);
         for (int b = 0; b <= m.bars; ++b) { g.setColour (t.text.withAlpha (b % 4 == 0 ? 0.18f : 0.07f)); g.fillRect (r.getX() + r.getWidth() * (float) b * 4.0f / beats, r.getY(), 1.0f, r.getHeight()); }
         const float beatNow = playing ? proc.loopBeat.load() : -1.0f;
+        if (withChords)
+            for (auto& n : m.chords)
+            {
+                const float x = r.getX() + r.getWidth() * n.start / beats, w = std::max (2.0f, r.getWidth() * n.len / beats - 1.0f);
+                const float y = r.getBottom() - r.getHeight() * (float) (n.pitch - lo + 1) / rows, h = std::max (2.5f, r.getHeight() / rows - 1.0f);
+                g.setColour (TC (0xff9b6bff).withAlpha (proc.melLayers == 2 ? 0.85f : 0.45f));
+                g.fillRoundedRectangle (x, y, w, h, 1.5f);
+            }
         for (auto& n : m.notes)
         {
             const float x = r.getX() + r.getWidth() * n.start / beats, w = std::max (2.0f, r.getWidth() * n.len / beats - 1.0f);
             const float y = r.getBottom() - r.getHeight() * (float) (n.pitch - lo + 1) / rows, h = std::max (2.5f, r.getHeight() / rows - 1.0f);
             const bool lit = beatNow >= n.start && beatNow < n.start + n.len;
-            g.setColour (lit ? t.text : col.withAlpha (0.55f + 0.4f * n.vel));
+            g.setColour (lit ? t.text : col.withAlpha ((withChords && proc.melLayers == 2 ? 0.2f : 0.55f) + 0.4f * n.vel));
             g.fillRoundedRectangle (x, y, w, h, 1.5f);
         }
         if (beatNow >= 0) { g.setColour (t.text.withAlpha (0.8f)); g.fillRect (r.getX() + r.getWidth() * beatNow / beats, r.getY(), 1.5f, r.getHeight()); }
@@ -6445,7 +6710,7 @@ private:
         g.drawText (m.how, r.reduced (12, 8).removeFromTop (20), Justification::centredRight);
         drawRoll (g, r.reduced (12, 8).withTrimmedTop (24).withTrimmedBottom (20), m, playing, t.accent);
         g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.1f));
-        g.drawText (String (kk::mel::keyName (m.key)) + " " + kk::mel::scaleName (m.scale) + "  .  " + String (m.bars) + " BARS  .  " + String ((int) m.notes.size()) + " NOTES",
+        g.drawText (String (kk::mel::keyName (m.key)) + " " + kk::mel::scaleName (m.scale) + "  .  " + String (m.bars) + " BARS  .  " + (m.genre >= 0 ? String (roundToInt (m.bpm)) + " BPM" : String ((int) m.notes.size()) + " NOTES"),
                     r.reduced (12, 6).removeFromBottom (16), Justification::centredLeft);
         if (hot) { g.setColour (t.dim); g.drawText ("drag = MIDI", r.reduced (12, 6).removeFromBottom (16), Justification::centredRight); }
     }
@@ -6504,6 +6769,9 @@ private:
         surpriseTab.selected = ! proc.melFromMine; mineTab.selected = proc.melFromMine; surpriseTab.repaint(); mineTab.repaint();
         for (int k = 0; k < 12; ++k) { keyBtns[(size_t) k]->selected = proc.melKey == k; keyBtns[(size_t) k]->repaint(); }
         scaleBox.setSelectedId (proc.melScale + 1, dontSendNotification);
+        for (int i = 0; i < (int) genreBtns.size(); ++i) { genreBtns[(size_t) i]->selected = proc.melGenre == i - 1; genreBtns[(size_t) i]->setEnabled (! proc.melFromMine); genreBtns[(size_t) i]->repaint(); }
+        for (int i = 0; i < 3; ++i) { layerBtns[(size_t) i]->selected = proc.melLayers == i; layerBtns[(size_t) i]->repaint(); }
+        bpmSl.setValue (proc.melBpm, dontSendNotification);
         static const int bars[] { 4, 8, 16 };
         for (int i = 0; i < 3; ++i) { barBtns[(size_t) i]->selected = proc.melBars == bars[i]; barBtns[(size_t) i]->repaint(); barBtns[(size_t) i]->setEnabled (! proc.melFromMine); }
         for (int i = 0; i < 3; ++i) { rangeBtns[(size_t) i]->selected = std::abs (proc.melStyle.range - (float) i * 0.5f) < 0.1f; rangeBtns[(size_t) i]->repaint(); }
@@ -6528,15 +6796,17 @@ private:
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     HotButton surpriseTab { lnf }, mineTab { lnf }, curSoundBtn { lnf }, pickSoundBtn { lnf }, listenBtn { lnf }, hearMineBtn { lnf }, generateBtn { lnf }, backBtn { lnf }, againBtn { lnf }, stopBtn { lnf };
-    std::vector<std::unique_ptr<HotButton>> keyBtns, barBtns, rangeBtns;
+    std::vector<std::unique_ptr<HotButton>> keyBtns, barBtns, rangeBtns, genreBtns, layerBtns;
     ComboBox scaleBox;
-    Slider busySl, wildSl;
+    Slider busySl, wildSl, bpmSl;
     DragFileButton dragMine { "MIDI", TC (0xff36ff6a) };
     String note;
     int mineY = 600, hoverCard = -1, downCard = -1, lastHover = -1, lastVer = -1, lastHeardCount = -1, blink = 0;
     uint32 hoverSince = 0, animStart = 0;
     bool heard = false, dragged = false, dropHot = false;
 };
+
+#include "MixLabPage.h"
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -6666,6 +6936,7 @@ public:
         {
             if (k == 8) { showEvolve (true); return; }
             if (k == 9) { if (! (openTabIndex == tabMelody && isPanelVisible())) openTab (tabMelody); return; }
+            if (k == 10) { if (! (openTabIndex == tabMix && isPanelVisible())) openTab (tabMix); return; }
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
             const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
@@ -6903,6 +7174,25 @@ public:
                 proc.melPlay (-1);
             }
         }
+        if (v >= 43 && v <= 46)   // v0.41 MIX LAB: EQ / COMP / TIME MACHINE / SPACE with a melody playing through it
+        {
+            if (proc.getSampleRate() <= 0) proc.prepareToPlay (44100, 512);
+            proc.melSetGenre (kk::mel::gTrap); proc.melGenerate(); proc.melPlay (proc.melShown[0]);
+            proc.mixLab.band[2].on = true; proc.mixLab.band[2].gain = -4.0f; proc.mixLab.band[2].freq = 320.0f;
+            proc.mixLab.band[5].on = true; proc.mixLab.band[5].gain = -3.0f; proc.mixLab.band[5].dyn = 0.6f; proc.mixLab.band[5].freq = 3600.0f; proc.mixLab.band[5].q = 2.0f;
+            proc.mixLab.band[6].on = true; proc.mixLab.band[6].gain = 2.5f;
+            proc.mixLab.compOn = true; proc.mixLab.thresh = -24.0f;
+            if (v == 45) { kk::applyEra (proc.mixLab, 0.25f); proc.mixLab.tmOn = true; }
+            if (v == 46) { proc.mixLab.spOn = true; proc.mixLab.spMode = kk::spCloud; proc.mixLab.dlOn = true; proc.mixLab.dlMode = kk::dlPingPong; }
+            openTab (tabMix);
+            if (auto* ip = dynamic_cast<InsetPage*> (module (tabMix))) if (auto* mp = dynamic_cast<MixLabPage*> (ip->page()))
+            {
+                AudioBuffer<float> b (2, 512); MidiBuffer mb;
+                mp->debugShow (v == 46 ? 3 : v - 43);
+                for (int i = 0; i < 400; ++i) { proc.processBlock (b, mb); if (i % 6 == 0) mp->debugTick(); }
+            }
+            proc.melPlay (-1);
+        }
         if (v == 37) { FxRackPage::lastMode() = 0; openTab (tabFxRack); }   // v0.37 SURPRISE FX
         if (v == 38) { FxRackPage::lastMode() = 1; proc.stepPreset (4); proc.stepOn = true; openTab (tabFxRack); }   // STEP FX
         if (v == 31 || v == 36 || v == 39)   // SAMPLER with a sample, zoomed in, a part selected (36: FLIPS, 39: EDIT of a sample)
@@ -7045,13 +7335,13 @@ public:
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
-                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
+                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
         labSwitch.setBounds (R (16, 100, 138, 600));
         if (evolve != nullptr) evolve->setBounds (R (0, 0, 1672, 806));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -7086,6 +7376,7 @@ private:
                     };
                     m = std::make_unique<InsetPage> (std::move (pg)); break;
                 }
+                case tabMix:      m = std::make_unique<InsetPage> (std::make_unique<MixLabPage> (proc, lnf)); break;   // v0.41
                 default:          m = std::make_unique<InsetPage> (std::make_unique<FxRackPage> (proc, lnf)); break;
             }
             addChildComponent (*m); noFocus (*m); resized();
@@ -7190,7 +7481,7 @@ private:
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
         const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabSampler ? 5
-                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : -1;
+                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : -1;
         if (openTabIndex >= tab808 && openTabIndex < numTabs) lastDrum = openTabIndex - tab808;
         else proc.kitPlay = false;   // PLAY KIT is a preview on the drum pages
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
@@ -7199,7 +7490,9 @@ private:
             const int owner = proc.loopOwnerId();
             const bool keep = (owner == 1 && treeOn) || (owner == 2 && (openTabIndex == tabPair || openTabIndex == tabVst))
                            || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0)
-                           || openTabIndex == tabEdit;   // SOUND EDIT: keep the loop running while you tweak the sound
+                           || openTabIndex == tabEdit    // SOUND EDIT: keep the loop running while you tweak the sound
+                           || openTabIndex == tabMix     // v0.41 MIX LAB: you mix what plays
+                           || (owner == 4 && openTabIndex == tabMelody);
             if (! keep) proc.stopLoop();
         }
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }

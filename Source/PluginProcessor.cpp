@@ -120,6 +120,7 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 KeysKillaProcessor::~KeysKillaProcessor()
 {
     vst.unload(); vstB.unload();
+    matchStop = true; matchPool.removeAllJobs (true, 60000);   // v0.41 MATCH stops first
     harvestPool.removeAllJobs (true, 60000);
     drumPool.removeAllJobs (true, 60000);   // a running harvest finishes before the plugin goes
     cancelPendingUpdate();
@@ -151,6 +152,7 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fxPtr = std::make_unique<kk::FxRack>();   // fresh DSP state on every prepare
     fxPtr->prepare (sampleRate, kChunk);
     rackFx = std::make_unique<kk::FxRack>(); rackFx->prepare (sampleRate, kChunk);
+    mixDsp.prepare (sampleRate, samplesPerBlock);
     rackL.assign (kChunk, 0.0f); rackR.assign (kChunk, 0.0f); rackG.assign (kChunk, 0.0f);
     rackTail = 0; gateEnv = 1.0f;
     bufL.assign (kChunk, 0.0f); bufR.assign (kChunk, 0.0f); bufG.assign (kChunk, 0.0f);
@@ -594,6 +596,7 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         for (int c = 0; c < 2; ++c) fxIn.copyFrom (c, 0, buffer, std::min (c, inCh - 1), 0, n);
         hasInput = fxIn.getMagnitude (0, n) > 1.0e-7f;
     }
+    if (hasInput) mixLab.inputBlocks = std::min (100000, mixLab.inputBlocks.load() + 1); else if (mixLab.inputBlocks.load() > 0) mixLab.inputBlocks = std::max (0, mixLab.inputBlocks.load() - 1);
     buffer.clear();
     // hosts may call before prepareToPlay or with empty buffers (parameter flush) - nothing to render then
     if (n <= 0 || buffer.getNumChannels() == 0 || bufL.empty() || fxPtr == nullptr) return;
@@ -833,6 +836,8 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
     processRack (buffer, n, beatPos, bps);   // FX RACK: the whole melody bus (synth, PAIR, VST, SAMPLER)
     processStepFx (buffer, n, beatPos, bps); // v0.37 STEP FX: effects in time on the melody bus
+    mixLab.bpm = (float) lastBpm.load();
+    if (buffer.getNumChannels() > 1) mixDsp.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, mixLab);   // v0.41 MIX LAB
     // DRUM BOOST: the drums play after the melody effects - the FX RACK never touches them
     if (buffer.getNumChannels() > 1)
         for (int d = 0; d < kk::numDrumSlots; ++d)
@@ -1966,6 +1971,14 @@ juce::String KeysKillaProcessor::evoName (const EvoNode& parent, int k, uint32_t
 void KeysKillaProcessor::evoSeedPreset (int idx)
 {
     auto g = genomeFromPreset (idx);
+    if (! g.valid()) return;
+    evoReset();
+    EvoNode n; n.g = g; n.name = g.name; n.fx = fxCurrent(); n.picked = true; evo.push_back (n);
+    evoFocus (0);
+}
+
+void KeysKillaProcessor::evoSeedGenome (const Genome& g)
+{
     if (! g.valid()) return;
     evoReset();
     EvoNode n; n.g = g; n.name = g.name; n.fx = fxCurrent(); n.picked = true; evo.push_back (n);
@@ -3388,6 +3401,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
             mt.setProperty ("key", melKey, nullptr); mt.setProperty ("scale", melScale, nullptr); mt.setProperty ("bars", melBars, nullptr);
             mt.setProperty ("density", melStyle.density, nullptr); mt.setProperty ("wild", melStyle.wild, nullptr); mt.setProperty ("range", melStyle.range, nullptr);
             mt.setProperty ("fromMine", melFromMine, nullptr);
+            mt.setProperty ("genre", melGenre, nullptr); mt.setProperty ("bpm", melBpm, nullptr); mt.setProperty ("layers", melLayers, nullptr);
             if (melHasMine)
             {
                 juce::String t; for (auto& n : melMine.notes) t << juce::String (n.start, 3) << ":" << juce::String (n.len, 3) << ":" << n.pitch << ":" << juce::String (n.vel, 2) << ";";
@@ -3395,6 +3409,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
             }
             state.appendChild (mt, nullptr);
         }
+        state.appendChild (mixToTree(), nullptr);   // v0.41 MIX LAB
         if (auto smp = pairPlayer.sound())
         {
             if (smp.get() != activeSampleSaved)
@@ -3437,6 +3452,9 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                     melBars = (int) mt.getProperty ("bars", 8);
                     melStyle.density = (float) mt.getProperty ("density", 0.5f); melStyle.wild = (float) mt.getProperty ("wild", 0.35f); melStyle.range = (float) mt.getProperty ("range", 0.5f);
                     melFromMine = (bool) mt.getProperty ("fromMine", false);
+                    melGenre = juce::jlimit (-1, (int) kk::mel::numGenres - 1, (int) mt.getProperty ("genre", (int) kk::mel::gTrap));
+                    melBpm = juce::jlimit (50.0f, 200.0f, (float) mt.getProperty ("bpm", 140.0f));
+                    melLayers = juce::jlimit (0, 2, (int) mt.getProperty ("layers", 0));
                     std::vector<kk::mel::Note> notes;
                     for (auto& e : juce::StringArray::fromTokens (mt.getProperty ("mine", "").toString(), ";", ""))
                     {
@@ -3447,6 +3465,7 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                     if (melHasMine) { melMine = kk::mel::fromNotes (notes, 0); melMine.name = "Your melody"; }
                     vt.removeChild (mt, nullptr);
                 }
+                if (const auto xt = vt.getChildWithName ("MIXLAB"); xt.isValid()) { mixFromTree (xt); vt.removeChild (xt, nullptr); }
             }
             {   // v0.36 EVOLVE
                 const auto et = vt.getChildWithName ("EVOLVE");
@@ -4007,7 +4026,7 @@ KeysKillaProcessor::FxGenome KeysKillaProcessor::fxMutate (const FxGenome& src, 
 // ---------------- STEP FX ----------------
 const char* KeysKillaProcessor::stepFxName (int i)
 {
-    static const char* n[] { "STUTTER", "REVERSE", "TAPE STOP", "FILTER", "GATE", "ECHO", "OCTAVE UP", "CRUSH" };
+    static const char* n[] { "STUTTER", "REVERSE", "TAPE STOP", "FILTER", "GATE", "ECHO", "OCTAVE UP", "CRUSH", "ROLL", "OCTAVE DOWN", "PAN", "RISER" };
     return n[juce::jlimit (0, (int) numStepFx - 1, i)];
 }
 void KeysKillaProcessor::stepClear() { for (auto& row : stepGrid) for (auto& c : row) c = false; }
@@ -4020,8 +4039,8 @@ void KeysKillaProcessor::stepRandom (uint32_t seed, float density)
     {
         const float weight = st == 0 ? 0.15f : (st % 4 == 0 ? 0.6f : 1.0f) * (st >= 12 ? 1.5f : 1.0f);
         if (r.nextFloat() > density * 0.55f * weight) continue;
-        static const int pool[] { sfStutter, sfStutter, sfReverse, sfTape, sfFilter, sfGate, sfGate, sfEcho, sfPitchUp, sfCrush };
-        int fx = pool[r.nextInt (10)];
+        static const int pool[] { sfStutter, sfStutter, sfReverse, sfTape, sfFilter, sfGate, sfGate, sfEcho, sfPitchUp, sfCrush, sfRoll, sfPitchDown, sfPan, sfRiser };
+        int fx = pool[r.nextInt (14)];
         if (fx == sfTape && st % 4 != 3) fx = sfGate;   // a tape stop only before a beat
         stepGrid[(size_t) fx][(size_t) st] = true;
         if (fx == sfStutter && st + 1 < numSteps && r.nextFloat() < 0.4f) stepGrid[(size_t) fx][(size_t) st + 1] = true;
@@ -4038,7 +4057,10 @@ void KeysKillaProcessor::stepPreset (int which)
         case 2: set (sfTape, { 7, 15 }); set (sfFilter, { 12, 13, 14 }); break;                        // BRAKE
         case 3: set (sfReverse, { 3, 7, 11, 15 }); set (sfEcho, { 4, 12 }); break;                      // MIRROR
         case 4: set (sfPitchUp, { 10, 11 }); set (sfStutter, { 14, 15 }); set (sfCrush, { 2, 6 }); break; // GLITCH
-        default: set (sfFilter, { 0, 1, 2, 3, 8, 9, 10, 11 }); set (sfEcho, { 7, 15 }); break;          // SWEEP
+        case 5: set (sfFilter, { 0, 1, 2, 3, 8, 9, 10, 11 }); set (sfEcho, { 7, 15 }); break;          // SWEEP
+        case 6: set (sfRiser, { 8, 9, 10, 11, 12, 13 }); set (sfRoll, { 14, 15 }); break;               // BUILD
+        case 7: set (sfPan, { 1, 3, 5, 7, 9, 11, 13, 15 }); set (sfPitchDown, { 6, 14 }); break;         // BOUNCE
+        default: set (sfPitchDown, { 4, 5, 12, 13 }); set (sfRoll, { 7 }); set (sfReverse, { 15 }); set (sfCrush, { 10 }); break;   // DARK
     }
 }
 juce::String KeysKillaProcessor::stepToString() const
@@ -4050,12 +4072,15 @@ juce::String KeysKillaProcessor::stepToString() const
 void KeysKillaProcessor::stepFromString (const juce::String& s)
 {
     const auto a = juce::StringArray::fromTokens (s, ".", "");
-    if (a.size() < numStepFx + 2) return;
-    for (int f = 0; f < numStepFx; ++f)
-        for (int st = 0; st < numSteps; ++st) stepGrid[(size_t) f][(size_t) st] = a[f].length() > st && a[f][st] == '1';
-    stepRate = juce::jlimit (0, 2, a[numStepFx].getIntValue());
-    stepOn = a[numStepFx + 1].getIntValue() != 0;
-    if (a.size() > numStepFx + 2) stepMix = juce::jlimit (0.0f, 1.0f, a[numStepFx + 2].getFloatValue());
+    // rows of 16 '0'/'1', then rate, on, mix (older projects have fewer rows)
+    int rows = 0; while (rows < a.size() && a[rows].length() == numSteps && a[rows].containsOnly ("01")) ++rows;
+    if (rows == 0 || a.size() < rows + 2) return;
+    stepClear();
+    for (int f = 0; f < std::min (rows, (int) numStepFx); ++f)
+        for (int st = 0; st < numSteps; ++st) stepGrid[(size_t) f][(size_t) st] = a[f][st] == '1';
+    stepRate = juce::jlimit (0, 2, a[rows].getIntValue());
+    stepOn = a[rows + 1].getIntValue() != 0;
+    if (a.size() > rows + 2) stepMix = juce::jlimit (0.0f, 1.0f, (a[rows + 2] + "." + (a.size() > rows + 3 ? a[rows + 3] : juce::String ("0"))).getFloatValue());
 }
 
 void KeysKillaProcessor::processStepFx (juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps)
@@ -4101,22 +4126,24 @@ void KeysKillaProcessor::processStepFx (juce::AudioBuffer<float>& buffer, int n,
             for (int f = 0; f < numStepFx; ++f) act[f] = on && stepGrid[(size_t) f][(size_t) (step < 0 ? 0 : step)].load();
         }
         // one "read" effect at a time (STUTTER > REVERSE > TAPE > OCTAVE UP), 3 ms crossfades
-        const int read = act[sfStutter] ? sfStutter : act[sfReverse] ? sfReverse : act[sfTape] ? sfTape : act[sfPitchUp] ? sfPitchUp : -1;
+        const int read = act[sfStutter] ? sfStutter : act[sfRoll] ? sfRoll : act[sfReverse] ? sfReverse : act[sfTape] ? sfTape : act[sfPitchUp] ? sfPitchUp : act[sfPitchDown] ? sfPitchDown : -1;
         float wl = 0, wr = 0, dryW = 1.0f;
         const int start = (int) stepRevStart;
-        for (int f : { (int) sfStutter, (int) sfReverse, (int) sfTape, (int) sfPitchUp })
+        for (int f : { (int) sfStutter, (int) sfRoll, (int) sfReverse, (int) sfTape, (int) sfPitchUp, (int) sfPitchDown })
         {
             auto& e = stepEnv[f];
             e = f == read ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
             if (e <= 0.0f) continue;
             int idx = stepW;
-            if (f == sfStutter) { const int slice = std::max (32, stepLen / 4); idx = (start + (pos % slice)) & mask; }
+            const int sliceN = f == sfRoll ? 8 : 4;
+            if (f == sfStutter || f == sfRoll) { const int slice = std::max (32, stepLen / sliceN); idx = (start + (pos % slice)) & mask; }
+            else if (f == sfPitchDown) idx = (start + pos / 2) & mask;   // this step at half speed = an octave down
             else if (f == sfReverse) idx = (start - 1 - pos + size * 4) & mask;
             else if (f == sfTape) { stepTapePos += std::max (0.0f, 1.0f - frac * 1.05f); idx = (start + (int) stepTapePos) & mask; }
             else idx = (start - stepLen + (2 * pos) % stepLen + size * 4) & mask;   // the step before, twice as fast = an octave up
             // short window at the slice edges: no clicks
             float w = 1.0f;
-            if (f == sfStutter) { const int slice = std::max (32, stepLen / 4), ph = pos % slice, ed = std::min (slice / 4, (int) (0.002 * sr)); w = std::min (1.0f, std::min ((float) ph / (float) std::max (1, ed), (float) (slice - ph) / (float) std::max (1, ed))); }
+            if (f == sfStutter || f == sfRoll) { const int slice = std::max (32, stepLen / sliceN), ph = pos % slice, ed = std::min (slice / 4, (int) (0.002 * sr)); w = std::min (1.0f, std::min ((float) ph / (float) std::max (1, ed), (float) (slice - ph) / (float) std::max (1, ed))); }
             wl += stepBufL[(size_t) idx] * e * w; wr += stepBufR[(size_t) idx] * e * w;
             dryW -= e;
         }
@@ -4131,6 +4158,23 @@ void KeysKillaProcessor::processStepFx (juce::AudioBuffer<float>& buffer, int n,
                 stepLp[0].tick (fc, l); stepLp[1].tick (fc, r);
                 l = l + (stepLp[0].lp - l) * e; r = r + (stepLp[1].lp - r) * e;
             }
+        }
+        // RISER: a high-pass that opens up over the step (build-ups)
+        {
+            auto& e = stepEnv[sfRiser];
+            e = act[sfRiser] ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            if (e > 0.0f)
+            {
+                kk::SvfCoef hc; hc.set (120.0f * std::exp2 (frac * 5.0f), 1.6f, (float) sr);
+                stepHp[0].tick (hc, l); stepHp[1].tick (hc, r);
+                l = l + (stepHp[0].hp - l) * e; r = r + (stepHp[1].hp - r) * e;
+            }
+        }
+        // PAN: even steps lean left, odd steps right
+        {
+            auto& e = stepEnv[sfPan];
+            e = act[sfPan] ? std::min (1.0f, e + ramp) : std::max (0.0f, e - ramp);
+            if (e > 0.0f) { const float pan = (step % 2 == 0 ? -0.85f : 0.85f) * e; l *= std::min (1.0f, 1.0f - pan); r *= std::min (1.0f, 1.0f + pan); }
         }
         // CRUSH: 10 bits, a quarter of the rate
         {
@@ -4611,7 +4655,7 @@ void KeysKillaProcessor::melGenerate()
         const uint32_t seed = kk::hash32 (base + (uint32_t) k * 7919u);
         auto st = melStyle;
         st.density = juce::jlimit (0.05f, 0.95f, melStyle.density + ((float) (k % 4) - 1.5f) * 0.08f);   // a little spread so the 8 differ
-        auto m = kk::mel::generate (seed, melKey, melScale, melBars, st);
+        auto m = kk::mel::generateGenre (seed, melGenre, melKey, melScale, melBars, st, melBpm);
         m.gen = 1; m.name = kk::mel::melodyName (seed, 1, k);
         mels.push_back (m);
         melShown.push_back ((int) mels.size() - 1);
@@ -4650,18 +4694,29 @@ void KeysKillaProcessor::melBack()
     else { melParent = -1; melShown.clear(); for (int i = 0; i < (int) mels.size(); ++i) if (mels[(size_t) i].parent < 0 && mels[(size_t) i].how != "YOURS") melShown.push_back (i); ++melVer; }
 }
 
-static std::vector<kk::LoopNote> toLoopNotes (const kk::mel::Melody& m)
+static std::vector<kk::LoopNote> toLoopNotes (const kk::mel::Melody& m, int layers)
 {
     std::vector<kk::LoopNote> out;
-    for (auto& n : m.notes) out.push_back ({ n.start, n.len, n.pitch, false });
+    for (auto& n : kk::mel::layerNotes (m, layers)) out.push_back ({ std::max (0.0f, n.start), n.len, n.pitch, false });
     return out;
+}
+
+void KeysKillaProcessor::melSetGenre (int g)
+{
+    melGenre = juce::jlimit (-1, (int) kk::mel::numGenres - 1, g);
+    if (melGenre >= 0)
+    {
+        const auto gi = kk::mel::genreInfo (melGenre);
+        melScale = gi.scale; melBpm = (float) gi.bpm;
+    }
+    ++melVer;
 }
 
 void KeysKillaProcessor::melPlay (int idx)
 {
     if (! juce::isPositiveAndBelow (idx, (int) mels.size())) { if (loopOwner == 4) stopLoop(); melPlaying = -1; ++melVer; return; }
     melPlaying = idx;
-    playCustomLoop (toLoopNotes (mels[(size_t) idx]), mels[(size_t) idx].beats());
+    playCustomLoop (toLoopNotes (mels[(size_t) idx], melLayers), mels[(size_t) idx].beats());
     ++melVer;
 }
 
@@ -4669,7 +4724,7 @@ void KeysKillaProcessor::melPlayMine()
 {
     if (! melHasMine) return;
     melPlaying = -2;
-    playCustomLoop (toLoopNotes (melMine), melMine.beats());
+    playCustomLoop (toLoopNotes (melMine, 0), melMine.beats());
     ++melVer;
 }
 
@@ -4677,11 +4732,14 @@ juce::File KeysKillaProcessor::melExport (int idx)
 {
     const kk::mel::Melody* m = idx == -2 && melHasMine ? &melMine : juce::isPositiveAndBelow (idx, (int) mels.size()) ? &mels[(size_t) idx] : nullptr;
     if (m == nullptr) return {};
-    const double bpm = lastBpm.load();
-    auto mf = kk::mel::toMidiFile (*m, bpm);
+    const double bpm = m->genre >= 0 ? (double) m->bpm : lastBpm.load();
+    const int layers = idx == -2 ? 0 : melLayers;
+    auto mf = kk::mel::toMidiFile (*m, bpm, layers);
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("EVOLVE Melodies");
     dir.createDirectory();
-    auto f = dir.getChildFile (juce::File::createLegalFileName (m->name + " - " + kk::mel::keyName (m->key) + " " + kk::mel::scaleName (m->scale) + " - " + juce::String (juce::roundToInt (bpm)) + "BPM") + ".mid");
+    const juce::String style = m->genre >= 0 ? juce::String (kk::mel::genreName (m->genre)) + " " : juce::String();
+    const juce::String what = layers == 1 ? " + CHORDS" : layers == 2 ? " CHORDS" : "";
+    auto f = dir.getChildFile (juce::File::createLegalFileName (style + m->name + what + " - " + kk::mel::keyName (m->key) + " " + kk::mel::scaleName (m->scale) + " - " + juce::String (juce::roundToInt (bpm)) + "BPM") + ".mid");
     f.deleteFile();
     if (juce::FileOutputStream os { f }; os.openedOk()) mf.writeTo (os, 1);
     return f;
@@ -4731,6 +4789,25 @@ void KeysKillaProcessor::melListen (bool on)
     ++melVer;
 }
 
+bool KeysKillaProcessor::melLoadAudioFile (const juce::File& f)
+{
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
+    if (rd == nullptr || rd->lengthInSamples < 2048) return false;
+    const int len = (int) std::min<juce::int64> (rd->lengthInSamples, (juce::int64) (rd->sampleRate * 40.0));
+    juce::AudioBuffer<float> b ((int) std::max (1u, std::min (2u, rd->numChannels)), len);
+    rd->read (&b, 0, len, 0, true, b.getNumChannels() > 1);
+    const double bpm = lastBpm.load() > 30 ? lastBpm.load() : 140.0;
+    auto notes = kk::mel::notesFromAudio (b, rd->sampleRate, bpm);
+    if (notes.size() < 3) return false;
+    melMine = kk::mel::fromNotes (notes, 0);
+    melMine.name = "From " + f.getFileNameWithoutExtension().substring (0, 24);
+    melHasMine = melMine.notes.size() >= 3;
+    if (melHasMine) { melFromMine = true; melKey = melMine.key; melScale = melMine.scale; melBars = melMine.bars; }
+    ++melVer;
+    return melHasMine;
+}
+
 bool KeysKillaProcessor::melLoadMidiFile (const juce::File& f)
 {
     juce::FileInputStream in (f);
@@ -4744,4 +4821,273 @@ bool KeysKillaProcessor::melLoadMidiFile (const juce::File& f)
     if (melHasMine) { melFromMine = true; melKey = melMine.key; melScale = melMine.scale; melBars = melMine.bars; }
     ++melVer;
     return melHasMine;
+}
+
+//==============================================================================
+// v0.41 MIX LAB state
+juce::ValueTree KeysKillaProcessor::mixToTree() const
+{
+    juce::ValueTree t ("MIXLAB");
+    const auto& m = mixLab;
+    t.setProperty ("eqOn", m.eqOn.load(), nullptr); t.setProperty ("eqOut", m.eqOut.load(), nullptr);
+    for (int b = 0; b < kk::MixLabState::numBands; ++b)
+    {
+        auto& x = m.band[(size_t) b];
+        t.setProperty ("b" + juce::String (b), juce::String ((int) x.on.load()) + "," + juce::String (x.type.load()) + "," + juce::String (x.slope.load()) + "," + juce::String (x.freq.load(), 2) + ","
+                                               + juce::String (x.gain.load(), 2) + "," + juce::String (x.q.load(), 3) + "," + juce::String (x.dyn.load(), 3), nullptr);
+    }
+    t.setProperty ("comp", juce::String ((int) m.compOn.load()) + "," + juce::String (m.compStyle.load()) + "," + juce::String (m.thresh.load(), 2) + "," + juce::String (m.ratio.load(), 2) + "," + juce::String (m.attack.load(), 2) + ","
+                           + juce::String (m.release.load(), 1) + "," + juce::String (m.knee.load(), 1) + "," + juce::String (m.compMix.load(), 3) + "," + juce::String (m.compOut.load(), 2) + "," + juce::String ((int) m.autoGain.load()) + "," + juce::String ((int) m.scHp.load()), nullptr);
+    juce::String tm; tm << (int) m.tmOn.load() << "," << m.noiseType.load() << "," << m.magnitude.load() << "," << m.era.load() << "," << m.tmLp.load() << "," << m.tmHp.load() << "," << m.tmMono.load() << "," << m.tmMix.load()
+                        << "," << m.wobbleRate.load() << "," << m.distTone.load() << "," << m.digRate.load() << "," << m.spaceSize.load() << "," << m.fadeRate.load();
+    for (int i = 0; i < kk::numTm; ++i) tm << "," << (int) m.tmModOn[(size_t) i].load() << "," << m.tmAmt[(size_t) i].load();
+    t.setProperty ("tm", tm, nullptr);
+    juce::String sp; sp << (int) m.spOn.load() << "," << m.spMode.load() << "," << m.spMix.load() << "," << m.spDecay.load() << "," << m.spPre.load() << "," << m.spTone.load() << "," << m.spMod.load() << "," << m.spWidth.load() << "," << m.spDuck.load()
+                        << "," << (int) m.dlOn.load() << "," << m.dlMode.load() << "," << m.dlTime.load() << "," << m.dlMix.load() << "," << m.dlFb.load() << "," << m.dlTone.load() << "," << m.dlDuck.load();
+    t.setProperty ("space", sp, nullptr);
+    t.setProperty ("coachGenre", coachGenre, nullptr);
+    return t;
+}
+
+void KeysKillaProcessor::mixFromTree (const juce::ValueTree& t)
+{
+    auto& m = mixLab;
+    auto f = [] (const juce::StringArray& a, int i, float d) { return i < a.size() ? a[i].getFloatValue() : d; };
+    m.eqOn = (bool) t.getProperty ("eqOn", true); m.eqOut = (float) t.getProperty ("eqOut", 0.0f);
+    for (int b = 0; b < kk::MixLabState::numBands; ++b)
+    {
+        const auto a = juce::StringArray::fromTokens (t.getProperty ("b" + juce::String (b), "").toString(), ",", "");
+        if (a.size() < 7) continue;
+        auto& x = m.band[(size_t) b];
+        x.on = a[0].getIntValue() != 0; x.type = juce::jlimit (0, (int) kk::numEqTypes - 1, a[1].getIntValue()); x.slope = juce::jlimit (1, 2, a[2].getIntValue());
+        x.freq = juce::jlimit (16.0f, 22000.0f, a[3].getFloatValue()); x.gain = juce::jlimit (-24.0f, 24.0f, a[4].getFloatValue()); x.q = juce::jlimit (0.1f, 30.0f, a[5].getFloatValue()); x.dyn = juce::jlimit (0.0f, 1.0f, a[6].getFloatValue());
+    }
+    const auto c = juce::StringArray::fromTokens (t.getProperty ("comp", "").toString(), ",", "");
+    if (c.size() >= 11)
+    {
+        m.compOn = c[0].getIntValue() != 0; m.compStyle = juce::jlimit (0, (int) kk::numCompStyles - 1, c[1].getIntValue());
+        m.thresh = f (c, 2, -18); m.ratio = f (c, 3, 3); m.attack = f (c, 4, 15); m.release = f (c, 5, 120); m.knee = f (c, 6, 6); m.compMix = f (c, 7, 1); m.compOut = f (c, 8, 0);
+        m.autoGain = c[9].getIntValue() != 0; m.scHp = c[10].getIntValue() != 0;
+    }
+    const auto tm = juce::StringArray::fromTokens (t.getProperty ("tm", "").toString(), ",", "");
+    if (tm.size() >= 13 + 2 * kk::numTm)
+    {
+        m.tmOn = tm[0].getIntValue() != 0; m.noiseType = juce::jlimit (0, 2, tm[1].getIntValue()); m.magnitude = f (tm, 2, 1); m.era = f (tm, 3, 0.5f);
+        m.tmLp = f (tm, 4, 20000); m.tmHp = f (tm, 5, 20); m.tmMono = f (tm, 6, 0); m.tmMix = f (tm, 7, 1);
+        m.wobbleRate = f (tm, 8, 0.5f); m.distTone = f (tm, 9, 0.5f); m.digRate = f (tm, 10, 0.5f); m.spaceSize = f (tm, 11, 0.5f); m.fadeRate = f (tm, 12, 0.4f);
+        for (int i = 0; i < kk::numTm; ++i) { m.tmModOn[(size_t) i] = tm[13 + 2 * i].getIntValue() != 0; m.tmAmt[(size_t) i] = f (tm, 14 + 2 * i, 0.4f); }
+    }
+    const auto sp = juce::StringArray::fromTokens (t.getProperty ("space", "").toString(), ",", "");
+    if (sp.size() >= 16)
+    {
+        m.spOn = sp[0].getIntValue() != 0; m.spMode = juce::jlimit (0, (int) kk::numSpaceModes - 1, sp[1].getIntValue());
+        m.spMix = f (sp, 2, 0.25f); m.spDecay = f (sp, 3, 0.5f); m.spPre = f (sp, 4, 20); m.spTone = f (sp, 5, 0.6f); m.spMod = f (sp, 6, 0.4f); m.spWidth = f (sp, 7, 1); m.spDuck = f (sp, 8, 0);
+        m.dlOn = sp[9].getIntValue() != 0; m.dlMode = juce::jlimit (0, (int) kk::numEchoModes - 1, sp[10].getIntValue()); m.dlTime = juce::jlimit (0, 5, sp[11].getIntValue());
+        m.dlMix = f (sp, 12, 0.25f); m.dlFb = f (sp, 13, 0.4f); m.dlTone = f (sp, 14, 0.6f); m.dlDuck = f (sp, 15, 0);
+    }
+    coachGenre = juce::jlimit (-1, (int) kk::mel::numGenres - 1, (int) t.getProperty ("coachGenre", (int) kk::mel::gTrap));
+}
+
+//==============================================================================
+// v0.41 MATCH: a sound you drop -> the synth searches for it (an evolution with four strands)
+juce::AudioBuffer<float> KeysKillaProcessor::renderWith (KeysKillaProcessor& r, const Genome& g, double rate, double seconds, int note)
+{
+    for (size_t i = 0; i < r.params.size() && i < g.v.size(); ++i)
+    {
+        const float v = ID::isModuleParam (r.params[i]->paramID) || r.params[i]->paramID == ID::playMode ? r.params[i]->getDefaultValue() : g.v[i];
+        if (std::abs (r.params[i]->getValue() - v) > 1.0e-6f) r.params[i]->setValueNotifyingHost (v);
+    }
+    r.eco = false;
+    const int block = 512, total = (int) (rate * seconds), offAt = (int) (rate * seconds * 0.7);
+    r.prepareToPlay (rate, block);
+    juce::AudioBuffer<float> out (2, total), buf (2, block);
+    for (int pos = 0; pos < total; pos += block)
+    {
+        juce::MidiBuffer m;
+        if (pos == 0) m.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+        if (pos <= offAt && offAt < pos + block) m.addEvent (juce::MidiMessage::noteOff (1, note), offAt - pos);
+        buf.clear();
+        r.processBlock (buf, m);
+        const int n = std::min (block, total - pos);
+        for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, pos, buf, ch, 0, n);
+    }
+    return out;
+}
+
+namespace
+{
+// what a sound is, for comparing: 24 log bands (whole + attack), its loudness shape over 1.2 s
+std::vector<float> matchFeatures (const juce::AudioBuffer<float>& b, double rate)
+{
+    std::vector<float> f;
+    const int n = b.getNumSamples();
+    std::vector<float> x ((size_t) n);
+    float pk = 0;
+    for (int i = 0; i < n; ++i) { float v = 0; for (int c = 0; c < b.getNumChannels(); ++c) v += b.getSample (c, i); x[(size_t) i] = v; pk = std::max (pk, std::abs (v)); }
+    if (pk < 1e-5f) return f;
+    int on = 0; while (on < n && std::abs (x[(size_t) on]) < pk * 0.03f) ++on;
+    constexpr int order = 11, N = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> work ((size_t) N * 2);
+    const int frames = 7, hop = (int) (rate * 0.09);
+    std::array<float, 24> avg {}, atk {};
+    std::array<float, 7> env {};
+    float envMax = 1e-9f;
+    for (int fr = 0; fr < frames; ++fr)
+    {
+        const int s0 = on + fr * hop;
+        std::fill (work.begin(), work.end(), 0.0f);
+        double e = 0;
+        for (int i = 0; i < N; ++i)
+        {
+            const float v = s0 + i < n ? x[(size_t) (s0 + i)] : 0.0f;
+            e += v * v;
+            work[(size_t) i] = v * (0.5f - 0.5f * std::cos (kk::twoPi * (float) i / (float) (N - 1)));
+        }
+        env[(size_t) fr] = (float) std::sqrt (e / N); envMax = std::max (envMax, env[(size_t) fr]);
+        fft.performFrequencyOnlyForwardTransform (work.data(), true);
+        for (int band = 0; band < 24; ++band)
+        {
+            const float lo = 60.0f * std::pow (2.0f, (float) band * 8.0f / 24.0f), hi = lo * std::pow (2.0f, 8.0f / 24.0f);
+            const int b0 = std::max (1, (int) (lo / rate * N)), b1 = std::min (N / 2, std::max (b0 + 1, (int) (hi / rate * N)));
+            double s = 0; for (int k = b0; k < b1; ++k) s += work[(size_t) k] * work[(size_t) k];
+            const float db = 10.0f * std::log10 ((float) (s / (b1 - b0)) + 1e-12f);
+            avg[(size_t) band] += db / frames;
+            if (fr == 0) atk[(size_t) band] = db;
+        }
+    }
+    float mA = 0, mT = 0; for (int band = 0; band < 24; ++band) { mA += avg[(size_t) band] / 24; mT += atk[(size_t) band] / 24; }
+    for (int band = 0; band < 24; ++band) f.push_back (avg[(size_t) band] - mA);
+    for (int band = 0; band < 24; ++band) f.push_back ((atk[(size_t) band] - mT) * 0.7f);
+    for (int fr = 0; fr < frames; ++fr) f.push_back (std::max (-60.0f, 20.0f * std::log10 (env[(size_t) fr] / envMax + 1e-9f)) * 0.5f);
+    return f;
+}
+float matchDistance (const std::vector<float>& a, const std::vector<float>& b)
+{
+    if (a.size() != b.size() || a.empty()) return 1e9f;
+    double s = 0; for (size_t i = 0; i < a.size(); ++i) s += (a[i] - b[i]) * (a[i] - b[i]);
+    return (float) std::sqrt (s / (double) a.size());
+}
+float matchPercent (float dist) { return 100.0f / (1.0f + std::max (0.0f, dist - 0.8f) / 5.0f); }   // two renders of one sound differ by ~1 (random phases)
+std::array<float, 64> peaks64 (const juce::AudioBuffer<float>& b)
+{
+    std::array<float, 64> w {};
+    const int n = b.getNumSamples(); if (n <= 0) return w;
+    float mx = 1e-9f;
+    for (int k = 0; k < 64; ++k) { float p = 0; for (int i = k * n / 64; i < (k + 1) * n / 64; ++i) p = std::max (p, std::abs (b.getSample (0, i))); w[(size_t) k] = p; mx = std::max (mx, p); }
+    for (auto& v : w) v /= mx;
+    return w;
+}
+}
+
+bool KeysKillaProcessor::evoMatchStart (const juce::File& f)
+{
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
+    if (rd == nullptr || rd->lengthInSamples < 2048) return false;
+    const double rate = 44100.0;
+    const int len = (int) std::min<juce::int64> (rd->lengthInSamples, (juce::int64) (rd->sampleRate * 3.0));
+    juce::AudioBuffer<float> raw ((int) std::max (1u, std::min (2u, rd->numChannels)), len);
+    rd->read (&raw, 0, len, 0, true, raw.getNumChannels() > 1);
+    // to 44.1 kHz (linear is enough for comparing)
+    const double ratio = rd->sampleRate / rate;
+    juce::AudioBuffer<float> target (1, (int) (len / ratio));
+    for (int i = 0; i < target.getNumSamples(); ++i)
+    {
+        const double pos = i * ratio; const int i0 = (int) pos; const float fr = (float) (pos - i0);
+        float v = 0;
+        for (int c = 0; c < raw.getNumChannels(); ++c) v += raw.getSample (c, std::min (i0, len - 1)) * (1 - fr) + raw.getSample (c, std::min (i0 + 1, len - 1)) * fr;
+        target.setSample (0, i, v);
+    }
+    auto tf = matchFeatures (target, rate);
+    if (tf.empty()) return false;
+    // its note: the synth plays the same note, so the spectra line up
+    int note = 60;
+    if (auto ns = kk::mel::notesFromAudio (target, rate, 120.0); ! ns.empty())
+    {
+        std::vector<int> ps; for (auto& x : ns) ps.push_back (x.pitch);
+        std::nth_element (ps.begin(), ps.begin() + (long) ps.size() / 2, ps.end()); note = juce::jlimit (28, 96, ps[ps.size() / 2]);
+    }
+    evoMatchStop();
+    matchTargetName = f.getFileNameWithoutExtension(); matchTargetWave = peaks64 (target);
+    { const juce::SpinLock::ScopedLockType sl (matchLock); matchStrandsData.clear(); }
+    matchStop = false; matchRunning = true; matchProgress = 0; ++matchVer;
+    std::vector<Genome> seeds; for (int i = 0; i < (int) factoryPresets().size(); ++i) seeds.push_back (genomeFromPreset (i));
+    const auto disc = discrete;
+    matchPool.addJob ([this, tf, note, seeds, disc, rate]
+    {
+        auto renderer = std::make_unique<KeysKillaProcessor> (false);
+        int playNote = note;
+        auto scoreAt = [&] (const Genome& g, int nn, std::array<float, 64>* wave) { auto b = renderWith (*renderer, g, rate, 0.75, nn); if (wave) *wave = peaks64 (b); return matchDistance (tf, matchFeatures (b, rate)); };
+        auto score = [&] (const Genome& g, std::array<float, 64>* wave) { return scoreAt (g, playNote, wave); };
+        // 1) every sound of the bank, the closest four start the strands (from different families)
+        // pitch trackers are often an octave off: every bank sound is heard at the note and an octave away, the better octave wins
+        const int alt = note >= 48 ? note - 12 : note + 12;
+        std::vector<std::pair<float, int>> allA, allB;
+        for (int i = 0; i < (int) seeds.size() && ! matchStop.load(); ++i)
+        {
+            if (seeds[(size_t) i].valid()) { allA.push_back ({ scoreAt (seeds[(size_t) i], note, nullptr), i }); allB.push_back ({ scoreAt (seeds[(size_t) i], alt, nullptr), i }); }
+            matchProgress = 0.4f * (float) (i + 1) / (float) seeds.size();
+        }
+        if (matchStop.load() || allA.empty()) { matchRunning = false; return; }
+        std::sort (allA.begin(), allA.end()); std::sort (allB.begin(), allB.end());
+        const bool useAlt = allB[0].first < allA[0].first;
+        auto all = useAlt ? allB : allA;
+        playNote = useAlt ? alt : note;
+        std::vector<MatchStrand> strands;
+        std::vector<float> dist;
+        std::set<int> cats;
+        for (auto& [d, i] : all)
+        {
+            if ((int) strands.size() >= 4) break;
+            if (cats.count (seeds[(size_t) i].cat) && (int) strands.size() < 3) continue;
+            cats.insert (seeds[(size_t) i].cat);
+            MatchStrand ms; ms.g = seeds[(size_t) i]; score (ms.g, &ms.wave); ms.match = matchPercent (d);
+            strands.push_back (ms); dist.push_back (d);
+        }
+        { const juce::SpinLock::ScopedLockType sl (matchLock); matchStrandsData = strands; } ++matchVer;
+        // 2) they grow: mutants of each strand (sometimes crossed with another strand), the closer one wins
+        juce::Random rnd ((juce::int64) juce::Time::getMillisecondCounter());
+        const int gens = 24, kids = 5;
+        for (int gen = 0; gen < gens && ! matchStop.load(); ++gen)
+        {
+            const float sigma = 0.12f * (1.0f - (float) gen / gens) + 0.02f;
+            for (size_t s = 0; s < strands.size() && ! matchStop.load(); ++s)
+            {
+                for (int k = 0; k < kids; ++k)
+                {
+                    Genome c = strands[s].g;
+                    const auto& other = strands[(size_t) rnd.nextInt ((int) strands.size())].g;
+                    for (size_t i = 0; i < c.v.size(); ++i)
+                    {
+                        const bool isDisc = i < disc.size() && disc[i];
+                        if (k == kids - 1 && i < other.v.size() && rnd.nextFloat() < 0.25f) c.v[i] = other.v[i];   // a cross
+                        else if (! isDisc && rnd.nextFloat() < 0.18f) c.v[i] = juce::jlimit (0.0f, 1.0f, c.v[i] + (rnd.nextFloat() + rnd.nextFloat() + rnd.nextFloat() - 1.5f) * 1.4f * sigma);
+                        else if (isDisc && rnd.nextFloat() < 0.02f) c.v[i] = rnd.nextFloat();
+                    }
+                    std::array<float, 64> w {};
+                    const float d = score (c, &w);
+                    if (d < dist[s]) { dist[s] = d; strands[s].g = c; strands[s].wave = w; strands[s].match = matchPercent (d); strands[s].gen = gen + 1; }
+                }
+                matchProgress = 0.4f + 0.6f * ((float) gen + (float) (s + 1) / (float) strands.size()) / (float) gens;
+            }
+            for (size_t s = 0; s < strands.size(); ++s) strands[s].g.name = "Match " + juce::String ((int) s + 1) + " - " + juce::String (juce::roundToInt (strands[s].match)) + "%";
+            { const juce::SpinLock::ScopedLockType sl (matchLock); matchStrandsData = strands; } ++matchVer;
+        }
+        matchProgress = 1.0f; matchRunning = false; ++matchVer;
+    });
+    return true;
+}
+
+void KeysKillaProcessor::evoMatchStop()
+{
+    matchStop = true;
+    matchPool.removeAllJobs (true, 20000);
+    matchRunning = false;
+}
+
+std::vector<KeysKillaProcessor::MatchStrand> KeysKillaProcessor::matchStrands() const
+{
+    const juce::SpinLock::ScopedLockType sl (matchLock);
+    return matchStrandsData;
 }

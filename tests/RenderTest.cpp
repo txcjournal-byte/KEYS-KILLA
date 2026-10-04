@@ -850,6 +850,219 @@ static int unitTests()
         juce::MidiFile mf; juce::FileInputStream in (f);
         check (f.existsAsFile() && in.openedOk() && mf.readFrom (in) && mf.getTrack (0)->getNumEvents() > 10, "v0.40 MELODY: drags out as MIDI");
     }
+    // v0.41 GENRES: trap hooks on the 1/8 grid that repeat, house stabs on the off-beats, high DNB arps, in key, chords layer
+    {
+        using namespace kk::mel;
+        int badKey = 0, totalNotes = 0, badChords = 0;
+        for (int g = 0; g < numGenres; ++g)
+        {
+            double grid8 = 0, n8 = 0, med = 0; int nm = 0, span = 0, chordN = 0; double rep = 0;
+            for (int k = 0; k < 12; k += 3)
+            {
+                const auto gi = genreInfo (g);
+                Style st; auto m = generateGenre (500u + (uint32_t) (g * 97 + k), g, k, gi.scale, 8, st, (float) gi.bpm);
+                const auto& steps = scaleSteps (gi.scale);
+                int lo = 127, hi = 0;
+                std::vector<int> ps;
+                for (auto& n : m.notes)
+                {
+                    const int pc = ((n.pitch - k) % 12 + 12) % 12;
+                    badKey += std::find (steps.begin(), steps.end(), pc) == steps.end(); ++totalNotes;
+                    lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); ps.push_back (n.pitch);
+                    const float q = n.start * 2.0f; grid8 += std::abs (q - std::round (q)) < 0.06f; n8 += 1;
+                }
+                for (auto& n : m.chords) { const int pc = ((n.pitch - k) % 12 + 12) % 12; badChords += std::find (steps.begin(), steps.end(), pc) == steps.end(); }
+                chordN += (int) m.chords.size();
+                std::sort (ps.begin(), ps.end()); if (! ps.empty()) { med += ps[ps.size() / 2] - k; ++nm; }
+                span = std::max (span, hi - lo);
+                // bars 1-2 vs bars 3-4: the hook repeats
+                std::set<std::pair<int, int>> a, b2;
+                for (auto& n : m.notes) { const int q = (int) std::round (n.start * 4.0f); if (q < 32) a.insert ({ q, n.pitch }); else if (q < 64) b2.insert ({ q - 32, n.pitch }); }
+                int inter = 0; for (auto& x : a) inter += b2.count (x) > 0;
+                rep += (double) inter / std::max<size_t> (1, std::max (a.size(), b2.size()));
+                if (g == gHouse)
+                {
+                    int off = 0; for (auto& c : m.chords) { const float fr = c.start - std::floor (c.start); off += fr > 0.4f && fr < 0.6f; }
+                    check (off >= (int) m.chords.size() * 9 / 10, "v0.41 HOUSE: the chord stabs sit on the off-beats");
+                }
+            }
+            std::printf ("GENRE %-9s on 1/8 grid %3.0f%%  median pitch %5.1f  widest %2d  repeat %.2f  chord notes %d\n", genreName (g), 100.0 * grid8 / std::max (1.0, n8), med / std::max (1, nm), span, rep / 4.0, chordN);
+            if (g == gTrap) check (grid8 / n8 > 0.85 && rep / 4.0 > 0.6, "v0.41 TRAP: hooks on the 1/8 grid that repeat like real trap loops");
+            if (g == gDnb) check (med / std::max (1, nm) > 70.0, "v0.41 DNB: the arpeggios sit high (above the bass)");
+            check (span <= 30 && chordN > 0, (juce::String ("v0.41 ") + genreName (g) + ": a playable range and a chords layer").toRawUTF8());
+        }
+        std::printf ("GENRES: %d of %d notes out of key (dark half-step leans), %d chord notes out of key\n", badKey, totalNotes, badChords);
+        check (badKey * 40 < totalNotes && badChords == 0, "v0.41 GENRES: in the key (only rare dark half-step leans), chords always in key");
+        {   // AUDIO -> MIDI: a played melody (tones with harmonics, 140 BPM, 1/8 notes) comes back as the same notes
+            const int ap[] { 69, 72, 76, 74, 72, 71, 69, 64, 69, 72, 76, 79, 77, 76, 74, 72 };
+            const double rate = 44100.0, spb = rate * 60.0 / 140.0;
+            juce::AudioBuffer<float> a (1, (int) (spb * 0.5 * 17));
+            a.clear();
+            for (int i = 0; i < 16; ++i)
+            {
+                const int s0 = (int) (i * 0.5 * spb), len = (int) (0.42 * spb);
+                const double f = 440.0 * std::pow (2.0, (ap[i] - 69) / 12.0);
+                for (int k = 0; k < len; ++k)
+                {
+                    const double env = std::min (1.0, k / 200.0) * std::min (1.0, (len - k) / 400.0);
+                    double v = 0; for (int h = 1; h <= 4; ++h) v += std::sin (2 * juce::MathConstants<double>::pi * f * h * k / rate) / h;
+                    a.setSample (0, s0 + k, (float) (0.3 * env * v));
+                }
+            }
+            auto heard = notesFromAudio (a, rate, 140.0);
+            int match = 0; for (size_t i = 0; i < heard.size() && i < 16; ++i) match += heard[i].pitch == ap[i] && std::abs (heard[i].start - 0.5f * (float) i) < 0.08f;
+            std::printf ("AUDIO -> MIDI: %d notes heard, %d of 16 right (pitch + time)\n", (int) heard.size(), match);
+            check (heard.size() == 16 && match >= 15, "v0.41 AUDIO -> MIDI: a played melody becomes the same MIDI notes");
+            auto mm = fromNotes (heard, 0);
+            check (mm.key == 9 && mm.scale == scMinor, "v0.41 AUDIO -> MIDI: and its key (A minor) is found");
+        }
+        // in the plugin: the genre sets scale + tempo, the MIDI carries the chords when asked
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        p.melSetGenre (gHouse);
+        check (p.melScale == scDorian && std::abs (p.melBpm - 126.0f) < 0.5f, "v0.41: HOUSE picks its scale and 126 BPM");
+        p.melLayers = 1; p.melGenerate();
+        const int idx = p.melShown[0];
+        const auto f = p.melExport (idx);
+        juce::MidiFile mf; juce::FileInputStream in (f);
+        int ons = 0; if (in.openedOk() && mf.readFrom (in)) for (int i = 0; i < mf.getTrack (0)->getNumEvents(); ++i) ons += mf.getTrack (0)->getEventPointer (i)->message.isNoteOn();
+        check (f.getFileName().contains ("HOUSE") && f.getFileName().contains ("126BPM") && ons == (int) (p.mels[(size_t) idx].notes.size() + p.mels[(size_t) idx].chords.size()), "v0.41: + CHORDS drags melody and chords in one MIDI (named HOUSE 126BPM)");
+        p.melEvolve (idx, false);
+        check (p.mels[(size_t) p.melShown[1]].genre == gHouse && ! p.mels[(size_t) p.melShown[1]].chords.empty(), "v0.41: the children keep the genre and the chords");
+    }
+    // v0.41 MIX LAB: EQ (bell, 24 dB cut, dynamic), compressor, TIME MACHINE (silence stays silent), COACH, state
+    {
+        const double rate = 44100.0; const int N = 44100;
+        auto sine = [&] (float hz, float amp) { juce::AudioBuffer<float> b (2, N); for (int i = 0; i < N; ++i) { const float v = amp * std::sin (kk::twoPi * hz * (float) i / (float) rate); b.setSample (0, i, v); b.setSample (1, i, v); } return b; };
+        auto runLab = [&] (kk::MixLabState& st, juce::AudioBuffer<float> b) { kk::MixLabDsp d; d.prepare (rate, 512); for (int o = 0; o < N; o += 512) { const int n = std::min (512, N - o); d.process (b.getWritePointer (0) + o, b.getWritePointer (1) + o, n, st); } return b; };
+        auto tailRms = [&] (const juce::AudioBuffer<float>& b) { return b.getRMSLevel (0, N / 2, N / 2); };
+        auto db = [] (float x) { return 20.0f * std::log10 (x + 1e-9f); };
+        {
+            kk::MixLabState st; st.band[3].on = true; st.band[3].type = kk::eqBell; st.band[3].freq = 1000; st.band[3].gain = 6; st.band[3].q = 1;
+            const float g = db (tailRms (runLab (st, sine (1000, 0.25f)))) - db (tailRms (sine (1000, 0.25f)));
+            kk::MixLabState lc; lc.band[0].on = true; lc.band[0].type = kk::eqLowCut; lc.band[0].freq = 200; lc.band[0].slope = 2;
+            const float cut = db (tailRms (runLab (lc, sine (50, 0.25f)))) - db (tailRms (sine (50, 0.25f)));
+            std::printf ("MIX LAB EQ: bell +6 at 1k -> %+.2f dB, 24 dB low cut at 200 Hz -> 50 Hz %+.1f dB\n", g, cut);
+            check (std::abs (g - 6.0f) < 0.5f && cut < -40.0f, "v0.41 SHAPE EQ: a bell boosts what it should, a 24 dB cut really cuts");
+            kk::MixLabState dy; dy.band[4].on = true; dy.band[4].type = kk::eqBell; dy.band[4].freq = 3000; dy.band[4].gain = 0; dy.band[4].q = 2; dy.band[4].dyn = 1.0f;
+            const float loud = db (tailRms (runLab (dy, sine (3000, 0.5f)))) - db (tailRms (sine (3000, 0.5f)));
+            const float quiet = db (tailRms (runLab (dy, sine (3000, 0.003f)))) - db (tailRms (sine (3000, 0.003f)));
+            std::printf ("MIX LAB DYNAMIC band: loud %+.1f dB, quiet %+.1f dB\n", loud, quiet);
+            check (loud < -6.0f && quiet > -1.0f, "v0.41 DYNAMIC EQ: cuts only when that range is loud");
+        }
+        {
+            kk::MixLabState st; st.compOn = true; st.compStyle = kk::csClean; st.thresh = -20; st.ratio = 4; st.knee = 0; st.attack = 2; st.release = 50; st.autoGain = false; st.scHp = false;
+            auto out = runLab (st, sine (220, 0.5f));
+            const float gr = db (tailRms (sine (220, 0.5f))) - db (tailRms (out));
+            std::printf ("MIX LAB COMP: -6 dBFS sine, -20 dB threshold 4:1 -> %.1f dB less (meter %.1f)\n", gr, st.mGr.load());
+            check (gr > 7.0f && gr < 13.0f && st.mGr.load() < -6.0f, "v0.41 PUNCH COMP: it compresses by the ratio above the threshold");
+            for (int s2 = 0; s2 < kk::numCompStyles; ++s2) { st.compStyle = s2; auto o2 = runLab (st, sine (220, 0.5f)); check (o2.getMagnitude (0, N) < 1.2f && std::isfinite (o2.getRMSLevel (0, 0, N)), "v0.41 PUNCH COMP: every character is stable"); }
+        }
+        {
+            int changed = 0; bool finite = true; float silentOut = 0;
+            for (int m = 0; m < kk::numTm; ++m)
+            {
+                kk::MixLabState st; st.tmOn = true; st.tmModOn[(size_t) m] = true; st.tmAmt[(size_t) m] = 0.8f;
+                auto in = sine (440, 0.3f); auto out = runLab (st, in);
+                float diff = 0; for (int i = N / 2; i < N; ++i) diff += std::abs (out.getSample (0, i) - in.getSample (0, i));
+                changed += diff / (N / 2) > 0.003f; finite &= std::isfinite (out.getRMSLevel (0, 0, N)) && out.getMagnitude (0, N) < 1.5f;
+                juce::AudioBuffer<float> z (2, N); z.clear(); auto zo = runLab (st, z); silentOut = std::max (silentOut, zo.getMagnitude (0, N));
+            }
+            std::printf ("TIME MACHINE: %d of 6 modules change the sound, silence -> peak %.6f\n", changed, silentOut);
+            check (changed == 6 && finite && silentOut < 1e-4f, "v0.41 TIME MACHINE: all six modules colour the sound, silence stays silent (the noise follows the music)");
+            kk::MixLabState st; kk::applyEra (st, 0.0f);
+            check (st.tmLp.load() < 6000.0f && st.tmMono.load() > 0.9f && st.tmModOn[kk::tmNoise].load(), "v0.41 ERA: the oldest machine is narrow, mono and noisy");
+            kk::applyEra (st, 5.0f / 7.0f);
+            int anyOn = 0; for (auto& o : st.tmModOn) anyOn += o.load();
+            check (anyOn == 0 && st.tmLp.load() > 19000.0f, "v0.41 ERA: CLEAN (2026) is clean");
+        }
+        {
+            // the COACH: a spectrum with far too much low mid -> it says so, the FIX puts a cut there
+            const int bins = 2049; const float sr = 44100.0f, hz = sr * 0.5f / (bins - 1);
+            std::vector<float> pw ((size_t) bins);
+            for (int b = 1; b < bins; ++b) { const float f = b * hz; pw[(size_t) b] = 1e-4f / std::max (30.0f, f) * (f > 150 && f < 400 ? 40.0f : 1.0f) * (f < 60 ? 3.0f : 1.0f); }
+            kk::MixLabState st; st.mRms = 0.1f; st.mPeak = 0.4f; st.mCrest = 12; st.mCorr = 0.8f; st.mWidth = 0.3f;
+            auto rd = kk::coach::read (pw, sr, st);
+            auto tips = kk::coach::advise (rd, 0, true);
+            bool saw = false; for (auto& t : tips) if (t.fix == kk::coach::fixRegionCut && t.region == kk::coach::rLowMid) { saw = true; kk::coach::applyFix (st, t); }
+            int cutBand = -1; for (int b = 0; b < kk::MixLabState::numBands; ++b) if (st.band[(size_t) b].on.load() && st.band[(size_t) b].gain.load() < -1 && st.band[(size_t) b].freq.load() > 150 && st.band[(size_t) b].freq.load() < 400) cutBand = b;
+            check (saw && cutBand >= 0, "v0.41 COACH: hears too much low mids and FIX cuts there");
+            st.mPeak = 1.0f; auto t2 = kk::coach::advise (kk::coach::read (pw, sr, st), 0, true);
+            check (! t2.empty() && t2[0].fix == kk::coach::fixLower && t2[0].severity == 3, "v0.41 COACH: hitting 0 dB is the first thing it tells you");
+            // key from harmonic tones (A minor triad with saw-like harmonics)
+            std::vector<float> k2 ((size_t) bins, 1e-12f);
+            for (int note : { 57, 60, 64, 69, 45 })
+                for (int h = 1; h <= 8; ++h) { const float f = 440.0f * std::pow (2.0f, (note - 69) / 12.0f) * h; const int b = (int) std::round (f / hz); if (b < bins) k2[(size_t) b] += 1.0f / (h * h); }
+            st.mPeak = 0.5f; auto rk = kk::coach::read (k2, sr, st);
+            std::printf ("COACH key: %d %s (conf %.3f)\n", rk.key, rk.minor ? "minor" : "major", rk.keyConf);
+            check (rk.key == 9 && rk.minor, "v0.41 COACH: finds A minor from harmonic tones");
+            // AUTO EQ + EVOLVE
+            kk::MixLabState a2; a2.mRms = 0.1f; a2.mPeak = 0.4f;
+            check (kk::coach::autoEq (a2, kk::coach::read (pw, sr, a2), 0).contains ("moves"), "v0.41 AUTO EQ makes moves on an unbalanced sound");
+            auto base = kk::coach::snap (a2); int differ = 0;
+            for (int k = 0; k < 4; ++k) { auto m = kk::coach::mutate (base, 100u + (uint32_t) k, 0.5f); float d = 0; for (float f : { 100.0f, 500.0f, 2000.0f, 8000.0f }) d += std::abs (kk::coach::curveDb (m, f, sr) - kk::coach::curveDb (base, f, sr)); differ += d > 1.0f; }
+            check (differ == 4, "v0.41 EQ EVOLVE: four different curves grow from yours");
+        }
+        {
+            // SPACE: every mode makes a tail that lasts after the sound stops, FREEZE holds it, nothing blows up; ECHO lands on the beat
+            for (int mode = 0; mode < kk::numSpaceModes; ++mode)
+            {
+                kk::MixLabState st; st.spOn = true; st.spMode = mode; st.spMix = 0.5f; st.spDecay = 0.5f; st.spPre = 10;
+                juce::AudioBuffer<float> b (2, N * 2); b.clear();
+                for (int i = 0; i < 4410; ++i) { const float v = 0.4f * std::sin (kk::twoPi * 330.0f * (float) i / (float) rate); b.setSample (0, i, v); b.setSample (1, i, v); }
+                kk::MixLabDsp d; d.prepare (rate, 512);
+                for (int o = 0; o < N * 2; o += 512) d.process (b.getWritePointer (0) + o, b.getWritePointer (1) + o, std::min (512, N * 2 - o), st);
+                const float tail = b.getRMSLevel (0, 8820, 8820), late = b.getRMSLevel (0, N * 2 - 4410, 4410);
+                std::printf ("SPACE %-8s tail %.4f  late %.5f  peak %.3f\n", kk::spaceModeName (mode), tail, late, b.getMagnitude (0, N * 2));
+                check (tail > 0.003f && b.getMagnitude (0, N * 2) < 1.5f && std::isfinite (late), (juce::String ("v0.41 SPACE ") + kk::spaceModeName (mode) + ": a tail, stable").toRawUTF8());
+                if (mode == kk::spRoom) check (late < tail * 0.05f, "v0.41 SPACE ROOM: dies away quickly");
+            }
+            {
+                kk::MixLabState st; st.dlOn = true; st.dlMode = kk::dlDigital; st.dlMix = 1.0f; st.dlFb = 0.0f; st.dlTime = 0; st.bpm = 120.0f;   // 1/4 at 120 = 0.5 s
+                juce::AudioBuffer<float> b (2, N); b.clear(); b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f);
+                kk::MixLabDsp d; d.prepare (rate, 512);
+                for (int o = 0; o < N; o += 512) d.process (b.getWritePointer (0) + o, b.getWritePointer (1) + o, std::min (512, N - o), st);
+                int at = 0; float mx = 0; for (int i = 100; i < N; ++i) if (std::abs (b.getSample (0, i)) > mx) { mx = std::abs (b.getSample (0, i)); at = i; }
+                std::printf ("ECHO 1/4 at 120 BPM: first echo at %d samples (expected 22050)\n", at);
+                check (std::abs (at - 22050) < 30, "v0.41 ECHO: the echo lands on the beat (1/4 at 120 BPM)");
+            }
+            for (int mode = 0; mode < kk::numEchoModes; ++mode)
+            {
+                kk::MixLabState st; st.dlOn = true; st.dlMode = mode; st.dlMix = 0.6f; st.dlFb = 0.85f; st.dlTime = 1; st.bpm = 140.0f;
+                auto b = sine (500, 0.4f);
+                kk::MixLabDsp d; d.prepare (rate, 512);
+                for (int o = 0; o < N; o += 512) d.process (b.getWritePointer (0) + o, b.getWritePointer (1) + o, std::min (512, N - o), st);
+                check (std::isfinite (b.getRMSLevel (0, 0, N)) && b.getMagnitude (0, N) < 3.0f && b.getRMSLevel (0, N / 2, N / 2) > 0.05f, (juce::String ("v0.41 ECHO ") + kk::echoModeName (mode) + ": echoes, stable at high feedback").toRawUTF8());
+            }
+        }
+        {
+            KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+            p.mixLab.compOn = true; p.mixLab.thresh = -31.0f; p.mixLab.band[5].on = true; p.mixLab.band[5].freq = 4321.0f; p.mixLab.tmOn = true; p.mixLab.tmAmt[2] = 0.77f; p.coachGenre = kk::mel::gHouse;
+            juce::MemoryBlock mb; p.getStateInformation (mb);
+            KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (r2.mixLab.compOn.load() && std::abs (r2.mixLab.thresh.load() + 31.0f) < 0.01f && r2.mixLab.band[5].on.load() && std::abs (r2.mixLab.band[5].freq.load() - 4321.0f) < 0.5f
+                   && r2.mixLab.tmOn.load() && std::abs (r2.mixLab.tmAmt[2].load() - 0.77f) < 0.01f && r2.coachGenre == kk::mel::gHouse, "v0.41 MIX LAB: the project keeps every setting");
+        }
+    }
+    // v0.41 MATCH: a sound of the bank, rendered to a WAV, is found again (and every strand can be planted)
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto g = p.currentGenome();
+        p.loadPreset (17); auto target = p.renderGenomeAudio (p.currentGenome(), 44100.0, 1.6);
+        auto wf = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk_match_target.wav");
+        wf.deleteFile();
+        { juce::WavAudioFormat wav; std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (wf), 44100.0, 2, 24, {}, 0)); if (w) w->writeFromAudioSampleBuffer (target, 0, target.getNumSamples()); }
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        check (p.evoMatchStart (wf), "v0.41 MATCH: starts on a WAV");
+        while (p.matchRunning.load() && juce::Time::getMillisecondCounterHiRes() - t0 < 240000.0) juce::Thread::sleep (50);
+        auto st = p.matchStrands();
+        float best = 0; for (auto& x : st) best = std::max (best, x.match);
+        std::printf ("MATCH: %d strands, best %.0f%%, %.1f s\n", (int) st.size(), best, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+        check (st.size() == 4 && best > 85.0f, "v0.41 MATCH: four strands, the closest is very close to the sound");
+        p.evoSeedGenome (st[1].g);
+        check (! p.evo.empty() && p.evo[0].g.valid(), "v0.41 MATCH: a strand plants a new EVOLVE tree");
+        wf.deleteFile();
+        juce::ignoreUnused (g);
+    }
     // PAIR flavours change the children (same children, new flavour)
     {
         KeysKillaProcessor p (false); p.prepareToPlay (44100, 512);
