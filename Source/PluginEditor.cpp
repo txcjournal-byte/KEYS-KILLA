@@ -4426,7 +4426,7 @@ public:
             if (loopBox (k).contains (pos)) { proc.togglePairLoop (k); repaint(); return; }
             if (saveBox (k).contains (pos))
             {
-                saveToFolderMenu (proc, { proc.pairKids[(size_t) k] }, this, [safe = Component::SafePointer<PairPage> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
+                saveToFolderMenu (proc, { proc.withEdits (proc.pairKids[(size_t) k]) }, this, [safe = Component::SafePointer<PairPage> (this)] (String msg) { if (safe != nullptr) { safe->note = msg; safe->repaint(); } });
                 return;
             }
             if (kid (k).contains (pos)) { proc.selectPairKid (k, true); repaint(); return; }
@@ -7842,7 +7842,7 @@ private:
         if (proc.labAudioMode())
         {
             if (! isPositiveAndBelow (idx, (int) proc.pairKids.size())) return;
-            saveToFolderMenu (proc, { proc.pairKids[(size_t) idx] }, from, [safe = SafePointer<MainPage> (this)] (String) { if (safe != nullptr) safe->refreshState(); });
+            saveToFolderMenu (proc, { proc.withEdits (proc.pairKids[(size_t) idx]) }, from, [safe = SafePointer<MainPage> (this)] (String) { if (safe != nullptr) safe->refreshState(); });
             return;
         }
         if (! isPositiveAndBelow (idx, (int) proc.kids().size())) return;

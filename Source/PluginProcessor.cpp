@@ -1107,10 +1107,11 @@ void KeysKillaProcessor::togglePairLoop (int i)
     ++pairVer; ++labVer;
 }
 
-juce::File KeysKillaProcessor::exportPairKid (int i) const
+juce::File KeysKillaProcessor::exportPairKid (int i)
 {
     if (i < 0 || i >= (int) pairKids.size()) return {};
-    return kk::PairLab::exportWav (*pairKids[(size_t) i], sr > 0 ? sr : 44100.0, "PAIR " + juce::String (i + 1));
+    auto s = withEdits (pairKids[(size_t) i]);   // edited in EDIT? the WAV is what you hear
+    return kk::PairLab::exportWav (*s, sr > 0 ? sr : 44100.0, s != pairKids[(size_t) i] ? s->name : "PAIR " + juce::String (i + 1));
 }
 
 juce::File KeysKillaProcessor::exportPairLoop() const
@@ -2442,6 +2443,7 @@ juce::File KeysKillaProcessor::evoExportWav (int node)
 {
     if (juce::isPositiveAndBelow (node, (int) evo.size())) tasteLearn (evo[(size_t) node], 0.7f);   // you took it: MY TASTE learns
     auto snd = evoAsSound (node);
+    if (juce::isPositiveAndBelow (node, (int) evo.size()) && evo[(size_t) node].isAudio()) snd = withEdits (evo[(size_t) node].audio) == evo[(size_t) node].audio ? snd : withEdits (evo[(size_t) node].audio);
     return snd != nullptr ? kk::PairLab::exportWav (*snd, sr > 0 ? sr : 44100.0, snd->name) : juce::File();
 }
 
@@ -3957,6 +3959,20 @@ kk::PairPtr KeysKillaProcessor::editedSample()
     if (b.getNumSamples() < 8) return s;
     auto out = kk::PairLab::fromBuffer (b, rate, rate, s->name + " edit");
     return out;
+}
+
+bool KeysKillaProcessor::sampleEdited() const
+{
+    for (int i = 0; i < numSampleEdit; ++i) if (std::abs (sampleEdit[(size_t) i].load() - sampleEditDefault (i)) > 1.0e-3f) return true;
+    bool any = false; sampleFxParams (any);
+    return any;
+}
+
+kk::PairPtr KeysKillaProcessor::withEdits (kk::PairPtr s)
+{
+    if (s == nullptr || s != pairPlayer.sound() || ! sampleEdited()) return s;
+    auto e = editedSample();
+    return e != nullptr ? e : s;
 }
 
 juce::File KeysKillaProcessor::exportEditedSample()

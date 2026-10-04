@@ -808,6 +808,7 @@ public:
         styleBox.onChange = [this] { proc.coachGenre = styleBox.getSelectedId() - 2; refreshReading(); repaint(); };
         styleBox.setTooltip ("What the COACH compares your sound with");
         addAndMakeVisible (styleBox);
+        btn (testBtn, "PLAY A LOOP", "Plays a melody loop with the sound on the keys - so the COACH (and the analyzer) have something to hear", [this] { proc.toggleLoop(); });
         btn (modeSound, "MY SOUND", "The COACH judges one melodic sound (it should leave the low end to the 808)", [this] { coachMode = 0; refresh(); refreshReading(); });
         btn (modeBeat, "WHOLE BEAT", "The COACH judges a whole beat (EVOLVE on FL's master as an effect)", [this] { coachMode = 1; refresh(); refreshReading(); });
         for (int i = 0; i < 4; ++i)
@@ -914,6 +915,7 @@ public:
         // COACH
         const auto C = coachArea();
         styleBox.setBounds (C.getRight() - 172, C.getY() + 14, 158, 28);
+        testBtn.setBounds (C.getX() + 40, C.getY() + 360, C.getWidth() - 80, 40);
         modeSound.setBounds (C.getX() + 16, C.getY() + 282, (C.getWidth() - 40) / 2, 30); modeBeat.setBounds (modeSound.getRight() + 8, C.getY() + 282, (C.getWidth() - 40) / 2, 30);
         layoutFixButtons();
     }
@@ -1128,7 +1130,7 @@ private:
         g.drawText (live ? kk::coach::level (roundToInt (sc)) : "LISTENING", C.getX() + 128, C.getY() + 62, 220, 24, Justification::centredLeft);
         g.setColour (t.dim); g.setFont (kk::modern::font (12.0f, true, 0.03f));
         g.drawFittedText (live ? String (wholeBeat() ? "BEAT SCORE - " : "SOUND SCORE - ") + (proc.coachGenre >= 0 ? String ("compared with ") + kk::mel::genreName (proc.coachGenre) : String ("balanced reference")) + "\n" + String (fixes) + " fixes applied"
-                               : String ("play something: a melody, the keys,\nor your beat through EVOLVE on the master"),
+                               : String ("it hears only what comes OUT of EVOLVE:\nplay the keys, a loop - or put EVOLVE on FL's master"),
                           Rectangle<int> (C.getX() + 128, C.getY() + 88, C.getWidth() - 140, 50), Justification::topLeft, 3, 0.8f);
         // tonal balance: your sound (bars) vs the style (ticks)
         const auto bal = Rectangle<float> ((float) C.getX() + 16, (float) C.getY() + 162, (float) C.getWidth() - 32, 112);
@@ -1183,6 +1185,8 @@ private:
         if (view == 2) for (auto& c : cards) c->tick();
         if (view == 3) spaceView.tick();
         if (++frame % 8 == 0) { refreshReading(); repaint (coachArea()); }
+        testBtn.setVisible (reading.silent || proc.loopPlaying());
+        testBtn.setButtonText (proc.loopPlaying() ? "STOP THE LOOP" : "PLAY A LOOP");
     }
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     MixAnalyzer an;
@@ -1191,7 +1195,7 @@ private:
     HotButton tabSp { lnf };
     HotButton tabEq { lnf }, tabComp { lnf }, tabTm { lnf }, powEq { lnf }, powComp { lnf }, powTm { lnf };
     HotButton bandOn { lnf }, dynBtn { lnf }, autoEqBtn { lnf }, evolveEqBtn { lnf }, resetEqBtn { lnf };
-    HotButton autoGainBtn { lnf }, scBtn { lnf }, autoCompBtn { lnf }, diceTm { lnf }, modeSound { lnf }, modeBeat { lnf };
+    HotButton autoGainBtn { lnf }, scBtn { lnf }, autoCompBtn { lnf }, diceTm { lnf }, modeSound { lnf }, modeBeat { lnf }, testBtn { lnf };
     std::vector<std::unique_ptr<HotButton>> styleBtns, fixBtns;
     ComboBox typeBox, styleBox;
     std::unique_ptr<RackKnob> kThresh, kRatio, kAttack, kRelease, kKnee, kMix, kCompOut, kFreq, kGain, kQ, kDyn, kEqOut, kMag, kTmMix;

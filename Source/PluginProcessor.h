@@ -388,7 +388,7 @@ public:
     void pairBreed (bool newChildren = true);   // false: same children, only the flavour changes
     void selectPairKid (int i, bool audition);                  // the kid plays on the keys / in the loop
     void togglePairLoop (int i);                                // a new melody loop with this kid (host tempo)
-    juce::File exportPairKid (int i) const;
+    juce::File exportPairKid (int i);
     juce::File exportPairLoop() const;
     std::array<kk::PairPtr, kk::PairLab::maxParents> pairParents;
     std::vector<kk::PairPtr> pairKids;
@@ -413,6 +413,8 @@ public:
     juce::AudioBuffer<float> renderEditedSample (kk::PairPtr s);  // the sample with SAMPLE EDIT + the knobs, offline (drag / save)
     kk::PairPtr editedSample();                                  // the active sample as edited (for SAVE / DRAG)
     juce::File exportEditedSample();
+    bool sampleEdited() const;                                   // v0.42: EDIT changed the sound on the keys
+    kk::PairPtr withEdits (kk::PairPtr s);                       // s as you hear it: with the EDIT changes when s is the sound on the keys
 
     // ---------------- v0.37 FX EVOLVE (SURPRISE FX) + STEP FX ----------------
     FxGenome fxCurrent() const;

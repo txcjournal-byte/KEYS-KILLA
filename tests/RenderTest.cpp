@@ -1088,6 +1088,19 @@ static int unitTests()
         std::printf ("LISTEN AUDIO: inputs %d, %d notes, key %d, from %s\n", p.getTotalNumInputChannels(), (int) p.melMine.notes.size(), p.melMine.key, p.melListenSource.toRawUTF8());
         check (p.melHasMine && p.melListenSource == "AUDIO" && p.melMine.notes.size() >= 15 && p.melMine.key == 9, "v0.42 LISTEN AUDIO: the sound of another plugin becomes the melody (A minor)");
     }
+    // v0.42: a sound edited in EDIT drags / saves as edited (not as it was before the edit)
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        juce::AudioBuffer<float> b (2, 44100);
+        for (int i = 0; i < b.getNumSamples(); ++i) { const float v = 0.5f * std::sin (kk::twoPi * 261.63f * (float) i / 44100.0f) * std::exp (-(float) i / 15000.0f); b.setSample (0, i, v); b.setSample (1, i, v); }
+        auto snd = kk::PairLab::fromBuffer (b, 44100.0, 44100.0, "kid");
+        p.useSample (snd, false);
+        check (p.withEdits (snd) == snd, "v0.42 EDIT: an unedited sound drags as it is");
+        p.sampleEdit[KeysKillaProcessor::seTune] = 7.0f;
+        auto e = p.withEdits (snd);
+        check (e != snd && e != nullptr && e->audio.getNumSamples() < snd->audio.getNumSamples() * 0.8, "v0.42 EDIT: the edited sound (tune +7) is what drags / saves");
+        p.resetSampleEdit();
+    }
     // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
     {
         KeysKillaProcessor p; p.prepareToPlay (44100, 512);
