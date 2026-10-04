@@ -692,12 +692,11 @@ static int unitTests()
         const auto& kidsIdx = p.evo[0].kids;
         int withFx = 0, withLoop = 0;
         for (int k : kidsIdx) { const auto& n = p.evo[(size_t) k]; for (auto o : n.fx.on) if (o) { ++withFx; break; } withLoop += n.g.loop.valid ? 1 : 0; }
-        check (kidsIdx.size() == 6 && withLoop == 6 && withFx >= 3, "v0.38 IDEA: children carry a melody and effects");
+        check (kidsIdx.size() == 6 && withFx >= 3, "v0.38 IDEA: children carry effects");
         const int kid = kidsIdx[3];
         auto idea = p.renderIdea (kid, 44100.0);
-        const double expect = 44100.0 * 60.0 / 140.0 * 16.0;
-        check (idea.getNumSamples() > (int) expect && idea.getMagnitude (0, idea.getNumSamples()) > 0.05f && idea.getMagnitude (0, idea.getNumSamples()) <= 1.0f,
-               "v0.38 IDEA: the whole idea renders as a 4-bar loop");
+        check (idea.getNumSamples() > 44100 && idea.getMagnitude (0, idea.getNumSamples()) > 0.05f && idea.getMagnitude (0, idea.getNumSamples()) <= 1.0f,
+               "v0.40 IDEA: the sound renders through its effects");
         check (p.evoExportIdea (kid).existsAsFile(), "v0.38 IDEA: the idea drags out as a WAV");
         // MY TASTE: when it knows what you like, the six it keeps are closer to it
         const auto target = p.evoDescribe (p.evo[(size_t) kidsIdx[1]]);
@@ -740,32 +739,15 @@ static int unitTests()
         p.tasteLoaded = true; p.taste = {}; p.evoTasteAmt = 0.0f;
         p.evoSeedPreset (20);
         const auto c = p.evo[(size_t) p.evoCenter];
-        // only the MELODY: same sound, same effects, other melodies
-        p.evoLayer = KeysKillaProcessor::layerMelody; p.evoGrow (p.evoCenter, true);
-        int sameSound = 0, otherMel = 0, sameFx = 0;
-        for (int k : p.evo[(size_t) p.evoCenter].kids) { const auto& n = p.evo[(size_t) k]; sameSound += n.g.v == c.g.v; otherMel += ! (n.g.loop == c.g.loop); sameFx += n.fx.on == c.fx.on; }
-        check (sameSound == 6 && otherMel >= 4 && sameFx == 6, "v0.39 LAYERS: MELODY changes only the melodies");
-        p.evoLayer = KeysKillaProcessor::layerBeat; p.evoGrow (p.evoCenter, true);
-        int otherBeat = 0; for (int k : p.evo[(size_t) p.evoCenter].kids) otherBeat += p.evo[(size_t) k].beat.kick != c.beat.kick || p.evo[(size_t) k].beat.hat != c.beat.hat;
-        check (otherBeat >= 5, "v0.39 LAYERS: BEAT changes the beats");
+        // only the EFFECTS: same sound, other effect chains
+        p.evoLayer = KeysKillaProcessor::layerFx; p.evoGrow (p.evoCenter, true);
+        int sameSound = 0, otherFx = 0;
+        for (int k : p.evo[(size_t) p.evoCenter].kids) { const auto& n = p.evo[(size_t) k]; sameSound += n.g.v == c.g.v; otherFx += n.fx.on != c.fx.on || n.fx.v != c.fx.v; }
+        check (sameSound == 6 && otherFx >= 5, "v0.40 LAYERS: FX changes only the effects");
         p.evoLayer = KeysKillaProcessor::layerAll; p.evoGrow (p.evoCenter, true);
-        // the beat: hits on every bar, plays with the idea, exports as MIDI
-        const auto hits = kk::beatHits (kk::beatFromSeed (77), 4);
-        int kicks = 0, snares = 0, hats = 0; for (auto& h : hits) { kicks += h.drum == 0; snares += h.drum == 1; hats += h.drum == 2; }
-        check (kicks >= 4 && snares >= 4 && hats >= 32, "v0.39 BEAT: kicks, snares on 3, hats with rolls");
-        p.evoActive = true; p.evoIdea = true; p.evoBeat = true;
-        p.evoAudition (p.evoCenter, false); p.toggleLoop();
-        juce::AudioBuffer<float> b (2, 512); float pk = 0; bool fin = true;
-        for (int i = 0; i < 300; ++i) { juce::MidiBuffer m; p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, 512)); for (int s2 = 0; s2 < 512; ++s2) fin &= std::isfinite (b.getSample (0, s2)); }
-        p.stopLoop();
-        check (fin && pk > 0.05f && pk <= 1.0f, "v0.39 BEAT: the idea plays with its beat, clean");
-        for (int part = 0; part < 3; ++part)
-        {
-            const auto f = p.evoExportPart (p.evoCenter, part);
-            juce::MidiFile mf; juce::FileInputStream in (f);
-            const bool ok = f.existsAsFile() && in.openedOk() && mf.readFrom (in) && mf.getNumTracks() == 1 && mf.getTrack (0)->getNumEvents() > 4;
-            check (ok, part == 0 ? "v0.39 TRACK: MELODY drags out" : part == 1 ? "v0.39 TRACK: BASS drags out" : "v0.39 TRACK: BEAT drags out");
-        }
+        // the idea (sound + FX) drags out as a one-shot
+        const auto iw = p.evoExportIdea (p.evo[(size_t) p.evoCenter].kids[0]);
+        check (iw.existsAsFile() && iw.getSize() > 10000, "v0.40: SOUND + FX drags out as a WAV");
         // POCKET + a cross between two trees
         p.evoPocketAdd (p.evo[(size_t) p.evoCenter].kids[2]);
         check (p.pocket.size() == 1, "v0.39 POCKET keeps an idea");
@@ -788,13 +770,85 @@ static int unitTests()
         check (p.evoSaveWorld (wf), "v0.39 WORLD saves");
         KeysKillaProcessor q; q.prepareToPlay (44100, 512);
         check (q.evoLoadWorld (wf) && q.evo.size() == p.evo.size() && q.evoCenter == p.evoCenter && q.pocket.size() == 1, "v0.39 WORLD opens with every idea, the middle and the POCKET");
-        bool beatsSame = true; for (size_t i = 0; i < p.evo.size() && i < q.evo.size(); ++i) beatsSame &= p.evo[i].beat.kick == q.evo[i].beat.kick && p.evo[i].picked == q.evo[i].picked;
-        check (beatsSame, "v0.39 WORLD keeps the beats and your way");
+        bool sameWay = true; for (size_t i = 0; i < p.evo.size() && i < q.evo.size(); ++i) sameWay &= p.evo[i].picked == q.evo[i].picked && p.evo[i].fx.on == q.evo[i].fx.on;
+        check (sameWay, "v0.39 WORLD keeps the effects and your way");
         juce::MemoryBlock mb; p.getStateInformation (mb);
         KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
         check (r2.pocket.size() == 1 && r2.evo.size() == p.evo.size(), "v0.39: the project keeps the tree and the POCKET");
         wf.deleteFile();
         if (keepTaste.isEmpty()) tf.deleteFile(); else tf.replaceWithText (keepTaste);
+    }
+    // v0.40 MELODY: in the key, singable, variations, your melody (key found), LISTEN from FL, plays with the sound, MIDI out
+    {
+        using namespace kk::mel;
+        int outOfKey = 0, wideRange = 0; double meanInt = 0; int cnt = 0;
+        for (int sc = 0; sc < numScales; ++sc)
+            for (int k = 0; k < 12; k += 5)
+            {
+                Style st; auto m = generate (100u + (uint32_t) (sc * 31 + k), k, sc, 8, st);
+                const auto& steps = scaleSteps (sc);
+                int lo = 127, hi = 0;
+                for (size_t i = 0; i < m.notes.size(); ++i)
+                {
+                    const int pc = ((m.notes[i].pitch - k) % 12 + 12) % 12;
+                    outOfKey += std::find (steps.begin(), steps.end(), pc) == steps.end();
+                    lo = std::min (lo, m.notes[i].pitch); hi = std::max (hi, m.notes[i].pitch);
+                    if (i) { meanInt += std::abs (m.notes[i].pitch - m.notes[i - 1].pitch); ++cnt; }
+                }
+                wideRange += hi - lo > 26;
+                for (int v = 0; v < 8; ++v)
+                {
+                    auto c = vary (m, v, 55u + (uint32_t) v, 0.5f, st);
+                    for (auto& n : c.notes) { const int pc = ((n.pitch - k) % 12 + 12) % 12; outOfKey += std::find (steps.begin(), steps.end(), pc) == steps.end(); }
+                }
+            }
+        std::printf ("MELODY: mean step %.2f semitones, %d melodies wider than 2 octaves, %d notes out of key\n", meanInt / std::max (1, cnt), wideRange, outOfKey);
+        check (outOfKey == 0, "v0.40 MELODY: every note (and every child's note) is in the key");
+        check (meanInt / std::max (1, cnt) < 5.0 && wideRange <= 3, "v0.40 MELODY: singable lines (small steps, not too wide)");
+        Style st; auto m = generate (7, 9, scMinor, 8, st);
+        int differ = 0; for (int v = 0; v < 8; ++v) { auto c = vary (m, v, 99u + (uint32_t) v, 0.5f, st); bool same = c.notes.size() == m.notes.size(); if (same) for (size_t i = 0; i < c.notes.size(); ++i) same &= c.notes[i].pitch == m.notes[i].pitch && std::abs (c.notes[i].start - m.notes[i].start) < 1e-4f; differ += ! same; }
+        check (differ >= 7, "v0.40 MELODY: the 8 children are 8 different variations");
+        // your melody: key detection (A minor, E major)
+        std::vector<Note> am; const int ap[] { 69, 72, 76, 74, 72, 71, 69, 64, 69, 72, 76, 79, 77, 76, 74, 72, 69 };
+        for (int i = 0; i < 17; ++i) am.push_back ({ 8.0f + (float) i * 0.5f, i == 16 ? 2.0f : 0.45f, ap[i], 0.8f });
+        auto mine = fromNotes (am, 0);
+        check (mine.key == 9 && mine.scale == scMinor && mine.bars == 4 && std::abs (mine.notes[0].start) < 1e-4f, "v0.40 MELODY: your melody - A minor found, moved to bar 1");
+        std::vector<Note> em; const int ep[] { 64, 66, 68, 69, 71, 73, 75, 76, 71, 68, 64, 76 };
+        for (int i = 0; i < 12; ++i) em.push_back ({ (float) i * 0.5f, 0.45f, ep[i], 0.8f });
+        auto emj = fromNotes (em, 0);
+        check (emj.key == 4 && emj.scale == scMajor, "v0.40 MELODY: E major found");
+        // in the plugin: LISTEN to FL, GENERATE from it, play it with the sound, MIDI out
+        KeysKillaProcessor p; p.setCurrentProgram (3); p.prepareToPlay (44100, 512);
+        p.melListen (true);
+        juce::AudioBuffer<float> b (2, 512);
+        const double spb = 44100.0 * 60.0 / 140.0;   // samples per beat (no host: 140 BPM)
+        for (int blk = 0; blk < 360; ++blk)
+        {
+            juce::MidiBuffer mb;
+            for (int i = 0; i < 17; ++i)
+            {
+                const int on = (int) (i * 0.5 * spb), off = (int) ((i * 0.5 + 0.45) * spb);
+                if (on >= blk * 512 && on < (blk + 1) * 512) mb.addEvent (juce::MidiMessage::noteOn (1, ap[i], (juce::uint8) 100), on - blk * 512);
+                if (off >= blk * 512 && off < (blk + 1) * 512) mb.addEvent (juce::MidiMessage::noteOff (1, ap[i]), off - blk * 512);
+            }
+            p.processBlock (b, mb);
+        }
+        p.melListen (false);
+        std::printf ("LISTEN: heard %d, kept %d notes, key %d scale %d\n", p.melHeardNotes(), (int) p.melMine.notes.size(), p.melMine.key, p.melMine.scale);
+        check (p.melHasMine && p.melMine.notes.size() >= 15 && p.melMine.key == 9, "v0.40 MELODY: LISTEN catches the melody FL plays (A minor)");
+        p.melFromMine = true; p.melGenerate();
+        check (p.melShown.size() == 8 && p.melParent == 0 && p.mels[0].how == "YOURS", "v0.40 MELODY: 8 variations of your melody");
+        p.melFromMine = false; p.melKey = 2; p.melScale = scDorian; p.melBars = 16; p.melGenerate();
+        check (p.melShown.size() == 8 && p.mels[(size_t) p.melShown[3]].bars == 16 && p.mels[(size_t) p.melShown[3]].key == 2, "v0.40 MELODY: SURPRISE ME in D dorian, 16 bars");
+        p.melEvolve (p.melShown[2], false);
+        check (p.melParent >= 0 && p.melShown.size() == 8 && p.mels[(size_t) p.melShown[0]].gen == 2, "v0.40 MELODY: a click grows 8 children");
+        p.melPlay (p.melShown[1]);
+        float pk = 0; for (int i = 0; i < 300; ++i) { juce::MidiBuffer mb; p.processBlock (b, mb); pk = std::max (pk, b.getMagnitude (0, 512)); }
+        check (p.loopPlaying() && pk > 0.02f, "v0.40 MELODY: the melody plays with the sound on the keys");
+        p.melPlay (-1);
+        const auto f = p.melExport (p.melShown[1]);
+        juce::MidiFile mf; juce::FileInputStream in (f);
+        check (f.existsAsFile() && in.openedOk() && mf.readFrom (in) && mf.getTrack (0)->getNumEvents() > 10, "v0.40 MELODY: drags out as MIDI");
     }
     // PAIR flavours change the children (same children, new flavour)
     {
@@ -1100,7 +1154,7 @@ static int unitTests()
         KeysKillaProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
         bool same = q.treeKids().size() == p.treeKids().size() && q.ancestor (0).name == p.ancestor (0).name && ! q.ancestor (2).valid();
         for (size_t i = 0; same && i < p.treeKids().size(); ++i) same &= q.treeKids()[i].g.loop == p.treeKids()[i].g.loop;
-        check (same && q.getTreeMode() == KeysKillaProcessor::treeLoop && q.loopBars() == 16 && q.loopKey() == 5, "family tree survives save / load");
+        check (same && q.getTreeMode() == KeysKillaProcessor::treeSound && q.loopBars() == 16 && q.loopKey() == 5, "family tree survives save / load (v0.40: sounds only)");
         std::printf ("FAMILY TREE: %s, %d notes exported\n", f.getFileName().toRawUTF8(), notes);
     }
     // ERA / FUTURE / BREED extremes stay finite and bounded on every category

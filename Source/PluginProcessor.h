@@ -15,7 +15,7 @@
 #include "PairLab.h"
 #include "Harvest.h"
 #include "VstHost.h"
-#include "TrapDrums.h"
+#include "MelodyGen.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -141,7 +141,6 @@ public:
         Genome g;                    // synth sound (bank seeds); g.loop = its melody
         kk::PairPtr audio;           // audio sound (WAV seeds and their family)
         FxGenome fx;                 // v0.38 IDEA: its effect chain (sound + melody + FX evolve together)
-        kk::BeatGenes beat;          // v0.39 TRACK: its beat (kick / snare / hats) - the idea is a whole 4-bar track
         bool picked = false;         // you chose it (the MAP shows your way)
         juce::String file;           // an audio node kept as a WAV (POCKET / WORLD files)
         int parent = -1, gen = 0;
@@ -158,11 +157,8 @@ public:
     juce::File evoExportIdea (int node);                         // the whole idea as a loop WAV (bars at the project tempo)
     juce::AudioBuffer<float> renderIdea (int node, double rate);
     // v0.39 LAYERS: what the next children change - ALL, only the SOUND, only the MELODY, only the FX, only the BEAT
-    enum { layerAll, layerSound, layerMelody, layerFx, layerBeat };
+    enum { layerAll, layerSound, layerMelody, layerFx };   // layerMelody is not used any more (v0.40: melodies have their own page)
     int evoLayer = layerAll;
-    std::atomic<bool> evoBeat { true };                          // the beat plays with the ideas (IDEA MODE)
-    void setBeat (const kk::BeatGenes& b);                       // the drums the loop plays (message thread)
-    juce::File evoExportPart (int node, int part);               // 0 melody, 1 bass, 2 beat - MIDI, C minor, project tempo
     // POCKET: keep ideas from any tree; drop one onto a bubble = a cross between two trees
     std::vector<EvoNode> pocket;
     void evoPocketAdd (int node);
@@ -214,6 +210,7 @@ public:
     juce::String evoName (const EvoNode& parent, int k, uint32_t seed) const;
     kk::PairPtr childAsSound (int i);                          // a bank child rendered as a sound (save / drag)
     juce::File exportChildWav (int i);
+    juce::File exportGenomeWav (const Genome& g);                 // any bank / bred sound as a WAV (drag into FL)
     void genomeParentSet (int slot);
     juce::AudioBuffer<float> renderGenomeAudio (const Genome& g, double rate, double seconds);
     void setParentChild (int slot, int childIndex);
@@ -240,6 +237,29 @@ public:
     std::atomic<int> arpCurStep { -1 };               // playing arp step (UI)
     float breedWild = 0.25f;                          // WILD rail: 0 safe ... 1 crazy
     void resetParams (const juce::StringArray& ids);  // back to the sound as it was loaded
+
+    // ---------------- v0.40 MELODY EVOLVE: melodies have their own page ----------------
+    // SURPRISE ME: 8 melodies in your key / scale / bars.  FROM MY MELODY: your melody from FL (LISTEN, or a dropped .mid)
+    // -> its key is found -> 8 variations.  Click one = it becomes the parent, 8 children grow.  Drag = MIDI into FL.
+    std::vector<kk::mel::Melody> mels;
+    std::vector<int> melShown;                 // the 8 on screen
+    int melParent = -1, melPlaying = -1;
+    kk::mel::Melody melMine; bool melHasMine = false, melFromMine = false;
+    int melKey = 0, melScale = kk::mel::scMinor, melBars = 8;
+    kk::mel::Style melStyle;
+    std::atomic<int> melVer { 0 };
+    void melGenerate();                        // 8 new (SURPRISE ME or from your melody)
+    void melEvolve (int idx, bool reroll);     // it becomes the parent: 8 children
+    void melBack();
+    void melPlay (int idx);                    // -1 = stop.  The melody plays the sound on the keys, in time
+    void melPlayMine();
+    juce::File melExport (int idx);            // a .mid for FL (the name says key, scale, tempo)
+    juce::File melSave (int idx);              // into Documents/KEYS KILLA/Melodies
+    void melListen (bool on);                  // LISTEN: catch the melody FL plays into this plugin
+    bool melListening() const { return melListenOn.load(); }
+    int  melHeardNotes() const { return melHeard.load(); }
+    bool melLoadMidiFile (const juce::File& f);
+    void playCustomLoop (const std::vector<kk::LoopNote>& notes, double lenBeats);
 
     // ---------------- FAMILY TREE: up to 4 sounds -> BREED -> 6 new sounds or 6 melody loops ----------------
     static constexpr int numAncestors = 4;
@@ -503,9 +523,6 @@ private:
     int modBlock = 0, lastPlayMode = 0, reportedLatency = 0;
     kk::WorldStage worldStage;
     kk::PairLab pairPlayer;
-    kk::TrapDrums trapDrums;                                     // v0.39: the beat of an EVOLVE idea
-    juce::SpinLock beatLock; std::vector<kk::BeatHit> beatSeq; std::atomic<bool> beatSet { false };
-    double beatLastB = -1.0;
     std::unique_ptr<kk::FxRack> extFx { std::make_unique<kk::FxRack>() };   // v0.37: the knobs / SAMPLE EDIT on your sounds
     std::vector<float> extL, extR, extG;
     int extTail = 0;
@@ -519,6 +536,10 @@ private:
     // flip player
     juce::SpinLock flipLock; std::vector<FlipStep> flipSeq; double flipOrigin = 0; int flipLastStep = -1;
     juce::File sessionDir() const;
+    // MELODY: a custom loop (the loop player plays these notes instead of a generated loop) + LISTEN capture
+    bool customLoop = false; std::vector<kk::LoopNote> customSeq; double customLen = 32.0;
+    struct RecEv { double beat; int note; bool on; float vel; };
+    juce::SpinLock recLock; std::vector<RecEv> rec; std::atomic<bool> melListenOn { false }; std::atomic<int> melHeard { 0 };
     juce::String activeSampleFile;                               // the active sample, kept with the project
     const void* activeSampleSaved = nullptr;
     juce::ThreadPool harvestPool { 1 };
