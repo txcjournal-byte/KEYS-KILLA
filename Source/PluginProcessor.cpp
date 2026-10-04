@@ -52,11 +52,17 @@ struct KeysKillaProcessor::Idx
 };
 
 KeysKillaProcessor::KeysKillaProcessor (bool withModules)
+#if KK_FX_BUILD
+    // EVOLVE FX: an effect - the input is always on (the track / master comes in, MIX LAB + COACH work on it)
+    : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+#else
     : AudioProcessor (juce::PluginHostType::getPluginLoadedAs() == juce::AudioProcessor::wrapperType_AudioUnit
                           ? BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                           // VST3: an optional audio input - KEYS KILLA in an FL mixer insert puts VOODOO / EFFECTOR on that track
                           : BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), false)
                                              .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+#endif
       apvts (*this, nullptr, "KEYSKILLA", createLayout())
 {
     for (auto& p : playing) p = false;

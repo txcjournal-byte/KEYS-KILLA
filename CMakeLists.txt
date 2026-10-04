@@ -84,6 +84,49 @@ target_link_libraries(KeysKilla
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
+# v0.42 EVOLVE FX: the same plugin as an EFFECT (FL's mixer lists only effects) - for the MASTER / a track:
+# MIX LAB + COACH on your whole beat, LISTEN hears another plugin's sound.  Its own codes, never change them.
+juce_add_plugin(EvolveFX
+    COMPANY_NAME "${KK_COMPANY_NAME}"
+    BUNDLE_ID com.808killa.evolvefx
+    PLUGIN_MANUFACTURER_CODE ${KK_MANUFACTURER_CODE}
+    PLUGIN_CODE Kkfx
+    PRODUCT_NAME "EVOLVE FX"
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    VST3_CATEGORIES Fx
+    AU_MAIN_TYPE kAudioUnitType_MusicEffect
+    FORMATS VST3 AU
+    COPY_PLUGIN_AFTER_BUILD FALSE)
+target_sources(EvolveFX PRIVATE
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp
+    Source/Presets.cpp)
+target_compile_definitions(EvolveFX PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_USE_MP3AUDIOFORMAT=1
+    JUCE_USE_FLAC=1
+    JUCE_PLUGINHOST_VST3=1
+    $<$<PLATFORM_ID:Darwin>:JUCE_PLUGINHOST_AU=1>
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    KK_FX_BUILD=1
+    KK_VERSION_STRING="${PROJECT_VERSION}")
+target_link_libraries(EvolveFX
+    PRIVATE
+        KeysKillaAssets
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_opengl
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags)
+
 # --- Offline render test (sanity check of all factory presets) ---------------
 option(KK_BUILD_TESTS "Build render test" ON)
 if(KK_BUILD_TESTS)

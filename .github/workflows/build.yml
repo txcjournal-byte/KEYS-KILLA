@@ -28,7 +28,7 @@ jobs:
         run: cmake -B build -A x64 -DKK_BUILD_TESTS=OFF
 
       - name: Build plugin
-        run: cmake --build build --config Release --parallel --target KeysKilla_VST3 KeysKilla_Standalone
+        run: cmake --build build --config Release --parallel --target KeysKilla_VST3 KeysKilla_Standalone EvolveFX_VST3
 
       - name: Installer
         shell: pwsh
@@ -45,7 +45,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item (Get-ChildItem build\installer\*.exe | Select-Object -First 1).FullName out\KEYS-KILLA-Setup-Windows.exe
-          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
+          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3","build\EvolveFX_artefacts\Release\VST3\EVOLVE FX.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
           $notes = "Latest test build`n`nCommit: ${{ github.sha }}`nBranch: ${{ github.ref_name }}`nBuilt: $(Get-Date -Format u)"
           gh release view test *> $null
           if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "EVOLVE - latest test build" --notes $notes --target ${{ github.sha }} }
