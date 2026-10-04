@@ -1143,6 +1143,60 @@ static int unitTests()
         for (int i = 0; i < 100; ++i) { juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, mb); pk = std::max (pk, b.getMagnitude (0, 512)); }
         check (pk > 0.01f, "v0.42 SOUND WORLD: the hybrid plays on the keys");
     }
+    // v0.42 EVOLVE FX PRO modules: REMIX REEL, DIAL-UP, WARP DRIVE, FINAL BOSS
+    {
+        const double rate = 44100.0; const int N = 44100 * 2;
+        auto tone = [&] (float hz, float amp) { juce::AudioBuffer<float> b (2, N); for (int i = 0; i < N; ++i) { const float v = amp * std::sin (kk::twoPi * hz * (float) i / (float) rate) * (0.6f + 0.4f * std::sin ((float) i * 0.0007f)); b.setSample (0, i, v); b.setSample (1, i, v); } return b; };
+        auto zc = [] (const juce::AudioBuffer<float>& b, int from) { int z = 0; for (int i = from + 1; i < b.getNumSamples(); ++i) z += (b.getSample (0, i - 1) < 0) != (b.getSample (0, i) < 0); return z; };
+        {   // REEL: a 1/8 roll on every step changes the music, stays finite
+            kk::pro::ReelState st; st.on = true; for (int s2 = 0; s2 < 16; ++s2) st.grid[kk::pro::rrLoop][(size_t) s2] = 3;
+            kk::pro::ReelDsp d; d.prepare (rate);
+            auto in = tone (330, 0.4f), out = in;
+            const double bps = 120.0 / 60.0 / rate;
+            for (int o = 0; o < N; o += 512) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (512, N - o), st, bps * o, bps);
+            float diff = 0; for (int i = N / 2; i < N; ++i) diff += std::abs (out.getSample (0, i) - in.getSample (0, i));
+            check (diff / (N / 2) > 0.01f && std::isfinite (out.getRMSLevel (0, 0, N)) && out.getMagnitude (0, N) < 1.5f, "v0.42 REMIX REEL: the steps re-cut the music");
+            int changedPresets = 0; for (int pr = 0; pr < 5; ++pr) { st.preset (pr); int cells = 0; for (auto& row : st.grid) for (auto& c : row) cells += c.load() != 0; changedPresets += cells > 0; }
+            check (changedPresets == 5, "v0.42 REMIX REEL: five ready patterns");
+        }
+        {   // DIAL-UP: a phone line cuts the highs; every mode stays safe
+            for (int m = 0; m < kk::pro::numDialModes; ++m)
+            {
+                kk::pro::DialState st; st.on = true; st.applyMode (m); st.signal = 0.0f;
+                kk::pro::DialDsp d; d.prepare (rate);
+                auto hi = tone (9000, 0.3f), out = hi;
+                for (int o = 0; o < N; o += 512) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (512, N - o), st);
+                const float att = 20.0f * std::log10 ((out.getRMSLevel (0, N / 2, N / 2) + 1e-9f) / hi.getRMSLevel (0, N / 2, N / 2));
+                if (m == kk::pro::dmLandline) std::printf ("DIAL-UP LANDLINE: 9 kHz %.1f dB\n", att);
+                check ((m == kk::pro::dmVoiceNote || att < -12.0f) && std::isfinite (att) && out.getMagnitude (0, N) < 1.2f, (juce::String ("v0.42 DIAL-UP ") + kk::pro::dialModeName (m) + ": phone band, safe").toRawUTF8());
+            }
+        }
+        {   // WARP DRIVE: an octave up doubles the pitch
+            kk::pro::WarpState st; st.on = true; st.applyMode (kk::pro::wmUp); st.mix = 1.0f;
+            kk::pro::WarpDsp d; d.prepare (rate);
+            auto in = tone (220, 0.4f), out = in;
+            for (int o = 0; o < N; o += 512) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (512, N - o), st);
+            const float ratio = (float) zc (out, N / 2) / (float) std::max (1, zc (in, N / 2));
+            std::printf ("WARP DRIVE octave up: pitch ratio %.2f\n", ratio);
+            check (ratio > 1.7f && ratio < 2.4f, "v0.42 WARP DRIVE: OCTAVE UP doubles the pitch");
+        }
+        {   // FINAL BOSS: never over the ceiling; AUTO walks toward the target loudness
+            kk::pro::BossState st; st.on = true; st.ceiling = -1.0f; st.target = kk::pro::btStreaming;
+            kk::pro::BossDsp d; d.prepare (rate);
+            auto in = tone (110, 1.6f), out = in;
+            for (int o = 0; o < N; o += 512) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (512, N - o), st);
+            std::printf ("FINAL BOSS: peak %.2f dB, short-term %.1f LUFS, auto %.1f dB, GR %.1f dB\n", 20.0f * std::log10 (out.getMagnitude (0, N)), st.mShort.load(), st.mAuto.load(), st.mGr.load());
+            check (out.getMagnitude (0, N) <= std::pow (10.0f, -1.0f / 20.0f) + 1e-4f, "v0.42 FINAL BOSS: the output never passes the ceiling (-1 dB)");
+            check (st.mAuto.load() < -0.5f && st.mShort.load() > -30.0f, "v0.42 FINAL BOSS: AUTO turns a too-loud track down toward -14 LUFS");
+        }
+        {   // state
+            KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+            p.reel.on = true; p.reel.grid[2][5] = 3; p.dial.on = true; p.dial.applyMode (kk::pro::dmWalkie); p.warp.on = true; p.warp.semis = -5; p.boss.target = kk::pro::btClub;
+            juce::MemoryBlock mb; p.getStateInformation (mb);
+            KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (r2.reel.on.load() && r2.reel.grid[2][5].load() == 3 && r2.dial.mode.load() == kk::pro::dmWalkie && std::abs (r2.warp.semis.load() + 5.0f) < 0.01f && r2.boss.target.load() == kk::pro::btClub, "v0.42 FX PRO: the project keeps the modules");
+        }
+    }
     // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
     {
         KeysKillaProcessor p; p.prepareToPlay (44100, 512);
@@ -1888,7 +1942,7 @@ int main (int argc, char** argv)
         juce::PropertiesFile (o).setValue ("theme", th.containsIgnoreCase ("night") || th == "1" ? 1 : 0);
         juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
-        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..93: the EVOLVE FX pages
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..98: the EVOLVE FX PRO pages
         {
             juce::Image kkFxSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);

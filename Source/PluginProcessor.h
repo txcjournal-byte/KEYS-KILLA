@@ -18,6 +18,7 @@
 #include "MelodyGen.h"
 #include "MixCoach.h"
 #include "SoundWorld.h"
+#include "FxPro.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -272,6 +273,10 @@ public:
     void melSetGenre (int g);                  // also picks the genre's scale and tempo
     // v0.41 MIX LAB: SHAPE EQ + PUNCH COMP + TIME MACHINE on the output, the COACH reads its meters
     kk::MixLabState mixLab;
+    // v0.42 EVOLVE FX PRO modules
+    kk::pro::ReelState reel; kk::pro::DialState dial; kk::pro::WarpState warp; kk::pro::BossState boss;
+    juce::ValueTree proToTree() const;
+    void proFromTree (const juce::ValueTree& t);
     int coachGenre = kk::mel::gTrap;
     juce::ValueTree mixToTree() const;
     void mixFromTree (const juce::ValueTree& t);
@@ -579,6 +584,7 @@ private:
     int stepLast = -1; double stepRevStart = 0; float stepHold[2] {};
     void processStepFx (juce::AudioBuffer<float>& buffer, int n, double beatPos, double bps);
     kk::MixLabDsp mixDsp;
+    kk::pro::ReelDsp reelDsp; kk::pro::DialDsp dialDsp; kk::pro::WarpDsp warpDsp; kk::pro::BossDsp bossDsp;
     // MATCH (background search)
     juce::ThreadPool matchPool { 1 };
     std::atomic<bool> matchStop { false };

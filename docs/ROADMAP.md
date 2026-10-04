@@ -17,7 +17,14 @@ Planned:
 - SONG LAB (sampler extension): song map, found sounds shelf, SAMPLE -> SYNTH, FREEZE MOMENT.
 
 ## EVOLVE FX PRO (mixer effect)
-Already in: MIX LAB, FX, CHAINS (12 + mine + EVOLVE IT), LISTEN.
+Names mix three eras: RARE (old tech), SOCIAL (today's internet) and FUTURE.
+
+Done in v0.42 (tabs): MIX LAB, FX RACK, REMIX REEL (= LOOP LAB, social), DIAL-UP (= PHONE, rare),
+WARP DRIVE (= SHIFT, future), DOODLE (= DRAW, social), FINAL BOSS (= LOUD & SAFE, rare),
+FEED (= chains, smart), NEURAL EAR (= listen -> MIDI, smart).
+
+Name ideas for the rest: FX WORLD -> ATLAS, BOUNCE -> DROPZONE, ROOM -> HOLOROOM, ARCADE -> 8-BIT ARCADE,
+UNMASK -> NO FILTER, REFERENCE MATCH -> DUPE, DUCK/PUMP -> SIDECHAIN SURF, snapshots -> SAVE STATES, XY -> JOYSTICK.
 
 Planned (1-8 first proposal):
 1. LOUD & SAFE: true-peak limiter, LUFS meter, targets STREAMING / SOUNDCLOUD / CLUB

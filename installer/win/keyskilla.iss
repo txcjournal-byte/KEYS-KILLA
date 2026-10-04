@@ -26,11 +26,12 @@ SolidCompression=yes
 ; the plugin used to be called KEYS KILLA, then BREED LAB - the old bundles go, so FL Studio sees one plugin
 Type: filesandordirs; Name: "{commoncf64}\VST3\KEYS KILLA.vst3"
 Type: filesandordirs; Name: "{commoncf64}\VST3\BREED LAB.vst3"
+Type: filesandordirs; Name: "{commoncf64}\VST3\EVOLVE FX.vst3"
 Type: filesandordirs; Name: "{commonpf64}\BREED LAB"
 
 [Files]
 Source: "..\..\build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3\*"; DestDir: "{commoncf64}\VST3\EVOLVE.vst3"; Excludes: "*.pdb,*.ilk"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\build\EvolveFX_artefacts\Release\VST3\EVOLVE FX.vst3\*"; DestDir: "{commoncf64}\VST3\EVOLVE FX.vst3"; Excludes: "*.pdb,*.ilk"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\build\EvolveFX_artefacts\Release\VST3\EVOLVE FX PRO.vst3\*"; DestDir: "{commoncf64}\VST3\EVOLVE FX PRO.vst3"; Excludes: "*.pdb,*.ilk"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\build\KeysKilla_artefacts\Release\Standalone\EVOLVE.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\EULA.txt"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -39,4 +40,4 @@ Name: "{commonprograms}\EVOLVE"; Filename: "{app}\EVOLVE.exe"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{commoncf64}\VST3\EVOLVE.vst3"
-Type: filesandordirs; Name: "{commoncf64}\VST3\EVOLVE FX.vst3"
+Type: filesandordirs; Name: "{commoncf64}\VST3\EVOLVE FX PRO.vst3"

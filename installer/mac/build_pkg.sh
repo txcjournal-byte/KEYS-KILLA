@@ -15,8 +15,8 @@ OUT="$ROOT/build/installer"
 rm -rf "$STAGE" && mkdir -p "$STAGE/Library/Audio/Plug-Ins/VST3" "$STAGE/Library/Audio/Plug-Ins/Components" "$STAGE/Applications" "$OUT"
 cp -R "$ART/VST3/EVOLVE.vst3" "$STAGE/Library/Audio/Plug-Ins/VST3/"
 cp -R "$ART/AU/EVOLVE.component" "$STAGE/Library/Audio/Plug-Ins/Components/"
-cp -R "$ROOT/build/EvolveFX_artefacts/Release/VST3/EVOLVE FX.vst3" "$STAGE/Library/Audio/Plug-Ins/VST3/" 2>/dev/null || true
-cp -R "$ROOT/build/EvolveFX_artefacts/Release/AU/EVOLVE FX.component" "$STAGE/Library/Audio/Plug-Ins/Components/" 2>/dev/null || true
+cp -R "$ROOT/build/EvolveFX_artefacts/Release/VST3/EVOLVE FX PRO.vst3" "$STAGE/Library/Audio/Plug-Ins/VST3/" 2>/dev/null || true
+cp -R "$ROOT/build/EvolveFX_artefacts/Release/AU/EVOLVE FX PRO.component" "$STAGE/Library/Audio/Plug-Ins/Components/" 2>/dev/null || true
 cp -R "$ART/Standalone/EVOLVE.app" "$STAGE/Applications/"
 
 if [ -n "${MAC_APP_SIGN_ID:-}" ]; then

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.41.1 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.42.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,14 +84,14 @@ target_link_libraries(KeysKilla
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
-# v0.42 EVOLVE FX: the same plugin as an EFFECT (FL's mixer lists only effects) - for the MASTER / a track:
+# v0.42 EVOLVE FX PRO: the same plugin as an EFFECT (FL's mixer lists only effects) - for the MASTER / a track:
 # MIX LAB + COACH on your whole beat, LISTEN hears another plugin's sound.  Its own codes, never change them.
 juce_add_plugin(EvolveFX
     COMPANY_NAME "${KK_COMPANY_NAME}"
     BUNDLE_ID com.808killa.evolvefx
     PLUGIN_MANUFACTURER_CODE ${KK_MANUFACTURER_CODE}
     PLUGIN_CODE Kkfx
-    PRODUCT_NAME "EVOLVE FX"
+    PRODUCT_NAME "EVOLVE FX PRO"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE

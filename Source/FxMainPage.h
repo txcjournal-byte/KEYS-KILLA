@@ -21,7 +21,7 @@ public:
         const auto& t = kk::theme();
         pageBackdrop (g, *this);
         g.setColour (t.text); g.setFont (kk::modern::font (30.0f, true, 0.06f));
-        g.drawText ("CHAINS", 24, 12, 220, 40, Justification::centredLeft);
+        g.drawText ("FEED", 24, 12, 220, 40, Justification::centredLeft);
         g.setColour (t.dim); g.setFont (kk::modern::font (13.5f, true, 0.04f));
         g.drawText ("one click = a whole chain of effects (MIX LAB + FX).  then change anything, EVOLVE IT, SAVE MY CHAIN", 220, 18, getWidth() - 240, 28, Justification::centredLeft);
         static const uint32 cols[] { 0xff22d3ee, 0xffff8a3d, 0xffb07a4a, 0xffa78bfa, 0xff36ff6a, 0xff4d7dff, 0xffff4fd8, 0xffff3b5c, 0xffffd23f, 0xffff4d6d, 0xff2ee6a6, 0xff7c4dff };
@@ -147,9 +147,9 @@ public:
         const auto& t = kk::theme();
         pageBackdrop (g, *this);
         g.setColour (t.text); g.setFont (kk::modern::font (30.0f, true, 0.06f));
-        g.drawText ("LISTEN", 24, 12, 220, 40, Justification::centredLeft);
+        g.drawText ("NEURAL EAR", 24, 12, 260, 40, Justification::centredLeft);
         g.setColour (t.dim); g.setFont (kk::modern::font (13.5f, true, 0.04f));
-        g.drawText ("the melody on this track (Nexus, a vocal, any plugin) becomes MIDI notes", 220, 18, getWidth() - 240, 28, Justification::centredLeft);
+        g.drawText ("the melody on this track (Nexus, a vocal, any plugin) becomes MIDI notes", 300, 18, getWidth() - 240, 28, Justification::centredLeft);
         const auto r = rollArea().toFloat();
         kk::modern::well (g, r, 12.0f);
         if (proc.melHasMine && ! proc.melMine.notes.empty())
@@ -172,7 +172,7 @@ public:
         else
         {
             g.setColour (t.dim); g.setFont (kk::modern::font (16.0f, true, 0.05f));
-            g.drawFittedText ("1.  EVOLVE FX sits on the track of the plugin that plays the melody\n2.  press LISTEN, then PLAY in FL\n3.  when the melody has played once, press LISTEN again\n4.  drag the MIDI into FL", rollArea().reduced (30), Justification::centred, 6);
+            g.drawFittedText ("1.  EVOLVE FX PRO sits on the track of the plugin that plays the melody\n2.  press LISTEN, then PLAY in FL\n3.  when the melody has played once, press LISTEN again\n4.  drag the MIDI into FL", rollArea().reduced (30), Justification::centred, 6);
         }
         if (note.isNotEmpty()) { g.setColour (kk::accentText()); g.setFont (kk::modern::font (14.0f, true, 0.03f)); g.drawText (note, 24, getHeight() - 40, getWidth() - 48, 24, Justification::centredLeft); }
         if (proc.melListening())
@@ -196,9 +196,12 @@ private:
     String note;
 };
 
+#include "FxProPages.h"
+
 class FxMainPage : public Component
 {
 public:
+    static constexpr int numPages = 9;
     explicit FxMainPage (KeysKillaProcessor& p) : proc (p)
     {
         lnf.setSkin (Skin::all()[(size_t) kk::themeIndex()]);
@@ -206,14 +209,21 @@ public:
         setLookAndFeel (&lnf);
         pages[0] = std::make_unique<MixLabPage> (proc, lnf);
         pages[1] = std::make_unique<FxRackPage> (proc, lnf);
-        auto ch = std::make_unique<ChainsPage> (proc, lnf);
-        pages[2] = std::move (ch);
-        pages[3] = std::make_unique<ListenPage> (proc, lnf);
+        pages[2] = std::make_unique<ReelPage> (proc, lnf);
+        pages[3] = std::make_unique<DialPage> (proc, lnf);
+        pages[4] = std::make_unique<WarpPage> (proc, lnf);
+        pages[5] = std::make_unique<DoodlePage> (proc, lnf);
+        pages[6] = std::make_unique<BossPage> (proc, lnf);
+        pages[7] = std::make_unique<ChainsPage> (proc, lnf);
+        pages[8] = std::make_unique<ListenPage> (proc, lnf);
         for (auto& pg : pages) addChildComponent (*pg);
-        static const char* names[] { "MIX LAB", "FX", "CHAINS", "LISTEN" };
+        static const char* names[] { "MIX LAB", "FX RACK", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DOODLE", "FINAL BOSS", "FEED", "NEURAL EAR" };
         static const char* tips[] { "EQ, compressor, vintage colour, space + echo - and the COACH", "SURPRISE FX, STEP FX and the RACK",
-                                    "ready-made chains of effects, and your own", "the melody on this track becomes MIDI" };
-        for (int i = 0; i < 4; ++i)
+                                    "a 16-step reel that re-cuts the music: slices, loops, stops, filters", "old phones, voice notes, bad signal, walkie-talkies",
+                                    "octaves, chipmunks, demons, alien frequency shifts", "draw a line - get a melody as MIDI",
+                                    "the master's last stage: LUFS loudness + PEAK SAFE", "ready-made chains of effects, and your own",
+                                    "the melody on this track becomes MIDI" };
+        for (int i = 0; i < numPages; ++i)
         {
             tabs[(size_t) i] = std::make_unique<HotButton> (lnf, names[i]);
             tabs[(size_t) i]->framed = true; tabs[(size_t) i]->setTooltip (tips[i]);
@@ -235,34 +245,39 @@ public:
         show (0);
     }
     ~FxMainPage() override { for (auto& pg : pages) pg.reset(); for (auto& tb : tabs) tb.reset(); setLookAndFeel (nullptr); }
-    void showView (int v) { show (jlimit (0, 3, v)); }
+    void showView (int v) { show (jlimit (0, numPages - 1, v)); }
     void paint (Graphics& g) override
     {
         pageBackdrop (g, *this, 0.75f);
         const auto& t = kk::theme();
         g.setColour (t.text); g.setFont (kk::modern::font (26.0f, true, 0.3f));
-        g.drawFittedText ("EVOLVE", Rectangle<int> (22, 24, 156, 40), Justification::centredLeft, 1, 0.8f);
+        g.drawFittedText ("EVOLVE", Rectangle<int> (22, 20, 156, 36), Justification::centredLeft, 1, 0.8f);
         g.setColour (kk::accentText()); g.setFont (kk::modern::font (16.0f, true, 0.2f));
-        g.drawText ("FX", 26, 66, 60, 22, Justification::centredLeft);
-        g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.12f));
-        g.drawText ("by TrapVST", 60, 68, 100, 18, Justification::centredLeft);
+        g.drawText ("FX PRO", 24, 56, 90, 22, Justification::centredLeft);
+        g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.12f));
+        g.drawText ("by TrapVST", 24, 78, 140, 16, Justification::centredLeft);
+        // era groups next to the tabs
+        static const std::pair<int, const char*> eras[] { { 2, "ERAS" }, { 7, "SMART" } };
+        g.setFont (kk::modern::font (9.0f, true, 0.25f));
+        for (auto& [i, n] : eras) { g.setColour (t.dim.withAlpha (0.7f)); g.drawText (n, 20, tabs[(size_t) i]->getY() - 13, 150, 11, Justification::centredLeft); }
     }
     void resized() override
     {
-        for (int i = 0; i < 4; ++i) tabs[(size_t) i]->setBounds (18, 120 + i * 64, 150, 54);
-        themeBtn.setBounds (18, getHeight() - 70, 150, 44);
+        int y = 104;
+        for (int i = 0; i < numPages; ++i) { if (i == 2 || i == 7) y += 14; tabs[(size_t) i]->setBounds (18, y, 150, 46); y += 52; }
+        themeBtn.setBounds (18, getHeight() - 62, 150, 40);
         for (auto& pg : pages) pg->setBounds (184, 12, getWidth() - 196, getHeight() - 24);
     }
     int preferredScale() const { return jlimit (50, 100, openSettings()->getIntValue ("fxScale", 80)); }
 private:
     void show (int i)
     {
-        for (int k = 0; k < 4; ++k) { pages[(size_t) k]->setVisible (k == i); tabs[(size_t) k]->selected = k == i; tabs[(size_t) k]->repaint(); }
+        for (int k = 0; k < numPages; ++k) { pages[(size_t) k]->setVisible (k == i); tabs[(size_t) k]->selected = k == i; tabs[(size_t) k]->repaint(); }
     }
     KeysKillaProcessor& proc;
     LabCacheHolder cacheHolder;
     KKLookAndFeel lnf;
-    std::array<std::unique_ptr<Component>, 4> pages;
-    std::array<std::unique_ptr<HotButton>, 4> tabs;
+    std::array<std::unique_ptr<Component>, numPages> pages;
+    std::array<std::unique_ptr<HotButton>, numPages> tabs;
     HotButton themeBtn { lnf };
 };

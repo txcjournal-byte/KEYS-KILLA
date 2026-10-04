@@ -82,10 +82,10 @@ public:
             paths.removeNonExistentPaths();
             auto ids = f->searchPathsForPlugins (paths, true, false);
             for (auto& id : ids)
-                if (! id.containsIgnoreCase ("KEYS KILLA") && ! id.containsIgnoreCase ("BREED LAB") && ! id.endsWithIgnoreCase ("EVOLVE.vst3") && ! id.endsWithIgnoreCase ("EVOLVE FX.vst3")) all.addIfNotAlreadyThere (id);   // never itself
+                if (! id.containsIgnoreCase ("KEYS KILLA") && ! id.containsIgnoreCase ("BREED LAB") && ! id.endsWithIgnoreCase ("EVOLVE.vst3") && ! id.containsIgnoreCase ("EVOLVE FX")) all.addIfNotAlreadyThere (id);   // never itself
         }
         for (auto& fl : flStudioPlugins (false))
-            if (! fl.containsIgnoreCase ("KEYS KILLA") && ! fl.containsIgnoreCase ("BREED LAB") && ! fl.endsWithIgnoreCase ("EVOLVE.vst3") && ! fl.endsWithIgnoreCase ("EVOLVE FX.vst3")) all.addIfNotAlreadyThere (fl);
+            if (! fl.containsIgnoreCase ("KEYS KILLA") && ! fl.containsIgnoreCase ("BREED LAB") && ! fl.endsWithIgnoreCase ("EVOLVE.vst3") && ! fl.containsIgnoreCase ("EVOLVE FX")) all.addIfNotAlreadyThere (fl);
         all.sort (true);
         // FL Studio's instruments (generators) first, effects after
         const auto gens = flStudioPlugins (true);
@@ -103,7 +103,7 @@ public:
         juce::StringArray out, have;
         for (auto& l : loadable) have.add (displayName (l));
         for (auto& f : flStudioPlugins (false, true))
-            if (! have.contains (displayName (f), true) && ! out.contains (displayName (f), true) && ! f.containsIgnoreCase ("KEYS KILLA") && ! f.containsIgnoreCase ("BREED LAB") && ! f.endsWithIgnoreCase ("EVOLVE.vst3") && ! f.endsWithIgnoreCase ("EVOLVE FX.vst3")) out.add (displayName (f));
+            if (! have.contains (displayName (f), true) && ! out.contains (displayName (f), true) && ! f.containsIgnoreCase ("KEYS KILLA") && ! f.containsIgnoreCase ("BREED LAB") && ! f.endsWithIgnoreCase ("EVOLVE.vst3") && ! f.containsIgnoreCase ("EVOLVE FX")) out.add (displayName (f));
         out.sort (true);
         return out;
     }

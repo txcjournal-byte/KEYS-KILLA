@@ -159,6 +159,10 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fxPtr->prepare (sampleRate, kChunk);
     rackFx = std::make_unique<kk::FxRack>(); rackFx->prepare (sampleRate, kChunk);
     mixDsp.prepare (sampleRate, samplesPerBlock);
+    reelDsp.prepare (sampleRate); dialDsp.prepare (sampleRate); warpDsp.prepare (sampleRate); bossDsp.prepare (sampleRate);
+   #if KK_FX_BUILD
+    setLatencySamples (kk::pro::BossDsp::lookahead (sampleRate));   // FINAL BOSS looks 1.5 ms ahead (always, so the latency never changes)
+   #endif
     rackL.assign (kChunk, 0.0f); rackR.assign (kChunk, 0.0f); rackG.assign (kChunk, 0.0f);
     rackTail = 0; gateEnv = 1.0f;
     bufL.assign (kChunk, 0.0f); bufR.assign (kChunk, 0.0f); bufG.assign (kChunk, 0.0f);
@@ -860,7 +864,17 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     processRack (buffer, n, beatPos, bps);   // FX RACK: the whole melody bus (synth, PAIR, VST, SAMPLER)
     processStepFx (buffer, n, beatPos, bps); // v0.37 STEP FX: effects in time on the melody bus
     mixLab.bpm = (float) lastBpm.load();
-    if (buffer.getNumChannels() > 1) mixDsp.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, mixLab);   // v0.41 MIX LAB
+    if (buffer.getNumChannels() > 1)
+    {
+        float* L = buffer.getWritePointer (0); float* R = buffer.getWritePointer (1);
+        reelDsp.process (L, R, n, reel, beatPos, bps);    // v0.42 FX PRO: REMIX REEL, DIAL-UP, WARP DRIVE before MIX LAB
+        dialDsp.process (L, R, n, dial);
+        warpDsp.process (L, R, n, warp);
+        mixDsp.process (L, R, n, mixLab);                 // v0.41 MIX LAB
+       #if KK_FX_BUILD
+        bossDsp.process (L, R, n, boss);                  // FINAL BOSS: the very last stage
+       #endif
+    }
     // DRUM BOOST: the drums play after the melody effects - the FX RACK never touches them
     if (buffer.getNumChannels() > 1)
         for (int d = 0; d < kk::numDrumSlots; ++d)
@@ -3435,6 +3449,7 @@ void KeysKillaProcessor::getStateInformation (juce::MemoryBlock& destData)
             state.appendChild (mt, nullptr);
         }
         state.appendChild (mixToTree(), nullptr);   // v0.41 MIX LAB
+        state.appendChild (proToTree(), nullptr);   // v0.42 FX PRO
         if (auto smp = pairPlayer.sound())
         {
             if (smp.get() != activeSampleSaved)
@@ -3491,6 +3506,7 @@ void KeysKillaProcessor::setStateInformation (const void* data, int sizeInBytes)
                     vt.removeChild (mt, nullptr);
                 }
                 if (const auto xt = vt.getChildWithName ("MIXLAB"); xt.isValid()) { mixFromTree (xt); vt.removeChild (xt, nullptr); }
+                if (const auto pt = vt.getChildWithName ("FXPRO"); pt.isValid()) { proFromTree (pt); vt.removeChild (pt, nullptr); }
             }
             {   // v0.36 EVOLVE
                 const auto et = vt.getChildWithName ("EVOLVE");
@@ -5242,6 +5258,7 @@ void KeysKillaProcessor::chainReset()
     m.dlOn = false; m.dlMode = kk::dlTape; m.dlTime = 2; m.dlMix = 0.25f; m.dlFb = 0.4f; m.dlTone = 0.6f; m.dlDuck = 0;
     rack.reset();
     stepOn = false;
+    reel.on = false; dial.on = false; warp.on = false;   // v0.42 FX PRO modules off too (FINAL BOSS stays: it is the master safety)
 }
 
 void KeysKillaProcessor::chainApply (int i)
@@ -5376,4 +5393,37 @@ void KeysKillaProcessor::worldPlay (const Genome& g, bool preview)
     worldCurrent = g;
     EvoNode n; n.g = g; n.name = g.name;
     evoAuditionNode (n, preview);
+}
+
+//==============================================================================
+// v0.42 EVOLVE FX PRO state
+juce::ValueTree KeysKillaProcessor::proToTree() const
+{
+    juce::ValueTree t ("FXPRO");
+    juce::String g; for (auto& row : reel.grid) { for (auto& c : row) g << juce::String::toHexString (c.load()) << " "; g << "|"; }
+    t.setProperty ("reel", g, nullptr); t.setProperty ("reelOn", reel.on.load(), nullptr); t.setProperty ("reelMix", reel.mix.load(), nullptr);
+    t.setProperty ("dial", juce::String ((int) dial.on.load()) + "," + juce::String (dial.mode.load()) + "," + juce::String (dial.signal.load(), 3) + "," + juce::String (dial.crush.load(), 3) + ","
+                           + juce::String (dial.tinny.load(), 3) + "," + juce::String (dial.robot.load(), 3) + "," + juce::String (dial.mix.load(), 3), nullptr);
+    t.setProperty ("warp", juce::String ((int) warp.on.load()) + "," + juce::String (warp.mode.load()) + "," + juce::String (warp.semis.load(), 2) + "," + juce::String (warp.shiftHz.load(), 1) + ","
+                           + juce::String (warp.wobble.load(), 3) + "," + juce::String (warp.mix.load(), 3), nullptr);
+    t.setProperty ("boss", juce::String ((int) boss.on.load()) + "," + juce::String (boss.target.load()) + "," + juce::String (boss.drive.load(), 2) + "," + juce::String (boss.ceiling.load(), 2), nullptr);
+    return t;
+}
+
+void KeysKillaProcessor::proFromTree (const juce::ValueTree& t)
+{
+    const auto rows = juce::StringArray::fromTokens (t.getProperty ("reel", "").toString(), "|", "");
+    for (int r = 0; r < kk::pro::numReelRows && r < rows.size(); ++r)
+    {
+        const auto cells = juce::StringArray::fromTokens (rows[r], " ", "");
+        for (int c = 0; c < 16 && c < cells.size(); ++c) reel.grid[(size_t) r][(size_t) c] = juce::jlimit (0, kk::pro::reelChoices (r) - 1, cells[c].getHexValue32());
+    }
+    reel.on = (bool) t.getProperty ("reelOn", false); reel.mix = (float) t.getProperty ("reelMix", 1.0f);
+    auto vals = [] (const juce::var& v) { return juce::StringArray::fromTokens (v.toString(), ",", ""); };
+    if (const auto d = vals (t.getProperty ("dial", "")); d.size() >= 7)
+    { dial.on = d[0].getIntValue() != 0; dial.mode = juce::jlimit (0, (int) kk::pro::numDialModes - 1, d[1].getIntValue()); dial.signal = d[2].getFloatValue(); dial.crush = d[3].getFloatValue(); dial.tinny = d[4].getFloatValue(); dial.robot = d[5].getFloatValue(); dial.mix = d[6].getFloatValue(); }
+    if (const auto w = vals (t.getProperty ("warp", "")); w.size() >= 6)
+    { warp.on = w[0].getIntValue() != 0; warp.mode = juce::jlimit (0, (int) kk::pro::numWarpModes - 1, w[1].getIntValue()); warp.semis = w[2].getFloatValue(); warp.shiftHz = w[3].getFloatValue(); warp.wobble = w[4].getFloatValue(); warp.mix = w[5].getFloatValue(); }
+    if (const auto b = vals (t.getProperty ("boss", "")); b.size() >= 4)
+    { boss.on = b[0].getIntValue() != 0; boss.target = juce::jlimit (0, (int) kk::pro::numBossTargets - 1, b[1].getIntValue()); boss.drive = b[2].getFloatValue(); boss.ceiling = b[3].getFloatValue(); }
 }

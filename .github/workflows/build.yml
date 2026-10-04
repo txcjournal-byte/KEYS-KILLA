@@ -45,7 +45,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item (Get-ChildItem build\installer\*.exe | Select-Object -First 1).FullName out\KEYS-KILLA-Setup-Windows.exe
-          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3","build\EvolveFX_artefacts\Release\VST3\EVOLVE FX.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
+          Compress-Archive -Path "build\KeysKilla_artefacts\Release\VST3\EVOLVE.vst3","build\EvolveFX_artefacts\Release\VST3\EVOLVE FX PRO.vst3" -DestinationPath out\KEYS-KILLA-VST3-Windows.zip -Force
           $notes = "Latest test build`n`nCommit: ${{ github.sha }}`nBranch: ${{ github.ref_name }}`nBuilt: $(Get-Date -Format u)"
           gh release view test *> $null
           if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "EVOLVE - latest test build" --notes $notes --target ${{ github.sha }} }
