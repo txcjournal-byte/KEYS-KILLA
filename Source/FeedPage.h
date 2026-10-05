@@ -48,7 +48,7 @@ public:
     }
     void resized() override
     {
-        if (sidekick != nullptr) sidekick->setBounds (getWidth() - 260, tasteArea().getBottom() + 50, 236, jmax (60, shelfArea().getY() - tasteArea().getBottom() - 80));
+        if (sidekick != nullptr) sidekick->setBounds (24, 110, jmax (120, cardHome().getX() - 190), jmax (120, shelfArea().getY() - 150));   // the creature lives left of the cards
         const auto sh = shelfArea();
         stopBtn.setBounds (getWidth() - 260, 14, 110, 34); forgetBtn.setBounds (getWidth() - 260, tasteArea().getBottom() + 8, 236, 34);
         saveBtn.setBounds (sh.getRight() - 470, sh.getY() - 2, 110, 40); plantBtn.setBounds (sh.getRight() - 352, sh.getY() - 2, 190, 40); dragWav.setBounds (sh.getRight() - 154, sh.getY() - 4, 154, 44);
