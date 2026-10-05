@@ -993,3 +993,5 @@ private:
     std::array<DelayLine, 2> buf;
 };
 } // namespace kk::pro
+
+#include "FxWorlds.h"   // v0.45 FX PRO WORLDS: CLUB, SEASONING, ENGINE, DRAW, MOOD WORDS

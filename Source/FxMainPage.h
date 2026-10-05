@@ -198,11 +198,22 @@ private:
 
 #include "FxProPages.h"
 #include "FxTouchPages.h"
+#include "FxWorldPages.h"   // v0.45 WORLDS: CLUB, SEASONING, ENGINE, MOOD WORDS + DRAW
 
+// v0.45 FEWER DOORS: six doors on the left (MIX, TOUCH, ORGANIC, WORLDS, ERAS, EAR), the pages of a door in a strip on top.
+// The flat page index stays (showView (i), snapshots 90 + i): 0 MIX LAB, 1 FX RACK, 2 HOLOROOM, 3 GRAB, 4 REMIX REEL, 5 DIAL-UP,
+// 6 WARP DRIVE, 7 DRAW (was DOODLE - DOODLE moves to EVOLVE), 8 FINAL BOSS, 9 LIQUID, 10 INTENT, 11 EROSION, 12 FEED, 13 NEURAL EAR,
+// 14 CLUB, 15 SEASONING, 16 ENGINE, 17 MOOD WORDS.
 class FxMainPage : public Component, private Timer
 {
 public:
-    static constexpr int numPages = 14;
+    static constexpr int numPages = 18, numDoors = 6;
+    static const std::vector<int>& doorPages (int d)
+    {
+        static const std::vector<int> p[numDoors] { { 0, 1, 12 }, { 2, 3, 7 }, { 9, 10, 11 }, { 14, 15, 16, 17 }, { 4, 5, 6, 8 }, { 13 } };
+        return p[jlimit (0, numDoors - 1, d)];
+    }
+    static int doorOf (int page) { for (int d = 0; d < numDoors; ++d) for (int p : doorPages (d)) if (p == page) return d; return 0; }
     explicit FxMainPage (KeysKillaProcessor& p) : proc (p)
     {
         lnf.setSkin (Skin::all()[(size_t) kk::themeIndex()]);
@@ -215,28 +226,50 @@ public:
         pages[4] = std::make_unique<ReelPage> (proc, lnf);
         pages[5] = std::make_unique<DialPage> (proc, lnf);
         pages[6] = std::make_unique<WarpPage> (proc, lnf);
-        pages[7] = std::make_unique<DoodlePage> (proc, lnf);
+        pages[7] = std::make_unique<DrawAutoPage> (proc, lnf);   // v0.45: DRAW automation (DOODLE moves to EVOLVE)
         pages[8] = std::make_unique<BossPage> (proc, lnf);
         pages[9] = std::make_unique<LiquidPage> (proc, lnf);
         pages[10] = std::make_unique<IntentPage> (proc, lnf);
         pages[11] = std::make_unique<ErosionPage> (proc, lnf);
         pages[12] = std::make_unique<ChainsPage> (proc, lnf);
         pages[13] = std::make_unique<ListenPage> (proc, lnf);
+        pages[14] = std::make_unique<ClubPage> (proc, lnf);       // v0.45 WORLDS
+        pages[15] = std::make_unique<SeasoningPage> (proc, lnf);
+        pages[16] = std::make_unique<EnginePage> (proc, lnf);
+        auto mood = std::make_unique<MoodWordsPage> (proc, lnf);
+        mood->onOpenPage = [this] (int i) { show (i); };
+        moodPage = mood.get();
+        pages[17] = std::move (mood);
         for (auto& pg : pages) addChildComponent (*pg);
-        static const char* names[] { "MIX LAB", "FX RACK", "HOLOROOM", "GRAB", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DOODLE", "FINAL BOSS", "LIQUID", "INTENT", "EROSION", "FEED", "NEURAL EAR" };
+        static const char* names[] { "MIX LAB", "FX RACK", "HOLOROOM", "GRAB", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DRAW", "FINAL BOSS", "LIQUID", "INTENT", "EROSION", "FEED", "NEURAL EAR",
+                                     "CLUB", "SEASONING", "ENGINE", "MOOD WORDS" };
         static const char* tips[] { "EQ, compressor, vintage colour, space + echo - and the COACH", "SURPRISE FX, STEP FX and the RACK",
                                     "the sound is a glowing orb in a 3D room - drag it near, far, left, right, up, down", "grab the living spectrum: pull it, push it, squeeze it, tear it",
                                     "a 16-step reel that re-cuts the music: slices, loops, stops, filters", "old phones, voice notes, bad signal, walkie-talkies",
-                                    "octaves, chipmunks, demons, alien frequency shifts", "draw a line - get a melody as MIDI",
+                                    "octaves, chipmunks, demons, alien frequency shifts", "draw a curve over the bars - it moves the filter, space, drive, width or volume",
                                     "the master's last stage: LUFS loudness + PEAK SAFE", "the kick carves its hole in the bass - the bass flows around it",
                                     "one breath moves many muscles: rasp, width, filter, frozen air", "push it and it tires, starve it and it sinks into rumble",
-                                    "ready-made chains of effects, and your own", "the melody on this track becomes MIDI" };
+                                    "ready-made chains of effects, and your own", "the melody on this track becomes MIDI",
+                                    "your track plays in a club: disco ball, strobe, crowd, the DROP", "shake salt, pepper, chilli, sugar, ice, smoke over the track",
+                                    "rev it, shift the gears, pick the exhaust, hold TURBO", "type how it should feel - the modules arrange themselves" };
         for (int i = 0; i < numPages; ++i)
         {
             tabs[(size_t) i] = std::make_unique<HotButton> (lnf, names[i]);
             tabs[(size_t) i]->framed = true; tabs[(size_t) i]->setTooltip (tips[i]);
             tabs[(size_t) i]->onClick = [this, i] { show (i); };
-            addAndMakeVisible (*tabs[(size_t) i]);
+            addChildComponent (*tabs[(size_t) i]);
+        }
+        static const char* doorNames[] { "MIX", "TOUCH", "ORGANIC", "WORLDS", "ERAS", "EAR" };
+        static const char* doorTips[] { "MIX LAB, FX RACK and FEED - the mixing desk", "HOLOROOM, GRAB and DRAW - shape it with your hand",
+                                        "LIQUID, INTENT and EROSION - the sound behaves like a living thing", "CLUB, SEASONING, ENGINE and MOOD WORDS - play it in other worlds",
+                                        "REMIX REEL, DIAL-UP, WARP DRIVE and FINAL BOSS - old tech, the internet, the future", "NEURAL EAR - the melody becomes MIDI" };
+        for (int d = 0; d < numDoors; ++d)
+        {
+            doors[(size_t) d] = std::make_unique<HotButton> (lnf, doorNames[d]);
+            doors[(size_t) d]->framed = true; doors[(size_t) d]->setTooltip (doorTips[d]);
+            doors[(size_t) d]->onClick = [this, d] { show (lastSub[(size_t) d]); };
+            addAndMakeVisible (*doors[(size_t) d]);
+            lastSub[(size_t) d] = doorPages (d).front();
         }
         themeBtn.framed = true; themeBtn.setButtonText (kk::theme().night ? "DAY" : "NIGHT"); themeBtn.setTooltip ("Day / night");
         themeBtn.onClick = [this]
@@ -255,8 +288,10 @@ public:
         show (0);
         startTimerHz (30);
     }
-    ~FxMainPage() override { removeMouseListener (this); for (auto& pg : pages) pg.reset(); for (auto& tb : tabs) tb.reset(); setLookAndFeel (nullptr); }
+    ~FxMainPage() override { removeMouseListener (this); for (auto& pg : pages) pg.reset(); for (auto& tb : tabs) tb.reset(); for (auto& d : doors) d.reset(); setLookAndFeel (nullptr); }
     void showView (int v) { show (jlimit (0, numPages - 1, v)); }
+    int currentPage() const { return current; }
+    void debugMood (const String& words) { if (moodPage != nullptr) moodPage->debugType (words); }   // test snapshots
     void paint (Graphics& g) override
     {
         pageBackdrop (g, *this, 0.75f);
@@ -268,17 +303,36 @@ public:
         g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.12f));
         g.drawText ("by TrapVST", 24, 78, 140, 16, Justification::centredLeft);
         paintShake (g);
-        // groups next to the tabs
-        static const std::pair<int, const char*> groups[] { { 2, "TOUCH" }, { 4, "ERAS" }, { 9, "ORGANIC" }, { 12, "SMART" } };
-        g.setFont (kk::modern::font (9.0f, true, 0.25f));
-        for (auto& [i, n] : groups) { g.setColour (t.dim.withAlpha (0.75f)); g.drawText (n, 20, tabs[(size_t) i]->getY() - 13, 150, 11, Justification::centredLeft); }
+        // under every door: what is behind it
+        static const char* inside[] { "mix lab . fx rack . feed", "holoroom . grab . draw", "liquid . intent . erosion", "club . seasoning . engine . mood words", "remix reel . dial-up . warp . final boss", "neural ear" };
+        for (int d = 0; d < numDoors; ++d)
+        {
+            const auto r = doors[(size_t) d]->getBounds();
+            g.setColour (d == doorOf (current) ? kk::accentText().withAlpha (0.85f) : t.dim.withAlpha (0.8f)); g.setFont (kk::modern::font (9.5f, true, 0.04f));
+            g.drawFittedText (inside[d], Rectangle<int> (r.getX() + 2, r.getBottom() + 1, r.getWidth() - 4, 24), Justification::centredTop, 2, 0.8f);
+        }
+        // the strip of the open door
+        if (doorPages (doorOf (current)).size() > 1)
+        {
+            const auto s = stripArea().toFloat();
+            g.setColour (t.text.withAlpha (0.05f)); g.fillRoundedRectangle (s, 10);
+            g.setColour (t.dim.withAlpha (0.8f)); g.setFont (kk::modern::font (10.0f, true, 0.3f));
+            static const char* doorNames[] { "MIX", "TOUCH", "ORGANIC", "WORLDS", "ERAS", "EAR" };
+            g.drawText (doorNames[doorOf (current)], s.withWidth (96).reduced (12, 0), Justification::centredLeft);
+        }
     }
     void resized() override
     {
-        int y = shakeArea().getBottom() + 20;
-        for (int i = 0; i < numPages; ++i) { if (i == 2 || i == 4 || i == 9 || i == 12) y += 14; tabs[(size_t) i]->setBounds (18, y, 150, 38); y += 42; }
+        int y = shakeArea().getBottom() + 24;
+        for (int d = 0; d < numDoors; ++d) { doors[(size_t) d]->setBounds (18, y, 150, 48); y += 48 + 40; }
         themeBtn.setBounds (18, getHeight() - 62, 150, 40);
-        for (auto& pg : pages) pg->setBounds (184, 12, getWidth() - 196, getHeight() - 24);
+        const auto& dp = doorPages (doorOf (current));
+        const bool strip = dp.size() > 1;
+        const auto S = stripArea();
+        int x = S.getX() + 96;
+        for (int i = 0; i < numPages; ++i) tabs[(size_t) i]->setVisible (false);
+        if (strip) for (int i : dp) { tabs[(size_t) i]->setBounds (x, S.getY() + 4, 150, S.getHeight() - 8); tabs[(size_t) i]->setVisible (true); x += 156; }
+        for (auto& pg : pages) pg->setBounds (strip ? Rectangle<int> (184, S.getBottom() + 4, getWidth() - 196, getHeight() - S.getBottom() - 16) : Rectangle<int> (184, 12, getWidth() - 196, getHeight() - 24));
     }
     int preferredScale() const { return jlimit (50, 100, openSettings()->getIntValue ("fxScale", 80)); }
     // v0.44 SHAKE: fast reversals of the hovering mouse charge the glitch energy
@@ -307,6 +361,7 @@ public:
 private:
     struct Axis { float last = 0, travel = 0; int dir = 0; double lastRev = 0; };
     Rectangle<int> shakeArea() const { return { 18, 102, 150, 44 }; }
+    Rectangle<int> stripArea() const { return { 184, 10, getWidth() - 196, 44 }; }
     void paintShake (Graphics& g)
     {
         const auto& t = kk::theme();
@@ -341,13 +396,24 @@ private:
     }
     void show (int i)
     {
+        i = jlimit (0, numPages - 1, i);
+        current = i;
+        const int door = doorOf (i);
+        lastSub[(size_t) door] = i;
+        for (int d = 0; d < numDoors; ++d) { doors[(size_t) d]->selected = d == door; doors[(size_t) d]->repaint(); }
         for (int k = 0; k < numPages; ++k) { pages[(size_t) k]->setVisible (k == i); tabs[(size_t) k]->selected = k == i; tabs[(size_t) k]->repaint(); }
+        resized();
+        repaint();
     }
     KeysKillaProcessor& proc;
     LabCacheHolder cacheHolder;
     KKLookAndFeel lnf;
     std::array<std::unique_ptr<Component>, numPages> pages;
     std::array<std::unique_ptr<HotButton>, numPages> tabs;
+    std::array<std::unique_ptr<HotButton>, numDoors> doors;
+    std::array<int, numDoors> lastSub {};
+    MoodWordsPage* moodPage = nullptr;
+    int current = 0;
     HotButton themeBtn { lnf };
     Axis axes[2];
     Time lastMoveTime;

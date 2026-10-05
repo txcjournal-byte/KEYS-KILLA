@@ -1677,6 +1677,215 @@ static int unitTests()
             check (four && inRange, "v0.45 PARTY: a 4-on-the-floor bass on every beat, all notes inside the 4 bars");
         }
     }
+    // v0.45 FX PRO WORLDS: CLUB, SEASONING, ENGINE, DRAW automation, MOOD WORDS
+    {
+        const double rate = 44100.0; const int B = 512;
+        auto finite = [] (const juce::AudioBuffer<float>& b) { for (int c = 0; c < b.getNumChannels(); ++c) for (int i = 0; i < b.getNumSamples(); ++i) if (! std::isfinite (b.getSample (c, i))) return false; return true; };
+        auto same = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b) { for (int c = 0; c < 2; ++c) for (int i = 0; i < a.getNumSamples(); ++i) if (a.getSample (c, i) != b.getSample (c, i)) return false; return true; };
+        auto db = [] (double a, double b2) { return (float) (10.0 * std::log10 ((a + 1e-20) / (b2 + 1e-20))); };
+        auto energy = [] (const juce::AudioBuffer<float>& b, int from, int to) { double e = 0; for (int c = 0; c < 2; ++c) for (int i = from; i < to; ++i) e += (double) b.getSample (c, i) * b.getSample (c, i); return e; };
+        auto hpE = [&] (const juce::AudioBuffer<float>& b, float hz, int from, int to)   // 4-pole high-pass energy, both channels
+        {
+            kk::SvfCoef c; c.set (hz, 1.41421356f, (float) rate); double e = 0;
+            for (int ch = 0; ch < 2; ++ch) { kk::SvfState s1, s2; for (int i = 0; i < to; ++i) { s1.tick (c, b.getSample (ch, i)); s2.tick (c, s1.hp); if (i >= from) e += (double) s2.hp * s2.hp; } }
+            return e;
+        };
+        auto bandE = [&] (const juce::AudioBuffer<float>& b, float hz, int from, int to)   // narrow band energy (two narrow band-passes), left channel
+        {
+            kk::SvfCoef c; c.set (hz, 0.05f, (float) rate); kk::SvfState s, s2; double e = 0;
+            for (int i = 0; i < to; ++i) { s.tick (c, b.getSample (0, i)); s2.tick (c, 0.05f * s.bp); if (i >= from) e += (double) (0.05f * s2.bp) * (0.05f * s2.bp); }
+            return e;
+        };
+        auto noise = [&] (int N, float amp, uint32_t seed) { juce::AudioBuffer<float> b (2, N); kk::Rng r; r.seed (seed); for (int i = 0; i < N; ++i) { b.setSample (0, i, amp * r.bi()); b.setSample (1, i, amp * r.bi()); } return b; };
+        auto sine = [&] (int N, float hz, float amp) { juce::AudioBuffer<float> b (2, N); for (int i = 0; i < N; ++i) { const float v = amp * std::sin (kk::twoPi * hz * (float) i / (float) rate); b.setSample (0, i, v); b.setSample (1, i, v); } return b; };
+        // a generic runner: the DSP + its state, block by block, with a per-block hook
+        auto run = [&] (auto& dsp, auto& st, const juce::AudioBuffer<float>& in, std::function<void (int)> hook = {})
+        {
+            dsp.prepare (rate, B); auto out = in; const int N = in.getNumSamples();
+            for (int o = 0; o < N; o += B) { if (hook) hook (o); dsp.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st); }
+            return out;
+        };
+        {   // CLUB
+            const int N = 44100 * 3;
+            const auto nz = noise (N, 0.25f, 11);
+            { kk::pro::ClubState st; kk::pro::ClubDsp d; st.spin = 1; st.crowd = 1; check (same (run (d, st, nz), nz), "v0.45 CLUB: off = bit-identical"); }
+            // the disco ball: the brightness (a centroid proxy) moves with the spin
+            auto wobble = [&] (const juce::AudioBuffer<float>& b)
+            {
+                std::vector<float> r; for (int o = 22050; o + 2205 <= N; o += 2205) r.push_back (db (hpE (b, 2500.0f, o, o + 2205), energy (b, o, o + 2205)));
+                float lo = 1e9f, hi = -1e9f; for (float v : r) { lo = std::min (lo, v); hi = std::max (hi, v); } return hi - lo;
+            };
+            kk::pro::ClubState s0; s0.on = true; s0.spin = 0.0f; kk::pro::ClubDsp d0;
+            kk::pro::ClubState s1; s1.on = true; s1.spin = 0.9f; kk::pro::ClubDsp d1;
+            const auto still = run (d0, s0, nz), spun = run (d1, s1, nz);
+            const float w0 = wobble (still), w1 = wobble (spun);
+            std::printf ("CLUB: brightness swing still %.1f dB, spinning %.1f dB\n", w0, w1);
+            check (w1 > w0 + 6.0f && finite (spun), "v0.45 CLUB: the spinning disco ball sweeps the spectrum (the centroid moves)");
+            // the strobe: held = gated
+            const auto tone = sine (N, 440.0f, 0.3f);
+            kk::pro::ClubState s2; s2.on = true; s2.strobeHeld = true; kk::pro::ClubDsp d2;
+            const auto gated = run (d2, s2, tone);
+            float mn = 1e9f, mx = 0; for (int o = 44100; o + 110 <= 2 * 44100; o += 110) { const float e = (float) energy (gated, o, o + 110); mn = std::min (mn, e); mx = std::max (mx, e); }
+            kk::pro::ClubState s3; s3.on = true; kk::pro::ClubDsp d3;
+            const auto tapped = run (d3, s3, tone, [&] (int o) { if (o == B) s3.tapStrobe(); });
+            float mn2 = 1e9f, mx2 = 0; for (int o = 2 * 44100; o + 110 <= N; o += 110) { const float e = (float) energy (tapped, o, o + 110); mn2 = std::min (mn2, e); mx2 = std::max (mx2, e); }
+            float mn3 = 1e9f, mx3 = 0; for (int o = B; o + 110 <= B + 8820; o += 110) { const float e = (float) energy (tapped, o, o + 110); mn3 = std::min (mn3, e); mx3 = std::max (mx3, e); }
+            std::printf ("CLUB: strobe held - quietest / loudest 2.5 ms %.1f dB; a tap: first 200 ms %.1f dB, 2 s later %.1f dB\n", db (mn, mx), db (mn3, mx3), db (mn2, mx2));
+            check (db (mn, mx) < -20.0f && finite (gated), "v0.45 CLUB: a held strobe gates the track (> 20 dB deep)");
+            check (db (mn3, mx3) < -10.0f && db (mn2, mx2) > -3.0f, "v0.45 CLUB: a tapped strobe is a short burst - 2 s later the track flows again");
+            // the crowd: hands up = a rising noise riser (new energy up high) + the low end lifts out
+            const auto low = sine (N, 200.0f, 0.3f);
+            kk::pro::ClubState s4; s4.on = true; s4.crowd = 0.0f; kk::pro::ClubDsp d4; kk::pro::ClubState s5; s5.on = true; s5.crowd = 1.0f; kk::pro::ClubDsp d5;
+            const auto calmC = run (d4, s4, low), hype = run (d5, s5, low);
+            const float riser = db (hpE (hype, 5000.0f, 44100, N), hpE (calmC, 5000.0f, 44100, N)), lift = db (bandE (hype, 200.0f, 44100, N), bandE (calmC, 200.0f, 44100, N));
+            std::printf ("CLUB: crowd up - > 5 kHz %+.1f dB (riser), 200 Hz %+.1f dB (lift)\n", riser, lift);
+            check (riser > 10.0f && lift < -3.0f && finite (hype), "v0.45 CLUB: the crowd builds up - a noise riser up high, the lows lift out");
+            // the DROP: pulled = the highs fall away, released = they slam back
+            kk::pro::ClubState s6; s6.on = true; kk::pro::ClubDsp d6;
+            const auto dropped = run (d6, s6, nz, [&] (int o) { s6.lever = o >= 44100 && o < 2 * 44100 ? 1.0f : 0.0f; });
+            const int rel = ((2 * 44100 + B - 1) / B) * B;   // the first block with the lever up again
+            const float before = db (hpE (dropped, 4000.0f, 22050, 40000), energy (dropped, 22050, 40000)), during = db (hpE (dropped, 4000.0f, 70000, rel), energy (dropped, 70000, rel));
+            const float after = db (hpE (dropped, 4000.0f, rel + 2205, rel + 20000), energy (dropped, rel + 2205, rel + 20000));
+            std::printf ("CLUB: DROP - > 4 kHz share before %.1f dB, pulled %.1f dB, 50 ms after release %.1f dB\n", before, during, after);
+            check (during < before - 20.0f && std::abs (after - before) < 3.0f, "v0.45 CLUB: the DROP cuts the highs, released it slams back");
+            // everything at once stays finite and bounded; the fullness changes the room
+            kk::pro::ClubState s7; s7.on = true; s7.spin = 1; s7.crowd = 1; s7.fullness = 0; s7.strobeHeld = true; s7.lever = 0.5f; kk::pro::ClubDsp d7;
+            const auto wild = run (d7, s7, nz);
+            check (finite (wild) && wild.getMagnitude (0, N) < 2.0f && wild.getMagnitude (1, N) < 2.0f, "v0.45 CLUB: everything at once - finite, peaks bounded");
+            auto burst = noise (N, 0.3f, 5); for (int c = 0; c < 2; ++c) burst.clear (c, 22050, N - 22050);
+            kk::pro::ClubState se; se.on = true; se.fullness = 0.0f; kk::pro::ClubDsp de; kk::pro::ClubState sf; sf.on = true; sf.fullness = 1.0f; kk::pro::ClubDsp df;
+            const auto empty = run (de, se, burst), full = run (df, sf, burst);
+            const double te = energy (empty, 22050 + 13230, 22050 + 26460), tf = energy (full, 22050 + 13230, 22050 + 26460);
+            std::printf ("CLUB: tail 300-600 ms - empty club %.2e, full club %.2e\n", te, tf);
+            check (te > tf * 4.0, "v0.45 CLUB: an empty club rings long and hollow, a full one is tight");
+        }
+        {   // SEASONING
+            const int N = 44100 * 2;
+            const auto nz = noise (N, 0.2f, 21);
+            { kk::pro::SeasonState st; kk::pro::SeasonDsp d; st.dose[0] = 1; check (same (run (d, st, nz), nz), "v0.45 SEASONING: off = bit-identical"); }
+            { kk::pro::SeasonState st; st.on = true; kk::pro::SeasonDsp d; check (same (run (d, st, nz), nz), "v0.45 SEASONING: a clean plate = bit-identical"); }
+            auto dose = [&] (int sp, float amt, const juce::AudioBuffer<float>& in) { kk::pro::SeasonState st; st.on = true; st.dose[(size_t) sp] = amt; kk::pro::SeasonDsp d; return run (d, st, in); };
+            const auto salty = dose (kk::pro::spSalt, 1.0f, nz);
+            const float hf = db (hpE (salty, 6000.0f, 8820, N), hpE (nz, 6000.0f, 8820, N));
+            const auto tone = sine (N, 300.0f, 0.3f), pep = dose (kk::pro::spPepper, 1.0f, tone);
+            const float h3 = db (bandE (pep, 900.0f, 8820, N), bandE (tone, 900.0f, 8820, N) + 1e-14), h2 = db (bandE (pep, 600.0f, 8820, N), bandE (tone, 600.0f, 8820, N) + 1e-14);
+            auto burst = noise (N, 0.3f, 8); for (int c = 0; c < 2; ++c) burst.clear (c, 22050, N - 22050);
+            const auto iced = dose (kk::pro::spIce, 1.0f, burst);
+            const double tail = energy (iced, 22050 + 8820, 22050 + 22050), tail0 = energy (burst, 22050 + 8820, 22050 + 22050);
+            const auto smoky = dose (kk::pro::spSmoke, 1.0f, nz);
+            const float dark = db (hpE (smoky, 4000.0f, 8820, N), hpE (nz, 4000.0f, 8820, N));
+            const auto chilli = dose (kk::pro::spChilli, 1.0f, nz), sugar = dose (kk::pro::spSugar, 1.0f, nz);
+            std::printf ("SEASONING: salt > 6 kHz %+.1f dB, pepper 2nd %+.1f dB 3rd %+.1f dB, ice tail %.2e (dry %.2e), smoke > 4 kHz %+.1f dB\n", hf, h2, h3, tail, tail0, dark);
+            check (hf > 5.0f, "v0.45 SEASONING: SALT raises the highs (> 5 dB above 6 kHz)");
+            check (h3 > 20.0f && h2 > 20.0f, "v0.45 SEASONING: PEPPER adds harmonics (grit)");
+            check (tail > 1e-3 && tail0 == 0.0, "v0.45 SEASONING: ICE lengthens the tail");
+            check (dark < -10.0f, "v0.45 SEASONING: SMOKE darkens");
+            kk::pro::SeasonState all; all.on = true; for (auto& d : all.dose) d = 1.0f; kk::pro::SeasonDsp dall;
+            const auto full = run (dall, all, nz);
+            check (finite (full) && finite (chilli) && finite (sugar) && full.getMagnitude (0, N) < 2.0f && chilli.getMagnitude (0, N) < 2.0f && sugar.getMagnitude (0, N) < 2.0f, "v0.45 SEASONING: every spice at once - finite, peaks bounded");
+        }
+        {   // ENGINE
+            const int N = 44100 * 2;
+            const auto tone = sine (N, 200.0f, 0.3f);
+            { kk::pro::EngineState st; st.rev = 1; kk::pro::EngineDsp d; check (same (run (d, st, tone), tone), "v0.45 ENGINE: off = bit-identical"); }
+            { kk::pro::EngineState st; st.on = true; kk::pro::EngineDsp d; check (same (run (d, st, tone), tone), "v0.45 ENGINE: idle (no rev, stock pipe) = bit-identical"); }
+            auto engineRun = [&] (float rev, int gear, int exh, bool turbo, const juce::AudioBuffer<float>& in) { kk::pro::EngineState st; st.on = true; st.rev = rev; st.gear = gear; st.exhaust = exh; st.turbo = turbo; kk::pro::EngineDsp d; return run (d, st, in); };
+            auto harm = [&] (const juce::AudioBuffer<float>& b, int k) { return db (bandE (b, 200.0f * (float) k, 22050, N), bandE (b, 200.0f, 22050, N)); };
+            const auto lowRev = engineRun (0.15f, kk::pro::egTube, kk::pro::exStock, false, tone), hiRev = engineRun (0.9f, kk::pro::egTube, kk::pro::exStock, false, tone);
+            const auto fuzz = engineRun (0.6f, kk::pro::egFuzz, kk::pro::exStock, false, tone), tube = engineRun (0.6f, kk::pro::egTube, kk::pro::exStock, false, tone);
+            std::printf ("ENGINE: 3rd harmonic low rev %.1f dB, redline %.1f dB; 2nd-3rd TUBE %.1f dB, FUZZ %.1f dB\n", harm (lowRev, 3), harm (hiRev, 3), harm (tube, 2) - harm (tube, 3), harm (fuzz, 2) - harm (fuzz, 3));
+            check (harm (hiRev, 3) > harm (lowRev, 3) + 6.0f, "v0.45 ENGINE: more REV = more harmonics");
+            check ((harm (tube, 2) - harm (tube, 3)) > (harm (fuzz, 2) - harm (fuzz, 3)) + 10.0f, "v0.45 ENGINE: the GEAR changes the character (TUBE: even harmonics, FUZZ: odd)");
+            bool safe = true; float pk = 0;
+            for (int g = 0; g < kk::pro::numGears; ++g) for (int e = 0; e < kk::pro::numExhausts; ++e) { const auto o = engineRun (1.0f, g, e, true, tone); safe &= finite (o); pk = std::max (pk, o.getMagnitude (0, N)); }
+            std::printf ("ENGINE: every gear x exhaust at redline + turbo - peak %.2f\n", pk);
+            check (safe && pk < 2.0f, "v0.45 ENGINE: every gear and exhaust at redline with TURBO - finite, peaks bounded");
+            const auto nz = noise (N, 0.2f, 3);
+            const auto nr = engineRun (0.0f, 0, kk::pro::exRumble, false, nz), np = engineRun (0.0f, 0, kk::pro::exStraight, false, nz);
+            const float bR = db (hpE (nr, 4000.0f, 8820, N), hpE (nz, 4000.0f, 8820, N)), bP = db (hpE (np, 4000.0f, 8820, N), hpE (nz, 4000.0f, 8820, N));
+            std::printf ("ENGINE: > 4 kHz RUMBLE %+.1f dB, STRAIGHT PIPE %+.1f dB\n", bR, bP);
+            check (bP > bR + 6.0f && finite (nr) && finite (np), "v0.45 ENGINE: the EXHAUST changes the tone (STRAIGHT PIPE brighter than RUMBLE)");
+        }
+        {   // DRAW automation: the curve moves the target in time with the beat
+            const int N = 44100 * 2;   // one bar at 120 BPM
+            const double bps = 2.0 / rate;
+            juce::AudioBuffer<float> dc (2, N); for (int i = 0; i < N; ++i) { dc.setSample (0, i, 0.5f); dc.setSample (1, i, 0.5f); }
+            auto drawRun = [&] (kk::pro::DrawAutoState& st, const juce::AudioBuffer<float>& in)
+            {
+                kk::pro::DrawAutoDsp d; d.prepare (rate, B); auto out = in;
+                for (int o = 0; o < N; o += B) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st, bps * o, bps);
+                return out;
+            };
+            { kk::pro::DrawAutoState st; check (same (drawRun (st, dc), dc), "v0.45 DRAW: off = bit-identical"); }
+            kk::pro::DrawAutoState st; st.on = true; st.target = kk::pro::dtVolume; st.bars = 1;
+            for (int k = 0; k < kk::pro::DrawAutoState::numPoints; ++k) st.curve[(size_t) k] = (float) k / (float) (kk::pro::DrawAutoState::numPoints - 1);
+            const auto out = drawRun (st, dc);
+            float err = 0; for (float p : { 0.25f, 0.5f, 0.75f, 0.95f }) { const int i = (int) (p * (float) N); err = std::max (err, std::abs (out.getSample (0, i) - 0.5f * p * p)); }
+            std::printf ("DRAW: VOLUME follows the drawn ramp - worst error %.4f\n", err);
+            check (err < 0.01f, "v0.45 DRAW: the automation follows the drawn curve");
+            check (std::abs (kk::pro::DrawAutoDsp::phaseOf (-1.0, 1) - 0.75) < 1e-9 && std::abs (kk::pro::DrawAutoDsp::phaseOf (9.0, 2) - 0.125) < 1e-9, "v0.45 DRAW: the bar phase wraps (also before zero)");
+            // FILTER at the bottom of the curve = dark, at the top = open
+            const auto nz = noise (N, 0.2f, 9);
+            kk::pro::DrawAutoState sf; sf.on = true; sf.target = kk::pro::dtFilter; sf.bars = 1;
+            for (int k = 0; k < kk::pro::DrawAutoState::numPoints; ++k) sf.curve[(size_t) k] = k < kk::pro::DrawAutoState::numPoints / 2 ? 0.1f : 1.0f;
+            const auto fo = drawRun (sf, nz);
+            const float closed = db (hpE (fo, 3000.0f, 4410, N / 2 - 4410), hpE (nz, 3000.0f, 4410, N / 2 - 4410)), open = db (hpE (fo, 3000.0f, N / 2 + 4410, N), hpE (nz, 3000.0f, N / 2 + 4410, N));
+            std::printf ("DRAW: FILTER low half > 3 kHz %+.1f dB, high half %+.1f dB\n", closed, open);
+            check (closed < -30.0f && open > -1.5f, "v0.45 DRAW: a low curve closes the FILTER, a high one opens it");
+            bool safe = true;
+            for (int tg = 0; tg < kk::pro::numDrawTargets; ++tg) { kk::pro::DrawAutoState s2; s2.on = true; s2.target = tg; s2.shape (1); const auto o2 = drawRun (s2, nz); safe &= finite (o2) && o2.getMagnitude (0, N) < 1.5f; }
+            check (safe, "v0.45 DRAW: every target finite and bounded");
+        }
+        {   // MOOD WORDS
+            struct Mods { kk::pro::HoloState h; kk::pro::IntentState i; kk::pro::DialState d; kk::pro::WarpState w; kk::pro::LiquidState l; kk::pro::ErosionState e; kk::pro::ClubState c; kk::pro::SeasonState s; kk::pro::EngineState g;
+                          kk::pro::MoodTargets t() { return { h, i, d, w, l, e, c, s, g }; } };
+            auto snap = [] (Mods& m) { std::vector<float> v { (float) m.h.on.load(), m.h.depth.load(), m.h.room.load(), m.h.height.load(), (float) m.i.on.load(), (float) m.i.mode.load(), m.i.level.load(), (float) m.d.on.load(), (float) m.d.mode.load(),
+                                                              (float) m.w.on.load(), (float) m.l.on.load(), (float) m.e.on.load(), (float) m.c.on.load(), m.c.spin.load(), (float) m.s.on.load(), (float) m.g.on.load(), m.g.rev.load(), (float) m.g.gear.load() };
+                                       for (auto& x : m.s.dose) v.push_back (x.load()); return v; };
+            Mods a, b; const auto ra = kk::pro::moodApply ("night drive", a.t()), rb = kk::pro::moodApply ("night drive", b.t());
+            check (snap (a) == snap (b) && ra.count() > 0 && ra.count() == rb.count(), "v0.45 MOOD WORDS: the same words = the same arrangement");
+            Mods cz; kk::pro::moodApply ("No\xc4\x8dn\xc3\xad J\xc3\x8dZDA", cz.t());
+            check (snap (cz) == snap (a), "v0.45 MOOD WORDS: Czech words (with diacritics, any case) mean the same: nocni jizda = night drive");
+            Mods an; const auto rAn = kk::pro::moodApply ("angry", an.t());
+            check (an.i.on.load() && an.i.mode.load() == kk::pro::imAggression && an.g.on.load() && an.s.dose[kk::pro::spChilli].load() > 0.3f && rAn.moved[kk::pro::mmEngine], "v0.45 MOOD WORDS: angry = AGGRESSION + ENGINE + chilli");
+            Mods uw; kk::pro::moodApply ("underwater", uw.t());
+            check (uw.i.on.load() && uw.i.mode.load() == kk::pro::imOxygen && uw.h.on.load() && uw.h.depth.load() > 0.4f && uw.h.height.load() < 0.0f, "v0.45 MOOD WORDS: underwater = out of breath, far and heavy");
+            Mods dr; kk::pro::moodApply ("dreamy", dr.t());
+            check (dr.i.on.load() && dr.i.mode.load() == kk::pro::imCalm && dr.h.room.load() > 0.5f && dr.s.dose[kk::pro::spSugar].load() > 0.2f && ! dr.g.on.load(), "v0.45 MOOD WORDS: dreamy = CALM, a big room, sugar, no engine");
+            Mods cl; kk::pro::moodApply ("tanec v klubu", cl.t());
+            check (cl.c.on.load() && cl.l.on.load() && cl.c.spin.load() > 0.4f, "v0.45 MOOD WORDS: a dance in a club = CLUB + LIQUID");
+            Mods ph; kk::pro::moodApply ("old telefon", ph.t());
+            check (ph.d.on.load() && ! ph.c.on.load(), "v0.45 MOOD WORDS: an old phone = DIAL-UP");
+            Mods u1, u2, u3; const auto h1 = kk::pro::moodApply ("blorptax", u1.t()); kk::pro::moodApply ("blorptax", u2.t()); const auto h3 = kk::pro::moodApply ("quizzlewump", u3.t());
+            check (snap (u1) == snap (u2) && ! h1.words.empty() && ! h1.words[0].known && h1.v != h3.v, "v0.45 MOOD WORDS: an unknown word is hashed - always the same mood, another word another mood");
+            Mods em; em.h.on = true; em.c.on = true; em.g.on = true; const auto r0 = kk::pro::moodApply ("", em.t());
+            check (r0.count() == 0 && ! em.h.on.load() && ! em.c.on.load() && ! em.g.on.load() && ! em.s.on.load(), "v0.45 MOOD WORDS: no words = the mood modules rest");
+            const int dictN = (int) kk::pro::moodDictionary().size();
+            std::printf ("MOOD WORDS: %d dictionary words; 'night drive' moved %d modules\n", dictN, ra.count());
+            check (dictN >= 80, "v0.45 MOOD WORDS: a dictionary of at least 80 words");
+        }
+        {   // the project keeps the worlds; ALL OFF
+            KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+            p.club.on = true; p.club.spin = 0.7f; p.club.crowd = 0.3f; p.club.fullness = 0.2f;
+            p.season.on = true; p.season.dose[kk::pro::spSalt] = 0.4f; p.season.dose[kk::pro::spIce] = 0.8f;
+            p.engine.on = true; p.engine.rev = 0.66f; p.engine.gear = kk::pro::egFold; p.engine.exhaust = kk::pro::exRumble;
+            p.drawAuto.on = true; p.drawAuto.target = kk::pro::dtWidth; p.drawAuto.bars = 8; p.drawAuto.curve[17] = 0.123f;
+            juce::MemoryBlock mb; p.getStateInformation (mb);
+            KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (r2.club.on.load() && std::abs (r2.club.spin.load() - 0.7f) < 0.01f && std::abs (r2.club.fullness.load() - 0.2f) < 0.01f && r2.season.on.load() && std::abs (r2.season.dose[kk::pro::spIce].load() - 0.8f) < 0.01f
+                   && r2.engine.on.load() && r2.engine.gear.load() == kk::pro::egFold && r2.engine.exhaust.load() == kk::pro::exRumble && std::abs (r2.engine.rev.load() - 0.66f) < 0.01f
+                   && r2.drawAuto.on.load() && r2.drawAuto.target.load() == kk::pro::dtWidth && r2.drawAuto.bars.load() == 8 && std::abs (r2.drawAuto.curve[17].load() - 0.123f) < 0.002f, "v0.45 FX PRO WORLDS: the project keeps CLUB, SEASONING, ENGINE, DRAW");
+            r2.engine.turbo = true; r2.club.strobeHeld = true; r2.club.lever = 1.0f; r2.chainReset();
+            bool clean = true; for (auto& d : r2.season.dose) clean &= d.load() == 0.0f;
+            check (! r2.club.on.load() && ! r2.season.on.load() && ! r2.engine.on.load() && ! r2.drawAuto.on.load() && ! r2.engine.turbo.load() && ! r2.club.strobeHeld.load() && r2.club.lever.load() == 0.0f && clean,
+                   "v0.45 FX PRO: ALL OFF turns the worlds off");
+            // the whole processor: everything on, blocks of noise - finite
+            r2.club.on = true; r2.club.spin = 1; r2.season.on = true; r2.season.dose[2] = 1; r2.engine.on = true; r2.engine.rev = 1; r2.drawAuto.on = true;
+            juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer mid; bool fin = true;
+            for (int k = 0; k < 40; ++k) { kk::Rng rr; rr.seed ((uint32_t) k + 1); for (int i = 0; i < 512; ++i) { buf.setSample (0, i, 0.2f * rr.bi()); buf.setSample (1, i, 0.2f * rr.bi()); } r2.processBlock (buf, mid); fin &= finite (buf); }
+            check (fin, "v0.45 FX PRO WORLDS: in the processor chain - finite");
+        }
+    }
     // v0.43 LIFE: gravity, predator, swarm, metabolism
     {
         auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)
@@ -2845,7 +3054,7 @@ int main (int argc, char** argv)
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
             return 0;
         }
-        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..103: the EVOLVE FX PRO pages = 90 + page index (92 HOLOROOM, 93 GRAB, 99 LIQUID, 100 INTENT, 101 EROSION)
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..107: the EVOLVE FX PRO pages = 90 + flat page index (92 HOLOROOM, 93 GRAB, 97 DRAW, 99 LIQUID, 100 INTENT, 101 EROSION, 104 CLUB, 105 SEASONING, 106 ENGINE, 107 MOOD WORDS)
         {
             juce::Image kkFxSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);
@@ -2870,6 +3079,19 @@ int main (int argc, char** argv)
                                kk::pro::IntentDsp::Targets tg; kk::pro::IntentDsp::mappingBlend (kk::pro::imOxygen, kk::pro::imAggression, 0.3f, 0.35f, tg);
                                p.intent.mRasp = tg.rasp; p.intent.mWidth = tg.width; p.intent.mFreeze = tg.freeze; p.intent.mFilterHz = tg.lpHz; p.intent.mTremor = tg.tremor; }
             if (view == 101) { p.erosion.on = true; p.erosion.mFatigue = 0.55f; p.erosion.mStarve = 0.3f; p.erosion.mLevel = -8.0f; }
+            // v0.45 FX PRO WORLDS: 97 DRAW, 104 CLUB, 105 SEASONING, 106 ENGINE, 107 MOOD WORDS (flat page index = view - 90)
+            if (view == 97) { p.drawAuto.on = true; p.drawAuto.target = kk::pro::dtFilter; p.drawAuto.bars = 2; p.drawAuto.shape (0); p.drawAuto.mPos = 0.62f; p.drawAuto.mValue = p.drawAuto.at (0.62f); }
+            if (view == 104) { p.club.on = true; p.club.spin = 0.7f; p.club.crowd = 0.75f; p.club.fullness = 0.8f; p.club.mLevel = 0.6f; p.club.lever = 0.0f; }
+            if (view == 105) { p.season.on = true; p.season.dose[kk::pro::spSalt] = 0.45f; p.season.dose[kk::pro::spPepper] = 0.3f; p.season.dose[kk::pro::spChilli] = 0.25f; p.season.dose[kk::pro::spIce] = 0.4f; p.season.dose[kk::pro::spSmoke] = 0.35f; p.season.mLevel = 0.5f; }
+            if (view == 106) { p.engine.on = true; p.engine.rev = 0.72f; p.engine.gear = kk::pro::egTape; p.engine.exhaust = kk::pro::exStraight; }
+            if (view == 97 || view >= 104)   // the WORLDS snapshots follow the chosen skin (glass / night)
+            {
+                juce::Image kkFxWorldsSnapshot (KeysKillaProcessor&, int, const juce::String&);
+                auto img = kkFxWorldsSnapshot (p, view - 90, view == 107 ? juce::String (juce::CharPointer_UTF8 ("night drive in the rain, smoky blorptax")) : juce::String());
+                juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+                out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
+                return 0;
+            }
             auto img = kkFxSnapshot (p, juce::String (argv[4]).getIntValue() - 90);
             juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);

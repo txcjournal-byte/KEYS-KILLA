@@ -167,6 +167,7 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     reelDsp.prepare (sampleRate); dialDsp.prepare (sampleRate); warpDsp.prepare (sampleRate); bossDsp.prepare (sampleRate);
     liquidDsp.prepare (sampleRate, samplesPerBlock); intentDsp.prepare (sampleRate, samplesPerBlock); erosionDsp.prepare (sampleRate, samplesPerBlock);
     holoDsp.prepare (sampleRate, samplesPerBlock); grabDsp.prepare (sampleRate, samplesPerBlock); shakeDsp.prepare (sampleRate, samplesPerBlock);   // v0.44 TOUCH
+    clubDsp.prepare (sampleRate, samplesPerBlock); seasonDsp.prepare (sampleRate, samplesPerBlock); engineDsp.prepare (sampleRate, samplesPerBlock); drawAutoDsp.prepare (sampleRate, samplesPerBlock);   // v0.45 WORLDS
     scIn.setSize (2, std::max (64, samplesPerBlock) * 2);
    #if KK_FX_BUILD
     setLatencySamples (kk::pro::BossDsp::lookahead (sampleRate));   // FINAL BOSS looks 1.5 ms ahead (always, so the latency never changes)
@@ -894,6 +895,10 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         holoDsp.process (L, R, n, holoroom);              // v0.44 TOUCH: HOLOROOM, GRAB, then SHAKE right before MIX LAB
         grabDsp.process (L, R, n, grab);
         shakeDsp.process (L, R, n, shake);
+        clubDsp.process (L, R, n, club);                  // v0.45 FX PRO WORLDS: CLUB, SEASONING, ENGINE, then the DRAW automation
+        seasonDsp.process (L, R, n, season);
+        engineDsp.process (L, R, n, engine);
+        drawAutoDsp.process (L, R, n, drawAuto, beatPos, bps);
         mixDsp.process (L, R, n, mixLab);                 // v0.41 MIX LAB
        #if KK_FX_BUILD
         bossDsp.process (L, R, n, boss);                  // FINAL BOSS: the very last stage
@@ -5293,6 +5298,7 @@ void KeysKillaProcessor::chainReset()
     reel.on = false; dial.on = false; warp.on = false;   // v0.42 FX PRO modules off too (FINAL BOSS stays: it is the master safety)
     liquid.on = false; intent.on = false; erosion.on = false;
     holoroom.on = false; grab.on = false; grab.releaseAll(); shake.energy = 0.0f;   // v0.44 TOUCH
+    club.on = false; club.calm(); season.on = false; season.clean(); engine.on = false; engine.turbo = false; drawAuto.on = false;   // v0.45 WORLDS
 }
 
 void KeysKillaProcessor::chainApply (int i)
@@ -5545,6 +5551,12 @@ juce::ValueTree KeysKillaProcessor::proToTree() const
         grips << (int) gp.active.load() << "," << juce::String (gp.freq.load(), 1) << "," << juce::String (gp.q.load(), 3) << "," << juce::String (gp.gainDb.load(), 2) << ","
               << juce::String (gp.squeeze.load(), 3) << "," << juce::String (gp.tear.load(), 3) << ";";
     t.setProperty ("grab", (int) grab.on.load(), nullptr); t.setProperty ("grips", grips, nullptr);
+    // v0.45 FX PRO WORLDS: CLUB, SEASONING, ENGINE, DRAW
+    t.setProperty ("club", juce::String ((int) club.on.load()) + "," + juce::String (club.spin.load(), 3) + "," + juce::String (club.crowd.load(), 3) + "," + juce::String (club.fullness.load(), 3) + ","
+                           + juce::String (club.strobeRate.load(), 3), nullptr);
+    { juce::String sd ((int) season.on.load()); for (auto& d : season.dose) sd << "," << juce::String (d.load(), 3); t.setProperty ("season", sd, nullptr); }
+    t.setProperty ("engine", juce::String ((int) engine.on.load()) + "," + juce::String (engine.rev.load(), 3) + "," + juce::String (engine.gear.load()) + "," + juce::String (engine.exhaust.load()), nullptr);
+    { juce::String dc; dc << (int) drawAuto.on.load() << "," << drawAuto.target.load() << "," << drawAuto.bars.load(); for (auto& c : drawAuto.curve) dc << "," << juce::String (c.load(), 3); t.setProperty ("draw", dc, nullptr); }
     return t;
 }
 
@@ -5587,4 +5599,22 @@ void KeysKillaProcessor::proFromTree (const juce::ValueTree& t)
             gp.gainDb = juce::jlimit (-24.0f, 24.0f, g[3].getFloatValue()); gp.squeeze = juce::jlimit (0.0f, 1.0f, g[4].getFloatValue()); gp.tear = juce::jlimit (0.0f, 1.0f, g[5].getFloatValue());
             gp.active = g[0].getIntValue() != 0;
         }
+    // v0.45 FX PRO WORLDS (older projects: off)
+    if (const auto c = vals (t.getProperty ("club", "")); c.size() >= 5)
+    { club.calm(); club.on = c[0].getIntValue() != 0; club.spin = juce::jlimit (0.0f, 1.0f, c[1].getFloatValue()); club.crowd = juce::jlimit (0.0f, 1.0f, c[2].getFloatValue()); club.fullness = juce::jlimit (0.0f, 1.0f, c[3].getFloatValue()); club.strobeRate = juce::jlimit (0.0f, 1.0f, c[4].getFloatValue()); }
+    else { club.on = false; club.calm(); }
+    season.clean();
+    if (const auto s2 = vals (t.getProperty ("season", "")); s2.size() >= 1 + kk::pro::numSpices)
+    { season.on = s2[0].getIntValue() != 0; for (int k = 0; k < kk::pro::numSpices; ++k) season.dose[(size_t) k] = juce::jlimit (0.0f, 1.0f, s2[k + 1].getFloatValue()); }
+    else season.on = false;
+    engine.turbo = false;
+    if (const auto e = vals (t.getProperty ("engine", "")); e.size() >= 4)
+    { engine.on = e[0].getIntValue() != 0; engine.rev = juce::jlimit (0.0f, 1.0f, e[1].getFloatValue()); engine.gear = juce::jlimit (0, (int) kk::pro::numGears - 1, e[2].getIntValue()); engine.exhaust = juce::jlimit (0, (int) kk::pro::numExhausts - 1, e[3].getIntValue()); }
+    else engine.on = false;
+    if (const auto d = vals (t.getProperty ("draw", "")); d.size() >= 3 + kk::pro::DrawAutoState::numPoints)
+    {
+        drawAuto.on = d[0].getIntValue() != 0; drawAuto.target = juce::jlimit (0, (int) kk::pro::numDrawTargets - 1, d[1].getIntValue()); drawAuto.bars = juce::jlimit (1, 8, d[2].getIntValue());
+        for (int k = 0; k < kk::pro::DrawAutoState::numPoints; ++k) drawAuto.curve[(size_t) k] = juce::jlimit (0.0f, 1.0f, d[k + 3].getFloatValue());
+    }
+    else { drawAuto.on = false; drawAuto.shape (0); }
 }

@@ -8517,6 +8517,16 @@ juce::Image kkFxSnapshot (KeysKillaProcessor& p, int view)
     pg->showView (view);
     return pg->createComponentSnapshot (pg->getLocalBounds(), true, 0.8f);
 }
+// v0.45 FX PRO WORLDS: a snapshot of a page with words typed into MOOD WORDS first
+juce::Image kkFxWorldsSnapshot (KeysKillaProcessor& p, int view, const juce::String& moodWords)
+{
+    kk::themeIndex() = jlimit (0, 1, openSettings()->getIntValue ("theme", 0));
+    auto pg = std::make_unique<FxMainPage> (p);
+    pg->setBounds (0, 0, KeysKillaEditor::designW, KeysKillaEditor::designH);
+    if (moodWords.isNotEmpty()) pg->debugMood (moodWords);
+    pg->showView (view);
+    return pg->createComponentSnapshot (pg->getLocalBounds(), true, 0.8f);
+}
 // v0.45 GAME: the ARCADE page at 1512 x 798 (0 arcade, 1 invaders, 2 duel, 3 pinball, 4 a legendary chest, 5 the book)
 juce::Image kkGameSnapshot (KeysKillaProcessor& p, int which)
 {
