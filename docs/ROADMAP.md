@@ -2,6 +2,17 @@
 
 UI rule: no foreign product / brand names anywhere in the plugins. Sound / preset names in English.
 
+## v0.43 direction (owner, 2026-10-05): no preset browsing, no boring sounds
+Sounds and music are made in new ways; existing features stay. The factory bank only lives inside as hidden DNA.
+- ALCHEMY (done): EXCITE (metal strike, bio friction, electric short, breath, pressure wave) x BODY (hollow bone,
+  compressed gas, magnetic liquid, crystal lattice, molten core) x MATTER pad (glass ... mud, tiny ... giant).
+  Replaces the preset browser everywhere (top bar, parents, EVOLVE seed, melody sound, FL program list stays for hosts).
+- LIFE (done): GRAVITY (throws into a physics field), PREDATOR (hunt -> melody, pounce = pitch-bend accent),
+  SWARM (boids -> chords / cascades), METABOLISM (loops age, oxidise and decay until touched).
+- FX PRO: LIQUID (kick carves a hole, bass flows around it), INTENT (one biological state drives many params),
+  EROSION (load-driven material fatigue / starvation).
+- Later (not now, owner): room sensors (camera, biometrics), neural re-synthesis (voice -> animal throat etc.).
+
 ## EVOLVE (instrument)
 Already in: EVOLVE (bubbles, MAP, POCKET, WORLDS, MY TASTE, MATCH), MELODY (9 genres, BPM, CHORDS layer,
 AUDIO -> MIDI, LISTEN MIDI + audio, quick sound picker), BREED LAB, FAMILY TREE, MY SOUNDS,

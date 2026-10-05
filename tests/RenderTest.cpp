@@ -1143,6 +1143,89 @@ static int unitTests()
         for (int i = 0; i < 100; ++i) { juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); p.processBlock (b, mb); pk = std::max (pk, b.getMagnitude (0, 512)); }
         check (pk > 0.01f, "v0.42 SOUND WORLD: the hybrid plays on the keys");
     }
+    // v0.43 ALCHEMY: every exciter x body makes a playable sound, glass is brighter than mud, names differ
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto bright = [&] (const KeysKillaProcessor::Genome& g, float& peak)
+        {
+            p.alcUse (g, false);
+            juce::AudioBuffer<float> b (2, 512); double e = 0, d = 0; peak = 0; float last = 0; bool bad = false;
+            for (int i = 0; i < 60; ++i)
+            {
+                juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                if (i == 50) mb.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                p.processBlock (b, mb);
+                for (int n = 0; n < 512; ++n) { const float x = b.getSample (0, n); bad |= ! std::isfinite (x); e += x * x; d += (x - last) * (x - last); last = x; }
+                peak = std::max (peak, b.getMagnitude (0, 512));
+            }
+            p.panic();
+            for (int i = 0; i < 40; ++i) { juce::MidiBuffer mb; p.processBlock (b, mb); }
+            return bad ? -1.0 : d / std::max (1.0e-12, e);
+        };
+        int ok = 0, brighter = 0, combos = 0; std::set<juce::String> names;
+        for (int ex = 0; ex < (int) kk::alc::exciters().size(); ++ex)
+            for (int bo = 0; bo < (int) kk::alc::bodies().size(); ++bo)
+            {
+                ++combos;
+                auto glass = p.alchemy (ex, bo, 0.05f, 0.5f, 7), mud = p.alchemy (ex, bo, 0.95f, 0.5f, 7);
+                names.insert (glass.name); names.insert (mud.name);
+                float pg = 0, pm = 0; const double bg = bright (glass, pg), bm = bright (mud, pm);
+                ok += glass.valid() && mud.valid() && bg >= 0 && bm >= 0 && pg > 0.003f && pm > 0.003f && pg < 2.0f && pm < 2.0f;
+                brighter += bg > bm;
+            }
+        std::printf ("ALCHEMY: %d of %d recipes play (glass and mud), glass brighter in %d, %d names\n", ok, combos, brighter, (int) names.size());
+        check (ok == combos, "v0.43 ALCHEMY: every exciter x body plays as glass and as mud, clean");
+        check (brighter >= combos * 3 / 4, "v0.43 ALCHEMY: glass sounds brighter than mud");
+        check ((int) names.size() >= combos, "v0.43 ALCHEMY: the sounds get their own names");
+        auto a1 = p.alchemy (1, 2, 0.4f, 0.5f, 3), a2 = p.alchemy (1, 2, 0.4f, 0.5f, 3), a3 = p.alchemy (1, 2, 0.4f, 0.5f, 4);
+        check (a1.v == a2.v && a1.v != a3.v, "v0.43 ALCHEMY: the same recipe = the same sound, a new mutation = another");
+    }
+    // v0.43 LIFE: gravity, predator, swarm, metabolism
+    {
+        auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)
+        {
+            const auto& st = kk::mel::scaleSteps (scale);
+            for (auto& n : ns) if (std::find (st.begin(), st.end(), ((n.pitch - key) % 12 + 12) % 12) == st.end()) return false;
+            return true;
+        };
+        // a dropped ball: the bounces come faster and faster (accelerando), a heavier ball hits harder
+        kk::live::GravityField f; f.gravity = 0.5f; f.friction = 0.1f; f.bounce = 0.8f;
+        f.throws.push_back ({ 0.5f, 0.05f, 0.0f, 0.0f, 0.3f, 0.0f });
+        auto r1 = kk::live::gravity (f, 9, kk::mel::scMinor, 4);
+        bool faster = r1.notes.size() >= 4;
+        for (size_t i = 2; i < r1.notes.size() && i < 6; ++i) faster &= (r1.notes[i].start - r1.notes[i - 1].start) < (r1.notes[i - 1].start - r1.notes[i - 2].start) + 0.03f;
+        f.throws[0].mass = 1.0f; auto r2 = kk::live::gravity (f, 9, kk::mel::scMinor, 4);
+        std::printf ("GRAVITY: %d bounces, first gaps %.2f %.2f %.2f beats, velocity light %.2f heavy %.2f\n", (int) r1.notes.size(),
+                     r1.notes.size() > 3 ? r1.notes[1].start - r1.notes[0].start : 0.0f, r1.notes.size() > 3 ? r1.notes[2].start - r1.notes[1].start : 0.0f, r1.notes.size() > 3 ? r1.notes[3].start - r1.notes[2].start : 0.0f,
+                     r1.notes.empty() ? 0.0f : r1.notes[0].vel, r2.notes.empty() ? 0.0f : r2.notes[0].vel);
+        check (faster && ! r2.notes.empty() && r2.notes[0].vel > r1.notes[0].vel && inScale (r1.notes, 9, kk::mel::scMinor), "v0.43 GRAVITY: bounces speed up by themselves, mass = velocity, notes in the key");
+        int fieldNotes = 0; for (uint32_t sd = 1; sd <= 10; ++sd) fieldNotes += (int) kk::live::gravity (kk::live::randomField (sd), 0, kk::mel::scMajor, 4).notes.size() > 6;
+        check (fieldNotes >= 8, "v0.43 GRAVITY: random fields make music");
+        // the hunt: notes in the key, the pounce slides in (pitch-bend), and it lands in the MIDI file
+        kk::live::Hunt h; h.seed = 11;
+        auto hr = kk::live::predator (h, 2, kk::mel::scDorian, 4);
+        int bends = 0; for (auto& n : hr.notes) bends += std::abs (n.bend) > 0.01f;
+        auto mf = kk::live::toMidi (hr, 140.0); int wheel = 0;
+        for (int e = 0; e < mf.getTrack (0)->getNumEvents(); ++e) wheel += mf.getTrack (0)->getEventPointer (e)->message.isPitchWheel();
+        std::set<int> states (hr.stateAt.begin(), hr.stateAt.end());
+        std::printf ("PREDATOR: %d notes, %d pounces, %d pitch-bend events, %d behaviours\n", (int) hr.notes.size(), bends, wheel, (int) states.size());
+        check (hr.notes.size() >= 10 && bends >= 1 && wheel >= 9 && states.size() >= 3 && inScale (hr.notes, 2, kk::mel::scDorian), "v0.43 PREDATOR: chase, circle and pounce make a melody in the key with slides");
+        // the flock: calm = chords, frightened = a wider, busier cascade
+        kk::live::Flock fl; fl.seed = 3;
+        auto calm = kk::live::swarm (fl, 0, kk::mel::scMinor, 4);
+        fl.startles = { 2.0f, 8.0f }; fl.calm = 0.2f;
+        auto scared = kk::live::swarm (fl, 0, kk::mel::scMinor, 4);
+        auto range = [] (const std::vector<kk::live::LNote>& ns) { int lo = 127, hi = 0; for (auto& n : ns) { lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); } return hi - lo; };
+        int chords = 0; for (size_t i = 2; i < calm.notes.size(); ++i) chords += calm.notes[i].start == calm.notes[i - 2].start;
+        std::printf ("SWARM: calm %d notes (%d in chords, range %d)  scared %d notes (range %d)\n", (int) calm.notes.size(), chords, range (calm.notes), (int) scared.notes.size(), range (scared.notes));
+        check (chords >= 4 && scared.notes.size() > calm.notes.size() && range (scared.notes) > range (calm.notes) && inScale (scared.notes, 0, kk::mel::scMinor), "v0.43 SWARM: together = chords, startled = a cascade over the octaves");
+        // metabolism: young = the same, older = breathing, past its life = falling apart
+        kk::live::Metabolism m; m.rate = 0.6f; m.lifespan = 6;
+        auto young = kk::live::age (hr.notes, 0, m, 2, kk::mel::scDorian, hr.beats), mid = kk::live::age (hr.notes, 4, m, 2, kk::mel::scDorian, hr.beats), old = kk::live::age (hr.notes, 14, m, 2, kk::mel::scDorian, hr.beats);
+        float drift = 0; for (size_t i = 0; i < std::min (mid.size(), hr.notes.size()); ++i) drift += std::abs (mid[i].start - hr.notes[i].start);
+        std::printf ("METABOLISM: young %d notes, age 4 %d notes (drift %.2f beats), age 14 %d notes\n", (int) young.size(), (int) mid.size(), drift, (int) old.size());
+        check (young.size() == hr.notes.size() && mid.size() == hr.notes.size() && drift > 0.05f && old.size() < hr.notes.size() * 3 / 4 && inScale (mid, 2, kk::mel::scDorian), "v0.43 METABOLISM: the loop breathes, oxidises and falls apart when it is too old");
+    }
     // v0.42 EVOLVE FX PRO modules: REMIX REEL, DIAL-UP, WARP DRIVE, FINAL BOSS
     {
         const double rate = 44100.0; const int N = 44100 * 2;

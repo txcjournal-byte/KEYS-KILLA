@@ -5517,6 +5517,23 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             }
             break;
         }
+        case 12:  // ALCHEMY: a flask with bubbles
+        {
+            Path f; f.startNewSubPath (cx - w * 0.18f, cy - w * 0.5f); f.lineTo (cx - w * 0.18f, cy - w * 0.1f); f.lineTo (cx - w * 0.45f, cy + w * 0.45f);
+            f.lineTo (cx + w * 0.45f, cy + w * 0.45f); f.lineTo (cx + w * 0.18f, cy - w * 0.1f); f.lineTo (cx + w * 0.18f, cy - w * 0.5f);
+            g.strokePath (f, PathStrokeType (1.5f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.drawLine (cx - w * 0.26f, cy - w * 0.5f, cx + w * 0.26f, cy - w * 0.5f, 1.5f);
+            g.fillEllipse (cx - w * 0.15f, cy + w * 0.15f, w * 0.14f, w * 0.14f); g.drawEllipse (cx + w * 0.05f, cy + w * 0.02f, w * 0.12f, w * 0.12f, 1.0f);
+            break;
+        }
+        case 13:  // LIFE: a ball bouncing along an arc
+        {
+            Path a; a.startNewSubPath (cx - w * 0.5f, cy + w * 0.4f); a.quadraticTo (cx - w * 0.25f, cy - w * 0.4f, cx, cy + w * 0.4f); a.quadraticTo (cx + w * 0.18f, cy - w * 0.05f, cx + w * 0.36f, cy + w * 0.4f);
+            g.strokePath (a, PathStrokeType (1.2f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.drawLine (cx - w * 0.5f, cy + w * 0.46f, cx + w * 0.5f, cy + w * 0.46f, 1.2f);
+            g.fillEllipse (cx + w * 0.3f, cy + w * 0.18f, w * 0.18f, w * 0.18f);
+            break;
+        }
         case 8:   // EVOLVE: a seed with six children around it
         {
             const float rr = w * 0.42f;
@@ -5570,13 +5587,13 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 9;
-    // v0.40: EVOLVE / MELODY / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX (the ids stay as before; 9 = MELODY)
-    static int tileId (int v) { static const int ids[numTiles] { 8, 9, 11, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static constexpr int numTiles = 11, studioAt = 8;
+    // v0.43: EVOLVE / ALCHEMY / LIFE / MELODY / SOUND WORLD / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX / MIX LAB
+    static int tileId (int v) { static const int ids[numTiles] { 8, 12, 13, 9, 11, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB", "SOUND\nWORLD" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB", "SOUND\nWORLD", "ALCHEMY", "LIFE" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -5593,7 +5610,7 @@ public:
                 g.drawFittedText (dropHover ? "DROP\n= PARENT" : flashText, r.toNearestInt(), Justification::centred, 2);
                 continue;
             }
-            if (v == 6)
+            if (v == studioAt)
             {
                 const auto lr = r.withY (r.getY() - 15).withHeight (13);
                 g.setColour (TC (0xffc8c4e8)); g.setFont (serif (11.5f, true, 0.3f));
@@ -5619,7 +5636,7 @@ public:
             }
             juce::ignoreUnused (ink);
             // icon + name (left aligned) - each tile its own neon colour
-            const float bs = jmin (30.0f, r.getHeight() - 12.0f);
+            const float bs = jmin (30.0f, r.getHeight() - 10.0f);
             const auto ic = Rectangle<float> (r.getX() + 7, r.getCentreY() - bs * 0.5f, bs, bs);
             drawTileIcon (g, k, ic, on);
             g.setColour (on ? TC (0xffffffff) : TC (0xffe6e3ff));
@@ -5641,7 +5658,7 @@ private:
     {
         const float gap = 5.0f, extra = 18.0f;
         const float h = ((float) getHeight() - gap * (numTiles - 1) - extra) / (float) numTiles;
-        return { 3.0f, (float) k * (h + gap) + (k >= 6 ? extra : 0.0f), (float) getWidth() - 6.0f, h };
+        return { 3.0f, (float) k * (h + gap) + (k >= studioAt ? extra : 0.0f), (float) getWidth() - 6.0f, h };
     }
     void timerCallback() override { flash -= 0.012f; if (flash <= 0) { flash = 0; stopTimer(); } repaint (part (0).expanded (4).toNearestInt()); }
     KKLookAndFeel& lnf;
@@ -6779,16 +6796,16 @@ public:
             addAndMakeVisible (*b); layerBtns.push_back (std::move (b));
         }
         // v0.42 quick sound: a family + < > right here (the melody keeps playing while you flip through sounds)
-        static const int cats[] { cBells, cPlucks, cPiano, cKeys, cMallets, cPads, cLead, cStrings, cWoodwind, cBrass, cChoir, cOrgan, cSynth, cArp, cGuitar, cTexture };
-        for (int i = 0; i < (int) std::size (cats); ++i) catBox.addItem (categoryNames()[cats[i]], cats[i] + 1);
-        catBox.setSelectedId (cBells + 1, dontSendNotification);
+        // v0.43: no preset families - what EXCITES the matter, then < > mutates it (ALCHEMY makes the whole sound)
+        for (int i = 0; i < (int) kk::alc::exciters().size(); ++i) catBox.addItem (kk::alc::exciters()[(size_t) i].name, i + 1);
+        catBox.setSelectedId (proc.alcExc.load() + 1, dontSendNotification);
         catBox.onChange = [this] { stepSound (0); };
-        catBox.setTooltip ("A family of sounds for the melodies - then < > flips through them while the melody plays");
+        catBox.setTooltip ("What excites the matter of the melody sound - then < > mutates it while the melody plays");
         addAndMakeVisible (catBox);
-        btn (prevSnd, "<", "Previous sound of this family", [this] { stepSound (-1); });
-        btn (nextSnd, ">", "Next sound of this family", [this] { stepSound (1); });
+        btn (prevSnd, "<", "The previous mutation", [this] { stepSound (-1); });
+        btn (nextSnd, ">", "A new mutation of this matter", [this] { stepSound (1); });
         btn (curSoundBtn, "", "", [this] {}); curSoundBtn.setVisible (false);
-        btn (pickSoundBtn, "ALL SOUNDS", "Choose the sound the melodies play with (hear it first, then USE IT)", [this] { if (onPickSound) onPickSound(); });
+        btn (pickSoundBtn, "ALCHEMY", "Make the sound the melodies play with in ALCHEMY (then USE IT)", [this] { if (onPickSound) onPickSound(); });
         btn (listenBtn, "LISTEN", "LISTEN: press it, then play your melody in FL - press it again when it has played once.  Notes on EVOLVE's channel are caught as MIDI.  Another plugin (Nexus ...)? Put EVOLVE as an EFFECT on that plugin's mixer track: LISTEN hears its sound and turns it into notes", [this]
         {
             if (proc.melListening()) { proc.melListen (false); note = proc.melHasMine ? "got it" + String (proc.melListenSource == "AUDIO" ? " (from the sound)" : "") + ": " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) : String ("nothing heard - play your melody in FL while LISTEN is on (or EVOLVE as an effect on the plugin's track)"); }
@@ -7095,15 +7112,10 @@ private:
     void startAnim() { animStart = Time::getMillisecondCounter(); refresh(); }
     void stepSound (int dir)
     {
-        const int cat = catBox.getSelectedId() - 1;
-        std::vector<int> list;
-        const auto& ps = factoryPresets();
-        for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].cat == cat) list.push_back (i);
-        if (list.empty()) return;
-        int& pos = catPos[cat];
-        pos = dir == 0 ? jlimit (0, (int) list.size() - 1, pos) : (pos + dir + (int) list.size()) % (int) list.size();
+        proc.alcExc = jmax (0, catBox.getSelectedId() - 1);
+        proc.alcSeed = (uint32) ((int) proc.alcSeed + dir);
         const int playing = proc.melPlaying;
-        proc.loadPreset (list[(size_t) pos]);
+        proc.alcUse (proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), proc.alcSeed), playing == -1);
         if (playing >= 0) proc.melPlay (playing); else if (playing == -2) proc.melPlayMine();   // keep the melody going on the new sound
         repaint();
     }
@@ -7158,6 +7170,8 @@ private:
 
 #include "MixLabPage.h"
 #include "SoundWorldPage.h"
+#include "AlchemyPage.h"
+#include "LifePage.h"
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7173,17 +7187,17 @@ public:
         setLookAndFeel (&lnf);
 
         // ---- header
-        prevBtn.onClick = [this] { step (-1); }; prevBtn.setTooltip ("Previous preset (inside the category chosen in the browser)");
-        nextBtn.onClick = [this] { step (1); };  nextBtn.setTooltip ("Next preset (inside the category chosen in the browser)");
+        prevBtn.onClick = [this] { mutateMatter (-1); }; prevBtn.setTooltip ("The previous mutation of this matter");
+        nextBtn.onClick = [this] { mutateMatter (1); };  nextBtn.setTooltip ("A new mutation of this matter (ALCHEMY)");
         saveBtn.onClick = [this] { savePreset(); }; saveBtn.setTooltip ("Save this sound as a user preset.");
         menuBtn.onClick = [this] { showMenu(); };  menuBtn.setTooltip ("Presets, A/B, undo, ADVANCED, size.");
-        nameBtn.onClick = [this] { openTab (tabBrowser); }; nameBtn.setTooltip ("Click to browse and search all presets.");
-        heartBtn.onClick = [this] { toggleFavourite(); }; heartBtn.setTooltip ("Add to favourites");
+        nameBtn.onClick = [this] { openTab (tabAlchemy); }; nameBtn.setTooltip ("The sound on your keys.  Click = ALCHEMY: make a new one from matter (no presets to browse)");
+        heartBtn.onClick = [this] { savePresetAs(); }; heartBtn.setTooltip ("Love it?  Keep this sound (it goes into MY SOUNDS)");
         editBtn.framed = true; editBtn.hero = true; editBtn.setButtonText ("EDIT");
         editBtn.setTooltip ("SOUND EDIT: the whole sound on one page - oscillator, LFO, pitch, filter, envelopes and effects, with graphs you can drag.");
         editBtn.onClick = [this] { openTab (tabEdit); };
         addAndMakeVisible (editBtn);
-        keysPill.framed = true; keysPill.setTooltip ("What the keys play now.  Playing a sample / a child?  Click = back to the preset");
+        keysPill.framed = true; keysPill.setTooltip ("What the keys play now.  Playing a sample / a child?  Click = back to your sound");
         keysPill.onClick = [this] { if (proc.sampleActive() || proc.chopActive()) { proc.loadPreset (proc.getCurrentProgram()); labChanged(); } };
         addAndMakeVisible (keysPill);
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
@@ -7221,9 +7235,9 @@ public:
         for (int sl = 0; sl < 2; ++sl)
         {
             auto& pv = sl == 0 ? prevA : prevB; auto& nx = sl == 0 ? nextA : nextB; auto& dc = sl == 0 ? diceA : diceB;
-            pv.onClick = [this, sl] { proc.stepParent (sl, -1); labChanged(); }; pv.setTooltip ("Previous sound of this category");
-            nx.onClick = [this, sl] { proc.stepParent (sl, 1); labChanged(); };  nx.setTooltip ("Next sound of this category");
-            dc.onClick = [this, sl] { proc.randomParent (sl); labChanged(); };   dc.setTooltip ("Random parent from the whole library");
+            pv.onClick = [this, sl] { randomMatterParent (sl, false); }; pv.setTooltip ("Another mutation of this matter");
+            nx.onClick = [this, sl] { randomMatterParent (sl, false); };  nx.setTooltip ("Another mutation of this matter");
+            dc.onClick = [this, sl] { randomMatterParent (sl, true); };   dc.setTooltip ("A random matter: a random exciter, body and consistency");
             addAndMakeVisible (pv); addAndMakeVisible (nx); addAndMakeVisible (dc);
         }
         breedBtn.onBreed = [this]
@@ -7292,6 +7306,8 @@ public:
             if (k == 9) { if (! (openTabIndex == tabMelody && isPanelVisible())) openTab (tabMelody); return; }
             if (k == 10) { if (! (openTabIndex == tabMix && isPanelVisible())) openTab (tabMix); return; }
             if (k == 11) { if (! (openTabIndex == tabWorld && isPanelVisible())) openTab (tabWorld); return; }
+            if (k == 12) { if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy); return; }
+            if (k == 13) { if (! (openTabIndex == tabLife && isPanelVisible())) openTab (tabLife); return; }
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
             const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
@@ -7380,9 +7396,8 @@ public:
         evolve->onTheme = [this] { setTheme (1 - kk::themeIndex()); };
         evolve->onPickSeed = [this]
         {
-            ensureBrowser(); hidePanels();
-            browser->open (-1, -1, false, [this] (int idx) { if (idx >= 0) proc.evoSeedPreset (idx); else proc.evoSeedCurrent(); if (evolve) evolve->repaint(); }, "CHOOSE THE SEED");
-            browser->toFront (false);
+            showEvolve (false);
+            openAlchemy ("THE SEED OF A NEW TREE", [this] { proc.evoSeedCurrent(); showEvolve (true); if (evolve) evolve->repaint(); });
         };
         evolve->onSavePreset = [this] (int node)
         {
@@ -7513,6 +7528,20 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
+        if (v >= 50 && v <= 54)   // v0.43 ALCHEMY (50, 54 = as the chooser), LIFE (51 gravity, 52 predator, 53 swarm)
+        {
+            if (v == 50 || v == 54)
+            {
+                openTab (tabAlchemy);
+                if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->debugSet (0, 3, v == 54 ? 0.8f : 0.25f, 0.6f);
+                if (v == 54) openAlchemy ("PARENT A", [] {});
+            }
+            else
+            {
+                openTab (tabLife);
+                if (auto* ip = dynamic_cast<InsetPage*> (module (tabLife))) if (auto* lp = dynamic_cast<LifePage*> (ip->page())) lp->debugMode (v - 51);
+            }
+        }
         if (v == 41 || v == 42)   // v0.40 MELODY: 8 melodies (42: from your melody)
         {
             openTab (tabMelody);
@@ -7701,13 +7730,13 @@ public:
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
-                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
-        labSwitch.setBounds (R (16, 100, 138, 600));
+                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld || i == tabAlchemy || i == tabLife ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
+        labSwitch.setBounds (R (16, 98, 138, 606));
         if (evolve != nullptr) evolve->setBounds (R (0, 0, 1672, 806));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, tabAlchemy, tabLife, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -7726,7 +7755,7 @@ private:
                 case tabSounds:
                 {
                     auto pg = std::make_unique<MySoundsPage> (proc, lnf);
-                    pg->onFactory = [this] { openTab (tabBrowser); };
+                    pg->onFactory = [this] { openTab (tabAlchemy); };
                     pg->onPair = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr) { safe->hidePanels(); safe->openTabIndex = -1; safe->updateTabs(); safe->labChanged(); } }); };
                     m = std::make_unique<InsetPage> (std::move (pg)); break;   // v0.33: MY SOUNDS gets the whole page
                 }
@@ -7734,16 +7763,13 @@ private:
                 case tabMelody:
                 {
                     auto pg = std::make_unique<MelodyPage> (proc, lnf);
-                    pg->onPickSound = [this]
-                    {
-                        ensureBrowser();
-                        browser->open (-1, -1, false, [this] (int idx) { if (idx >= 0) proc.loadPreset (idx); }, "THE SOUND FOR THE MELODIES");
-                        browser->toFront (false);
-                    };
+                    pg->onPickSound = [this] { openAlchemy ("THE SOUND FOR THE MELODIES", [this] { openTab (tabMelody); }); };
                     m = std::make_unique<InsetPage> (std::move (pg)); break;
                 }
                 case tabMix:      m = std::make_unique<InsetPage> (std::make_unique<MixLabPage> (proc, lnf)); break;   // v0.41
                 case tabWorld:    m = std::make_unique<InsetPage> (std::make_unique<SoundWorldPage> (proc, lnf)); break;   // v0.42
+                case tabAlchemy:  m = std::make_unique<InsetPage> (std::make_unique<AlchemyPage> (proc, lnf)); break;     // v0.43
+                case tabLife:     m = std::make_unique<InsetPage> (std::make_unique<LifePage> (proc, lnf)); break;        // v0.43
                 default:          m = std::make_unique<InsetPage> (std::make_unique<FxRackPage> (proc, lnf)); break;
             }
             addChildComponent (*m); noFocus (*m); resized();
@@ -7786,6 +7812,7 @@ private:
     }
     void openTab (int t)
     {
+        if (t == tabBrowser) t = tabAlchemy;   // v0.43: no preset browser any more
         const bool wasOpen = t == openTabIndex && isPanelVisible();
         hidePanels();
         openTabIndex = -1;
@@ -7848,7 +7875,7 @@ private:
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
         const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabSampler ? 5
-                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : -1;
+                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : openTabIndex == tabAlchemy ? 12 : openTabIndex == tabLife ? 13 : -1;
         if (openTabIndex >= tab808 && openTabIndex < numTabs) lastDrum = openTabIndex - tab808;
         else proc.kitPlay = false;   // PLAY KIT is a preview on the drum pages
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
@@ -7859,7 +7886,7 @@ private:
                            || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0)
                            || openTabIndex == tabEdit    // SOUND EDIT: keep the loop running while you tweak the sound
                            || openTabIndex == tabMix     // v0.41 MIX LAB: you mix what plays
-                           || (owner == 4 && openTabIndex == tabMelody);
+                           || (owner == 4 && (openTabIndex == tabMelody || openTabIndex == tabLife || openTabIndex == tabAlchemy));
             if (! keep) proc.stopLoop();
         }
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }
@@ -7875,14 +7902,36 @@ private:
 
     // ---------------- BREED LAB ----------------
     void labChanged() { lastLab = -1; refreshState(); }
+    // ---------------- v0.43 ALCHEMY instead of the preset browser ----------------
+    void openAlchemy (const String& title, std::function<void()> then)
+    {
+        if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy);
+        if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->pick (title, std::move (then));
+    }
+    KeysKillaProcessor::Genome randomMatter()
+    {
+        auto& r = Random::getSystemRandom();
+        return proc.alchemy (r.nextInt ((int) kk::alc::exciters().size() - 1), r.nextInt ((int) kk::alc::bodies().size()), r.nextFloat(), 0.2f + 0.6f * r.nextFloat(), (uint32) r.nextInt() | 1u);
+    }
+    void randomMatterParent (int slot, bool anyMatter)
+    {
+        auto g = anyMatter ? randomMatter() : proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), (uint32) Random::getSystemRandom().nextInt() | 1u);
+        proc.setParentGenome (slot, g); labChanged();
+    }
+    void mutateMatter (int dir)
+    {
+        proc.alcSeed = (uint32) ((int) proc.alcSeed + dir);
+        proc.alcUse (proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), proc.alcSeed), true);
+        proc.captureUndo(); refreshState();
+    }
     void parentMenu (int slot) { soundMenu (slot, false); }
     void soundMenu (int slot, bool ancestor)
     {
         PopupMenu m, cats;
         m.addSectionHeader (ancestor ? "SOUND " + String (slot + 1) : String (slot == 0 ? "PARENT A" : "PARENT B"));
-        m.addItem (1, "Choose from the browser...");
-        m.addItem (2, "Use the current sound");
-        m.addItem (3, "Random sound");
+        m.addItem (1, "Make it in ALCHEMY...");
+        m.addItem (2, "Use the sound on the keys");
+        m.addItem (3, "Random matter");
         if (ancestor)
         {
             m.addItem (4, "Use PARENT A", proc.parent (0).valid());
@@ -7894,15 +7943,6 @@ private:
             m.addItem (7, "Your own sound (WAV, MP3 ...)...");
             m.addItem (6, "Empty", proc.labSlotFilled (slot));
         }
-        const auto& ps = factoryPresets();
-        for (int c = 0; c < numCategories; ++c)
-        {
-            if (c == c808) continue;
-            PopupMenu sub;
-            for (int i = 0; i < (int) ps.size(); ++i) if (ps[(size_t) i].cat == c) sub.addItem (1000 + i, ps[(size_t) i].name);
-            cats.addSubMenu (categoryNames()[c], sub);
-        }
-        m.addSubMenu ("By category", cats);
         m.showMenuAsync (PopupMenu::Options(), [this, slot, ancestor, safe = SafePointer<MainPage> (this)] (int r)
         {
             if (safe == nullptr || r == 0) return;
@@ -7913,14 +7953,12 @@ private:
             };
             if (r == 1)
             {
-                ensureBrowser(); hidePanels();
-                browser->open (-1, -1, false, [this, setPreset, ancestor] (int idx) { setPreset (idx); labChanged(); if (ancestor) openTab (tabTree); },
-                               ancestor ? "CHOOSE SOUND " + String (slot + 1) : String (slot == 0 ? "CHOOSE PARENT A" : "CHOOSE PARENT B"));
-                openTabIndex = tabBrowser; updateTabs();
+                openAlchemy (ancestor ? "SOUND " + String (slot + 1) + " OF THE FAMILY TREE" : String (slot == 0 ? "PARENT A" : "PARENT B"),
+                             [this, setPreset, ancestor] { setPreset (-1); labChanged(); if (ancestor) openTab (tabTree); else { hidePanels(); openTabIndex = -1; updateTabs(); } });
                 return;
             }
             if (r == 2) setPreset (-1);
-            else if (r == 3) { if (ancestor) proc.randomAncestor (slot); else proc.randomParent (slot); }
+            else if (r == 3) { auto g = randomMatter(); if (ancestor) proc.setAncestorGenome (slot, g); else proc.setParentGenome (slot, g); }
             else if (r == 4 || r == 5) proc.setAncestorGenome (slot, proc.parent (r - 4));
             else if (r == 6) { if (ancestor) proc.clearAncestor (slot); else proc.clearParent (slot); }
             else if (r == 7)
@@ -8099,12 +8137,9 @@ private:
         m.addItem (4, "Delete", user);
         m.addItem (5, "Revert", proc.isModified());
         m.addItem (6, "Init patch");
-        m.addItem (7, "Browse presets...");
-        packs.addItem (20, "INSTALL PACK (.kkpack)...");
-        packs.addItem (21, "Export my presets as a pack (.kkpack)...");
-        packs.addItem (23, "Show the Packs folder");
-        packs.addItem (22, "Show my preset folder");
-        m.addSubMenu ("Sound packs", packs);
+        m.addItem (7, "ALCHEMY: make a new sound...");
+        packs.addItem (22, "Show my sound folder");
+        m.addSubMenu ("Files", packs);
         m.addSectionHeader ("EDIT");
         m.addItem (8, "Undo", proc.canUndo());
         m.addItem (9, "Redo", proc.canRedo());

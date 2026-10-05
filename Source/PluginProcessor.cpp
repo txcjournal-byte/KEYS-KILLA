@@ -3785,7 +3785,15 @@ void KeysKillaProcessor::rescanPacks()
 juce::AudioProcessorEditor* KeysKillaProcessor::createEditor() { return new KeysKillaEditor (*this); }
 
 #if ! KK_TEST_BUILD
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new KeysKillaProcessor(); }
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    auto* p = new KeysKillaProcessor();
+   #if ! KK_FX_BUILD
+    // v0.43: a new EVOLVE starts with a sound made by ALCHEMY, not a preset (a saved project restores its own sound)
+    p->alcUse (p->alchemy (p->alcExc.load(), p->alcBody.load(), p->alcMatter.load(), p->alcSize.load(), p->alcSeed), false);
+   #endif
+    return p;
+}
 #endif
 
 //==============================================================================
@@ -5391,6 +5399,53 @@ void KeysKillaProcessor::worldPlay (const Genome& g, bool preview)
 {
     if (! g.valid()) return;
     worldCurrent = g;
+    EvoNode n; n.g = g; n.name = g.name;
+    evoAuditionNode (n, preview);
+}
+
+//==============================================================================
+// v0.43 ALCHEMY: exciter DNA x body DNA, then the matter and the size bend the result
+KeysKillaProcessor::Genome KeysKillaProcessor::alchemy (int exc, int body, float matter, float size, uint32_t seed)
+{
+    const auto& E = kk::alc::exciters()[(size_t) juce::jlimit (0, (int) kk::alc::exciters().size() - 1, exc)];
+    const auto& B = kk::alc::bodies()[(size_t) juce::jlimit (0, (int) kk::alc::bodies().size() - 1, body)];
+    matter = juce::jlimit (0.0f, 1.0f, matter); size = juce::jlimit (0.0f, 1.0f, size);
+    const auto pe = kk::alc::dnaPool (E), pb = kk::alc::dnaPool (B);
+    const uint32_t h = kk::hash32 (seed * 2654435761u + (uint32_t) exc * 97u + (uint32_t) body * 7919u);
+    auto a = genomeFromPreset (pe[(size_t) (h % pe.size())]), b = genomeFromPreset (pb[(size_t) ((h >> 9) % pb.size())]);
+    if (! a.valid() || ! b.valid()) return {};
+    const float keep = breedWild;
+    breedWild = 0.3f;
+    auto g = makeChildOf (a, b, 2 + (int) ((h >> 18) % 4), h, nullptr, false).g;
+    breedWild = keep;
+    auto real = [&] (const char* id) { auto it = idIndex.find (id); return it == idIndex.end() ? 0.0f : params[(size_t) it->second]->convertFrom0to1 (g.v[(size_t) it->second]); };
+    auto set = [&] (const char* id, float x) { if (auto it = idIndex.find (id); it != idIndex.end()) { auto& r = params[(size_t) it->second]->getNormalisableRange(); g.v[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (r.snapToLegalValue (juce::jlimit (r.start, r.end, x))); } };
+    const bool bass = E.dna.front().first == c808;
+    // MATTER: glass = bright, ringing, crisp ... mud = dark, slow, thick, wobbling
+    const float m2 = matter * matter;
+    set (ID::cutoff, juce::jlimit (bass ? 90.0f : 160.0f, 19000.0f, real (ID::cutoff) * (1.8f - 1.58f * matter)));
+    set (ID::reso, juce::jmap (matter, std::max (real (ID::reso), 0.35f), real (ID::reso) * 0.4f));
+    set (ID::attack, real (ID::attack) + m2 * (bass ? 0.01f : 0.22f));
+    set (ID::release, real (ID::release) * (0.7f + 1.5f * matter));
+    set (ID::decay, real (ID::decay) * (0.8f + 0.8f * matter));
+    set (ID::drive, juce::jmin (1.0f, real (ID::drive) + 0.35f * matter));
+    set (ID::wow, juce::jmin (1.0f, real (ID::wow) + 0.45f * m2));
+    set (ID::chorus, juce::jmin (1.0f, real (ID::chorus) + 0.2f * (1.0f - matter)));
+    set (ID::eqHigh, real (ID::eqHigh) + 3.0f - 9.0f * matter);
+    // SIZE: tiny = an octave up, dry ... giant = an octave down, a huge space
+    const int oct = size < 0.22f && ! bass ? 1 : size > 0.78f ? -1 : 0;
+    set (ID::octave, real (ID::octave) + (float) oct);
+    set (ID::revSize, 0.15f + 0.8f * size);
+    set (ID::revMix, bass ? real (ID::revMix) * 0.5f : juce::jmax (real (ID::revMix) * 0.6f, 0.04f + 0.4f * size * size));
+    g.cat = a.cat; g.preset = -1; g.gen = 0;
+    g.name = kk::alc::sizeWord (size) + kk::alc::matterWord (matter) + " " + E.word + " " + B.word;
+    g.loop = kk::loopFromSeed (h);
+    return g;
+}
+
+void KeysKillaProcessor::alcUse (const Genome& g, bool preview)
+{
+    if (! g.valid()) return;
     EvoNode n; n.g = g; n.name = g.name;
     evoAuditionNode (n, preview);
 }

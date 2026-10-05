@@ -19,6 +19,8 @@
 #include "MixCoach.h"
 #include "SoundWorld.h"
 #include "FxPro.h"
+#include "Alchemy.h"
+#include "Living.h"
 #include <map>
 
 class KeysKillaProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
@@ -206,6 +208,10 @@ public:
     Genome worldConnect (int regionA, int regionB, uint32_t seed);
     void worldPlay (const Genome& g, bool preview);              // on the keys (and heard)
     Genome worldCurrent; int worldRegion = -1, worldRegionB = -1, worldDot = -1;                        // v0.41: a synth genome (a MATCH strand) starts the tree
+    // v0.43 ALCHEMY: a sound from EXCITER x BODY x MATTER (glass..mud) x SIZE - the bank is only hidden DNA
+    Genome alchemy (int exciter, int body, float matter, float size, uint32_t seed);
+    void alcUse (const Genome& g, bool preview);                 // on the keys (and heard)
+    std::atomic<int> alcExc { 0 }, alcBody { 3 }; std::atomic<float> alcMatter { 0.3f }, alcSize { 0.5f }; uint32_t alcSeed = 1;
     // v0.41 MATCH: drop a WAV - four strands of synth sounds grow toward it in the background (any strand can be planted at any time)
     struct MatchStrand { Genome g; float match = 0; std::array<float, 64> wave {}; int gen = 0; };
     bool evoMatchStart (const juce::File& f);
