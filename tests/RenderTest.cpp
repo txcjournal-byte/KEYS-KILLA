@@ -4,6 +4,7 @@
 // Offline render of every factory preset: checks for NaN/Inf, silence, DC and loudness spread.
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
+#include "../Source/SoundCode.h"
 #include <cstdio>
 #include <set>
 
@@ -1209,6 +1210,71 @@ static int unitTests()
         check (t1 > t0 * 2.0 && r2 > r0 * 1.2, "v0.44 SCULPT: stretched + frozen rings longer, heated is rougher");
         check (torn.v != base.v && torn.name.contains ("Split"), "v0.44 SCULPT: torn in two = a second layer");
     }
+    // v0.45 COOK: the recipe = a SOUND CODE (round trip, typos caught), the same recipe = the same sound, every ingredient plays
+    {
+        juce::Random rnd (2026);
+        int trips = 0, typos = 0, typoTries = 0; size_t longest = 0;
+        for (int i = 0; i < 500; ++i)
+        {
+            const auto r = kk::code::random (rnd);
+            const auto c = kk::code::encode (r);
+            longest = std::max (longest, (size_t) c.length());
+            kk::code::Recipe back; trips += kk::code::decode (c, back) && back == r;
+            // one typo: another character of the alphabet somewhere after "EV-"
+            int pos = 3 + rnd.nextInt (c.length() - 3); while (c[pos] == '-') pos = 3 + rnd.nextInt (c.length() - 3);
+            const int v = kk::code::charValue (c[pos]); const int nv = (v + 1 + rnd.nextInt (31)) % 32;
+            auto bad = c.substring (0, pos) + juce::String::charToString ((juce::juce_wchar) kk::code::alphabet()[nv]) + c.substring (pos + 1);
+            kk::code::Recipe junk; ++typoTries; typos += ! kk::code::decode (bad, junk);
+        }
+        kk::code::Recipe lower; const auto c0 = kk::code::encode (kk::code::random (rnd));
+        const bool caseFree = kk::code::decode (c0.toLowerCase().removeCharacters ("-"), lower) && kk::code::encode (lower) == c0;
+        kk::code::Recipe dummy;
+        const bool rubbish = ! kk::code::decode ("hello world", dummy) && ! kk::code::decode ("EV-", dummy) && ! kk::code::decode (c0.dropLastCharacters (1), dummy) && ! kk::code::decode (c0 + "7", dummy);
+        std::printf ("COOK CODE: %d / 500 round trips, %d / %d typos caught, longest code %d chars, e.g. %s\n", trips, typos, typoTries, (int) longest, c0.toRawUTF8());
+        check (trips == 500, "v0.45 COOK: 500 random recipes -> code -> the exact same recipe");
+        check (typos == typoTries, "v0.45 COOK: a typo in a code is rejected");
+        check (caseFree && rubbish, "v0.45 COOK: codes read in any case, rubbish / cut / too long codes are rejected");
+
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        kk::code::Recipe r; r.ing[3] = 2; r.ing[0] = 1; r.setAmount (kk::code::stir, 0.3f); r.setAmount (kk::code::fry, 0.25f); r.seed = 77;
+        kk::code::Recipe back; kk::code::decode (kk::code::encode (r), back);
+        const auto g1 = kk::code::dish (p, r), g2 = kk::code::dish (p, back);
+        check (g1.valid() && g1.v == g2.v && g1.name == g2.name, "v0.45 COOK: the same recipe (via its code) = the identical genome");
+        int differ = 0;
+        for (int a = 0; a < kk::code::numActs; ++a)
+        {
+            auto r2 = r; r2.act[(size_t) a] = (juce::uint8) (r.act[(size_t) a] == 0 ? 10 : 2);
+            differ += kk::code::dish (p, r2).v != g1.v;
+        }
+        auto r3 = r; r3.ing[7] = 3; auto r4 = r; r4.seed = 78;
+        std::printf ("COOK: %d of %d gestures change the sound, '%s'\n", differ, (int) kk::code::numActs, g1.name.toRawUTF8());
+        check (differ == kk::code::numActs && kk::code::dish (p, r3).v != g1.v && kk::code::dish (p, r4).v != g1.v, "v0.45 COOK: different cooking / ingredients / mutation = a different genome");
+        // every ingredient alone (and cooked hard) plays: finite, not silent
+        int plays = 0;
+        for (int i = 0; i < kk::code::numIngredients; ++i)
+            for (int cooked = 0; cooked < 2; ++cooked)
+            {
+                kk::code::Recipe ri; ri.ing[(size_t) i] = 2; ri.seed = (juce::uint16) (100 + i);
+                if (cooked) for (int a = 0; a < kk::code::numActs; ++a) ri.setAmount (a, 0.6f);
+                const auto g = kk::code::dish (p, ri);
+                p.alcUse (g, false);
+                juce::AudioBuffer<float> b (2, 512); float peak = 0; bool bad = false;
+                for (int k = 0; k < 60; ++k)
+                {
+                    juce::MidiBuffer mb; if (k == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                    if (k == 50) mb.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                    p.processBlock (b, mb);
+                    for (int n = 0; n < 512; ++n) bad |= ! std::isfinite (b.getSample (0, n));
+                    peak = std::max (peak, b.getMagnitude (0, 512));
+                }
+                p.panic(); for (int k = 0; k < 40; ++k) { juce::MidiBuffer mb; p.processBlock (b, mb); }
+                const bool ok = g.valid() && ! bad && peak > 0.003f && peak < 2.0f;
+                if (! ok) std::printf ("!! COOK: %s (%s) peak %.4f\n", kk::code::ingredients()[(size_t) i].name, cooked ? "cooked" : "raw", peak);
+                plays += ok;
+            }
+        std::printf ("COOK: %d of %d ingredient dishes play\n", plays, 2 * kk::code::numIngredients);
+        check (plays == 2 * kk::code::numIngredients, "v0.45 COOK: every ingredient makes a valid playable dish (raw and cooked)");
+    }
     // v0.43 LIFE: gravity, predator, swarm, metabolism
     {
         auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)
@@ -2341,6 +2407,15 @@ int main (int argc, char** argv)
         juce::PropertiesFile (o).setValue ("theme", th.containsIgnoreCase ("night") || th == "1" ? 1 : 0);
         juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
+        if (argc > 4 && (juce::String (argv[4]).getIntValue() == 60 || juce::String (argv[4]).getIntValue() == 61))   // v0.45 COOK: 60 the kitchen with a dish, 61 the chooser "PARENT A"
+        {
+            juce::Image kkCookSnapshot (KeysKillaProcessor&, int);
+            p.prepareToPlay (44100, 512);
+            auto img = kkCookSnapshot (p, juce::String (argv[4]).getIntValue());
+            juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+            out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
+            return 0;
+        }
         if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..103: the EVOLVE FX PRO pages = 90 + page index (92 HOLOROOM, 93 GRAB, 99 LIQUID, 100 INTENT, 101 EROSION)
         {
             juce::Image kkFxSnapshot (KeysKillaProcessor&, int);

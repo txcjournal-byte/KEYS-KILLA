@@ -7064,6 +7064,7 @@ private:
 #include "SoundDock.h"
 #include "DoorPage.h"
 static std::unique_ptr<Component> makeDoodlePage (KeysKillaProcessor& p, KKLookAndFeel& l);   // defined after FxMainPage.h (DOODLE lives there)
+#include "CookPage.h"   // v0.45 COOK
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7091,7 +7092,7 @@ public:
         {
             if (proc.sampleActive() || proc.chopActive()) { openTab (tabEdit); return; }
             if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy);
-            if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->sculptCurrent();
+            if (auto* ap = pageOf<CookPage> (tabAlchemy)) ap->sculptCurrent();
         };
         addAndMakeVisible (editBtn);
         keysPill.framed = true; keysPill.setTooltip ("What the keys play now.  Playing a sample / a child?  Click = back to your sound");
@@ -7434,13 +7435,13 @@ public:
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
         if (v == 55) { openTab (tabFeed); if (auto* fp = pageOf<FeedPage> (tabFeed)) fp->debugSwipes(); }
-        if (v == 56) { openTab (tabAlchemy); if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->debugSculpt(); }
+        if (v == 56) { openTab (tabAlchemy); if (auto* ap = pageOf<CookPage> (tabAlchemy)) ap->debugCook(); }
         if (v >= 50 && v <= 54)   // v0.43 ALCHEMY (50, 54 = as the chooser), LIFE (51 gravity, 52 predator, 53 swarm)
         {
             if (v == 50 || v == 54)
             {
                 openTab (tabAlchemy);
-                if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->debugSet (0, 3, v == 54 ? 0.8f : 0.25f, 0.6f);
+                if (auto* ap = pageOf<CookPage> (tabAlchemy)) ap->debugCook();
                 if (v == 54) openAlchemy ("PARENT A", [] {});
             }
             else
@@ -7692,7 +7693,12 @@ private:
                 case tabAlchemy:  // v0.45 door CREATE
                 {
                     auto d = std::make_unique<DoorPage> (lnf);
-                    d->addRoom ("ALCHEMY", "Make a sound from matter, sculpt it with your hands", [this] { return std::unique_ptr<Component> (std::make_unique<AlchemyPage> (proc, lnf)); });
+                    d->addRoom ("COOK", "Cook a sound: ingredients into the pot, stir, fry, bake, freeze, season - every dish has a recipe code", [this]
+                    {
+                        auto c = std::make_unique<CookPage> (proc, lnf);
+                        c->onToLife = [this] { MessageManager::callAsync ([safe = SafePointer<MainPage> (this)] { if (safe != nullptr) safe->openTab (tabLife); }); };
+                        return std::unique_ptr<Component> (std::move (c));
+                    });
                     m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
                 case tabLife:     // v0.45 door LIFE: behaviour + drawing
@@ -7845,7 +7851,7 @@ private:
     void openAlchemy (const String& title, std::function<void()> then)
     {
         if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy);
-        if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->pick (title, std::move (then));
+        if (auto* ap = pageOf<CookPage> (tabAlchemy)) ap->pick (title, std::move (then));
     }
     KeysKillaProcessor::Genome randomMatter()
     {
@@ -8457,6 +8463,20 @@ juce::Image kkFxSnapshot (KeysKillaProcessor& p, int view)
     pg->setBounds (0, 0, KeysKillaEditor::designW, KeysKillaEditor::designH);
     pg->showView (view);
     return pg->createComponentSnapshot (pg->getLocalBounds(), true, 0.8f);
+}
+#endif
+
+#if KK_TEST_BUILD
+// v0.45 COOK: test snapshots of the kitchen (60 = a cooked dish, 61 = the chooser "PARENT A")
+juce::Image kkCookSnapshot (KeysKillaProcessor& p, int view)
+{
+    kk::themeIndex() = jlimit (0, 1, openSettings()->getIntValue ("theme", 0));
+    KKLookAndFeel lnf;
+    auto pg = std::make_unique<CookPage> (p, lnf);
+    pg->setBounds (0, 0, 1512, 798);
+    pg->debugCook();
+    if (view == 61) pg->pick ("PARENT A", [] {});
+    return pg->createComponentSnapshot (pg->getLocalBounds(), true, 1.0f);
 }
 #endif
 
