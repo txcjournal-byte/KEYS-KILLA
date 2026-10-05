@@ -1681,7 +1681,7 @@ public:
         btn (newKitBtn, "+ SOUND KIT", "A new sound kit: a folder FL Studio can browse, your sounds sorted into Bass, Keys, Plucks, Pads ...", TC (0xff22d3ee), [this] { newKit(); });
         btn (renameBtn, "RENAME", "Rename the chosen folder / kit", TC (0xffaaa4cf), [this] { renamePlace(); });
         btn (delPlaceBtn, "DELETE", "Delete the chosen folder / kit with its sounds (they go to the recycle bin)", TC (0xffff2f6d), [this] { deletePlace(); });
-        btn (factoryBtn, "FACTORY SOUNDS", "The sounds that come with BREED LAB (the SOUND LIBRARY)", TC (0xffff2f6d), [this] { if (onFactory) onFactory(); });
+        btn (factoryBtn, "EXPORT AS SOUND PACK", "Your folder as a sound pack: a zip with every WAV + a readme - share it or sell it as your own pack", TC (0xffff2f6d), [this] { if (onExportPack) onExportPack (placeDir()); });
         btn (pairBtn, "INTO BREED LAB", "This sound becomes a parent in BREED LAB (next free slot) - breed it", TC (0xff4d9dff), [this] { toPair(); });
         btn (moveBtn, "MOVE TO ...", "Move this sound into another folder or sound kit", TC (0xffffd23f), [this] { moveMenu(); });
         btn (delBtn, "DELETE SOUND", "Delete this sound (Del) - it goes to the recycle bin", TC (0xffff3b5c), [this] { deleteSound(); });
@@ -1692,6 +1692,7 @@ public:
         startTimerHz (2);
     }
     std::function<void()> onFactory, onPair;
+    std::function<void (const File&)> onExportPack;   // v0.45
     void visibilityChanged() override { if (isVisible()) reload(); }
     void paint (Graphics& g) override
     {
@@ -7065,6 +7066,9 @@ private:
 #include "DoorPage.h"
 static std::unique_ptr<Component> makeDoodlePage (KeysKillaProcessor& p, KKLookAndFeel& l);   // defined after FxMainPage.h (DOODLE lives there)
 #include "CookPage.h"   // v0.45 COOK
+#include "WordsPage.h"     // v0.45 EVOLVE: WORDS, GRID, CREATURE + DREAMS (SoundPack.h comes with Creature.h)
+#include "GridPage.h"
+#include "Creature.h"
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7100,6 +7104,9 @@ public:
         addChildComponent (keysPill);   // v0.45: the SOUND DOCK shows what the keys play (name + waveform)
         dock = std::make_unique<SoundDock> (proc, lnf);
         addAndMakeVisible (*dock);
+        dreams = std::make_unique<DreamEngine> (proc);
+        creature = std::make_unique<CreatureWidget>();
+        creature->onSurprise = [this] { if (auto* fp = pageOf<FeedPage> (tabFeed)) fp->somethingElse(); };
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
         worldBtn.setTooltip ("SOUND WORLD: one click colours the whole sound (rompler, analog, glassy, hi-fi, organic ...).  TRANCE GATE and CLIPPER are here too.");
         addAndMakeVisible (worldBtn);
@@ -7673,6 +7680,13 @@ private:
                 {
                     auto pg = std::make_unique<MySoundsPage> (proc, lnf);
                     pg->onFactory = [this] { openTab (tabAlchemy); };
+                    pg->onExportPack = [] (const File& dir)
+                    {
+                        kk::pack::packsFolder().createDirectory();
+                        const auto res = kk::pack::exportFolder (dir, kk::pack::packsFolder().getChildFile (dir.getFileName() + " - EVOLVE pack.zip"), dir.getFileName());
+                        AlertWindow::showMessageBoxAsync (MessageBoxIconType::NoIcon, "SOUND PACK", res.message);
+                        if (res.ok) res.zip.revealToUser();
+                    };
                     pg->onPair = [this] { MessageManager::callAsync ([safe = Component::SafePointer<MainPage> (this)] { if (safe != nullptr) { safe->hidePanels(); safe->openTabIndex = -1; safe->updateTabs(); safe->labChanged(); } }); };
                     m = std::make_unique<InsetPage> (std::move (pg)); break;   // v0.33: MY SOUNDS gets the whole page
                 }
@@ -7699,6 +7713,8 @@ private:
                         c->onToLife = [this] { MessageManager::callAsync ([safe = SafePointer<MainPage> (this)] { if (safe != nullptr) safe->openTab (tabLife); }); };
                         return std::unique_ptr<Component> (std::move (c));
                     });
+                    d->addRoom ("WORDS", "Type anything - a word, a name, a sentence - and get 10 sounds", [this] { return std::unique_ptr<Component> (std::make_unique<WordsPage> (proc, lnf)); });
+                    d->addRoom ("GRID", "Click squares on graph paper - they blend into one sound, played and edited below", [this] { return std::unique_ptr<Component> (std::make_unique<GridPage> (proc, lnf)); });
                     m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
                 case tabLife:     // v0.45 door LIFE: behaviour + drawing
@@ -7708,7 +7724,19 @@ private:
                     d->addRoom ("DOODLE", "Draw lines - they become a melody in your key", [this] { return makeDoodlePage (proc, lnf); });
                     m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
-                case tabFeed:     m = std::make_unique<InsetPage> (std::make_unique<FeedPage> (proc, lnf)); break;        // v0.44
+                case tabFeed:     // v0.45 door FEED: the feed with its creature, and the DREAMS from while you were away
+                {
+                    auto d = std::make_unique<DoorPage> (lnf);
+                    d->addRoom ("FEED", "Sounds come to you - swipe", [this]
+                    {
+                        auto f = std::make_unique<FeedPage> (proc, lnf);
+                        f->setSidekick (creature.get());
+                        f->onSwiped = [this] (const KeysKillaProcessor::Genome& g, bool liked) { creature->feed (g.name, liked); if (liked) dreams->remember (g); };
+                        return std::unique_ptr<Component> (std::move (f));
+                    });
+                    d->addRoom ("DREAMS", "While you were away the plugin dreamed variations of your sounds", [this] { return std::unique_ptr<Component> (std::make_unique<DreamsPanel> (proc, lnf, *dreams)); });
+                    m = std::make_unique<InsetPage> (std::move (d)); break;
+                }
                 default:          // v0.45 door FX: the rack + MIX LAB
                 {
                     auto d = std::make_unique<DoorPage> (lnf);
@@ -8237,6 +8265,14 @@ private:
     void timerCallback() override
     {
         proc.moduleHousekeeping();
+        if (dreams != nullptr && ++dreamTick >= 30)   // v0.45 DREAM: once a second - idle = the mouse rests and no loop plays
+        {
+            dreamTick = 0;
+            const auto mp = Desktop::getInstance().getMainMouseSource().getScreenPosition();
+            idleSec = mp == lastMouse && ! proc.loopPlaying() ? idleSec + 1 : 0; lastMouse = mp;
+            if (proc.currentName() != lastDreamName) { lastDreamName = proc.currentName(); if (! proc.sampleActive() && ! proc.chopActive()) dreams->remember (proc.currentGenome()); }
+            dreams->tick (idleSec > 0);
+        }
         updateKeysPill();
         {
             const int w = (int) proc.apvts.getRawParameterValue (ID::world)->load(), gt = (int) proc.apvts.getRawParameterValue (ID::gate)->load();
@@ -8316,6 +8352,9 @@ private:
     std::unique_ptr<PresetBrowser> browser;
     std::unique_ptr<MatterStrip> matterStrip;
     std::unique_ptr<SoundDock> dock;
+    int dreamTick = 0, idleSec = 0; Point<float> lastMouse; String lastDreamName;
+    std::unique_ptr<DreamEngine> dreams;            // v0.45: declared before the pages that show it
+    std::unique_ptr<CreatureWidget> creature;
     std::array<std::unique_ptr<Component>, numPages> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
@@ -8466,6 +8505,43 @@ juce::Image kkFxSnapshot (KeysKillaProcessor& p, int view)
 }
 #endif
 
+#if KK_TEST_BUILD
+// v0.45 EVOLVE area snapshots: 85 WORDS ("dark metal rain"), 86 GRID (10 squares + the rendered WAV), 87 CREATURE + DREAMS
+juce::Image kkEvolveSnapshot (KeysKillaProcessor& p, int which)
+{
+    kk::themeIndex() = jlimit (0, 1, openSettings()->getIntValue ("theme", 0));
+    KKLookAndFeel lnf;
+    std::unique_ptr<DreamEngine> dreams;
+    std::unique_ptr<Component> pg;
+    if (which == 85) { auto w = std::make_unique<WordsPage> (p, lnf); w->setBounds (0, 0, 1512, 798); w->debugType ("dark metal rain"); pg = std::move (w); }
+    else if (which == 86) { auto gp = std::make_unique<GridPage> (p, lnf); gp->setBounds (0, 0, 1512, 798); gp->debugPick(); pg = std::move (gp); }
+    else
+    {
+        struct Den : public Component
+        {
+            ~Den() override { deleteAllChildren(); }
+            void paint (Graphics& g) override
+            {
+                pageBackdrop (g, *this);
+                g.setColour (kk::theme().text); g.setFont (kk::modern::font (30.0f, true, 0.06f)); g.drawText ("CREATURE", 24, 12, 300, 40, Justification::centredLeft);
+                g.setColour (kk::theme().dim); g.setFont (kk::modern::font (13.5f, true, 0.04f));
+                g.drawText ("it eats the sounds you skip, grows with your taste, and gets bored of the same loop.  while you are away the plugin dreams", 210, 18, getWidth() - 230, 28, Justification::centredLeft);
+            }
+        };
+        auto den = std::make_unique<Den>(); den->setBounds (0, 0, 1512, 798);
+        dreams = std::make_unique<DreamEngine> (p);
+        dreams->remember (p.alchemy (0, 3, 0.2f, 0.4f, 7)); dreams->remember (p.alchemy (1, 2, 0.6f, 0.7f, 11));
+        dreams->setIdleSeconds (2);
+        for (int i = 0; i < 6; ++i) dreams->tick (true);
+        dreams->tick (false);
+        auto* c1 = new CreatureWidget(); c1->debugState (0.2f, 0.8f, 0.0f, 0.7f, 0.86f, 31, 14); c1->feed ("Glass Strike Crystal", true); c1->setBounds (40, 90, 480, 680); den->addAndMakeVisible (c1);
+        auto* c2 = new CreatureWidget(); c2->debugState (0.3f, 0.3f, 1.0f, 0.3f, 0.45f, 9, 3); c2->setBounds (540, 300, 300, 470); den->addAndMakeVisible (c2);
+        auto* dp = new DreamsPanel (p, lnf, *dreams); dp->setBounds (860, 80, 628, 690); den->addAndMakeVisible (dp);
+        pg = std::move (den);
+    }
+    return pg->createComponentSnapshot (pg->getLocalBounds(), true, 1.0f);
+}
+#endif
 #if KK_TEST_BUILD
 // v0.45 COOK: test snapshots of the kitchen (60 = a cooked dish, 61 = the chooser "PARENT A")
 juce::Image kkCookSnapshot (KeysKillaProcessor& p, int view)

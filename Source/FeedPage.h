@@ -48,6 +48,7 @@ public:
     }
     void resized() override
     {
+        if (sidekick != nullptr) sidekick->setBounds (getWidth() - 260, tasteArea().getBottom() + 50, 236, jmax (60, shelfArea().getY() - tasteArea().getBottom() - 80));
         const auto sh = shelfArea();
         stopBtn.setBounds (getWidth() - 260, 14, 110, 34); forgetBtn.setBounds (getWidth() - 260, tasteArea().getBottom() + 8, 236, 34);
         saveBtn.setBounds (sh.getRight() - 470, sh.getY() - 2, 110, 40); plantBtn.setBounds (sh.getRight() - 352, sh.getY() - 2, 190, 40); dragWav.setBounds (sh.getRight() - 154, sh.getY() - 4, 154, 44);
@@ -73,6 +74,9 @@ public:
         }
         swipe (dir);
     }
+    std::function<void (const KeysKillaProcessor::Genome&, bool)> onSwiped;   // v0.45: the CREATURE eats what you skip, DREAMS remember what you keep
+    void somethingElse() { if (! flying) swipe (4); }
+    void setSidekick (Component* c) { sidekick = c; addAndMakeVisible (c); resized(); }
     void debugSwipes() { swipe (1); flying = false; deal (1); swipe (1); flying = false; deal (1); swipe (2); flying = false; deal (2); drag = { 90, -20 }; }
 private:
     struct Recipe { int e = 0, b = 3; float m = 0.3f, s = 0.5f; uint32 seed = 1; };
@@ -127,6 +131,7 @@ private:
     void swipe (int dir)
     {
         const Recipe r = card.r;
+        if (onSwiped && (dir == 1 || dir == 2)) onSwiped (card.g, dir == 1);
         if (dir == 1) { learn (r, 1.0f); shelf.insert (shelf.begin(), card); if (shelf.size() > 12) shelf.pop_back(); chosenIdx = 0; note = "kept: " + card.g.name; }
         else if (dir == 2) learn (r, -1.0f);
         else if (dir == 3) learn (r, 0.5f);
@@ -302,4 +307,5 @@ private:
     int flyDir = 0, pending = 0, chosenIdx = -1;
     float phase = 0;
     String note;
+    Component* sidekick = nullptr;
 };

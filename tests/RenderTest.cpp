@@ -5,6 +5,9 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include "../Source/SoundCode.h"
+#include "../Source/Grid.h"        // v0.45 WORDS GRID DREAM PACK (Grid.h brings Words.h)
+#include "../Source/Dreams.h"
+#include "../Source/SoundPack.h"
 #include <cstdio>
 #include <set>
 
@@ -1275,6 +1278,120 @@ static int unitTests()
         std::printf ("COOK: %d of %d ingredient dishes play\n", plays, 2 * kk::code::numIngredients);
         check (plays == 2 * kk::code::numIngredients, "v0.45 COOK: every ingredient makes a valid playable dish (raw and cooked)");
     }
+    // v0.45 WORDS GRID DREAM PACK: meaning words move the recipe the right way (Czech = English), every other word is hashed,
+    // a sentence blends; grid places mean dark -> bright / short -> long; the WAV edit; dreams; the sound pack zip
+    {
+        namespace W = kk::words;
+        auto avg = [] (const W::Result& r, float W::Recipe::* f) { float s = 0; for (auto& x : r.sounds) s += x.*f; return r.sounds.empty() ? 0.0f : s / (float) r.sounds.size(); };
+        auto same = [] (const W::Result& a, const W::Result& b) { return a.sounds.size() == 10 && a.sounds == b.sounds; };
+        const auto dark = W::type ("dark"), bright = W::type ("bright"), glass = W::type ("glass"), mud = W::type ("mud"), tiny = W::type ("tiny"), giant = W::type ("giant");
+        const auto shrt = W::type ("short"), lng = W::type ("long"), fire = W::type ("fire"), ice = W::type ("ice");
+        std::printf ("WORDS: %d dictionary words; bright: dark %.2f bright %.2f, matter: glass %.2f mud %.2f, size: tiny %.2f giant %.2f, stretch: short %.2f long %.2f\n",
+                     W::dictionarySize(), avg (dark, &W::Recipe::bright), avg (bright, &W::Recipe::bright), avg (glass, &W::Recipe::matter), avg (mud, &W::Recipe::matter),
+                     avg (tiny, &W::Recipe::size), avg (giant, &W::Recipe::size), avg (shrt, &W::Recipe::stretch), avg (lng, &W::Recipe::stretch));
+        check (W::dictionarySize() >= 150, "v0.45 WORDS: a dictionary of at least 150 meaning words");
+        check (avg (dark, &W::Recipe::bright) < avg (bright, &W::Recipe::bright) - 0.8f && avg (glass, &W::Recipe::matter) < avg (mud, &W::Recipe::matter) - 0.5f
+               && avg (tiny, &W::Recipe::size) < avg (giant, &W::Recipe::size) - 0.5f && avg (shrt, &W::Recipe::stretch) < avg (lng, &W::Recipe::stretch) - 0.8f
+               && avg (fire, &W::Recipe::heat) > avg (ice, &W::Recipe::heat) + 0.4f && avg (ice, &W::Recipe::cool) > avg (fire, &W::Recipe::cool) + 0.4f,
+               "v0.45 WORDS: dark < bright, glass < mud, tiny < giant, short < long, fire hot, ice frozen");
+        check (W::type ("metal").sounds[0].exc == 0 && W::type ("water").sounds[0].body == 2 && W::type ("breath").sounds[0].exc == 3 && W::type ("808").sounds[0].exc == 4,
+               "v0.45 WORDS: metal strikes, water flows, breath blows, 808 is a pressure wave");
+        check (W::normalise (juce::String::fromUTF8 ("Žluťoučký KŮŇ déšť")) == "zlutoucky kun dest", "v0.45 WORDS: Czech diacritics are stripped");
+        check (same (W::type (juce::String::fromUTF8 ("temný")), dark) && same (W::type ("temny"), dark) && same (W::type (juce::String::fromUTF8 ("TEMNÝ")), dark)
+               && same (W::type (juce::String::fromUTF8 ("déšť")), W::type ("rain")) && same (W::type ("dest"), W::type ("rain")) && same (W::type ("kov"), W::type ("metal"))
+               && same (W::type (juce::String::fromUTF8 ("vesmír")), W::type ("space")) && same (W::type (juce::String::fromUTF8 ("oheň")), fire) && same (W::type ("sklo"), glass)
+               && same (W::type ("led"), ice) && same (W::type ("zlato"), W::type ("gold")) && same (W::type (juce::String::fromUTF8 ("jemný")), W::type ("soft")) && same (W::type ("vztek"), W::type ("angry"))
+               && same (W::type ("voda"), W::type ("water")) && same (W::type ("noc"), W::type ("night")) && same (W::type ("sen"), W::type ("dream")),
+               "v0.45 WORDS: Czech = English (with and without diacritics)");
+        const auto z1 = W::type ("Zorblax"), z2 = W::type ("zorblax"), k1 = W::type ("Kvetoslav");
+        int differ = 0; for (int i = 0; i < 10; ++i) differ += ! (z1.sounds[(size_t) i] == k1.sounds[(size_t) i]);
+        std::set<uint32_t> seeds; for (auto& r : z1.sounds) seeds.insert (r.seed);
+        check (same (z1, z2) && same (z1, W::type ("zorblax")) && differ >= 9 && seeds.size() == 10 && ! z1.words[0].known, "v0.45 WORDS: unknown words are hashed - always the same 10, distinct from other words");
+        const auto sent = W::type ("dark metal rain"), rev = W::type ("rain, metal ... DARK!");
+        int lit = 0; for (auto& w : sent.words) lit += w.known;
+        const auto db = W::type ("dark bright");
+        std::printf ("WORDS: \"dark metal rain\" -> %s x %s, bright %.2f, %d words lit; \"dark bright\" %.2f\n", kk::alc::exciters()[(size_t) sent.sounds[0].exc].name,
+                     kk::alc::bodies()[(size_t) sent.sounds[0].body].name, sent.sounds[0].bright, lit, db.sounds[0].bright);
+        check (lit == 3 && sent.sounds[0].exc == 0 && sent.sounds[0].body == 2 && sent.sounds[0].bright < -0.3f && same (sent, rev)
+               && db.sounds[0].bright > dark.sounds[0].bright + 0.4f && db.sounds[0].bright < bright.sounds[0].bright - 0.4f && W::type ("the a and").sounds.empty(),
+               "v0.45 WORDS: a sentence blends its words (order does not matter), the words that shaped it light up");
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        int valid = 0; std::set<std::vector<float>> distinct;
+        for (auto& r : sent.sounds) { auto g = p.sculpt (p.alchemy (r.exc, r.body, r.matter, r.size, r.seed), r.stretch, r.bright, r.heat, r.cool, r.split); valid += g.valid(); distinct.insert (g.v); }
+        check (valid == 10 && distinct.size() >= 9, "v0.45 WORDS: 10 valid, different sounds");
+
+        // GRID: the place of a square means something
+        namespace G = kk::grid;
+        const auto left = G::blend ({ G::cellIndex (1, 4) }), right = G::blend ({ G::cellIndex (14, 4) }), top = G::blend ({ G::cellIndex (7, 0) }), bottom = G::blend ({ G::cellIndex (7, 9) });
+        const auto lcol = G::blend ({ G::cellIndex (0, 2), G::cellIndex (1, 5), G::cellIndex (2, 7) }), rcol = G::blend ({ G::cellIndex (13, 2), G::cellIndex (14, 5), G::cellIndex (15, 7) });
+        std::set<int> zs; for (int i = 0; i < G::cols * G::rows; ++i) zs.insert (G::zoneOf (i));
+        const auto mixA = G::blend ({ 3, 40, 77, 120 }), mixB = G::blend ({ 120, 3, 77, 40 });
+        std::printf ("GRID: bright left %.2f right %.2f, stretch top %.2f bottom %.2f, %d colour zones, 4 squares -> %s\n", left.bright, right.bright, top.stretch, bottom.stretch, (int) zs.size(), mixA.name.toRawUTF8());
+        check (left.bright < right.bright - 1.0f && lcol.bright < rcol.bright - 1.0f && top.stretch < bottom.stretch - 1.0f && zs.size() == G::zones().size()
+               && mixA.seed == mixB.seed && mixA.seed != G::blend ({ 3, 40, 77 }).seed && G::blend ({ G::cellIndex (1, 1) }).exc == G::zones()[(size_t) G::zoneOf (G::cellIndex (1, 1))].exc,
+               "v0.45 GRID: left darker than right, top shorter than bottom, colour zones = families, the chosen squares blend");
+        auto gg = p.sculpt (p.alchemy (mixA.exc, mixA.body, mixA.matter, mixA.size, mixA.seed), mixA.stretch, mixA.bright, mixA.heat, mixA.cool, mixA.split);
+        const auto wav = p.renderGenomeAudio (gg, 44100, 2.2);
+        check (gg.valid() && wav.getNumSamples() == (int) (44100 * 2.2) && wav.getMagnitude (0, wav.getNumSamples()) > 0.01f, "v0.45 GRID: the blended sound renders as a WAV");
+        // the WAV edit on a ramp: trim / reverse / longer / shorter / fades
+        juce::AudioBuffer<float> ramp (2, 1000);
+        for (int i = 0; i < 1000; ++i) { ramp.setSample (0, i, (float) i / 1000.0f); ramp.setSample (1, i, -(float) i / 1000.0f); }
+        auto at = [] (const juce::AudioBuffer<float>& b, int i) { return b.getSample (0, i); };
+        G::Edit e; e.start = 0.1f; e.end = 0.5f; const auto trim = G::apply (ramp, e);
+        G::Edit er; er.reverse = true; const auto rv = G::apply (ramp, er);
+        er.end = 0.5f; const auto rvt = G::apply (ramp, er);
+        G::Edit ef; ef.fadeOut = 0.25f; ef.fadeIn = 0.1f; const auto fd = G::apply (ramp, ef);
+        G::Edit el; el.length = 2.0f; const auto lo = G::apply (ramp, el); el.length = 0.5f; const auto sh = G::apply (ramp, el);
+        check (trim.getNumSamples() == 400 && std::abs (at (trim, 0) - 0.1f) < 1e-6f && std::abs (at (trim, 399) - 0.499f) < 1e-6f && std::abs (trim.getSample (1, 0) + 0.1f) < 1e-6f,
+               "v0.45 GRID EDIT: trim keeps exactly start .. end");
+        check (rv.getNumSamples() == 1000 && std::abs (at (rv, 0) - 0.999f) < 1e-6f && std::abs (at (rv, 999)) < 1e-6f && rvt.getNumSamples() == 500 && std::abs (at (rvt, 0) - 0.999f) < 1e-6f && std::abs (at (rvt, 499) - 0.5f) < 1e-6f,
+               "v0.45 GRID EDIT: reverse plays it backwards (the trim follows what you see)");
+        check (at (fd, 0) == 0.0f && at (fd, 999) == 0.0f && std::abs (at (fd, 50) - 0.025f) < 1e-4f && std::abs (at (fd, 500) - 0.5f) < 1e-6f && std::abs (at (fd, 875) - 0.875f * 124.0f / 250.0f) < 1e-3f,
+               "v0.45 GRID EDIT: fade in from silence, fade out to silence, the middle untouched");
+        check (lo.getNumSamples() == 2000 && std::abs (at (lo, 0)) < 1e-6f && std::abs (at (lo, 1999) - 0.999f) < 1e-5f && std::abs (at (lo, 1000) - 0.4995f) < 1e-3f && sh.getNumSamples() == 500 && std::abs (at (sh, 499) - 0.999f) < 1e-5f,
+               "v0.45 GRID EDIT: longer / shorter resample the whole sound");
+        check (G::Edit().neutral() && G::apply (ramp, G::Edit()).getNumSamples() == 1000 && at (G::apply (ramp, G::Edit()), 321) == at (ramp, 321), "v0.45 GRID EDIT: no edit = the same WAV");
+
+        // DREAM: while you are away, 3 variations of what you used
+        DreamEngine dr (p);
+        const auto src = p.alchemy (2, 1, 0.3f, 0.5f, 5);
+        dr.remember (src); dr.setIdleSeconds (3);
+        dr.tick (true); dr.tick (true);
+        const bool noneYet = dr.dreams().empty();
+        dr.tick (false); for (int i = 0; i < 8; ++i) dr.tick (true);
+        bool dvalid = dr.dreams().size() == 3, ddiff = true;
+        std::set<std::vector<float>> dv;
+        for (auto& d : dr.dreams()) { dvalid &= d.g.valid() && d.g.v.size() == src.v.size(); ddiff &= d.g.v != src.v; dv.insert (d.g.v); std::printf ("DREAM: %s  (%s)\n", d.g.name.toRawUTF8(), d.how.toRawUTF8()); }
+        const bool waitingBefore = dr.hasNewDreams();
+        dr.tick (false);
+        const bool waiting = dr.hasNewDreams(); dr.markSeen();
+        const auto again = DreamEngine::dreamOf (p, src, 12345u), again2 = DreamEngine::dreamOf (p, src, 12345u);
+        check (noneYet && dvalid && ddiff && dv.size() == 3 && ! waitingBefore && waiting && ! dr.hasNewDreams() && again.g.v == again2.g.v,
+               "v0.45 DREAM: after a quiet while 3 valid dreams, all different from the source and from each other, waiting when you come back");
+        DreamEngine dr2 (p); dr2.setIdleSeconds (1); for (int i = 0; i < 4; ++i) dr2.tick (true);
+        check (dr2.dreams().size() == 3, "v0.45 DREAM: with nothing used yet it dreams of the sound on the keys");
+
+        // SOUND PACK: a MY SOUNDS folder -> zip with every WAV + readme.txt
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("kk pack test");
+        dir.deleteRecursively(); dir.createDirectory();
+        juce::StringArray names { "Glass Strike", "Dark Metal Rain 3", "Zorblax 7" };
+        for (auto& n : names) G::writeWav (dir.getChildFile (n + ".wav"), trim, 44100);
+        dir.getChildFile ("notes.txt").replaceWithText ("not a sound");
+        const auto zipF = dir.getSiblingFile ("kk pack test.zip");
+        const auto res = kk::pack::exportFolder (dir, zipF, "Night Pack");
+        juce::ZipFile z (zipF);
+        bool allIn = z.getNumEntries() == 4;
+        for (auto& n : names) allIn &= z.getEntry ("Night Pack/" + n + ".wav") != nullptr;
+        juce::String readme;
+        if (auto* e2 = z.getEntry ("Night Pack/readme.txt")) if (std::unique_ptr<juce::InputStream> is (z.createStreamForEntry (*e2)); is != nullptr) readme = is->readEntireStreamAsString();
+        std::unique_ptr<juce::InputStream> ws (z.getEntry ("Night Pack/Glass Strike.wav") != nullptr ? z.createStreamForEntry (*z.getEntry ("Night Pack/Glass Strike.wav")) : nullptr);
+        const bool wavOk = ws != nullptr && ws->getTotalLength() == dir.getChildFile ("Glass Strike.wav").getSize();
+        std::printf ("PACK: %s, %d entries, readme %d chars\n", res.message.toRawUTF8(), z.getNumEntries(), readme.length());
+        auto empty = dir.getChildFile ("empty"); empty.createDirectory();
+        check (res.ok && res.sounds == 3 && allIn && wavOk && readme.contains ("NIGHT PACK") && readme.contains ("made with EVOLVE by TrapVST") && readme.contains ("Zorblax 7") && readme.contains ("3 sounds")
+               && ! kk::pack::exportFolder (empty, dir.getSiblingFile ("kk empty.zip"), "x").ok, "v0.45 PACK: the zip holds every WAV + a readme (name, list, made with EVOLVE by TrapVST)");
+        dir.deleteRecursively(); zipF.deleteFile();
+    }
     // v0.43 LIFE: gravity, predator, swarm, metabolism
     {
         auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)
@@ -2412,6 +2529,15 @@ int main (int argc, char** argv)
             juce::Image kkCookSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);
             auto img = kkCookSnapshot (p, juce::String (argv[4]).getIntValue());
+            juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+            out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
+            return 0;
+        }
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 85 && juce::String (argv[4]).getIntValue() <= 87)   // v0.45 EVOLVE: 85 WORDS, 86 GRID, 87 CREATURE + DREAMS
+        {
+            juce::Image kkEvolveSnapshot (KeysKillaProcessor&, int);
+            p.prepareToPlay (44100, 512);
+            auto img = kkEvolveSnapshot (p, juce::String (argv[4]).getIntValue());
             juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
             return 0;
