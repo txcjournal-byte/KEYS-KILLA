@@ -86,37 +86,9 @@ public:
     }
     void paint (Graphics& g) override
     {
+        // v0.44: no knob - a living cell
         const float k = pageScale (*this);
-        auto r = getLocalBounds().toFloat();
-        auto lab = r.removeFromBottom (18 * k);
-        const float d = jmin (r.getWidth(), r.getHeight()) - 6 * k;
-        const auto c = r.getCentre();
-        const float rad = d * 0.5f;
-        const auto rp = getRotaryParameters();
-        const float pos = (float) valueToProportionOfLength (getValue());
-        const float a0 = rp.startAngleRadians, a1 = rp.endAngleRadians;
-        const bool bip = getMinimum() < 0 && getMaximum() > 0;
-        const float from = bip ? (a0 + a1) * 0.5f : a0, to = a0 + pos * (a1 - a0);
-        Path track; track.addCentredArc (c.x, c.y, rad, rad, 0, a0, a1, true);
-        g.setColour (TC (0xff2a2650)); g.strokePath (track, PathStrokeType (4.0f * k, PathStrokeType::curved, PathStrokeType::rounded));
-        if (std::abs (to - from) > 0.01f)
-        {
-            Path arc; arc.addCentredArc (c.x, c.y, rad, rad, 0, jmin (from, to), jmax (from, to), true);
-            g.setColour (hue.a.withAlpha (0.25f)); g.strokePath (arc, PathStrokeType (9.0f * k, PathStrokeType::curved, PathStrokeType::rounded));
-            g.setGradientFill (ColourGradient (hue.a, c.x - rad, c.y + rad, hue.b, c.x + rad, c.y - rad, false));
-            g.strokePath (arc, PathStrokeType (4.0f * k, PathStrokeType::curved, PathStrokeType::rounded));
-        }
-        const float cr = rad * 0.72f;
-        g.setGradientFill (ColourGradient (TC (0xff3a3470), c.x, c.y - cr, TC (0xff12102a), c.x, c.y + cr, false));
-        g.fillEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2);
-        g.setColour (TC (0xff4a4478)); g.drawEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2, 1.0f);
-        const float pa = to;
-        g.setColour (TC (0xffffffff));
-        g.drawLine (c.x + std::sin (pa) * cr * 0.25f, c.y - std::cos (pa) * cr * 0.25f, c.x + std::sin (pa) * cr * 0.85f, c.y - std::cos (pa) * cr * 0.85f, 2.2f * k);
-        const bool showVal = isMouseButtonDown() || isMouseOver();
-        g.setColour (showVal ? hue.a.brighter (0.4f) : TC (0xffe6e3ff));
-        g.setFont (Font (FontOptions (11.5f * k, Font::bold)).withExtraKerningFactor (0.08f));
-        g.drawFittedText (showVal && param != nullptr ? param->getCurrentValueAsText() : label, lab.toNearestInt(), Justification::centred, 1, 0.7f);
+        kk::cell::draw (g, getLocalBounds().toFloat(), (float) valueToProportionOfLength (getValue()), getMinimum() < 0 && getMaximum() > 0, hue.a, hue.b, label, isMouseOverOrDragging(), false, 18 * k, (float) label.hashCode() * 0.001f);
     }
     void mouseEnter (const MouseEvent& e) override { Slider::mouseEnter (e); repaint(); }
     void mouseExit (const MouseEvent& e) override { Slider::mouseExit (e); repaint(); }

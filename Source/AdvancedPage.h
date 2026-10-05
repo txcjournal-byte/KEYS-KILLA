@@ -41,8 +41,8 @@ public:
             }
             else
             {
-                item->slider = std::make_unique<Slider> (Slider::RotaryHorizontalVerticalDrag, Slider::TextBoxBelow);
-                item->slider->setTextBoxStyle (Slider::TextBoxBelow, false, 120, 26);
+                item->slider = std::make_unique<Slider> (Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox);
+                item->slider->setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
                 item->slider->setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
                 item->slider->setVelocityModeParameters (0.6, 1, 0.02, true, ModifierKeys::ctrlModifier);
                 item->slider->setDoubleClickReturnValue (true, rp->convertFrom0to1 (rp->getDefaultValue()));
@@ -222,7 +222,7 @@ public:
         {
             auto& r = rows[(size_t) s];
             r.src.addItemList (Choices::modSources, 1); r.dst.addItemList (Choices::modDests, 1);
-            r.amt.setSliderStyle (Slider::LinearHorizontal); r.amt.setTextBoxStyle (Slider::TextBoxRight, false, 56, 18);
+            r.amt.setSliderStyle (Slider::LinearHorizontal); r.amt.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
             r.amt.setDoubleClickReturnValue (true, 0.0);
             r.src.setTooltip ("Mod matrix source."); r.dst.setTooltip ("Mod matrix destination."); r.amt.setTooltip ("Mod amount (negative inverts).");
             for (Component* c : { (Component*) &r.src, (Component*) &r.dst, (Component*) &r.amt }) addAndMakeVisible (c);

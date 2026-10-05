@@ -8,6 +8,7 @@ using namespace juce;
 #include "BinaryData.h"
 #include "Theme.h"
 #include "ModernSkin.h"
+#include "LivingCell.h"
 
 //==============================================================================
 void KKLookAndFeel::setSkin (const Skin& s)
@@ -50,99 +51,18 @@ void KKLookAndFeel::setSkin (const Skin& s)
     setColour (Slider::textBoxBackgroundColourId, Colours::transparentBlack);
 }
 
-void KKLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, Slider&)
+void KKLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float pos, float, float, Slider& sl)
 {
-    const auto& s = *skin;
-    auto b = Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
-    const float size = jmin (b.getWidth(), b.getHeight());
-    auto r = b.withSizeKeepingCentre (size, size).reduced (size * 0.04f);
-    const auto c = r.getCentre();
-    const float R = r.getWidth() * 0.5f;
-    const float ang = a0 + pos * (a1 - a0);
-
-    // value arc
-    Path track; track.addCentredArc (c.x, c.y, R * 0.93f, R * 0.93f, 0, a0, a1, true);
-    g.setColour (s.track.withAlpha (0.6f));
-    g.strokePath (track, PathStrokeType (R * 0.07f, PathStrokeType::curved, PathStrokeType::butt));
-    if (pos > 0.001f)
-    {
-        Path val; val.addCentredArc (c.x, c.y, R * 0.93f, R * 0.93f, 0, a0, ang, true);
-        g.setColour (s.accent.withAlpha (0.25f));
-        g.strokePath (val, PathStrokeType (R * 0.2f, PathStrokeType::curved, PathStrokeType::butt));
-        g.setColour (s.accent);
-        g.strokePath (val, PathStrokeType (R * 0.08f, PathStrokeType::curved, PathStrokeType::butt));
-    }
-
-    // serrated outer ring
-    const float ro = R * 0.8f;
-    g.setGradientFill (ColourGradient (s.knobLight, c.x - ro, c.y - ro, s.knobDark, c.x + ro, c.y + ro, false));
-    g.fillEllipse (Rectangle<float> (ro * 2, ro * 2).withCentre (c));
-    g.setColour (s.dark ? TC (0xff000000).withAlpha (0.5f) : s.knobDark.withAlpha (0.6f));
-    for (int i = 0; i < 40; ++i)
-    {
-        const float a = MathConstants<float>::twoPi * (float) i / 40.0f;
-        g.drawLine (c.x + std::sin (a) * ro * 0.86f, c.y - std::cos (a) * ro * 0.86f,
-                    c.x + std::sin (a) * ro, c.y - std::cos (a) * ro, 1.0f);
-    }
-    // brushed cap
-    const float rc = R * 0.62f;
-    ColourGradient cap (s.knobDark.brighter (0.2f), c.x, c.y + rc, s.knobLight, c.x, c.y - rc, false);
-    cap.addColour (0.5, TC (0xff6b6f75));
-    g.setGradientFill (cap);
-    g.fillEllipse (Rectangle<float> (rc * 2, rc * 2).withCentre (c));
-    for (int i = 1; i < 6; ++i)
-    {
-        g.setColour (TC (0xffffffff).withAlpha (0.05f * (float) (i % 2 + 1)));
-        g.drawEllipse (Rectangle<float> (rc * 2 * i / 6.0f, rc * 2 * i / 6.0f).withCentre (c), 0.8f);
-    }
-    g.setColour (TC (0xff000000).withAlpha (0.5f));
-    g.drawEllipse (Rectangle<float> (rc * 2, rc * 2).withCentre (c), 1.2f);
-
-    // pointer
-    const Point<float> p0 (c.x + std::sin (ang) * rc * 0.25f, c.y - std::cos (ang) * rc * 0.25f);
-    const Point<float> p1 (c.x + std::sin (ang) * rc * 0.92f, c.y - std::cos (ang) * rc * 0.92f);
-    g.setColour (TC (0xffffffff));
-    g.drawLine ({ p0, p1 }, jmax (2.0f, R * 0.07f));
+    // v0.44: no knobs - a living cell
+    kk::cell::draw (g, { (float) x, (float) y, (float) w, (float) h }, pos, sl.getMinimum() < 0 && sl.getMaximum() > 0, skin->accent, TC (0xff9b4dff), {}, sl.isMouseOverOrDragging());
 }
 
-void KKLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int h, float pos, float, float,
+void KKLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int w, int h, float, float, float,
                                       Slider::SliderStyle style, Slider& sl)
 {
-    const auto& s = *skin;
-    auto b = Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
-    if (style == Slider::LinearVertical)   // pitch / mod wheel
-    {
-        auto well = b.reduced (2);
-        g.setColour (TC (0xff000000).withAlpha (0.7f));
-        g.fillRoundedRectangle (well, 6);
-        const float ty = jlimit (well.getY() + 6, well.getBottom() - 6, pos);
-        ColourGradient wg (s.knobDark, well.getX(), 0, s.knobDark, well.getRight(), 0, false);
-        wg.addColour (0.5, s.accent.withAlpha (0.8f));
-        g.setGradientFill (wg);
-        g.fillRoundedRectangle (well.reduced (5, 4), 5);
-        for (int i = 0; i < 14; ++i)
-        {
-            const float yy = well.getY() + 8 + (well.getHeight() - 16) * (float) i / 13.0f;
-            g.setColour (TC (0xff000000).withAlpha (0.25f));
-            g.drawHorizontalLine ((int) yy, well.getX() + 6, well.getRight() - 6);
-        }
-        g.setColour (TC (0xffffffff).withAlpha (0.9f));
-        g.fillRoundedRectangle (Rectangle<float> (well.getWidth() - 8, 5).withCentre ({ well.getCentreX(), ty }), 2);
-        ignoreUnused (sl);
-        return;
-    }
-    // horizontal (CHAOS)
-    auto tr = b.withSizeKeepingCentre (b.getWidth() - 10, 6);
-    g.setColour (s.track);
-    g.fillRoundedRectangle (tr, 3);
-    g.setColour (s.accent);
-    g.fillRoundedRectangle (tr.withRight (pos), 3);
-    g.setColour (s.accent.withAlpha (0.3f));
-    g.fillEllipse (Rectangle<float> (22, 22).withCentre ({ pos, b.getCentreY() }));
-    g.setColour (s.knobLight);
-    g.fillEllipse (Rectangle<float> (14, 14).withCentre ({ pos, b.getCentreY() }));
-    g.setColour (s.accent);
-    g.drawEllipse (Rectangle<float> (14, 14).withCentre ({ pos, b.getCentreY() }), 2);
+    // v0.44: no sliders - a stream of light, the glow gathers where the value is
+    const bool vert = style == Slider::LinearVertical || style == Slider::LinearBarVertical;
+    kk::cell::stream (g, { (float) x, (float) y, (float) w, (float) h }, (float) sl.valueToProportionOfLength (sl.getValue()), vert, skin->accent, sl.isMouseOverOrDragging());
 }
 
 void KKLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour&, bool over, bool down)
@@ -281,8 +201,9 @@ public:
     {
         setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
         setVelocityModeParameters (0.6, 1, 0.02, true, ModifierKeys::ctrlModifier);
-        setPopupDisplayEnabled (true, true, nullptr);
     }
+    void mouseEnter (const MouseEvent& e) override { Slider::mouseEnter (e); repaint(); }
+    void mouseExit (const MouseEvent& e) override { Slider::mouseExit (e); repaint(); }
     void place (Point<int> designCentre, int capRadius, int arcRadius)
     {
         centre = designCentre; capR = capRadius; arcR = arcRadius;
@@ -291,36 +212,9 @@ public:
     }
     void paint (Graphics& g) override
     {
-        const auto& s = *lnf.skin;
+        // v0.44: no knob - a living cell covers the old metal cap
         const float pos = (float) valueToProportionOfLength (getValue());
-        const float ang = MathConstants<float>::pi * (-0.75f + 1.5f * pos);
-        const Point<float> c ((float) getWidth() * 0.5f, (float) getHeight() * 0.5f);
-        const auto src = labImages().bg.getClippedImage ({ centre.x - capR, centre.y - capR, capR * 2, capR * 2 });
-        {
-            Graphics::ScopedSaveState ss (g);
-            Path clip; clip.addEllipse (c.x - (float) capR, c.y - (float) capR, (float) capR * 2, (float) capR * 2);
-            g.reduceClipRegion (clip);
-            g.setImageResamplingQuality (Graphics::highResamplingQuality);
-            g.drawImageTransformed (src, AffineTransform::translation (-(float) capR, -(float) capR).rotated (ang).translated (c));
-        }
-        if (pos > 0.002f)
-        {
-            Path arc; arc.addCentredArc (c.x, c.y, (float) arcR, (float) arcR, 0, -MathConstants<float>::pi * 0.75f, ang, true);
-            const float w = capR > 26 ? 1.0f : 0.7f;
-            // every knob its own neon pair (pink -> orange, violet -> pink, orange -> pink ...)
-            const Colour pairs[][2] { { TC (0xffff2f6d), TC (0xffff8a3d) }, { TC (0xffff8a3d), TC (0xffff2f6d) },
-                                             { TC (0xff9b4dff), TC (0xffff2f6d) }, { TC (0xffff2f6d), TC (0xff9b4dff) },
-                                             { TC (0xff4d7dff), TC (0xff9b4dff) } };
-            const auto& pr = pairs[(size_t) ((centre.x / 37 + centre.y / 11) % 5)];
-            const ColourGradient grad (pr[0], c.x - (float) arcR, c.y + (float) arcR, pr[1], c.x + (float) arcR, c.y - (float) arcR, false);
-            ColourGradient soft = grad; soft.multiplyOpacity (0.18f);
-            ColourGradient mid = grad;  mid.multiplyOpacity (0.45f);
-            g.setGradientFill (soft); g.strokePath (arc, PathStrokeType (13.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
-            g.setGradientFill (mid);  g.strokePath (arc, PathStrokeType (7.0f * w, PathStrokeType::curved, PathStrokeType::rounded));
-            g.setGradientFill (grad); g.strokePath (arc, PathStrokeType (3.6f * w, PathStrokeType::curved, PathStrokeType::rounded));
-            ignoreUnused (s);
-            g.setColour (TC (0xffffffff).withAlpha (0.5f)); g.strokePath (arc, PathStrokeType (1.0f * w));
-        }
+        kk::cell::draw (g, getLocalBounds().toFloat().reduced (2), pos, false, TC (0xffff2f6d), TC (0xffff8a3d), {}, isMouseOverOrDragging(), true, 0.0f, (float) (centre.x % 7));
     }
     bool hitTest (int x, int y) override { return Point<int> (x, y).getDistanceFrom ({ getWidth() / 2, getHeight() / 2 }) <= arcR + 6; }
 private:
@@ -398,10 +292,8 @@ public:
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        auto r = getLocalBounds().toFloat().reduced (5, 8);
-        const float py = r.getBottom() - (float) valueToProportionOfLength (getValue()) * r.getHeight();
-        g.setColour (s.accent.withAlpha (0.35f)); g.fillRoundedRectangle (Rectangle<float> (r.getWidth() + 4, 9).withCentre ({ r.getCentreX(), py }), 4);
-        g.setColour (TC (0xffffffff).withAlpha (0.95f)); g.fillRoundedRectangle (Rectangle<float> (r.getWidth(), 4).withCentre ({ r.getCentreX(), py }), 2);
+        g.setColour (Colour (0xff07080d)); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 8);   // covers the old wheel
+        kk::cell::stream (g, getLocalBounds().toFloat().reduced (4, 8), (float) valueToProportionOfLength (getValue()), true, s.accent, isMouseOverOrDragging());
     }
 private:
     KKLookAndFeel& lnf;
@@ -1547,7 +1439,7 @@ protected:
     Slider& addKnob (const String& id, const String& label, const String& tip)
     {
         Knob k; k.slider = std::make_unique<Slider> (Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox);
-        k.slider->setPopupDisplayEnabled (true, true, nullptr); k.slider->setTooltip (tip);
+        k.slider->setTooltip (tip);
         auto* prm = proc.apvts.getParameter (id);
         k.slider->setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
         k.att = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, *k.slider);
@@ -3078,31 +2970,11 @@ public:
     ThemedKnob (const DrumTheme& t) : Slider (RotaryHorizontalVerticalDrag, NoTextBox), th (t)
     {
         setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
-        setPopupDisplayEnabled (true, true, nullptr);
     }
     String label;
     void paint (Graphics& g) override
     {
-        const auto b = getLocalBounds().toFloat().withTrimmedBottom (20);
-        const float r = std::min (b.getWidth(), b.getHeight()) * 0.5f - 4.0f;
-        const auto c = b.getCentre();
-        const float pos = (float) valueToProportionOfLength (getValue());
-        const float a0 = MathConstants<float>::pi * 1.25f, a1 = a0 + MathConstants<float>::pi * 1.5f * pos;
-        Path track; track.addCentredArc (c.x, c.y, r, r, 0, a0, MathConstants<float>::pi * 2.75f, true);
-        g.setColour (TC (0xffffffff).withAlpha (0.08f)); g.strokePath (track, PathStrokeType (5.0f, PathStrokeType::curved, PathStrokeType::rounded));
-        Path arc; arc.addCentredArc (c.x, c.y, r, r, 0, a0, a1, true);
-        g.setColour (th.accent.withAlpha (0.25f)); g.strokePath (arc, PathStrokeType (11.0f, PathStrokeType::curved, PathStrokeType::rounded));
-        g.setGradientFill (ColourGradient (th.accent2, c.x - r, c.y, th.accent, c.x + r, c.y, false));
-        g.strokePath (arc, PathStrokeType (5.0f, PathStrokeType::curved, PathStrokeType::rounded));
-        const float cr = r * 0.68f;
-        g.setGradientFill (ColourGradient (TC (0xff4a4670), c.x, c.y - cr, TC (0xff16152e), c.x, c.y + cr, false));
-        g.fillEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2);
-        g.setColour (TC (0xffffffff).withAlpha (0.14f)); g.drawEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2, 1.2f);
-        const float ang = a1 - MathConstants<float>::halfPi;
-        g.setColour (th.text);
-        g.drawLine (c.x + std::cos (ang) * cr * 0.25f, c.y + std::sin (ang) * cr * 0.25f, c.x + std::cos (ang) * cr * 0.9f, c.y + std::sin (ang) * cr * 0.9f, 2.6f);
-        g.setColour (th.text.withAlpha (0.85f)); g.setFont (Font (FontOptions (13.0f, Font::bold)));
-        g.drawText (label, getLocalBounds().removeFromBottom (18), Justification::centred);
+        kk::cell::draw (g, getLocalBounds().toFloat(), (float) valueToProportionOfLength (getValue()), false, th.accent, th.accent2, label, isMouseOverOrDragging(), false, 20.0f);
     }
 private:
     const DrumTheme& th;
@@ -4638,33 +4510,8 @@ public:
     std::function<String (double)> valueText;
     void paint (Graphics& g) override
     {
-        auto r = getLocalBounds().toFloat();
-        auto lab = r.removeFromBottom (18);
-        const float rad = jmin (r.getWidth(), r.getHeight()) * 0.5f - 4;
-        const auto c = r.getCentre();
-        const auto rp = getRotaryParameters();
-        const float pos = (float) valueToProportionOfLength (getValue());
-        const float a0 = rp.startAngleRadians, a1 = rp.endAngleRadians, to = a0 + pos * (a1 - a0);
-        const bool bip = getMinimum() < 0;
-        const float from = bip ? (a0 + a1) * 0.5f : a0;
-        Path tr; tr.addCentredArc (c.x, c.y, rad, rad, 0, a0, a1, true);
-        g.setColour (TC (0xff2a2650)); g.strokePath (tr, PathStrokeType (3.5f, PathStrokeType::curved, PathStrokeType::rounded));
-        if (std::abs (to - from) > 0.01f)
-        {
-            Path arc; arc.addCentredArc (c.x, c.y, rad, rad, 0, jmin (from, to), jmax (from, to), true);
-            g.setColour (ca.withAlpha (0.25f)); g.strokePath (arc, PathStrokeType (8.0f, PathStrokeType::curved, PathStrokeType::rounded));
-            g.setGradientFill (ColourGradient (ca, c.x - rad, c.y + rad, cb, c.x + rad, c.y - rad, false));
-            g.strokePath (arc, PathStrokeType (3.5f, PathStrokeType::curved, PathStrokeType::rounded));
-        }
-        const float cr = rad * 0.7f;
-        g.setGradientFill (ColourGradient (TC (0xff3a3470), c.x, c.y - cr, TC (0xff12102a), c.x, c.y + cr, false));
-        g.fillEllipse (c.x - cr, c.y - cr, cr * 2, cr * 2);
-        g.setColour (TC (0xffffffff));
-        g.drawLine (c.x + std::sin (to) * cr * 0.25f, c.y - std::cos (to) * cr * 0.25f, c.x + std::sin (to) * cr * 0.85f, c.y - std::cos (to) * cr * 0.85f, 2.0f);
-        g.setColour (isMouseOverOrDragging() ? ca.brighter (0.4f) : TC (0xffe6e3ff));
-        g.setFont (Font (FontOptions (12.5f, Font::bold)).withExtraKerningFactor (0.08f));
-        const String txt = isMouseOverOrDragging() ? (valueText ? valueText (getValue()) : bip ? String (getValue(), 1) + " dB" : String (roundToInt (getValue() * 100)) + " %") : label;
-        g.drawFittedText (txt, lab.toNearestInt(), Justification::centred, 1, 0.7f);
+        // v0.44: no knob - a living cell (no numbers: you hear it)
+        kk::cell::draw (g, getLocalBounds().toFloat(), (float) valueToProportionOfLength (getValue()), getMinimum() < 0 && getMaximum() > 0, ca, cb, label, isMouseOverOrDragging(), false, 18.0f, (float) label.hashCode() * 0.001f);
     }
     void mouseEnter (const MouseEvent& e) override { Slider::mouseEnter (e); repaint(); }
     void mouseExit (const MouseEvent& e) override { Slider::mouseExit (e); repaint(); }
