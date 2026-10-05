@@ -88,3 +88,12 @@ animal / tree / body = it makes or changes a sound. Living reactions with animat
 Press = the plunger fires the ball, it bounces through bumpers and a maze and comes back. Every bumper / ramp is a note in the key
 (the bounces become a melody, the hits' strength = velocity); bumpers can also be ingredients (metal, glass, bone ...) so the run
 also cooks a new SOUND. Flippers = two keys / mouse buttons. Score -> chest -> unlocked sounds. Reuses the GRAVITY physics (Living.h).
+
+## FLEX / GARAGE (owner, 2026-10-05) - the harder, street side
+Pick an item on a ladder from the worst to the most expensive in the world -> a roll of ~10 random sounds in its character; roll again.
+Click a part of the item = that sound is re-shaped. No real brand / game / model names - invented ones only.
+- ARSENAL (stylised, not realistic): slingshot ... laser cannon -> hits, snaps, metallic transients, booms; parts: barrel, trigger, magazine, scope.
+- GARAGE (cars): rusty hatchback ... hypercar -> engine rumbles, 808 / bass, revs, tyres; parts: engine, exhaust, tyres, horn, turbo.
+- HARBOUR (boats / yachts) -> wide pads, bells, water; parts: hull, sail, deck, engine.
+- HANGAR (private jets) -> risers, swooshes, airy leads; parts: jet engine, wings, cabin.
+Higher tier = rarer, richer sounds (ties into GAME chests / rarity and COOK recipes). Built on ALCHEMY recipes, costs no memory.
