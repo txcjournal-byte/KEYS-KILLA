@@ -57,3 +57,16 @@ Plus (owner's list):
 - SHIFT: pitch / formant / frequency shifting
 - ARCADE: retro game-console effect modes with a live game display (many modes / presets)
 - EFFECTOR: our Effector Killa engine (Source/plugins/effector) - same functions, EVOLVE FX PRO design
+
+## Agreed next steps (owner, 2026-10-05)
+1. Fewer doors: EVOLVE = FEED / ALCHEMY+SCULPT / LIFE / EVOLVE tree / STUDIO (old pages inside); FX PRO = TOUCH / ORGANIC / ERAS / MIX.
+2. Measure performance before release: CPU per module, idle UI CPU, memory, installer size.
+3. New timeless ideas (recommended first: SOUND CODE, DREAM, CREATURE):
+   - SOUND CODE: every sound has a short code (EV-7K3Q-MUD) - type it in, get the exact sound.
+   - DREAM: while FL is idle the plugin dreams variations; 3 dreams waiting when you come back.
+   - CREATURE: a pet living in the plugin, eats skipped sounds, grows with your taste, gets bored of 8-bar loops.
+   - ANTI-TASTE, WEATHER (time of day / season), TIME TRAVEL undo, FOSSILS (deleted sounds), TIME CAPSULE, TRUCE (FX PRO tracks share the spectrum).
+4. MY SOUNDS: own folders (exists) + EXPORT AS SOUND PACK (WAV folder / zip) button.
+5. GAME section (light, vector-drawn, runs only when visible): finishing levels unlocks sounds (rarity COMMON / RARE / EPIC / LEGENDARY),
+   a collection book, unlocked sounds go to MY SOUNDS > UNLOCKED. Game ideas: SOUND INVADERS, BLOCK BEAT, PIXEL DUEL (win = steal the
+   rival's sound), WAVE RUNNER (run on the waveform), EAR QUEST (ear training). FX PRO: games unlock effect chains.
