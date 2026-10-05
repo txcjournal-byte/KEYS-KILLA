@@ -8,6 +8,7 @@
 #include "../Source/Grid.h"        // v0.45 WORDS GRID DREAM PACK (Grid.h brings Words.h)
 #include "../Source/Dreams.h"
 #include "../Source/SoundPack.h"
+#include "../Source/Games.h"   // v0.45 GAME
 #include <cstdio>
 #include <set>
 
@@ -1392,6 +1393,141 @@ static int unitTests()
                && ! kk::pack::exportFolder (empty, dir.getSiblingFile ("kk empty.zip"), "x").ok, "v0.45 PACK: the zip holds every WAV + a readme (name, list, made with EVOLVE by TrapVST)");
         dir.deleteRecursively(); zipF.deleteFile();
     }
+    // v0.45 GAME: invaders collision + scoring, duel damage + CPU loop ends, pinball stays on the table and sings in key,
+    //            chest rarity distribution, deterministic unlock recipes, every reward genome valid and audible
+    {
+        kk::game::Key key; key.root = 9; key.minor = true;
+        // SOUND INVADERS: a shot destroys the enemy above, scores, the kill is a note in the key; the wave is cleared
+        {
+            kk::game::Invaders iv; iv.start (5, key);
+            iv.enemies.clear(); iv.enemies.push_back ({ 0.5f, 0.5f, 0, 0, true }); iv.rows = 1; iv.px = 0.5f; iv.shots.clear();
+            std::vector<kk::game::Ev> all;
+            for (int i = 0; i < 120; ++i) { auto ev = iv.step (1.0f / 120.0f, false, false, i == 0); all.insert (all.end(), ev.begin(), ev.end()); if (iv.wave > 1) break; }
+            int kills = 0; bool inKey = true, cleared = false;
+            for (auto& e : all) { if (e.kind == kk::game::Invaders::evKill) { ++kills; inKey &= key.inKey (e.pitch); } cleared |= e.kind == kk::game::Invaders::evWaveClear; }
+            check (kills == 1 && iv.score == 10 && inKey, "v0.45 GAME: INVADERS - a hit destroys the enemy, scores 10, plays a note in the key");
+            check (cleared && iv.wave == 2 && iv.alive() > 8, "v0.45 GAME: INVADERS - a cleared wave brings the next one");
+            kk::game::Invaders miss; miss.start (5, key); miss.enemies.clear(); miss.enemies.push_back ({ 0.1f, 0.5f, 0, 0, true }); miss.px = 0.8f; miss.shots.clear();
+            for (int i = 0; i < 150; ++i) miss.step (1.0f / 120.0f, false, false, i == 0);
+            check (miss.score == 0 && miss.alive() == 1, "v0.45 GAME: INVADERS - a shot far away misses");
+            kk::game::Invaders hit; hit.start (5, key); hit.shots.clear(); hit.shots.push_back ({ hit.px, kk::game::Invaders::playerY, 0, 0.1f, true });
+            const int l0 = hit.lives; hit.step (1.0f / 120.0f, false, false, false);
+            check (hit.lives == l0 - 1, "v0.45 GAME: INVADERS - a bomb on the ship costs a life");
+            // the 808 BOSS takes many hits and gives a victory
+            kk::game::Invaders bs; bs.start (9, key); bs.wave = 3; bs.spawnWave(); bs.enemies.clear(); bs.lives = 99;
+            int frames = 0; while (! bs.over && frames < 120 * 120) { bs.px = bs.bossX; bs.lives = 99; bs.step (1.0f / 120.0f, false, false, true); ++frames; }
+            check (bs.victory && bs.score > 500, "v0.45 GAME: INVADERS - the 808 BOSS can be beaten (level clear)");
+        }
+        // PIXEL DUEL: a punch in range does damage; CPU vs CPU always ends; an idle player loses
+        {
+            kk::game::Duel d; d.start (1, 3, key); d.f[0].x = 0.45f; d.f[1].x = 0.53f;
+            kk::game::Duel::Input punch; punch.punch = true; const float hp0 = d.f[1].hp; int hits = 0; bool inKey = true;
+            for (int i = 0; i < 60; ++i) for (auto& e : d.step (1.0f / 120.0f, i == 0 ? punch : kk::game::Duel::Input(), {})) if (e.kind == kk::game::Duel::evHit) { ++hits; inKey &= key.inKey (e.pitch); }
+            check (hits == 1 && d.f[1].hp < hp0 && inKey, "v0.45 GAME: DUEL - a punch in range lands once, does damage, sounds in the key");
+            int ended = 0, p0wins = 0; long maxSteps = 0;
+            for (int s = 0; s < 40; ++s)
+            {
+                kk::game::Duel x; x.start (1 + s % 6, (uint32_t) s * 77u + 1u, key); long n = 0;
+                while (x.winner < 0 && n < 120L * 70) { auto a = x.cpu (0, 1.0f / 120.0f), b = x.cpu (1, 1.0f / 120.0f); x.step (1.0f / 120.0f, a, b); ++n; }
+                ended += x.winner >= 0; p0wins += x.winner == 0; maxSteps = std::max (maxSteps, n);
+            }
+            int cpuWins = 0;
+            for (int s = 0; s < 10; ++s) { kk::game::Duel x; x.start (2, (uint32_t) s + 5u, key); long n = 0; while (x.winner < 0 && n < 120L * 70) { x.step (1.0f / 120.0f, {}, x.cpu (1, 1.0f / 120.0f)); ++n; } cpuWins += x.winner == 1; }
+            std::printf ("GAME DUEL: %d / 40 CPU fights ended (left side won %d, longest %.1f s), an idle player lost %d / 10\n", ended, p0wins, (double) maxSteps / 120.0, cpuWins);
+            check (ended == 40, "v0.45 GAME: DUEL - every CPU fight ends (KO or time)");
+            check (cpuWins == 10, "v0.45 GAME: DUEL - doing nothing loses against the CPU");
+        }
+        // PINBALL: 30 s of random flippers per run - the ball never leaves the table, bumpers sing in the key
+        {
+            int outside = 0, bumps = 0, offKey = 0, ramps = 0, launches = 0; size_t melodyNotes = 0;
+            for (int run = 0; run < 4; ++run)
+            {
+                kk::game::Pinball pb; pb.start ((uint32_t) run + 1u, key);
+                kk::Rng rr; rr.seed ((uint32_t) run * 7u + 3u); bool lf = false, rf = false;
+                for (int i = 0; i < 60 * 30; ++i)
+                {
+                    if (i % 15 == 0) { lf = rr.uni() < 0.4f; rf = rr.uni() < 0.4f; }
+                    const bool plunge = pb.inLane && (i % 80) < 40;
+                    pb.balls = 99;
+                    for (auto& e : pb.step (1.0f / 60.0f, lf, rf, plunge))
+                    {
+                        if (e.kind == kk::game::Pinball::evBumper) { ++bumps; offKey += ! key.inKey (e.pitch); }
+                        if (e.kind == kk::game::Pinball::evRamp) { ++ramps; offKey += ! key.inKey (e.pitch); }
+                        launches += e.kind == kk::game::Pinball::evLaunch;
+                    }
+                    if (! (pb.bx >= 0 && pb.bx <= kk::game::Pinball::W && pb.by >= 0 && pb.by <= kk::game::Pinball::H && std::isfinite (pb.vx) && std::isfinite (pb.vy))) ++outside;
+                }
+                const auto mel = pb.melody(); melodyNotes += mel.notes.size();
+                for (auto& n : mel.notes) offKey += ! key.inKey (n.pitch);
+                if (run == 0) { auto mf = kk::live::toMidi (mel, 120.0); check (mf.getNumTracks() == 1 && mf.getTrack (0)->getNumEvents() > 4, "v0.45 GAME: PINBALL - the bounces make a MIDI melody"); }
+                const auto d1 = pb.dish(), d2 = pb.dish();
+                check (d1.seed == d2.seed && d1.name == d2.name && d1.name.isNotEmpty(), "v0.45 GAME: PINBALL - the run cooks one deterministic dish");
+            }
+            std::printf ("GAME PINBALL: 4 x 30 s - %d frames off the table, %d launches, %d bumper hits, %d ramps, %d melody notes, %d off key\n", outside, launches, bumps, ramps, (int) melodyNotes, offKey);
+            check (outside == 0, "v0.45 GAME: PINBALL - the ball stays inside the table");
+            check (bumps >= 8 && offKey == 0, "v0.45 GAME: PINBALL - bumpers are hit and every note is in the key");
+            kk::game::Pinball a; a.start (1, key); a.cooked[kk::game::inMetal] = 5; a.cooked[kk::game::inGlass] = 3; a.cooked[kk::game::inMud] = 1;
+            const auto da = a.dish();
+            check (da.exciter == 0 && da.matter < 0.4f && da.name.contains ("Metal"), "v0.45 GAME: PINBALL - METAL + GLASS cook a glassy metal strike");
+        }
+        // CHEST: rarer = higher score, legendary rare but reachable; deterministic per game / level / score
+        {
+            std::array<int, 4> lo {}, hi {};
+            for (uint32_t h = 0; h < 40000; ++h) { ++lo[(size_t) kk::game::rollRarity (h * 2654435761u + 1u, 0.0f)]; ++hi[(size_t) kk::game::rollRarity (h * 2654435761u + 1u, 1.0f)]; }
+            std::array<int, 4> mix {}; int items = 0, chests = 0;
+            static const int full[] { 3000, 1500, 25000 };
+            for (int game = 0; game < 3; ++game) for (int lvl = 1; lvl <= 6; ++lvl) for (int k = 0; k < 400; ++k)
+            {
+                const int sc = full[game] * k / 400;
+                if (! kk::game::earnsChest (game, sc, false)) continue;
+                const auto c = kk::game::openChest (game, lvl, sc, false); ++chests;
+                for (auto& r : c.items) { ++mix[(size_t) r.rarity]; ++items; }
+            }
+            const float legLo = (float) lo[3] / 40000.0f, legHi = (float) hi[3] / 40000.0f, legMix = (float) mix[3] / (float) std::max (1, items);
+            std::printf ("GAME CHEST: legendary %.2f%% at a low score, %.2f%% at a top score; %d chests / %d sounds: common %d rare %d epic %d legendary %d\n", 100.0f * legLo, 100.0f * legHi, chests, items, mix[0], mix[1], mix[2], mix[3]);
+            check (lo[3] > 0 && legLo < 0.01f && legHi > legLo * 5 && legHi < 0.15f, "v0.45 GAME: CHEST - legendary is rare at any score, reachable, likelier with a high score");
+            check (lo[0] > lo[1] && lo[1] > lo[2] && lo[2] > lo[3] && hi[2] > lo[2], "v0.45 GAME: CHEST - rarities are ordered and a high score shifts them up");
+            check (mix[3] > 0 && legMix < 0.05f && mix[0] > mix[3] * 5, "v0.45 GAME: CHEST - real chests contain legendaries, but rarely");
+            const auto c1 = kk::game::openChest (0, 2, 1234, true), c2 = kk::game::openChest (0, 2, 1234, true), c3 = kk::game::openChest (0, 2, 2900, true);
+            bool same = c1.items.size() == c2.items.size(); for (size_t i = 0; same && i < c1.items.size(); ++i) same = c1.items[i].slot == c2.items[i].slot;
+            check (same && ! c1.items.empty() && c3.items.size() >= c1.items.size(), "v0.45 GAME: CHEST - the same run opens the same chest, a better score gives more sounds");
+            kk::game::Collection col; col.add (3); col.add (3); col.add (240);
+            kk::game::Collection back; back.fromString (col.toString());
+            check (back.count == col.count && back.unlocked() == 2 && back.unlocked (kk::game::rLegendary) == 1, "v0.45 GAME: COLLECTION - saved and loaded");
+        }
+        // UNLOCK RECIPES: deterministic, unique names, rarity widens the ranges; every reward genome is valid and plays
+        {
+            std::set<juce::String> names; bool det = true, ranges = true;
+            for (int s = 0; s < kk::game::numSlots; ++s)
+            {
+                const auto a = kk::game::recipeForSlot (s), b = kk::game::recipeForSlot (s);
+                det &= a.seed == b.seed && a.matter == b.matter && a.exciter == b.exciter && a.name == b.name && a.rarity == kk::game::rarityOfSlot (s);
+                names.insert (a.name);
+                if (a.rarity == kk::game::rLegendary) ranges &= (a.matter < 0.07f || a.matter > 0.93f) && (a.size < 0.11f || a.size > 0.89f) && a.split > 0.6f && a.name.startsWith ("Golden");
+                if (a.rarity == kk::game::rCommon) ranges &= a.matter >= 0.25f && a.matter <= 0.75f && a.split == 0;
+            }
+            check (det && (int) names.size() == kk::game::numSlots, "v0.45 GAME: RECIPES - deterministic, 250 different names");
+            check (ranges, "v0.45 GAME: RECIPES - legendary = extreme matter / size + a sculpt twist + a golden name, common = middle ground");
+            KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+            std::vector<kk::game::Recipe> test;
+            for (int s = 0; s < kk::game::numSlots; s += (s >= kk::game::slotStart (kk::game::rLegendary) ? 1 : 9)) test.push_back (kk::game::recipeForSlot (s));
+            for (int lvl : { 1, 3, 5 }) test.push_back (kk::game::rivalRecipe (lvl));
+            kk::game::Pinball pb; pb.start (1, key); pb.cooked[kk::game::inLava] = 4; pb.cooked[kk::game::inBone] = 2; pb.score = 9000;
+            test.push_back (kk::game::dishRecipe (pb.dish(), pb.score));
+            int ok = 0;
+            for (auto& r : test)
+            {
+                const auto g = kk::game::genomeFor (p, r);
+                if (! g.valid() || g.name != r.name) continue;
+                const auto buf = p.renderGenomeAudio (g, 44100.0, 1.0);
+                bool fin = true; for (int ch = 0; ch < buf.getNumChannels(); ++ch) for (int i = 0; i < buf.getNumSamples(); ++i) fin &= std::isfinite (buf.getSample (ch, i));
+                const float pk = buf.getMagnitude (0, buf.getNumSamples());
+                if (fin && pk > 0.002f && pk < 4.0f) ++ok; else std::printf ("   silent / bad reward: %s (peak %.4f)\n", r.name.toRawUTF8(), pk);
+            }
+            std::printf ("GAME RECIPES: %d / %d reward genomes valid and audible\n", ok, (int) test.size());
+            check (ok == (int) test.size(), "v0.45 GAME: every reward genome is valid, named and audible");
+        }
+    }
     // v0.43 LIFE: gravity, predator, swarm, metabolism
     {
         auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)
@@ -2538,6 +2674,15 @@ int main (int argc, char** argv)
             juce::Image kkEvolveSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);
             auto img = kkEvolveSnapshot (p, juce::String (argv[4]).getIntValue());
+            juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+            out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
+            return 0;
+        }
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 70 && juce::String (argv[4]).getIntValue() <= 75)   // v0.45 GAME: 70 arcade, 71 invaders, 72 duel, 73 pinball, 74 legendary chest, 75 the book
+        {
+            juce::Image kkGameSnapshot (KeysKillaProcessor&, int);
+            p.prepareToPlay (44100, 512);
+            auto img = kkGameSnapshot (p, juce::String (argv[4]).getIntValue() - 70);
             juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
             return 0;

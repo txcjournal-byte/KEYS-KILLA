@@ -5382,6 +5382,13 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             g.fillEllipse (cx + w * 0.3f, cy + w * 0.18f, w * 0.18f, w * 0.18f);
             break;
         }
+        case 17:  // GAME: a little gamepad
+        {
+            g.drawRoundedRectangle (cx - w * 0.45f, cy - w * 0.22f, w * 0.9f, w * 0.44f, w * 0.18f, 1.4f);
+            g.drawLine (cx - w * 0.3f, cy, cx - w * 0.14f, cy, 1.4f); g.drawLine (cx - w * 0.22f, cy - w * 0.08f, cx - w * 0.22f, cy + w * 0.08f, 1.4f);
+            g.fillEllipse (cx + w * 0.14f, cy - w * 0.08f, w * 0.08f, w * 0.08f); g.fillEllipse (cx + w * 0.26f, cy, w * 0.08f, w * 0.08f);
+            break;
+        }
         case 14:  // FEED: two cards, the front one swiped
         {
             g.drawRoundedRectangle (cx - w * 0.42f, cy - w * 0.38f, w * 0.6f, w * 0.8f, 3.0f, 1.0f);
@@ -5443,14 +5450,14 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 10, studioAt = 7;
+    static constexpr int numTiles = 11, studioAt = 8;
     // v0.45 fewer doors: EVOLVE / FEED / CREATE / WORLDS / LIFE / MELODY / MY SOUNDS, STUDIO: BREED LAB / SAMPLER / FX + MIX
     // (FAMILY TREE is inside BREED LAB, MIX LAB is inside FX, DOODLE inside LIFE, SOUND WORLD inside WORLDS)
-    static int tileId (int v) { static const int ids[numTiles] { 8, 14, 12, 11, 13, 9, 4, 0, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static int tileId (int v) { static const int ids[numTiles] { 8, 14, 12, 11, 13, 9, 17, 4, 0, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX\n+ MIX", "EVOLVE", "MELODY", "MIX\nLAB", "WORLDS", "CREATE", "LIFE", "FEED" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX\n+ MIX", "EVOLVE", "MELODY", "MIX\nLAB", "WORLDS", "CREATE", "LIFE", "FEED", "", "", "GAME" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -7069,6 +7076,7 @@ static std::unique_ptr<Component> makeDoodlePage (KeysKillaProcessor& p, KKLookA
 #include "WordsPage.h"     // v0.45 EVOLVE: WORDS, GRID, CREATURE + DREAMS (SoundPack.h comes with Creature.h)
 #include "GridPage.h"
 #include "Creature.h"
+#include "GamePage.h"      // v0.45 GAME (ARCADE)
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7216,6 +7224,7 @@ public:
             if (k == 12) { if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy); return; }
             if (k == 13) { if (! (openTabIndex == tabLife && isPanelVisible())) openTab (tabLife); return; }
             if (k == 14) { if (! (openTabIndex == tabFeed && isPanelVisible())) openTab (tabFeed); return; }
+            if (k == 17) { if (! (openTabIndex == tabGame && isPanelVisible())) openTab (tabGame); return; }
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
             const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
@@ -7647,13 +7656,13 @@ public:
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
-                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld || i == tabAlchemy || i == tabLife || i == tabFeed ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
+                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld || i == tabAlchemy || i == tabLife || i == tabFeed || i == tabGame ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
         labSwitch.setBounds (R (16, 98, 138, 606));
         if (evolve != nullptr) evolve->setBounds (R (0, 0, 1672, 806));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, tabAlchemy, tabLife, tabFeed, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, tabAlchemy, tabLife, tabFeed, tabGame, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     // a page behind a tab: directly in its InsetPage, or one of the rooms behind a door
     template <class T> T* pageOf (int t)
     {
@@ -7724,6 +7733,7 @@ private:
                     d->addRoom ("DOODLE", "Draw lines - they become a melody in your key", [this] { return makeDoodlePage (proc, lnf); });
                     m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
+                case tabGame:     m = std::make_unique<InsetPage> (std::make_unique<GamePage> (proc, lnf)); break;   // v0.45 ARCADE
                 case tabFeed:     // v0.45 door FEED: the feed with its creature, and the DREAMS from while you were away
                 {
                     auto d = std::make_unique<DoorPage> (lnf);
@@ -7848,7 +7858,7 @@ private:
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
         const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabSampler ? 5
-                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : openTabIndex == tabAlchemy ? 12 : openTabIndex == tabLife ? 13 : openTabIndex == tabFeed ? 14 : -1;
+                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : openTabIndex == tabAlchemy ? 12 : openTabIndex == tabLife ? 13 : openTabIndex == tabFeed ? 14 : openTabIndex == tabGame ? 17 : -1;
         if (openTabIndex >= tab808 && openTabIndex < numTabs) lastDrum = openTabIndex - tab808;
         else proc.kitPlay = false;   // PLAY KIT is a preview on the drum pages
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
@@ -8502,6 +8512,17 @@ juce::Image kkFxSnapshot (KeysKillaProcessor& p, int view)
     pg->setBounds (0, 0, KeysKillaEditor::designW, KeysKillaEditor::designH);
     pg->showView (view);
     return pg->createComponentSnapshot (pg->getLocalBounds(), true, 0.8f);
+}
+// v0.45 GAME: the ARCADE page at 1512 x 798 (0 arcade, 1 invaders, 2 duel, 3 pinball, 4 a legendary chest, 5 the book)
+juce::Image kkGameSnapshot (KeysKillaProcessor& p, int which)
+{
+    KKLookAndFeel lnf;
+    auto pg = std::make_unique<GamePage> (p, lnf);
+    pg->setBounds (0, 0, 1512, 798);
+    pg->debugShow (which);
+    auto img = pg->createComponentSnapshot (pg->getLocalBounds(), true, 1.0f);
+    pg.reset();
+    return img;
 }
 #endif
 
