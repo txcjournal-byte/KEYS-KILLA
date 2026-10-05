@@ -83,3 +83,8 @@ Order: fewer doors + performance -> COOK + RECIPES -> GAME (SOUND INVADERS, PIXE
 A section to choose ANIMALS, PLANTS / TREES / NATURE or the HUMAN BODY (an anatomy model like at school). Touch / colour a part of the
 animal / tree / body = it makes or changes a sound. Living reactions with animation: movement makes an animal PANIC, become SHY, or MUTATE.
 (Today only LIFE has behaviour: PREDATOR hunts, SWARM panics when frightened; INTENT shows lungs.)
+
+## GAME idea: PINBALL (owner, 2026-10-05)
+Press = the plunger fires the ball, it bounces through bumpers and a maze and comes back. Every bumper / ramp is a note in the key
+(the bounces become a melody, the hits' strength = velocity); bumpers can also be ingredients (metal, glass, bone ...) so the run
+also cooks a new SOUND. Flippers = two keys / mouse buttons. Score -> chest -> unlocked sounds. Reuses the GRAVITY physics (Living.h).
