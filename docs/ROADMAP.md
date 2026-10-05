@@ -121,3 +121,9 @@ something (left -> right: dark -> bright, top -> bottom: short -> long, colour z
 into ONE sound. Under the grid a WAV player loops it all the time (PLAY) and changes live with every square you click.
 When you stop choosing: edit the WAV - trim start / end, longer / shorter, fade, reverse - then DRAG WAV into FL, EXPORT, or SAVE to MY SOUNDS.
 No MIDI here: MIDI lives in MELODY - add "the sound from MY SOUNDS" as the melody sound there, so: GRID -> MY SOUNDS -> MELODY -> MIDI loops.
+
+## SOUND DOCK (owner, 2026-10-05) - the same player on every page
+One strip that is always there (above the keys, replacing the small KEYS label), on every EVOLVE page: the WAVEFORM of whatever is on
+the keys now (updates the moment the sound changes), its name, PLAY / LOOP, trim handles (start / end), fade, reverse,
+DRAG WAV into FL, SAVE to MY SOUNDS (pick a folder). Same place, same buttons everywhere - the user never hunts for it.
+Pages may still show their own big view (GRID player, COOK plate ...), the dock is the common one.
