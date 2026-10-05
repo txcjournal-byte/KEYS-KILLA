@@ -65,7 +65,7 @@ public:
         startTimerHz (30);
     }
     ~WorldPage() override { stopTimer(); }
-    void visibilityChanged() override { if (isVisible() && isShowing()) hear (false); }
+    void visibilityChanged() override {}   // v0.45.2: opening a page never changes the sound on the keys
     void resized() override
     {
         const auto pn = panel(); const int bw = (pn.getWidth() - 30) / 2, x = pn.getX() + 10;
@@ -1557,7 +1557,7 @@ private:
 
     HotButton grooveBtn { lnf };
     kk::worlds::Party party;
-    bool groove = true, grooveMine = false;
+    bool groove = false, grooveMine = false;
     int mode = 0;
     float start = 0, lastAng = 0, angVel = 0, ballAngle = 0, beat = 0;
     uint32 lastMs = 0, lastLive = 0;

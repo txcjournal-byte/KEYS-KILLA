@@ -42,9 +42,11 @@ public:
     {
         const bool multi = rooms.size() > 1;
         auto s = strip().reduced (6, 5);
-        for (auto& c : chips) { c->setVisible (multi); c->setBounds (s.removeFromLeft (jmin (150, (s.getWidth() + 6) / jmax (1, (int) chips.size()))).withTrimmedRight (6)); }
+        const int cw = jmin (150, (s.getWidth() + 6) / jmax (1, (int) chips.size()));   // every chip the same width
+        for (auto& c : chips) { c->setVisible (multi); c->setBounds (s.removeFromLeft (cw).withTrimmedRight (6)); }
         for (auto& r : rooms) if (r.page) r.page->setBounds (multi ? getLocalBounds().withTrimmedTop (strip().getBottom() + 4) : getLocalBounds());
     }
+    Component* shown() { return room (current); }   // the room you are looking at
 private:
     Rectangle<int> strip() const { return { 0, 0, jmin (getWidth(), 160 * jmax (1, (int) rooms.size()) + 12), 44 }; }
     KKLookAndFeel& lnf;

@@ -5459,10 +5459,10 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 11, studioAt = 8;
-    // v0.45 fewer doors: EVOLVE / FEED / CREATE / WORLDS / LIFE / MELODY / MY SOUNDS, STUDIO: BREED LAB / SAMPLER / FX + MIX
-    // (FAMILY TREE is inside BREED LAB, MIX LAB is inside FX, DOODLE inside LIFE, SOUND WORLD inside WORLDS)
-    static int tileId (int v) { static const int ids[numTiles] { 8, 14, 12, 11, 13, 9, 17, 4, 0, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static constexpr int numTiles = 8, studioAt = 4;
+    // v0.46 one place: CREATE (every way to make a sound) / MELODY / GAME / MY SOUNDS, STUDIO: EVOLVE / BREED LAB / SAMPLER / FX + MIX
+    // (FEED, DREAMS, WORLDS and the WORLD MAP are rooms of CREATE, DOODLE is in MELODY, FAMILY TREE in BREED LAB, MIX LAB in FX)
+    static int tileId (int v) { static const int ids[numTiles] { 12, 9, 17, 4, 8, 0, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
@@ -7124,7 +7124,7 @@ public:
         addAndMakeVisible (*dock);
         dreams = std::make_unique<DreamEngine> (proc);
         creature = std::make_unique<CreatureWidget>();
-        creature->onSurprise = [this] { if (auto* fp = pageOf<FeedPage> (tabFeed)) fp->somethingElse(); };
+        creature->onSurprise = [this] { if (auto* fp = pageOf<FeedPage> (tabAlchemy)) fp->somethingElse(); };
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
         worldBtn.setTooltip ("SOUND WORLD: one click colours the whole sound (rompler, analog, glassy, hi-fi, organic ...).  TRANCE GATE and CLIPPER are here too.");
         addAndMakeVisible (worldBtn);
@@ -7344,7 +7344,8 @@ public:
         setSize (KeysKillaEditor::designW, KeysKillaEditor::designH);
         noFocus (*this);
         applyKeyMode();
-        showEvolve (settings->getBoolValue ("evolveOpen", true));
+        showEvolve (false);   // v0.46: the plugin opens in CREATE - the one place where sounds are made
+        openTab (tabAlchemy);
         focusGrabber.page = this;
         addMouseListener (&focusGrabber, true);   // a click anywhere in the plugin gives it the PC keyboard
         refreshState();
@@ -7460,7 +7461,7 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
-        if (v == 55) { openTab (tabFeed); if (auto* fp = pageOf<FeedPage> (tabFeed)) fp->debugSwipes(); }
+        if (v == 55) { openTab (tabAlchemy); if (auto* fp = pageOf<FeedPage> (tabAlchemy)) fp->debugSwipes(); }
         if (v == 56) { openTab (tabAlchemy); if (auto* ap = pageOf<CookPage> (tabAlchemy)) ap->debugCook(); }
         if (v >= 50 && v <= 54)   // v0.43 ALCHEMY (50, 54 = as the chooser), LIFE (51 gravity, 52 predator, 53 swarm)
         {
@@ -7499,7 +7500,7 @@ public:
             int dot = 0; for (int i = 0; i < (int) ds.size(); ++i) if (ds[(size_t) i].region == 3) { dot = i; break; }
             proc.worldDot = dot; proc.worldRegion = 3; proc.worldRegionB = v == 49 ? 9 : -1;
             proc.worldPlay (v == 49 ? proc.worldConnect (3, 9, 7) : proc.worldSound (dot), false);
-            openTab (tabWorld);
+            openTab (tabAlchemy); pageOf<SoundWorldPage> (tabAlchemy);
         }
         if (v >= 43 && v <= 46)   // v0.41 MIX LAB: EQ / COMP / TIME MACHINE / SPACE with a melody playing through it
         {
@@ -7712,9 +7713,15 @@ private:
                 case tabSampler:  m = std::make_unique<InsetPage> (std::make_unique<ChopPanel> (proc, lnf)); break;
                 case tabMelody:
                 {
-                    auto pg = std::make_unique<MelodyPage> (proc, lnf);
-                    pg->onPickSound = [this] { openAlchemy ("THE SOUND FOR THE MELODIES", [this] { openTab (tabMelody); }); };
-                    m = std::make_unique<InsetPage> (std::move (pg)); break;
+                    auto d = std::make_unique<DoorPage> (lnf);   // v0.46: DOODLE moved here from LIFE
+                    d->addRoom ("MELODY", "8 melodies in your key - pick one, play it, drag the MIDI to FL", [this]
+                    {
+                        auto pg = std::make_unique<MelodyPage> (proc, lnf);
+                        pg->onPickSound = [this] { openAlchemy ("THE SOUND FOR THE MELODIES", [this] { openTab (tabMelody); }); };
+                        return std::unique_ptr<Component> (std::move (pg));
+                    });
+                    d->addRoom ("DOODLE", "Draw lines - they become a melody in your key", [this] { return makeDoodlePage (proc, lnf); });
+                    m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
                 case tabMix:      m = std::make_unique<InsetPage> (std::make_unique<MixLabPage> (proc, lnf)); break;   // v0.41
                 case tabWorld:    // v0.45 door WORLDS
@@ -7732,11 +7739,23 @@ private:
                     d->addRoom ("COOK", "Cook a sound: ingredients into the pot, stir, fry, bake, freeze, season - every dish has a recipe code", [this]
                     {
                         auto c = std::make_unique<CookPage> (proc, lnf);
-                        c->onToLife = [this] { MessageManager::callAsync ([safe = SafePointer<MainPage> (this)] { if (safe != nullptr) safe->openTab (tabLife); }); };
+                        c->onToLife = [this] { MessageManager::callAsync ([safe = SafePointer<MainPage> (this)] { if (safe != nullptr) safe->openTab (tabMelody); }); };
                         return std::unique_ptr<Component> (std::move (c));
                     });
                     d->addRoom ("WORDS", "Type anything - a word, a name, a sentence - and get 10 sounds", [this] { return std::unique_ptr<Component> (std::make_unique<WordsPage> (proc, lnf)); });
                     d->addRoom ("GRID", "Click squares on graph paper - they blend into one sound, played and edited below", [this] { return std::unique_ptr<Component> (std::make_unique<GridPage> (proc, lnf)); });
+                    d->addRoom ("FEED", "Sounds come to you - swipe right = keep, left = next", [this]
+                    {
+                        auto f = std::make_unique<FeedPage> (proc, lnf);
+                        f->setSidekick (creature.get());
+                        f->onSwiped = [this] (const KeysKillaProcessor::Genome& g, bool liked) { creature->feed (g.name, liked); if (liked) dreams->remember (g); };
+                        return std::unique_ptr<Component> (std::move (f));
+                    });
+                    d->addRoom ("DREAMS", "While you were away the plugin dreamed variations of your sounds", [this] { return std::unique_ptr<Component> (std::make_unique<DreamsPanel> (proc, lnf, *dreams)); });
+                    d->addRoom ("BIOSPHERE", "Animals, nature, the human body - touch a part, it sounds; they panic, hide, mutate", [this] { return std::unique_ptr<Component> (std::make_unique<BiospherePage> (proc, lnf)); });
+                    d->addRoom ("GARAGE", "Arsenal, cars, yachts, jets - from the worst to the most expensive; click a part to re-shape", [this] { return std::unique_ptr<Component> (std::make_unique<GaragePage> (proc, lnf)); });
+                    d->addRoom ("PARTY", "A club: crowd, lights, the disco ball - the more energy, the more euphoric the sounds", [this] { return std::unique_ptr<Component> (std::make_unique<PartyPage> (proc, lnf)); });
+                    d->addRoom ("WORLD MAP", "The world map of sounds", [this] { return std::unique_ptr<Component> (std::make_unique<SoundWorldPage> (proc, lnf)); });
                     m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
                 case tabLife:     // v0.45 door LIFE: behaviour + drawing
@@ -7808,7 +7827,7 @@ private:
     }
     void openTab (int t)
     {
-        if (t == tabBrowser) t = tabAlchemy;   // v0.43: no preset browser any more
+        if (t == tabBrowser || t == tabWorld || t == tabFeed) t = tabAlchemy;   // v0.43: no preset browser; v0.46: FEED + WORLDS live in CREATE
         const bool wasOpen = t == openTabIndex && isPanelVisible();
         hidePanels();
         openTabIndex = -1;
@@ -8393,45 +8412,15 @@ private:
     }
 
     // v0.37 THE SOUND ON THE KEYS: what you picked last plays (the PC keys, your MIDI keyboard, FL's piano roll).
-    // Opening a page that HAS its own sound hands the keys to it once (BREED LAB, FAMILY TREE, SAMPLER, EVOLVE);
-    // EDIT, FX, MY SOUNDS and the bank never take the keys away - they work on the sound that plays.
+    // v0.46: no page takes the keys by itself any more - only picking a sound does.
     int currentPageId() const { return isPanelVisible() ? openTabIndex : evolveOpen() ? -50 : -1; }
-    void takeKeysForPage (int page)
-    {
-        switch (page)
-        {
-            case -50:   // EVOLVE: the middle sound
-                if (isPositiveAndBelow (proc.evoCenter, (int) proc.evo.size()))
-                {
-                    const auto& n = proc.evo[(size_t) proc.evoCenter];
-                    if (n.isAudio()) { if (proc.activeSample() != n.audio || ! proc.sampleActive()) proc.useSample (n.audio, false); }
-                    else proc.setPlayMode (KeysKillaProcessor::playKeys);
-                }
-                break;
-            case -1:    // BREED LAB: its selected child (your sounds = the audio child)
-                if (proc.labAudioMode() && isPositiveAndBelow (proc.pairSel, (int) proc.pairKids.size()))
-                { if (proc.activeSample() != proc.pairKids[(size_t) proc.pairSel] || ! proc.sampleActive()) proc.useSample (proc.pairKids[(size_t) proc.pairSel], false); }
-                else if (! proc.labAudioMode() && proc.selectedChild() >= 0) proc.setPlayMode (KeysKillaProcessor::playKeys);
-                break;
-            case tabTree:
-                if (! proc.treeKids().empty() && proc.treeSelected() >= 0) proc.setPlayMode (KeysKillaProcessor::playKeys);
-                break;
-            case tabSampler:
-                if (proc.chop.hasSource()) proc.setPlayMode (KeysKillaProcessor::playChop);
-                break;
-            case tabVst: proc.setPlayMode (KeysKillaProcessor::playVst); break;
-            default: break;   // EDIT, FX, MY SOUNDS, the bank: the sound stays
-        }
-    }
     void syncKeysToPage()
     {
         const int page = currentPageId();
         if (page == lastKeysPage) return;
         if (lastKeysPage == -99) { lastKeysPage = page; return; }   // the editor just opened: the sound on the keys stays
         lastKeysPage = page;
-        const int before = (int) proc.apvts.getRawParameterValue (ID::playMode)->load();
-        takeKeysForPage (page);
-        if ((int) proc.apvts.getRawParameterValue (ID::playMode)->load() != before) proc.panic();   // nothing keeps ringing from the sound you left
+        // v0.46: opening a page never changes the sound on the keys - only picking a sound does (and BACK brings the last one back)
     }
     int lastKeysPage = -99, lastPairVer = -1;
     bool lastSampleMode = false;
@@ -8442,7 +8431,7 @@ private:
         if (evolveOpen() && ! isPanelVisible()) { evolve->spacePressed(); return; }
         if (openTabIndex == tabMelody && isPanelVisible())   // v0.40: MELODY - stop / play the melody
         {
-            if (auto* m = module (tabMelody)) if (auto* ip = dynamic_cast<InsetPage*> (m)) if (auto* mp = dynamic_cast<MelodyPage*> (ip->page())) { mp->spacePressed(); return; }
+            if (auto* m = module (tabMelody)) if (auto* ip = dynamic_cast<InsetPage*> (m)) if (auto* d = dynamic_cast<DoorPage*> (ip->page())) if (auto* mp = dynamic_cast<MelodyPage*> (d->shown())) { mp->spacePressed(); return; }
         }
         if (openTabIndex == tabSampler && isPanelVisible())   // v0.35: SAMPLER - stop / play the part
         {

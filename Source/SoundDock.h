@@ -7,6 +7,7 @@ public:
     SoundDock (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (backBtn, "< BACK", "Back to the sound you had before (every sound you settled on is remembered)", [this] { goBack(); });
         btn (playBtn, "PLAY", "Hear the sound on the keys", [this] { proc.previewNote = 60; flash = 1.0f; });
         btn (loopBtn, "LOOP", "Hear it again and again while you shape it anywhere in the plugin", [this] { looping = ! looping; loopBtn.selected = looping; loopBtn.repaint(); });
         btn (revBtn, "REV", "Reverse the WAV you drag / save", [this] { reversed = ! reversed; revBtn.selected = reversed; revBtn.repaint(); repaint(); });
@@ -66,7 +67,8 @@ public:
         saveBtn.setBounds (r.removeFromRight (64)); r.removeFromRight (4);
         revBtn.setBounds (r.removeFromRight (52)); r.removeFromRight (4);
         loopBtn.setBounds (r.removeFromRight (60)); r.removeFromRight (4);
-        playBtn.setBounds (r.removeFromRight (60));
+        playBtn.setBounds (r.removeFromRight (60)); r.removeFromRight (4);
+        backBtn.setBounds (r.removeFromLeft (78)); r.removeFromLeft (6);
     }
     void mouseDown (const MouseEvent& e) override
     {
@@ -90,8 +92,8 @@ public:
     void mouseUp (const MouseEvent&) override { dragging = -1; }
     void mouseDoubleClick (const MouseEvent&) override { trimA = 0; trimB = 1; fadeIn = 0; fadeOut = 0.15f; reversed = false; revBtn.selected = false; revBtn.repaint(); repaint(); }
 private:
-    Rectangle<float> nameArea() const { return { 10, 4, 190, (float) getHeight() - 8 }; }
-    Rectangle<float> waveArea() const { return { 206, 6, (float) playBtn.getX() - 216, (float) getHeight() - 12 }; }
+    Rectangle<float> nameArea() const { return { 92, 4, 190, (float) getHeight() - 8 }; }
+    Rectangle<float> waveArea() const { return { 288, 6, (float) playBtn.getX() - 298, (float) getHeight() - 12 }; }
     // the sound with your edits, as a WAV-ready sound
     kk::PairPtr edited()
     {
@@ -136,19 +138,43 @@ private:
         if (! isShowing()) return;
         // follow the sound on the keys: re-draw its waveform a moment after it changed
         const String now = proc.currentName() + "|" + String (proc.labVersion()) + "|" + String ((int) proc.sampleActive()) + String ((int) proc.chopActive());
-        if (now != lastKey) { lastKey = now; pending = 5; }
+        if (now != lastKey)
+        {
+            // a sound you stayed with for a moment is remembered, so BACK can bring it back (live tweaking does not flood the history)
+            if (! goingBack && settled.valid() && Time::getMillisecondCounter() - settledAt > 1500)
+            {
+                if (history.empty() || history.back().v != settled.v) history.push_back (settled);
+                if (history.size() > 40) history.erase (history.begin());
+            }
+            goingBack = false;
+            lastKey = now; pending = 5;
+        }
         if (pending > 0 && --pending == 0)
         {
             name = proc.sampleActive() || proc.chopActive() ? "SAMPLE: " + proc.currentName() : proc.currentName();
             trimA = 0; trimB = 1; fadeIn = 0; fadeOut = 0.15f;
             render(); repaint();
+            if (! proc.sampleActive() && ! proc.chopActive()) { settled = proc.currentGenome(); settledAt = Time::getMillisecondCounter(); }
+            backBtn.setEnabled (! history.empty());
         }
         if (looping && ++loopT >= 30) { loopT = 0; proc.previewNote = 60; flash = 1.0f; }
         if (flash > 0) { flash = jmax (0.0f, flash - 0.12f); repaint(); }
         if (noteT > 0 && --noteT == 0) repaint();
     }
+    void goBack()
+    {
+        if (history.empty()) return;
+        auto g = history.back(); history.pop_back();
+        goingBack = true;
+        proc.alcUse (g, true);
+        backBtn.setEnabled (! history.empty());
+    }
+    std::vector<KeysKillaProcessor::Genome> history;
+    KeysKillaProcessor::Genome settled;
+    uint32 settledAt = 0;
+    bool goingBack = false;
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    HotButton playBtn { lnf }, loopBtn { lnf }, revBtn { lnf }, saveBtn { lnf };
+    HotButton backBtn { lnf }, playBtn { lnf }, loopBtn { lnf }, revBtn { lnf }, saveBtn { lnf };
     DragFileButton dragWav { "DRAG WAV", TC (0xff36ff6a) };
     AudioBuffer<float> audio;
     std::vector<float> peaks;

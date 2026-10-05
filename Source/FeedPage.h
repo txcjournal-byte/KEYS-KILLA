@@ -7,7 +7,7 @@ public:
     FeedPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
     {
         auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
-        btn (stopBtn, "STOP", "Stop / start the little phrase the cards play", [this] { autoplay = ! autoplay; if (! autoplay) { if (proc.loopOwnerId() == 4) proc.stopLoop(); } else hear (true); refreshBtns(); });
+        btn (stopBtn, "STOP", "Stop / start the little phrase the cards play", [this] { armed = true; autoplay = ! autoplay; if (! autoplay) { if (proc.loopOwnerId() == 4) proc.stopLoop(); } else hear (true); refreshBtns(); });
         btn (plantBtn, "PLANT IN EVOLVE", "The chosen kept sound becomes the seed of a new EVOLVE tree", [this] { if (auto* g = chosen()) { proc.evoSeedGenome (*g); note = "planted - open EVOLVE"; repaint(); } });
         btn (saveBtn, "SAVE", "Save the chosen kept sound into your folders / sound kits", [this]
         {
@@ -26,7 +26,7 @@ public:
         startTimerHz (40);
     }
     ~FeedPage() override { stopTimer(); }
-    void visibilityChanged() override { if (isVisible() && autoplay) hear (false); }
+    void visibilityChanged() override { if (! isVisible() && proc.loopOwnerId() == 4 && armed) proc.stopLoop(); }   // v0.45.2: opening FEED never changes the sound
     void paint (Graphics& g) override
     {
         const auto& t = kk::theme();
@@ -59,6 +59,7 @@ public:
         for (int i = 0; i < (int) shelf.size(); ++i)
             if (shelfSlot (i).contains (e.position)) { chosenIdx = i; proc.alcUse (shelf[(size_t) i].g, true); if (proc.loopOwnerId() == 4) proc.stopLoop(); autoplay = false; refreshBtns(); repaint(); return; }
         grabbing = cardHome().contains (e.getPosition());
+        if (grabbing) armed = true;
         drag = {};
     }
     void mouseDrag (const MouseEvent& e) override { if (grabbing && ! flying) { drag = e.position - e.mouseDownPosition; repaint(); } }
@@ -117,7 +118,7 @@ private:
         if (how == 3) {}   // MORE LIKE THIS: the new card grows from the one you pushed up
         next = make (invent (how == 4 ? 4 : 0, card.r));
         drag = {}; flyOff = {};
-        hear (true);
+        if (armed) hear (true);
         repaint();
     }
     void learn (const Recipe& r, float amount)
@@ -303,7 +304,7 @@ private:
     std::vector<Card> shelf;
     Taste taste;
     Point<float> drag, flyOff;
-    bool grabbing = false, flying = false, autoplay = true;
+    bool grabbing = false, flying = false, autoplay = true, armed = false;   // armed: the first touch - before it FEED stays silent
     int flyDir = 0, pending = 0, chosenIdx = -1;
     float phase = 0;
     String note;

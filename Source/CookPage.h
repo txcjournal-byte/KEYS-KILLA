@@ -26,7 +26,7 @@ public:
             auto snd = kk::PairLab::fromBuffer (proc.renderGenomeAudio (cur, rate, 3.0), rate, rate, cur.name);
             saveToFolderMenu (proc, { snd }, &saveBtn, [safe = SafePointer<CookPage> (this)] (String m) { if (safe != nullptr) safe->say (m); });
         });
-        btn (lifeBtn, "TO LIFE", "The dish becomes the sound of the LIFE melodies", [this] { if (! cur.valid()) return; proc.alcUse (cur, false); if (onToLife) onToLife(); else say ("on your keys - open LIFE"); });
+        btn (lifeBtn, "TO MELODY", "The dish becomes the sound your melodies play with", [this] { if (! cur.valid()) return; proc.alcUse (cur, false); if (onToLife) onToLife(); else say ("on your keys - open MELODY"); });
         btn (useBtn, "USE IT", "Use this dish", [this] { if (cur.valid() && onPicked) { proc.alcUse (cur, false); auto fn = onPicked; onPicked = nullptr; useBtn.setVisible (false); resized(); fn(); } });
         useBtn.hero = true; useBtn.setVisible (false);
         btn (copyBtn, "COPY CODE", "Copy the recipe code - send it to a friend, type it in later: the exact same sound", [this]
