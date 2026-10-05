@@ -54,7 +54,9 @@ struct KeysKillaProcessor::Idx
 KeysKillaProcessor::KeysKillaProcessor (bool withModules)
 #if KK_FX_BUILD
     // EVOLVE FX: an effect - the input is always on (the track / master comes in, MIX LAB + COACH work on it)
+    // v0.43: a second input "Sidechain" (off until the host routes a kick into it) - LIQUID hears the kick there
     : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                       .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)
                                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
 #else
     : AudioProcessor (juce::PluginHostType::getPluginLoadedAs() == juce::AudioProcessor::wrapperType_AudioUnit
@@ -147,8 +149,11 @@ int KeysKillaProcessor::indexOf (const juce::String& id) const
 
 bool KeysKillaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
+    const bool mainOk = layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
         && (layouts.getMainInputChannelSet().isDisabled() || layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo());
+    if (layouts.inputBuses.size() < 2) return mainOk;
+    const auto sc = layouts.getChannelSet (true, 1);   // the sidechain: off, mono or stereo
+    return mainOk && (sc.isDisabled() || sc == juce::AudioChannelSet::mono() || sc == juce::AudioChannelSet::stereo());
 }
 
 void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -160,6 +165,8 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     rackFx = std::make_unique<kk::FxRack>(); rackFx->prepare (sampleRate, kChunk);
     mixDsp.prepare (sampleRate, samplesPerBlock);
     reelDsp.prepare (sampleRate); dialDsp.prepare (sampleRate); warpDsp.prepare (sampleRate); bossDsp.prepare (sampleRate);
+    liquidDsp.prepare (sampleRate, samplesPerBlock); intentDsp.prepare (sampleRate, samplesPerBlock); erosionDsp.prepare (sampleRate, samplesPerBlock);
+    scIn.setSize (2, std::max (64, samplesPerBlock) * 2);
    #if KK_FX_BUILD
     setLatencySamples (kk::pro::BossDsp::lookahead (sampleRate));   // FINAL BOSS looks 1.5 ms ahead (always, so the latency never changes)
    #endif
@@ -599,13 +606,23 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     bypassed = false;
     const int n = buffer.getNumSamples();
     // FX INPUT: audio coming in (KEYS KILLA in a mixer insert) joins the melody bus -> VOODOO + EFFECTOR
-    const int inCh = std::min (getTotalNumInputChannels(), buffer.getNumChannels());
+    const int inCh = std::min (getMainBusNumInputChannels(), buffer.getNumChannels());
     bool hasInput = false;
     if (inCh > 0 && n > 0 && n <= fxIn.getNumSamples())
     {
         for (int c = 0; c < 2; ++c) fxIn.copyFrom (c, 0, buffer, std::min (c, inCh - 1), 0, n);
         hasInput = fxIn.getMagnitude (0, n) > 1.0e-7f;
     }
+    bool hasSc = false;   // v0.43 LIQUID: the sidechain (a kick routed in by the host), only when that bus is on
+   #if KK_FX_BUILD
+    if (getBusCount (true) > 1 && n > 0 && n <= scIn.getNumSamples())
+        if (auto* scBus = getBus (true, 1); scBus != nullptr && scBus->isEnabled())
+            if (const auto sc = getBusBuffer (buffer, true, 1); sc.getNumChannels() > 0)
+            {
+                for (int c = 0; c < 2; ++c) scIn.copyFrom (c, 0, sc, std::min (c, sc.getNumChannels() - 1), 0, n);
+                hasSc = true;
+            }
+   #endif
     if (hasInput) mixLab.inputBlocks = std::min (100000, mixLab.inputBlocks.load() + 1); else if (mixLab.inputBlocks.load() > 0) mixLab.inputBlocks = std::max (0, mixLab.inputBlocks.load() - 1);
     buffer.clear();
     // hosts may call before prepareToPlay or with empty buffers (parameter flush) - nothing to render then
@@ -870,6 +887,9 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         reelDsp.process (L, R, n, reel, beatPos, bps);    // v0.42 FX PRO: REMIX REEL, DIAL-UP, WARP DRIVE before MIX LAB
         dialDsp.process (L, R, n, dial);
         warpDsp.process (L, R, n, warp);
+        liquidDsp.process (L, R, n, liquid, hasSc ? scIn.getReadPointer (0) : nullptr, hasSc ? scIn.getReadPointer (1) : nullptr);   // v0.43 LIQUID, INTENT, EROSION
+        intentDsp.process (L, R, n, intent);
+        erosionDsp.process (L, R, n, erosion);
         mixDsp.process (L, R, n, mixLab);                 // v0.41 MIX LAB
        #if KK_FX_BUILD
         bossDsp.process (L, R, n, boss);                  // FINAL BOSS: the very last stage
@@ -5267,6 +5287,7 @@ void KeysKillaProcessor::chainReset()
     rack.reset();
     stepOn = false;
     reel.on = false; dial.on = false; warp.on = false;   // v0.42 FX PRO modules off too (FINAL BOSS stays: it is the master safety)
+    liquid.on = false; intent.on = false; erosion.on = false;
 }
 
 void KeysKillaProcessor::chainApply (int i)
@@ -5462,6 +5483,11 @@ juce::ValueTree KeysKillaProcessor::proToTree() const
     t.setProperty ("warp", juce::String ((int) warp.on.load()) + "," + juce::String (warp.mode.load()) + "," + juce::String (warp.semis.load(), 2) + "," + juce::String (warp.shiftHz.load(), 1) + ","
                            + juce::String (warp.wobble.load(), 3) + "," + juce::String (warp.mix.load(), 3), nullptr);
     t.setProperty ("boss", juce::String ((int) boss.on.load()) + "," + juce::String (boss.target.load()) + "," + juce::String (boss.drive.load(), 2) + "," + juce::String (boss.ceiling.load(), 2), nullptr);
+    t.setProperty ("liquid", juce::String ((int) liquid.on.load()) + "," + juce::String (liquid.source.load()) + "," + juce::String (liquid.flow.load(), 3) + "," + juce::String (liquid.depth.load(), 3) + ","
+                             + juce::String (liquid.viscosity.load(), 3) + "," + juce::String (liquid.mix.load(), 3), nullptr);
+    t.setProperty ("intent", juce::String ((int) intent.on.load()) + "," + juce::String (intent.mode.load()) + "," + juce::String (intent.level.load(), 3) + "," + juce::String (intent.mix.load(), 3), nullptr);
+    t.setProperty ("erosion", juce::String ((int) erosion.on.load()) + "," + juce::String (erosion.sensitivity.load(), 3) + "," + juce::String (erosion.fatigue.load(), 3) + ","
+                              + juce::String (erosion.recovery.load(), 3) + "," + juce::String (erosion.mix.load(), 3), nullptr);
     return t;
 }
 
@@ -5481,4 +5507,10 @@ void KeysKillaProcessor::proFromTree (const juce::ValueTree& t)
     { warp.on = w[0].getIntValue() != 0; warp.mode = juce::jlimit (0, (int) kk::pro::numWarpModes - 1, w[1].getIntValue()); warp.semis = w[2].getFloatValue(); warp.shiftHz = w[3].getFloatValue(); warp.wobble = w[4].getFloatValue(); warp.mix = w[5].getFloatValue(); }
     if (const auto b = vals (t.getProperty ("boss", "")); b.size() >= 4)
     { boss.on = b[0].getIntValue() != 0; boss.target = juce::jlimit (0, (int) kk::pro::numBossTargets - 1, b[1].getIntValue()); boss.drive = b[2].getFloatValue(); boss.ceiling = b[3].getFloatValue(); }
+    if (const auto q = vals (t.getProperty ("liquid", "")); q.size() >= 6)
+    { liquid.on = q[0].getIntValue() != 0; liquid.source = juce::jlimit (0, 1, q[1].getIntValue()); liquid.flow = q[2].getFloatValue(); liquid.depth = q[3].getFloatValue(); liquid.viscosity = q[4].getFloatValue(); liquid.mix = q[5].getFloatValue(); }
+    if (const auto m = vals (t.getProperty ("intent", "")); m.size() >= 4)
+    { intent.on = m[0].getIntValue() != 0; intent.mode = juce::jlimit (0, (int) kk::pro::numIntentModes - 1, m[1].getIntValue()); intent.level = m[2].getFloatValue(); intent.mix = m[3].getFloatValue(); }
+    if (const auto e = vals (t.getProperty ("erosion", "")); e.size() >= 5)
+    { erosion.on = e[0].getIntValue() != 0; erosion.sensitivity = e[1].getFloatValue(); erosion.fatigue = e[2].getFloatValue(); erosion.recovery = e[3].getFloatValue(); erosion.mix = e[4].getFloatValue(); }
 }

@@ -10,6 +10,9 @@
 //   rare era:     DIAL-UP (an old phone line), FINAL BOSS (loudness + peak safe)
 //   social era:   REMIX REEL (a step looper that re-cuts the music), DOODLE (draw a melody)
 //   future era:   WARP DRIVE (pitch + frequency warping)
+// v0.43 organic modules (the sound behaves like a living thing):
+//   LIQUID (spectral cannibalism - the kick carves its hole, the bass flows around it), INTENT (one breath drives many muscles),
+//   EROSION (material fatigue: overload tires the sound, starving it lets it sink into rumble)
 namespace kk::pro
 {
 // ---------------------------------------------------------------- REMIX REEL ----------------------------------------------------------------
@@ -369,5 +372,285 @@ private:
     std::vector<float> dl, dr, peakWin;
     SvfCoef hs, hpC; std::array<SvfState, 2> kS, kH;
     float msq = 0, ssq = 0, gain = 1, autoDb = 0; double integSum = 0; long integN = 0;
+};
+
+// ---------------------------------------------------------------- LIQUID ----------------------------------------------------------------
+// Two liquids in one vessel: where the kick lands (per band, 30-300 Hz) the track is carved out, and the removed energy
+// flows one band up (an octave-up "spill"), so the bass stays audible while the kick owns its frequencies.
+enum LiquidSource { lsSidechain, lsSelf };
+struct LiquidState
+{
+    static constexpr int numBands = 5;
+    std::atomic<bool> on { false };
+    std::atomic<int> source { lsSidechain };
+    std::atomic<float> flow { 0.6f }, depth { 0.85f }, viscosity { 0.35f }, mix { 1.0f };
+    std::array<std::atomic<float>, numBands> mHole {};   // 0..1 how deep each band is carved right now
+    std::atomic<float> mKick { 0 };                      // 0..1 kick level
+    std::atomic<bool> mSidechain { false };              // a sidechain signal is arriving
+};
+class LiquidDsp
+{
+public:
+    static constexpr int numBands = LiquidState::numBands;
+    static float edge (int k) { static const float e[numBands] { 45.0f, 70.0f, 110.0f, 180.0f, 300.0f }; return e[std::clamp (k, 0, numBands - 1)]; }
+    static float centre (int k) { return k == 0 ? 37.0f : std::sqrt (edge (k - 1) * edge (k)); }
+    static constexpr float bandK = 0.55f;   // band width (1 / Q) - neighbouring bands overlap a little
+    void prepare (double rate, int maxBlock)
+    {
+        (void) maxBlock; sr = (float) rate;
+        for (int k = 0; k < numBands; ++k) { bpC[(size_t) k].set (centre (k), bandK, sr); spC[(size_t) k].set (2.0f * centre (k), 1.0f, sr); }
+        for (auto& ch : bell) for (auto& s : ch) s.reset();
+        for (auto& ch : det) for (auto& s : ch) s.reset();
+        for (auto& ch : sp) for (auto& s : ch) s.reset();
+        fast.fill (0); slow.fill (0); hole.fill (0);
+        aAtt = std::exp (-1.0f / (0.001f * sr)); aRelDet = std::exp (-1.0f / (0.06f * sr)); aSlow = std::exp (-1.0f / (0.25f * sr)); aHoleAtt = std::exp (-1.0f / (0.002f * sr));
+    }
+    // scL / scR: the sidechain (nullptr when nothing is connected - then the track's own low end is the kick)
+    void process (float* L, float* R, int n, LiquidState& st, const float* scL, const float* scR)
+    {
+        if (! st.on.load()) { if (st.mKick.load() > 0.0f) { for (auto& h : st.mHole) h = 0; st.mKick = 0; } st.mSidechain = false; return; }
+        const bool useSc = st.source.load() == lsSidechain && scL != nullptr;
+        const float flow = std::clamp (st.flow.load(), 0.0f, 1.0f), depth = std::clamp (st.depth.load(), 0.0f, 1.0f), mix = std::clamp (st.mix.load(), 0.0f, 1.0f);
+        const float aRel = std::exp (-1.0f / ((0.03f * std::pow (25.0f, std::clamp (st.viscosity.load(), 0.0f, 1.0f))) * sr));   // water 30 ms .. mercury 750 ms
+        float kickMax = 0, scPeak = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const float in[2] { L[i], R[i] };
+            // the kick, per band (band-passes with unity gain at their centre)
+            float lvl[numBands], dmax = 1.0e-9f;
+            const float m = useSc ? 0.5f * (scL[i] + (scR != nullptr ? scR[i] : scL[i])) : 0.5f * (in[0] + in[1]);
+            if (useSc) scPeak = std::max (scPeak, std::abs (m));
+            for (int k = 0; k < numBands; ++k)
+            {
+                auto& s = det[0][(size_t) k]; s.tick (bpC[(size_t) k], m);
+                const float a = std::abs (bandK * s.bp);
+                auto& f = fast[(size_t) k];
+                f = a > f ? aAtt * f + (1 - aAtt) * a : aRelDet * f + (1 - aRelDet) * a;
+                if (useSc) lvl[k] = f;
+                else   // SELF: only the onsets of the track's own low end (a held bass is not a kick)
+                {
+                    slow[(size_t) k] = aSlow * slow[(size_t) k] + (1 - aSlow) * f;
+                    lvl[k] = std::max (0.0f, f - 1.4f * slow[(size_t) k]) * 2.5f;
+                }
+                dmax = std::max (dmax, lvl[k]);
+            }
+            const float amount = std::clamp ((20.0f * std::log10 (dmax + 1.0e-9f) + 40.0f) / 24.0f, 0.0f, 1.0f);   // -40 dBFS = nothing, -16 dBFS = all
+            kickMax = std::max (kickMax, amount);
+            // the hole: a chain of dynamic bell cuts (x - h * band: exactly (1 - h) at each centre, untouched when h = 0)
+            float out[2] { in[0], in[1] }, spill[2] {};
+            for (int k = 0; k < numBands; ++k)
+            {
+                const float tgt = depth * amount * std::pow (lvl[k] / dmax, 1.5f);   // the bands where the kick lives get the deepest hole
+                hole[(size_t) k] = tgt > hole[(size_t) k] ? aHoleAtt * hole[(size_t) k] + (1 - aHoleAtt) * tgt : aRel * hole[(size_t) k] + (1 - aRel) * tgt;
+                const float h = hole[(size_t) k];
+                for (int c = 0; c < 2; ++c)
+                {
+                    auto& b = bell[(size_t) c][(size_t) k]; b.tick (bpC[(size_t) k], out[c]);
+                    const float removed = h * bandK * b.bp;
+                    out[c] -= removed;
+                    sp[(size_t) c][(size_t) k].tick (spC[(size_t) k], std::abs (removed));   // the removed liquid, one octave up, poured into the band above
+                    spill[c] += sp[(size_t) c][(size_t) k].bp;
+                }
+            }
+            for (int c = 0; c < 2; ++c) out[c] += flow * 2.2f * spill[c];
+            L[i] = in[0] + (out[0] - in[0]) * mix; R[i] = in[1] + (out[1] - in[1]) * mix;
+        }
+        for (int k = 0; k < numBands; ++k) st.mHole[(size_t) k] = hole[(size_t) k];
+        st.mKick = kickMax; st.mSidechain = useSc && scPeak > 1.0e-4f;
+    }
+private:
+    float sr = 44100, aAtt = 0, aRelDet = 0, aSlow = 0, aHoleAtt = 0;
+    std::array<SvfCoef, numBands> bpC, spC;
+    std::array<std::array<SvfState, numBands>, 2> bell, sp;
+    std::array<std::array<SvfState, numBands>, 1> det;
+    std::array<float, numBands> fast {}, slow {}, hole {};
+};
+
+// ---------------------------------------------------------------- INTENT ----------------------------------------------------------------
+// One breath instead of dozens of automations: a biological state moves many "muscles" (rasp, width, filter, reverb freeze,
+// tremor, attack) at once, each with its own curve.  LEVEL = the breath: 1 = relaxed and clean, 0 = the state at its extreme.
+enum IntentMode { imOxygen, imAggression, imStress, imCalm, numIntentModes };
+inline const char* intentModeName (int m) { static const char* n[] { "OXYGEN", "AGGRESSION", "STRESS", "CALM" }; return n[std::clamp (m, 0, (int) numIntentModes - 1)]; }
+struct IntentState
+{
+    std::atomic<bool> on { false };
+    std::atomic<int> mode { imOxygen };
+    std::atomic<float> level { 1.0f }, mix { 1.0f };
+    std::atomic<float> mRasp { 0 }, mWidth { 1 }, mFreeze { 0 }, mFilterHz { 20000 }, mTremor { 0 }, mPulse { 0 };
+};
+class IntentDsp
+{
+public:
+    struct Targets { float rasp = 0, width = 1, lpHz = 20000, verbMix = 0, verbFb = 0.5f, freeze = 0, tremor = 0, transient = 0; };
+    static void mapping (int state, float level, Targets& t)
+    {
+        const float d = 1.0f - std::clamp (level, 0.0f, 1.0f);   // how far the breath is pulled down
+        auto smooth = [] (float a, float b, float x) { const float u = std::clamp ((x - a) / (b - a), 0.0f, 1.0f); return u * u * (3.0f - 2.0f * u); };
+        t = {};
+        switch (state)
+        {
+            case imOxygen:     t.rasp = 0.95f * std::pow (d, 1.3f); t.width = 1.0f - 0.95f * d; t.lpHz = 20000.0f * std::pow (0.08f, std::pow (d, 1.2f));
+                               t.verbMix = 0.45f * d; t.verbFb = 0.6f + 0.3f * d; t.freeze = smooth (0.45f, 1.0f, d); t.tremor = 0.15f * d * d; break;
+            case imAggression: t.rasp = 0.8f * std::pow (d, 0.8f); t.width = 1.0f - 0.3f * d; t.transient = d; t.verbMix = 0.05f * d; t.verbFb = 0.4f; t.tremor = 0.05f * d; break;
+            case imStress:     t.tremor = d; t.rasp = 0.35f * d; t.width = 1.0f - 0.5f * d; t.lpHz = 20000.0f * std::pow (0.35f, d); t.verbMix = 0.2f * d; t.verbFb = 0.75f; t.transient = 0.3f * d; break;
+            default:           t.width = 1.0f + 0.5f * d; t.lpHz = 20000.0f * std::pow (0.25f, d); t.verbMix = 0.4f * d; t.verbFb = 0.75f + 0.2f * d; t.freeze = 0.25f * d * d; t.transient = -0.6f * d; break;
+        }
+    }
+    void prepare (double rate, int maxBlock)
+    {
+        (void) maxBlock; sr = (float) rate;
+        static const float ms[4] { 31.0f, 43.0f, 53.0f, 67.0f };
+        for (int k = 0; k < 4; ++k) { fdn[(size_t) k].prepare ((int) (rate * 0.08) + 8); len[k] = ms[k] * 0.001f * sr; damp[k] = 0; }
+        for (auto& d : jit) d.prepare ((int) (rate * 0.01) + 8);
+        for (auto& s : flt) s.reset();
+        for (auto& d : dc) { d = {}; d.setHz (10.0f, sr); }
+        cur = {}; envF = envS = 0; tremPh = 0; tremHz = 10; jitPh = 0; rng.seed (4242); fltCount = 0; pulse = 0;
+        aSm = std::exp (-1.0f / (0.03f * sr)); aF = std::exp (-1.0f / (0.002f * sr)); aS = std::exp (-1.0f / (0.04f * sr));
+    }
+    void process (float* L, float* R, int n, IntentState& st)
+    {
+        if (! st.on.load()) return;
+        Targets tg; mapping (st.mode.load(), st.level.load(), tg);
+        const float mix = std::clamp (st.mix.load(), 0.0f, 1.0f);
+        float pk = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            // every muscle moves smoothly
+            cur.rasp += (tg.rasp - cur.rasp) * (1 - aSm); cur.width += (tg.width - cur.width) * (1 - aSm); cur.lpHz += (tg.lpHz - cur.lpHz) * (1 - aSm);
+            cur.verbMix += (tg.verbMix - cur.verbMix) * (1 - aSm); cur.verbFb += (tg.verbFb - cur.verbFb) * (1 - aSm); cur.freeze += (tg.freeze - cur.freeze) * (1 - aSm);
+            cur.tremor += (tg.tremor - cur.tremor) * (1 - aSm); cur.transient += (tg.transient - cur.transient) * (1 - aSm);
+            if (--fltCount <= 0) { fltCount = 16; fc.set (std::min (cur.lpHz, sr * 0.45f), 0.9f, sr); }
+            const float dl = L[i], dr = R[i];
+            float x[2] { dl, dr };
+            // attack: AGGRESSION bites harder, CALM rounds the hits off
+            const float a = 0.5f * (std::abs (dl) + std::abs (dr));
+            envF = aF * envF + (1 - aF) * a; envS = aS * envS + (1 - aS) * a;
+            const float onset = std::clamp (envF / (envS + 1.0e-5f) - 1.0f, 0.0f, 3.0f);
+            const float tGain = std::clamp (cur.transient > 0 ? 1.0f + cur.transient * onset * 0.8f : 1.0f + cur.transient * std::min (onset, 1.0f) * 0.6f, 0.3f, 3.4f);
+            // tremor: a shaking amplitude and a jittering pitch (STRESS)
+            if (rng.uni() < 4.0f / sr) tremHz = 8.0f + 7.0f * rng.uni();
+            tremPh += tremHz / sr; tremPh -= std::floor (tremPh); jitPh += (tremHz * 0.37f) / sr; jitPh -= std::floor (jitPh);
+            const float am = 1.0f - 0.55f * cur.tremor * (0.5f + 0.5f * std::sin (twoPi * tremPh));
+            for (int c = 0; c < 2; ++c)
+            {
+                float v = x[c] * tGain;
+                jit[(size_t) c].push (v);
+                const float j = jit[(size_t) c].read (sr * (0.002f + 0.0012f * std::sin (twoPi * (jitPh + 0.25f * (float) c))));
+                v = (v + cur.tremor * (j - v)) * am;
+                // rasp: asymmetric saturation (the throat), DC removed
+                const float drv = 1.0f + 12.0f * cur.rasp, bias = 0.25f * cur.rasp;
+                const float sat = (fastTanh (drv * (v + bias)) - fastTanh (drv * bias)) * 0.7f;
+                v = dc[(size_t) c].tick (v + cur.rasp * (sat - v));
+                flt[(size_t) c].tick (fc, v); x[c] = flt[(size_t) c].lp;
+            }
+            // a small 4-line reverb whose feedback reaches a freeze, its input gated when frozen
+            const float fb = cur.verbFb + (0.995f - cur.verbFb) * cur.freeze, gIn = 0.5f * (1.0f - cur.freeze), dmp = 0.35f * (1.0f - cur.freeze);
+            float y[4]; for (int k = 0; k < 4; ++k) { y[k] = fdn[(size_t) k].read (len[k]); damp[k] += (y[k] - damp[k]) * (1.0f - dmp); y[k] = damp[k]; }
+            const float h0 = 0.5f * (y[0] + y[1] + y[2] + y[3]), h1 = 0.5f * (y[0] - y[1] + y[2] - y[3]), h2 = 0.5f * (y[0] + y[1] - y[2] - y[3]), h3 = 0.5f * (y[0] - y[1] - y[2] + y[3]);
+            fdn[0].push (x[0] * gIn + fb * h0); fdn[1].push (x[1] * gIn + fb * h1); fdn[2].push (x[0] * gIn + fb * h2); fdn[3].push (x[1] * gIn + fb * h3);
+            float l = x[0] + cur.verbMix * 0.7f * (y[0] + y[2]), r = x[1] + cur.verbMix * 0.7f * (y[1] + y[3]);
+            // width: down to a claustrophobic mono
+            const float m = 0.5f * (l + r), s = 0.5f * (l - r) * cur.width;
+            l = m + s; r = m - s;
+            L[i] = dl + (l - dl) * mix; R[i] = dr + (r - dr) * mix;
+            pk = std::max (pk, std::abs (m));
+        }
+        pulse = std::max (pk, pulse * 0.85f);
+        st.mRasp = cur.rasp; st.mWidth = cur.width; st.mFreeze = cur.freeze; st.mFilterHz = cur.lpHz; st.mTremor = cur.tremor; st.mPulse = pulse;
+    }
+private:
+    float sr = 44100, aSm = 0, aF = 0, aS = 0, envF = 0, envS = 0, tremPh = 0, tremHz = 10, jitPh = 0, pulse = 0, len[4] {}, damp[4] {};
+    int fltCount = 0; Targets cur; SvfCoef fc; Rng rng;
+    std::array<DelayLine, 4> fdn; std::array<DelayLine, 2> jit; std::array<SvfState, 2> flt; std::array<DcBlock, 2> dc;
+};
+
+// ---------------------------------------------------------------- EROSION ----------------------------------------------------------------
+// Material fatigue: a hot signal tires the sound (the highs wear off and recover slowly, cavitation bubbles crackle),
+// a starved one sinks into a subsonic rumble with an unstable phase.  Silence stays silent.
+struct ErosionState
+{
+    std::atomic<bool> on { false };
+    std::atomic<float> sensitivity { 0.5f }, fatigue { 0.5f }, recovery { 0.5f }, mix { 1.0f };
+    std::atomic<float> mFatigue { 0 }, mStarve { 0 }, mLevel { -100 };
+    static float thresholdDb (float sens) { return -4.0f - 14.0f * std::clamp (sens, 0.0f, 1.0f); }   // 0.5 = -11 dBFS
+    static float floorDb (float sens) { return -42.0f + 14.0f * std::clamp (sens, 0.0f, 1.0f); }      // 0.5 = -35 dBFS
+};
+class ErosionDsp
+{
+public:
+    static constexpr float gateDb = -70.0f;
+    void prepare (double rate, int maxBlock)
+    {
+        (void) maxBlock; sr = (float) rate;
+        for (auto& ch : lp) for (auto& s : ch) s.reset();
+        for (auto& o : rum) for (auto& p : o) { p.reset(); p.setHz (28.0f, sr); }
+        for (auto& d : rumDc) { d = {}; d.setHz (12.0f, sr); }
+        for (auto& p : pops) p = {};
+        for (auto& a : ap) a = {};
+        ms = 0; fat = 0; starve = 0; gateG = 0; wetW = 0; fltCount = 0; rng.seed (777); wob[0] = wob[1] = wobT[0] = wobT[1] = 0;
+        aMs = std::exp (-1.0f / (0.05f * sr));
+    }
+    void process (float* L, float* R, int n, ErosionState& st)
+    {
+        if (! st.on.load()) return;
+        const float sens = st.sensitivity.load(), thr = ErosionState::thresholdDb (sens), flo = ErosionState::floorDb (sens), mix = std::clamp (st.mix.load(), 0.0f, 1.0f);
+        const float speed = 0.05f + 0.7f * std::clamp (st.fatigue.load(), 0.0f, 1.0f);                           // per second, 6 dB over
+        const float recPerS = 1.0f / (12.0f * std::pow (0.05f, std::clamp (st.recovery.load(), 0.0f, 1.0f)));     // 12 s .. 0.6 s to recover fully
+        const float aSt = std::exp (-1.0f / (0.8f * sr)), aStRel = std::exp (-1.0f / (0.3f * sr)), gStep = 1.0f / (0.02f * sr);
+        float lvlDb = -100;
+        for (int i = 0; i < n; ++i)
+        {
+            const float dl = L[i], dr = R[i];
+            ms = aMs * ms + (1 - aMs) * 0.5f * (dl * dl + dr * dr);
+            lvlDb = 10.0f * std::log10 (ms + 1.0e-12f);
+            const float over = lvlDb - thr;
+            fat = std::clamp (over > 0 ? fat + speed * (0.3f + std::min (over / 6.0f, 2.0f)) / sr : fat - recPerS / sr, 0.0f, 1.0f);
+            const float stT = lvlDb > gateDb && lvlDb < flo ? std::clamp ((flo - lvlDb) / 15.0f, 0.0f, 1.0f) : 0.0f;
+            starve = stT > starve ? aSt * starve + (1 - aSt) * stT : aStRel * starve + (1 - aStRel) * stT;
+            gateG = lvlDb > gateDb ? std::min (1.0f, gateG + gStep) : std::max (0.0f, gateG - gStep);
+            if (--fltCount <= 0) { fltCount = 32; fc.set (18000.0f * std::exp2 (-5.0f * fat), 1.41421356f, sr); }
+            wetW += (std::min (1.0f, fat * 200.0f) - wetW) * 0.002f;
+            float x[2] { dl, dr };
+            // fatigue: the highs wear off
+            for (int c = 0; c < 2; ++c)
+            {
+                lp[(size_t) c][0].tick (fc, x[c]); lp[(size_t) c][1].tick (fc, lp[(size_t) c][0].lp);
+                x[c] += wetW * (lp[(size_t) c][1].lp - x[c]);
+            }
+            // cavitation: bubbles pop, more of them the harder the overload
+            if (over > 0 && rng.uni() < fat * std::min (over / 6.0f + 0.2f, 1.5f) * 50.0f / sr)
+                for (auto& p : pops) if (p.amp < 1.0e-4f) { p.ph = 0; p.inc = (900.0f + 2600.0f * rng.uni()) / sr; p.amp = std::sqrt (ms) * (0.3f + 0.5f * rng.uni()); p.dec = std::exp (-1.0f / ((0.0006f + 0.002f * rng.uni()) * sr)); p.pan = rng.uni(); break; }
+            for (auto& p : pops)
+                if (p.amp >= 1.0e-4f) { const float v = std::sin (twoPi * p.ph) * p.amp; p.ph += p.inc; p.ph -= std::floor (p.ph); p.inc *= 1.0004f; p.amp *= p.dec; x[0] += v * (1.0f - p.pan) * gateG; x[1] += v * p.pan * gateG; }
+            // starving: a subsonic sediment and a phase that cannot hold still
+            if (gateG > 0)
+            {
+                const float nz = rng.bi(), nl = nz + 0.4f * rng.bi(), nr = nz + 0.4f * rng.bi();
+                const float rl = rumDc[0].tick (rum[0][1].lp (rum[0][0].lp (nl))), rr = rumDc[1].tick (rum[1][1].lp (rum[1][0].lp (nr)));
+                x[0] += rl * 2.2f * starve * gateG; x[1] += rr * 2.2f * starve * gateG;
+            }
+            if (rng.uni() < 2.0f / sr) { wobT[0] = rng.bi(); wobT[1] = rng.bi(); }
+            for (int c = 0; c < 2; ++c)
+            {
+                wob[c] += (wobT[c] - wob[c]) * (0.6f / sr);
+                auto& a = ap[(size_t) c];
+                if (starve > 1.0e-4f)
+                {
+                    const float k = 1.0f - starve * (0.5f + 0.45f * wob[c]);   // 1 = no phase shift
+                    const float y = k * x[c] + a.x1 - k * a.y1; a.x1 = x[c]; a.y1 = y; x[c] = y;
+                }
+                else a.x1 = a.y1 = x[c];
+            }
+            L[i] = dl + (x[0] - dl) * mix; R[i] = dr + (x[1] - dr) * mix;
+        }
+        st.mFatigue = fat; st.mStarve = starve; st.mLevel = lvlDb;
+    }
+private:
+    struct Pop { float ph = 0, inc = 0, amp = 0, dec = 0, pan = 0.5f; };
+    struct Ap { float x1 = 0, y1 = 0; };
+    float sr = 44100, ms = 0, fat = 0, starve = 0, gateG = 0, aMs = 0, wetW = 0, wob[2] {}, wobT[2] {};
+    int fltCount = 0; SvfCoef fc; Rng rng;
+    std::array<std::array<SvfState, 2>, 2> lp; std::array<std::array<OnePole, 2>, 2> rum; std::array<DcBlock, 2> rumDc;
+    std::array<Pop, 8> pops; std::array<Ap, 2> ap;
 };
 } // namespace kk::pro

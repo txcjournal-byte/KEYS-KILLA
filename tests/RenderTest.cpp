@@ -1280,6 +1280,154 @@ static int unitTests()
             check (r2.reel.on.load() && r2.reel.grid[2][5].load() == 3 && r2.dial.mode.load() == kk::pro::dmWalkie && std::abs (r2.warp.semis.load() + 5.0f) < 0.01f && r2.boss.target.load() == kk::pro::btClub, "v0.42 FX PRO: the project keeps the modules");
         }
     }
+    // v0.43 EVOLVE FX PRO organic modules: LIQUID, INTENT, EROSION
+    {
+        const double rate = 44100.0; const int B = 512;
+        auto finite = [] (const juce::AudioBuffer<float>& b) { for (int c = 0; c < b.getNumChannels(); ++c) for (int i = 0; i < b.getNumSamples(); ++i) if (! std::isfinite (b.getSample (c, i))) return false; return true; };
+        // energy through a band-pass (k = 1/Q, peak gain 1), only where mask is set
+        auto bandE = [&] (const juce::AudioBuffer<float>& b, float hz, float k, const std::vector<char>& mask)
+        {
+            kk::SvfCoef c; c.set (hz, k, (float) rate); kk::SvfState s; double e = 0;
+            for (int i = 0; i < b.getNumSamples(); ++i) { s.tick (c, b.getSample (0, i)); if (mask[(size_t) i]) e += (double) (k * s.bp) * (k * s.bp); }
+            return e;
+        };
+        auto totalE = [] (const juce::AudioBuffer<float>& b, const std::vector<char>& mask) { double e = 0; for (int i = 0; i < b.getNumSamples(); ++i) if (mask[(size_t) i]) e += (double) b.getSample (0, i) * b.getSample (0, i); return e; };
+        auto db = [] (double a, double b2) { return (float) (10.0 * std::log10 ((a + 1e-20) / (b2 + 1e-20))); };
+        // 4-pole high / low pass energy over [from, end)
+        auto passE = [&] (const juce::AudioBuffer<float>& b, float hz, bool high, int from)
+        {
+            kk::SvfCoef c; c.set (hz, 1.41421356f, (float) rate); double e = 0;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                kk::SvfState s1, s2;
+                for (int i = 0; i < b.getNumSamples(); ++i) { s1.tick (c, b.getSample (ch, i)); s2.tick (c, high ? s1.hp : s1.lp); const float v = high ? s2.hp : s2.lp; if (i >= from) e += (double) v * v; }
+            }
+            return e;
+        };
+        {   // LIQUID: a kick on the sidechain carves its hole out of a held bass, the energy flows up instead of vanishing
+            const int N = 44100 * 4, hitEvery = 22050;
+            juce::AudioBuffer<float> bass (2, N), sc (2, N);
+            std::vector<char> inKick ((size_t) N, 0);
+            for (int i = 0; i < N; ++i)
+            {
+                const float t = (float) i / (float) rate, th = (float) (i % hitEvery) / (float) rate;
+                const float v = 0.3f * std::sin (kk::twoPi * 55.0f * t) + 0.2f * std::sin (kk::twoPi * 110.0f * t);
+                const float k = 0.9f * std::sin (kk::twoPi * 50.0f * th) * std::exp (-th / 0.12f);
+                bass.setSample (0, i, v); bass.setSample (1, i, v); sc.setSample (0, i, k); sc.setSample (1, i, k);
+                inKick[(size_t) i] = i >= hitEvery && th < 0.15f;
+            }
+            auto run = [&] (bool on, float flow, int source, bool withSc, float* maxHole)
+            {
+                kk::pro::LiquidState st; st.on = on; st.flow = flow; st.source = source;
+                kk::pro::LiquidDsp d; d.prepare (rate, B);
+                auto out = bass;
+                for (int o = 0; o < N; o += B)
+                {
+                    d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st, withSc ? sc.getReadPointer (0) + o : nullptr, withSc ? sc.getReadPointer (1) + o : nullptr);
+                    if (maxHole != nullptr && o > 22050) for (auto& h : st.mHole) *maxHole = std::max (*maxHole, h.load());
+                }
+                return out;
+            };
+            float mh = 0;
+            const auto off = run (false, 0.6f, kk::pro::lsSidechain, true, nullptr), on = run (true, 0.6f, kk::pro::lsSidechain, true, &mh), dry = run (true, 0.0f, kk::pro::lsSidechain, true, nullptr);
+            bool same = true; for (int i = 0; i < N; ++i) same &= off.getSample (0, i) == bass.getSample (0, i);
+            check (same, "v0.43 LIQUID: off = the signal passes untouched");
+            const float hole55 = db (bandE (on, 55.0f, 0.1f, inKick), bandE (off, 55.0f, 0.1f, inKick));
+            const float totOn = db (totalE (on, inKick), totalE (off, inKick)), totDry = db (totalE (dry, inKick), totalE (off, inKick));
+            const float up = db (bandE (on, 110.0f, 0.3f, inKick), bandE (dry, 110.0f, 0.3f, inKick));
+            std::printf ("LIQUID: 55 Hz during kicks %.1f dB, total %.1f dB (no flow %.1f dB), 110 Hz band +%.1f dB from the flow, peak %.2f\n", hole55, totOn, totDry, up, on.getMagnitude (0, N));
+            check (hole55 < -6.0f, "v0.43 LIQUID: the kick's band (50-60 Hz) drops more than 6 dB during the kicks");
+            check (totOn > hole55 + 3.0f && totOn > totDry && up > 1.0f, "v0.43 LIQUID: the whole track drops far less than a plain duck - the energy flows up");
+            check (finite (on) && on.getMagnitude (0, N) < std::pow (10.0f, 1.0f / 20.0f), "v0.43 LIQUID: finite, never over +1 dBFS");
+            float mhSelf = 0; const auto self = run (true, 0.6f, kk::pro::lsSelf, false, &mhSelf);
+            std::printf ("LIQUID: max hole with the sidechain %.2f, SELF on a held bass %.2f\n", mh, mhSelf);
+            check (mh > 0.5f && mhSelf < 0.15f && finite (self), "v0.43 LIQUID: SELF does not mistake a held bass for a kick");
+        }
+        {   // INTENT: the mappings move the right way, the image really narrows, nothing explodes
+            bool mono = true;
+            kk::pro::IntentDsp::Targets prev; kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 1.0f, prev);
+            for (int s = 1; s <= 20; ++s)
+            {
+                kk::pro::IntentDsp::Targets tg; kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 1.0f - (float) s / 20.0f, tg);
+                mono &= tg.rasp >= prev.rasp && tg.width <= prev.width && tg.freeze >= prev.freeze && tg.lpHz <= prev.lpHz;
+                prev = tg;
+            }
+            kk::pro::IntentDsp::Targets full, empty; kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 1.0f, full); kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 0.0f, empty);
+            check (mono && empty.rasp > full.rasp + 0.5f && empty.width < 0.2f && empty.freeze > 0.9f && full.freeze < 0.01f && std::abs (full.width - 1.0f) < 0.01f,
+                   "v0.43 INTENT: OXYGEN - less breath = more rasp, less width, more freeze (monotonic)");
+            const int N = 44100 * 2;
+            juce::AudioBuffer<float> noise (2, N); kk::Rng r; r.seed (31);
+            for (int i = 0; i < N; ++i) { noise.setSample (0, i, 0.25f * r.bi()); noise.setSample (1, i, 0.25f * r.bi()); }
+            auto sideMid = [&] (const juce::AudioBuffer<float>& b)
+            {
+                double m = 0, s = 0;
+                for (int i = N / 2; i < N; ++i) { const double l = b.getSample (0, i), rr = b.getSample (1, i); m += (l + rr) * (l + rr); s += (l - rr) * (l - rr); }
+                return std::sqrt (s / (m + 1e-20));
+            };
+            bool safe = true, offSame = true;
+            float narrow = 0;
+            for (int m = 0; m < kk::pro::numIntentModes; ++m)
+                for (float lv : { 0.0f, 0.5f, 1.0f })
+                {
+                    kk::pro::IntentState st; st.on = true; st.mode = m; st.level = lv;
+                    kk::pro::IntentDsp d; d.prepare (rate, B);
+                    auto out = noise;
+                    for (int o = 0; o < N; o += B) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st);
+                    safe &= finite (out) && out.getMagnitude (0, N) < 3.0f;
+                    if (m == kk::pro::imOxygen && lv == 0.0f) narrow = (float) (sideMid (out) / sideMid (noise));
+                }
+            {
+                kk::pro::IntentState st; kk::pro::IntentDsp d; d.prepare (rate, B); auto out = noise;
+                for (int o = 0; o < N; o += B) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st);
+                for (int i = 0; i < N; ++i) offSame &= out.getSample (0, i) == noise.getSample (0, i);
+            }
+            std::printf ("INTENT: OXYGEN out of breath - side/mid %.3f of the input\n", narrow);
+            check (narrow > 0 && narrow < 0.25f, "v0.43 INTENT: OXYGEN out of breath closes the image into mono (side/mid down > 12 dB)");
+            check (safe && offSame, "v0.43 INTENT: every state stays finite and bounded, off = untouched");
+        }
+        {   // EROSION: hot = it tires and loses its top, quiet = it sinks into rumble, silence = silence
+            const int N = 44100 * 3;
+            auto run = [&] (float amp, kk::pro::ErosionState& st)
+            {
+                juce::AudioBuffer<float> in (2, N); kk::Rng r; r.seed (77);
+                for (int i = 0; i < N; ++i) { in.setSample (0, i, amp * r.bi()); in.setSample (1, i, amp * r.bi()); }
+                auto out = in;
+                kk::pro::ErosionDsp d; d.prepare (rate, B);
+                float fat2s = 0;
+                for (int o = 0; o < N; o += B) { d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st); if (o <= 44100 * 2) fat2s = st.mFatigue.load(); }
+                st.mFatigue = fat2s;   // the fatigue after 2 s
+                return std::make_pair (in, out);
+            };
+            kk::pro::ErosionState hot; hot.on = true;
+            const auto [hin, hout] = run (0.708f, hot);   // white noise peaking at -3 dBFS
+            const float hf = db (passE (hout, 6000.0f, true, 44100 * 2), passE (hin, 6000.0f, true, 44100 * 2));
+            std::printf ("EROSION hot: fatigue %.2f after 2 s, > 6 kHz %.1f dB\n", hot.mFatigue.load(), hf);
+            check (hot.mFatigue.load() > 0.2f && hf < -6.0f && finite (hout) && hout.getMagnitude (0, N) < 1.5f, "v0.43 EROSION: a hot input tires - the top end wears off (> 6 dB above 6 kHz)");
+            kk::pro::ErosionState quiet; quiet.on = true;
+            const auto [qin, qout] = run (0.0056f * 1.732f, quiet);   // -45 dBFS RMS
+            const float sub = db (passE (qout, 40.0f, false, 44100 + 22050), passE (qin, 40.0f, false, 44100 + 22050));
+            std::printf ("EROSION quiet: starve %.2f, < 40 Hz +%.1f dB\n", quiet.mStarve.load(), sub);
+            check (quiet.mStarve.load() > 0.3f && sub > 6.0f && finite (qout), "v0.43 EROSION: a starved input sinks into a sub rumble");
+            kk::pro::ErosionState sil; sil.on = true;
+            const auto [sin0, sout] = run (0.0f, sil);
+            std::printf ("EROSION silence: peak out (both channels) %g, starve %g\n", (double) sout.getMagnitude (0, N), (double) sil.mStarve.load());
+            check (sout.getMagnitude (0, N) == 0.0f && sil.mStarve.load() == 0.0f, "v0.43 EROSION: digital silence stays silent");
+            kk::pro::ErosionState off;
+            const auto [oin, oout] = run (0.5f, off);
+            bool same = true; for (int i = 0; i < N; ++i) same &= oin.getSample (0, i) == oout.getSample (0, i);
+            check (same, "v0.43 EROSION: off = untouched");
+        }
+        {   // state + ALL OFF
+            KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+            p.liquid.on = true; p.liquid.source = kk::pro::lsSelf; p.liquid.flow = 0.25f; p.intent.on = true; p.intent.mode = kk::pro::imStress; p.intent.level = 0.3f; p.erosion.on = true; p.erosion.recovery = 0.8f;
+            juce::MemoryBlock mb; p.getStateInformation (mb);
+            KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (r2.liquid.on.load() && r2.liquid.source.load() == kk::pro::lsSelf && std::abs (r2.liquid.flow.load() - 0.25f) < 0.01f && r2.intent.mode.load() == kk::pro::imStress
+                   && std::abs (r2.intent.level.load() - 0.3f) < 0.01f && r2.erosion.on.load() && std::abs (r2.erosion.recovery.load() - 0.8f) < 0.01f, "v0.43 FX PRO: the project keeps LIQUID, INTENT, EROSION");
+            r2.chainReset();
+            check (! r2.liquid.on.load() && ! r2.intent.on.load() && ! r2.erosion.on.load(), "v0.43 FX PRO: ALL OFF turns the organic modules off");
+        }
+    }
     // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
     {
         KeysKillaProcessor p; p.prepareToPlay (44100, 512);
@@ -2025,11 +2173,16 @@ int main (int argc, char** argv)
         juce::PropertiesFile (o).setValue ("theme", th.containsIgnoreCase ("night") || th == "1" ? 1 : 0);
         juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
-        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..98: the EVOLVE FX PRO pages
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..101: the EVOLVE FX PRO pages (97 LIQUID, 98 INTENT, 99 EROSION)
         {
             juce::Image kkFxSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);
-            if (juce::String (argv[4]).getIntValue() == 92) p.chainApply (5);
+            const int view = juce::String (argv[4]).getIntValue();
+            if (view == 92) p.chainApply (5);
+            if (view == 97) { p.liquid.on = true; const float h[] { 0.35f, 0.8f, 0.55f, 0.2f, 0.05f }; for (int b = 0; b < 5; ++b) p.liquid.mHole[(size_t) b] = h[b]; p.liquid.mKick = 0.8f; }   // a kick in the middle of its hit
+            if (view == 98) { p.intent.on = true; p.intent.mode = kk::pro::imOxygen; p.intent.level = 0.35f; kk::pro::IntentDsp::Targets tg; kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 0.35f, tg);
+                              p.intent.mRasp = tg.rasp; p.intent.mWidth = tg.width; p.intent.mFreeze = tg.freeze; p.intent.mFilterHz = tg.lpHz; p.intent.mTremor = tg.tremor; }
+            if (view == 99) { p.erosion.on = true; p.erosion.mFatigue = 0.55f; p.erosion.mStarve = 0.3f; p.erosion.mLevel = -8.0f; }
             auto img = kkFxSnapshot (p, juce::String (argv[4]).getIntValue() - 90);
             juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);

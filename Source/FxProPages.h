@@ -1,4 +1,5 @@
 // v0.42 EVOLVE FX PRO pages (included by FxMainPage.h): REMIX REEL, DIAL-UP, WARP DRIVE, DOODLE, FINAL BOSS
+// v0.43 organic pages: LIQUID, INTENT, EROSION
 
 static void proHeader (Graphics& g, Component& c, const String& title, const String& era, const String& sub, Colour col)
 {
@@ -531,4 +532,495 @@ private:
     std::vector<Stroke> strokes;
     kk::mel::Melody melody;
     int pen = 0, bars = 4;
+};
+
+// ---------------------------------------------------------------- LIQUID ----------------------------------------------------------------
+class LiquidPage : public Component, private Timer
+{
+public:
+    LiquidPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (onBtn, "OFF", "LIQUID on / off - the kick carves its own hole in the track, the bass flows around it", [this] { proc.liquid.on = ! proc.liquid.on.load(); refresh(); });
+        btn (scBtn, "SIDECHAIN", "KICK SOURCE: the kick routed into this plugin's sidechain input", [this] { proc.liquid.source = kk::pro::lsSidechain; proc.liquid.on = true; refresh(); });
+        btn (selfBtn, "SELF", "KICK SOURCE: no sidechain - the kicks in this track's own low end", [this] { proc.liquid.source = kk::pro::lsSelf; proc.liquid.on = true; refresh(); });
+        const Colour a (0xff22d3ee), b2 (0xffff3b8a);
+        auto pct = [] (double v) { return String (roundToInt (v * 100)) + " %"; };
+        auto k = [&] (std::atomic<float>& v, const char* n, double def, std::function<String (double)> txt, const String& tip)
+        { knobs.push_back (std::make_unique<RackKnob> (v, n, 0, 1, def, a, b2)); knobs.back()->valueText = std::move (txt); knobs.back()->setTooltip (tip); addAndMakeVisible (*knobs.back()); };
+        k (proc.liquid.flow, "FLOW", 0.6, pct, "How much of the carved-out bass flows one band up (an octave higher) - the bass stays audible");
+        k (proc.liquid.depth, "DEPTH", 0.85, pct, "How deep the hole is where the kick lands");
+        k (proc.liquid.viscosity, "VISCOSITY", 0.35, [] (double v) { return String (roundToInt (30.0 * std::pow (25.0, v))) + " ms"; }, "How fast the liquid closes the hole again: water (fast) .. mercury (slow)");
+        k (proc.liquid.mix, "MIX", 1.0, pct, "Dry / wet");
+        for (int b = 0; b < kk::pro::LiquidState::numBands; ++b) hole[(size_t) b] = proc.liquid.mHole[(size_t) b].load();
+        kick = proc.liquid.mKick.load();
+        startTimerHz (30);
+        refresh();
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        const Colour cTrack (0xff22d3ee), cKick (0xffff3b8a);
+        proHeader (g, *this, "LIQUID", "ORGANIC ERA", "the kick does not turn the bass down - it carves its own hole in the low end, and the bass flows around it like mercury", cTrack);
+        const auto V = vessel().toFloat();
+        const auto R = V.reduced (14, 10).withTrimmedBottom (30);
+        const int nb = kk::pro::LiquidState::numBands, regions = nb + 1;
+        const float rw = R.getWidth() / (float) regions, flow = proc.liquid.flow.load();
+        auto at = [&] (const std::array<float, 6>& v, float x)   // smooth curve through the region centres
+        {
+            const float u = jlimit (0.0f, (float) regions - 1.0f, (x - R.getX()) / rw - 0.5f);
+            const int i0 = (int) u; const int i1 = std::min (regions - 1, i0 + 1); const float f = 0.5f - 0.5f * std::cos (MathConstants<float>::pi * (u - (float) i0));
+            return v[(size_t) i0] + (v[(size_t) i1] - v[(size_t) i0]) * f;
+        };
+        std::array<float, 6> holes {}, bulge {};
+        for (int b = 0; b < nb; ++b) { holes[(size_t) b] = hole[(size_t) b]; bulge[(size_t) b + 1] += flow * hole[(size_t) b]; }
+        // the vessel
+        Path glass; glass.addRoundedRectangle (R.getX(), R.getY() - 6, R.getWidth(), R.getHeight() + 6, 46.0f, 46.0f, false, false, true, true);
+        g.setColour (Colour (0xff050912).withAlpha (t.night ? 0.75f : 0.85f)); g.fillPath (glass);
+        {
+            Graphics::ScopedSaveState ss (g); g.reduceClipRegion (glass);
+            const float yBase = R.getY() + R.getHeight() * 0.3f;
+            Path track, kickP, surf;
+            const int steps = 160;
+            for (int s = 0; s <= steps; ++s)
+            {
+                const float x = R.getX() + R.getWidth() * (float) s / (float) steps;
+                const float y = yBase + std::sin (x * 0.02f + phase * 2.0f) * 4.0f + std::sin (x * 0.047f - phase * 1.3f) * 2.5f + at (holes, x) * R.getHeight() * 0.42f - at (bulge, x) * R.getHeight() * 0.14f;
+                if (s == 0) { track.startNewSubPath (x, R.getBottom()); surf.startNewSubPath (x, y); } else surf.lineTo (x, y);
+                track.lineTo (x, y);
+                const float ky = R.getBottom() - at (holes, x) * R.getHeight() * 0.5f - 6.0f * kick + std::sin (x * 0.03f + phase * 3.0f) * 3.0f * at (holes, x);
+                if (s == 0) kickP.startNewSubPath (x, R.getBottom() + 2);
+                kickP.lineTo (x, ky);
+            }
+            track.lineTo (R.getRight(), R.getBottom()); track.closeSubPath();
+            kickP.lineTo (R.getRight(), R.getBottom() + 2); kickP.closeSubPath();
+            g.setGradientFill (ColourGradient (cTrack.withAlpha (0.85f), 0, yBase, Colour (0xff0b2f5a), 0, R.getBottom(), false)); g.fillPath (track);
+            g.setGradientFill (ColourGradient (cKick.brighter (0.3f), 0, R.getBottom() - R.getHeight() * 0.5f, Colour (0xff5a0a2e), 0, R.getBottom(), false)); g.fillPath (kickP);
+            g.setColour (cKick.withAlpha (0.35f)); g.strokePath (kickP, PathStrokeType (6.0f));
+            g.setColour (Colours::white.withAlpha (0.75f)); g.strokePath (surf, PathStrokeType (2.0f));
+            // the spill: drops flow from each hole into the band above
+            Random rr (11);
+            for (int b = 0; b < nb; ++b)
+                for (int d = 0; d < 9; ++d)
+                {
+                    const float amt = hole[(size_t) b] * flow;
+                    if (amt < 0.04f) break;
+                    const float u = std::fmod (rr.nextFloat() + phase * 0.35f, 1.0f);
+                    const float x0 = R.getX() + rw * ((float) b + 0.5f), x1 = x0 + rw;
+                    const float x = x0 + (x1 - x0) * u, y = yBase + R.getHeight() * 0.4f * hole[(size_t) b] * (1.0f - u) - std::sin (u * MathConstants<float>::pi) * R.getHeight() * 0.07f * amt - 6.0f;
+                    const float r = 3.0f + 5.0f * rr.nextFloat() * amt;
+                    g.setColour (cTrack.brighter (0.5f).withAlpha (jmin (1.0f, amt) * (1.0f - u * 0.6f))); g.fillEllipse (x - r, y - r, 2 * r, 2 * r);
+                }
+            // rising bubbles in the track liquid
+            for (int i = 0; i < 40; ++i)
+            {
+                const float u = std::fmod (rr.nextFloat() + phase * (0.05f + 0.1f * rr.nextFloat()), 1.0f), x = R.getX() + rr.nextFloat() * R.getWidth();
+                const float y = R.getBottom() - u * (R.getBottom() - yBase - 10.0f), r = 1.5f + 2.5f * rr.nextFloat();
+                g.setColour (Colours::white.withAlpha (0.25f * (1.0f - u))); g.drawEllipse (x - r, y - r, 2 * r, 2 * r, 1.0f);
+            }
+            // band borders
+            for (int b = 1; b < regions; ++b) { g.setColour (Colours::white.withAlpha (0.08f)); g.fillRect (R.getX() + rw * (float) b, R.getY(), 1.0f, R.getHeight()); }
+        }
+        g.setColour (Colours::white.withAlpha (0.35f)); g.strokePath (glass, PathStrokeType (2.5f));
+        g.setColour (Colours::white.withAlpha (0.08f)); g.fillRoundedRectangle (R.getX() + 18, R.getY() + 10, 10, R.getHeight() * 0.7f, 5);
+        // band names + how deep each one is carved
+        static const char* names[] { "30-45 Hz", "45-70 Hz", "70-110 Hz", "110-180 Hz", "180-300 Hz", "300+ Hz" };
+        for (int b = 0; b < regions; ++b)
+        {
+            const auto cell = Rectangle<float> (R.getX() + rw * (float) b, R.getBottom() + 8, rw, 18);
+            g.setColour (t.dim); g.setFont (kk::modern::font (11.5f, true, 0.12f)); g.drawText (names[b], cell, Justification::centred);
+            if (b < nb && hole[(size_t) b] > 0.02f) { g.setColour (Colours::white.withAlpha (0.9f)); g.setFont (kk::modern::font (13.0f, true, 0.05f)); g.drawText ("-" + String (roundToInt (hole[(size_t) b] * 100)) + "%", Rectangle<float> (cell.getX(), R.getBottom() - 30, rw, 20), Justification::centred); }
+            if (b == nb && flow > 0.01f) { g.setColour (cTrack.brighter (0.4f)); g.setFont (kk::modern::font (11.0f, true, 0.12f)); g.drawText ("FLOWS HERE", Rectangle<float> (cell.getX(), R.getY() + 12, rw, 16), Justification::centred); }
+        }
+        // the right column
+        const auto C = column();
+        g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.25f)); g.drawText ("KICK SOURCE", C.getX(), C.getY(), 200, 14, Justification::centredLeft);
+        const bool sc = proc.liquid.source.load() == kk::pro::lsSidechain, live = proc.liquid.mSidechain.load();
+        g.setColour (sc && ! live && proc.liquid.on.load() ? Colour (0xffffb020) : t.text.withAlpha (0.8f)); g.setFont (kk::modern::font (12.5f, true, 0.03f));
+        g.drawFittedText (! sc ? String ("SELF: the kicks in this track's own low end") : live ? String ("SIDECHAIN: kick arriving") : String ("SIDECHAIN: nothing arriving yet - route the kick in (below)"), C.getX(), C.getY() + 66, C.getWidth(), 18, Justification::centredLeft, 1, 0.8f);
+        // kick meter
+        const auto km = Rectangle<float> ((float) C.getX(), (float) C.getY() + 440, (float) C.getWidth(), 14);
+        g.setColour (Colours::black.withAlpha (0.4f)); g.fillRoundedRectangle (km, 7);
+        g.setGradientFill (ColourGradient (cKick.darker (0.3f), km.getX(), 0, cKick.brighter (0.4f), km.getRight(), 0, false)); g.fillRoundedRectangle (km.withWidth (km.getWidth() * jlimit (0.0f, 1.0f, kick)), 7);
+        g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.25f)); g.drawText ("KICK", (int) km.getX(), (int) km.getY() - 18, 100, 14, Justification::centredLeft);
+        // how to route the kick (FL Studio mixer)
+        const auto how = Rectangle<float> ((float) C.getX(), (float) C.getY() + 476, (float) C.getWidth(), (float) (V.getBottom() - C.getY() - 476));
+        kk::modern::well (g, how, 12.0f);
+        g.setColour (cTrack); g.setFont (kk::modern::font (13.0f, true, 0.25f));
+        g.drawText ("ROUTE THE KICK IN", how.reduced (18, 14).removeFromTop (18), Justification::centredLeft);
+        g.setColour (t.text); g.setFont (kk::modern::font (15.0f, true, 0.02f));
+        g.drawFittedText ("1.  put EVOLVE FX PRO on the bass (or the whole beat) track\n"
+                          "2.  in the FL mixer select the KICK track\n"
+                          "3.  right-click the send arrow under the track with this plugin  ->  \"Sidechain to this track\"\n"
+                          "4.  KICK SOURCE: SIDECHAIN.   no routing?  SELF hears the kicks in the track itself",
+                          how.reduced (18, 14).withTrimmedTop (28).withHeight (150).toNearestInt(), Justification::topLeft, 9, 0.9f);
+        g.setColour (t.dim); g.setFont (kk::modern::font (13.0f, true, 0.02f));
+        g.drawFittedText ("DEPTH  how deep the kick carves\nFLOW  how much of the bass flows one octave up\nVISCOSITY  water closes the hole fast, mercury slowly",
+                          how.reduced (18, 14).withTrimmedTop (150).toNearestInt(), Justification::topLeft, 4, 0.9f);
+    }
+    void resized() override
+    {
+        onBtn.setBounds (300, 56, 70, 32);
+        const auto C = column();
+        scBtn.setBounds (C.getX(), C.getY() + 20, C.getWidth() / 2 - 4, 40); selfBtn.setBounds (C.getX() + C.getWidth() / 2 + 4, C.getY() + 20, C.getWidth() / 2 - 4, 40);
+        const int kw = C.getWidth() / 2;
+        for (int i = 0; i < (int) knobs.size(); ++i) knobs[(size_t) i]->setBounds (C.getX() + (i % 2) * kw, C.getY() + 100 + (i / 2) * 160, kw - 8, 150);
+    }
+private:
+    Rectangle<int> vessel() const { return { 24, 100, getWidth() - 24 - 470, getHeight() - 140 }; }
+    Rectangle<int> column() const { return { getWidth() - 440, 100, 416, getHeight() - 140 }; }
+    void refresh()
+    {
+        onBtn.selected = proc.liquid.on.load(); onBtn.setButtonText (proc.liquid.on.load() ? "ON" : "OFF"); onBtn.repaint();
+        scBtn.selected = proc.liquid.source.load() == kk::pro::lsSidechain; selfBtn.selected = ! scBtn.selected; scBtn.repaint(); selfBtn.repaint();
+        for (auto& k : knobs) k->sync();
+        repaint();
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        phase += 0.04f;
+        const float visc = proc.liquid.viscosity.load();
+        for (int b = 0; b < kk::pro::LiquidState::numBands; ++b) { const float m = proc.liquid.mHole[(size_t) b].load(); hole[(size_t) b] += (m - hole[(size_t) b]) * (m > hole[(size_t) b] ? 0.7f : 0.35f - 0.27f * visc); }
+        kick += (proc.liquid.mKick.load() - kick) * 0.4f;
+        repaint();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton onBtn { lnf }, scBtn { lnf }, selfBtn { lnf };
+    std::vector<std::unique_ptr<RackKnob>> knobs;
+    std::array<float, kk::pro::LiquidState::numBands> hole {};
+    float kick = 0, phase = 0;
+};
+
+// ---------------------------------------------------------------- INTENT ----------------------------------------------------------------
+class IntentPage : public Component, private Timer
+{
+public:
+    IntentPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (onBtn, "OFF", "INTENT on / off - one breath moves rasp, width, filter, reverb freeze, tremor and attack together", [this] { proc.intent.on = ! proc.intent.on.load(); refresh(); });
+        static const char* tips[] { "Oxygen drains: the sound gets a raspy throat, closes into mono, the air freezes",
+                                    "Aggression: harder attacks, a growl, a tighter image", "Stress: it shakes, the pitch jitters, the room closes in",
+                                    "Calm: soft attacks, a wide warm room, a darker top" };
+        for (int m = 0; m < kk::pro::numIntentModes; ++m)
+        {
+            auto b = std::make_unique<HotButton> (lnf, kk::pro::intentModeName (m)); b->framed = true; b->setTooltip (tips[m]);
+            b->onClick = [this, m] { proc.intent.mode = m; proc.intent.on = true; refresh(); };
+            addAndMakeVisible (*b); chips.push_back (std::move (b));
+        }
+        mix = std::make_unique<RackKnob> (proc.intent.mix, "MIX", 0, 1, 1, stateColour (0), Colour (0xffa78bfa)); addAndMakeVisible (*mix);
+        breath = proc.intent.level.load();
+        startTimerHz (30);
+        refresh();
+    }
+    static Colour stateColour (int m) { static const uint32 c[] { 0xff38bdf8, 0xffff4d2e, 0xffd4f542, 0xffa78bfa }; return Colour (c[jlimit (0, 3, m)]); }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        const int mode = proc.intent.mode.load();
+        const auto col = stateColour (mode);
+        proHeader (g, *this, "INTENT", "ORGANIC ERA", "one state, one breath - it moves many muscles at once: rasp, width, filter, frozen air, tremor, attack.  drag the breath down", col);
+        kk::pro::IntentDsp::Targets tg; kk::pro::IntentDsp::mapping (mode, breath, tg);
+        const bool on = proc.intent.on.load();
+        const float rasp = on ? proc.intent.mRasp.load() : tg.rasp, width = on ? proc.intent.mWidth.load() : tg.width, freeze = on ? proc.intent.mFreeze.load() : tg.freeze;
+        const float hz = on ? proc.intent.mFilterHz.load() : tg.lpHz, trem = on ? proc.intent.mTremor.load() : tg.tremor;
+        // the lungs
+        const auto A = lungArea().toFloat();
+        kk::modern::well (g, A, 16.0f);
+        {
+            Graphics::ScopedSaveState ss (g); g.reduceClipRegion (A.toNearestInt());
+            Random jr ((int64) (phase * 30.0f));
+            const auto c = A.getCentre().translated (trem * 4.0f * (jr.nextFloat() - 0.5f), A.getHeight() * 0.06f + trem * 4.0f * (jr.nextFloat() - 0.5f));
+            const float s = jmin (A.getWidth(), A.getHeight()) * 0.5f;
+            const float rate = mode == kk::pro::imAggression ? 2.6f : mode == kk::pro::imStress ? 3.4f : mode == kk::pro::imCalm ? 0.8f : 1.2f;
+            const float swell = (0.6f + 0.4f * breath) * (1.0f + 0.04f * std::sin (phase * rate) + 0.08f * pulse);
+            const float sep = s * (0.16f + 0.24f * jmin (1.5f, width)) * swell;
+            const auto lobeCol = col.interpolatedWith (Colour (0xffe8f6ff), freeze * 0.7f);
+            g.setGradientFill (ColourGradient (lobeCol.withAlpha (0.22f * (0.4f + 0.6f * breath)), c.x, c.y, lobeCol.withAlpha (0.0f), c.x + s * 1.2f, c.y, true));
+            g.fillEllipse (c.x - s * 1.2f, c.y - s * 1.2f, s * 2.4f, s * 2.4f);
+            for (int side = -1; side <= 1; side += 2)
+            {
+                const Point<float> lc (c.x + (float) side * sep, c.y + s * 0.02f);
+                const float rx = s * 0.44f * swell, ry = s * 0.74f * swell;
+                Path lobe;
+                for (int i = 0; i <= 120; ++i)
+                {
+                    const float a = MathConstants<float>::twoPi * (float) i / 120.0f;
+                    const float ax = std::sin (a), ay = -std::cos (a);
+                    const bool inner = ax * (float) side < 0;
+                    float r = 1.0f + 0.03f * std::sin (3.0f * a + phase) + rasp * 0.07f * std::sin (a * 23.0f + phase * 5.0f) * std::sin (a * 7.0f - phase * 2.0f);
+                    float x = ax * rx * r * (inner ? 0.62f : 1.0f), y = ay * ry * r;
+                    if (ay < 0) x *= 0.75f + 0.25f * (1.0f + ay);   // narrower at the top
+                    if (inner && ay > 0.1f) x *= 1.0f - 0.35f * ay;   // the heart's notch
+                    if (i == 0) lobe.startNewSubPath (lc.x + x, lc.y + y); else lobe.lineTo (lc.x + x, lc.y + y);
+                }
+                lobe.closeSubPath();
+                g.setGradientFill (ColourGradient (lobeCol.brighter (0.35f).withAlpha (0.95f), lc.x - (float) side * rx * 0.3f, lc.y - ry * 0.4f, lobeCol.darker (0.8f).withAlpha (0.9f), lc.x + (float) side * rx, lc.y + ry, true));
+                g.fillPath (lobe);
+                g.setColour (lobeCol.brighter (0.6f).withAlpha (0.8f)); g.strokePath (lobe, PathStrokeType (2.0f + 2.0f * pulse));
+                // bronchi: branches that open as the breath fills
+                Random br (side > 0 ? 7 : 13);
+                std::function<void (Point<float>, float, float, int)> branch = [&] (Point<float> p0, float ang, float len, int depth)
+                {
+                    const Point<float> p1 (p0.x + std::sin (ang) * len, p0.y + std::cos (ang) * len);
+                    g.setColour (Colours::white.withAlpha (0.18f + 0.1f * (float) depth)); g.drawLine (Line<float> (p0, p1), 0.8f + 1.2f * (float) depth);
+                    if (depth > 0) for (int k = 0; k < 2; ++k) branch (p1, ang + (k == 0 ? -1.0f : 1.0f) * (0.35f + 0.3f * br.nextFloat()), len * 0.68f, depth - 1);
+                };
+                const Point<float> hilum (c.x + (float) side * sep * 0.35f, c.y - s * 0.2f);
+                branch (hilum, (float) side * 0.55f, s * 0.2f * swell, 4);
+                // frost when the air freezes
+                if (freeze > 0.02f)
+                    for (int f = 0; f < 9; ++f)
+                    {
+                        const Point<float> fp (lc.x + (br.nextFloat() - 0.5f) * rx * 1.1f, lc.y + (br.nextFloat() - 0.5f) * ry * 1.4f);
+                        const float fr = (6.0f + 12.0f * br.nextFloat()) * freeze;
+                        g.setColour (Colours::white.withAlpha (0.75f * freeze));
+                        for (int k = 0; k < 6; ++k) { const float a = (float) k * MathConstants<float>::pi / 3.0f; g.drawLine (fp.x, fp.y, fp.x + std::cos (a) * fr, fp.y + std::sin (a) * fr, 1.2f); }
+                    }
+            }
+            // the trachea
+            Path tr; tr.startNewSubPath (c.x, A.getY() + 10); tr.lineTo (c.x, c.y - s * 0.28f);
+            tr.quadraticTo (c.x, c.y - s * 0.18f, c.x - sep * 0.35f, c.y - s * 0.2f); tr.startNewSubPath (c.x, c.y - s * 0.28f); tr.quadraticTo (c.x, c.y - s * 0.18f, c.x + sep * 0.35f, c.y - s * 0.2f);
+            g.setColour (lobeCol.withAlpha (0.55f)); g.strokePath (tr, PathStrokeType (s * 0.07f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour (Colours::white.withAlpha (0.25f));
+            for (int r = 0; r < 7; ++r) { const float y = A.getY() + 24 + (float) r * (c.y - s * 0.3f - A.getY() - 24) / 7.0f; g.fillRoundedRectangle (c.x - s * 0.045f, y, s * 0.09f, 3.0f, 1.5f); }
+        }
+        g.setColour (col); g.setFont (kk::modern::font (16.0f, true, 0.3f));
+        g.drawText (String (kk::pro::intentModeName (mode)) + (on ? "" : "   (off)"), A.reduced (22, 16).removeFromTop (22), Justification::centredLeft);
+        // the breath fader
+        const auto F = fader().toFloat();
+        g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.25f)); g.drawText ("BREATH", F.withHeight (14).translated (0, -20), Justification::centred);
+        g.setColour (Colours::black.withAlpha (0.45f)); g.fillRoundedRectangle (F, F.getWidth() * 0.5f);
+        const auto fill = F.reduced (6).withTrimmedTop ((F.getHeight() - 12) * (1.0f - breath));
+        g.setGradientFill (ColourGradient (col.brighter (0.4f), 0, fill.getY(), col.darker (0.7f), 0, fill.getBottom(), false)); g.fillRoundedRectangle (fill, (F.getWidth() - 12) * 0.5f);
+        for (int k = 1; k < 10; ++k) { g.setColour (Colours::white.withAlpha (0.12f)); g.fillRect (F.getX() + 10, F.getY() + F.getHeight() * (float) k / 10.0f, F.getWidth() - 20, 1.0f); }
+        g.setColour (Colours::white); g.fillEllipse (F.getCentreX() - 16, fill.getY() - 4, 32, 12);
+        g.setColour (t.text); g.setFont (kk::modern::font (28.0f, true, 0.0f)); g.drawText (String (roundToInt (breath * 100)), F.withHeight (40).translated (0, F.getHeight() + 6), Justification::centred);
+        // what the muscles do
+        const auto M = muscles();
+        auto readout = [&] (int i, const String& name, const String& val, float u)
+        {
+            const auto r = Rectangle<float> ((float) M.getX(), (float) M.getY() + (float) i * 92.0f, (float) M.getWidth(), 80.0f);
+            kk::modern::well (g, r, 10.0f);
+            g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.25f)); g.drawText (name, r.reduced (14, 10).removeFromTop (14), Justification::centredLeft);
+            g.setColour (t.text); g.setFont (kk::modern::font (26.0f, true, 0.0f)); g.drawText (val, r.reduced (14, 8).withTrimmedTop (18).withHeight (32), Justification::centredLeft);
+            const auto bar = r.reduced (14, 0).withTrimmedTop (r.getHeight() - 14).withHeight (5);
+            g.setColour (Colours::black.withAlpha (0.35f)); g.fillRoundedRectangle (bar, 2.5f);
+            g.setColour (col); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * jlimit (0.0f, 1.0f, u)), 2.5f);
+        };
+        readout (0, "RASP", String (roundToInt (rasp * 100)) + " %", rasp);
+        readout (1, "WIDTH", String (roundToInt (width * 100)) + " %", width / 1.5f);
+        readout (2, "FREEZE", String (roundToInt (freeze * 100)) + " %", freeze);
+        readout (3, "FILTER", hz >= 19500.0f ? String ("OPEN") : hz >= 1000.0f ? String (hz / 1000.0f, 1) + " kHz" : String (roundToInt (hz)) + " Hz", std::log (hz / 20.0f) / std::log (1000.0f));
+        readout (4, "TREMOR", String (roundToInt (trem * 100)) + " %", trem);
+        static const char* what[] { "pull the breath down: the throat rasps, the image closes into mono, the air freezes",
+                                    "pull the breath down: the hits bite harder, a growl, a tighter image",
+                                    "pull the breath down: it shakes, the pitch jitters, the room closes in",
+                                    "pull the breath down: soft attacks, a wide warm room, a darker top" };
+        g.setColour (col); g.setFont (kk::modern::font (12.0f, true, 0.25f));
+        g.drawText (kk::pro::intentModeName (mode), M.getX(), M.getY() + 470, M.getWidth(), 16, Justification::centredLeft);
+        g.setColour (t.text); g.setFont (kk::modern::font (14.5f, true, 0.02f));
+        g.drawFittedText (what[jlimit (0, 3, mode)], M.getX(), M.getY() + 490, M.getWidth(), 80, Justification::topLeft, 4, 0.9f);
+    }
+    void resized() override
+    {
+        onBtn.setBounds (300, 56, 70, 32);
+        const auto A = lungArea();
+        const int cw = A.getWidth() / (int) chips.size();
+        for (int i = 0; i < (int) chips.size(); ++i) chips[(size_t) i]->setBounds (A.getX() + i * cw, 100, cw - 8, 40);
+        const auto M = muscles();
+        mix->setBounds (M.getX() + M.getWidth() / 2 - 70, getHeight() - 40 - 150, 140, 150);
+    }
+    void mouseDown (const MouseEvent& e) override { if (fader().expanded (10).contains (e.getPosition())) { dragging = true; setLevel (e.position.y); } }
+    void mouseDrag (const MouseEvent& e) override { if (dragging) setLevel (e.position.y); }
+    void mouseUp (const MouseEvent&) override { dragging = false; }
+    void mouseDoubleClick (const MouseEvent& e) override { if (fader().expanded (10).contains (e.getPosition())) { proc.intent.level = 1.0f; breath = 1.0f; repaint(); } }
+private:
+    Rectangle<int> lungArea() const { return { 24, 154, getWidth() - 24 - 470, getHeight() - 154 - 40 }; }
+    Rectangle<int> fader() const { return { getWidth() - 440, 124, 110, getHeight() - 124 - 100 }; }
+    Rectangle<int> muscles() const { return { getWidth() - 306, 100, 282, 452 }; }
+    void setLevel (float y)
+    {
+        const auto F = fader().toFloat();
+        proc.intent.level = jlimit (0.0f, 1.0f, 1.0f - (y - F.getY()) / F.getHeight()); proc.intent.on = true;
+        breath = proc.intent.level.load(); refresh();
+    }
+    void refresh()
+    {
+        onBtn.selected = proc.intent.on.load(); onBtn.setButtonText (proc.intent.on.load() ? "ON" : "OFF"); onBtn.repaint();
+        for (int i = 0; i < (int) chips.size(); ++i) { chips[(size_t) i]->selected = proc.intent.mode.load() == i; chips[(size_t) i]->repaint(); }
+        mix->sync(); repaint();
+    }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        phase += 0.05f; breath += (proc.intent.level.load() - breath) * 0.3f;
+        pulse = std::max (pulse * 0.85f, jmin (1.0f, proc.intent.mPulse.load() * (proc.intent.on.load() ? 1.5f : 0.0f)));
+        repaint();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton onBtn { lnf };
+    std::vector<std::unique_ptr<HotButton>> chips;
+    std::unique_ptr<RackKnob> mix;
+    float breath = 1, phase = 0, pulse = 0; bool dragging = false;
+};
+
+// ---------------------------------------------------------------- EROSION ----------------------------------------------------------------
+class ErosionPage : public Component, private Timer
+{
+public:
+    ErosionPage (KeysKillaProcessor& p, KKLookAndFeel& l) : proc (p), lnf (l)
+    {
+        auto btn = [this] (HotButton& b, const String& t, const String& tip, std::function<void()> fn) { b.setButtonText (t); b.framed = true; b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        btn (onBtn, "OFF", "EROSION on / off - the sound tires when you push it, sinks into rumble when you starve it", [this] { proc.erosion.on = ! proc.erosion.on.load(); refresh(); });
+        const Colour a (0xffff8a3d), b2 (0xff8b5a2b);
+        auto pct = [] (double v) { return String (roundToInt (v * 100)) + " %"; };
+        auto k = [&] (std::atomic<float>& v, const char* n, double def, std::function<String (double)> txt, const String& tip)
+        { knobs.push_back (std::make_unique<RackKnob> (v, n, 0, 1, def, a, b2)); knobs.back()->valueText = std::move (txt); knobs.back()->setTooltip (tip); addAndMakeVisible (*knobs.back()); };
+        k (proc.erosion.sensitivity, "SENSITIVITY", 0.5, [] (double v) { return String (kk::pro::ErosionState::thresholdDb ((float) v), 0) + " dB"; }, "Where the load starts: higher = it tires earlier (and starves later)");
+        k (proc.erosion.fatigue, "FATIGUE", 0.5, pct, "How fast it tires under load");
+        k (proc.erosion.recovery, "RECOVERY", 0.5, [] (double v) { return String (12.0 * std::pow (0.05, v), 1) + " s"; }, "How long the material needs to recover");
+        k (proc.erosion.mix, "MIX", 1.0, pct, "Dry / wet");
+        Random r (2024);   // the cracks it will grow, in the order they appear
+        for (int c = 0; c < 9; ++c)
+        {
+            Point<float> at (0.08f + 0.84f * r.nextFloat(), r.nextFloat() < 0.6f ? 0.0f : 0.15f + 0.5f * r.nextFloat());
+            float ang = MathConstants<float>::pi * (0.35f + 0.3f * r.nextFloat());
+            const float born = (float) c / 9.0f * 0.6f;
+            for (int s = 0; s < 14; ++s)
+            {
+                ang += (r.nextFloat() - 0.5f) * 0.9f;
+                const Point<float> q (at.x + std::cos (ang) * 0.035f, at.y + std::sin (ang) * 0.045f);
+                cracks.push_back ({ at, q, born + (float) s / 14.0f * 0.4f, 1.0f - (float) s / 18.0f });
+                if (r.nextFloat() < 0.25f) { Point<float> bp = q; float ba = ang + (r.nextBool() ? 0.9f : -0.9f); for (int b = 0; b < 4; ++b) { const Point<float> bq (bp.x + std::cos (ba) * 0.025f, bp.y + std::sin (ba) * 0.03f); cracks.push_back ({ bp, bq, born + (float) (s + b) / 14.0f * 0.4f + 0.1f, 0.5f }); bp = bq; ba += (r.nextFloat() - 0.5f) * 0.8f; } }
+                if (r.nextFloat() < 0.3f) bubbles.push_back ({ q, born + 0.15f + 0.3f * r.nextFloat(), 0.006f + 0.012f * r.nextFloat(), r.nextFloat() });
+                at = q;
+            }
+        }
+        fat = proc.erosion.mFatigue.load(); starve = proc.erosion.mStarve.load(); level = proc.erosion.mLevel.load();
+        startTimerHz (30);
+        refresh();
+    }
+    void paint (Graphics& g) override
+    {
+        const auto& t = kk::theme();
+        const Colour col (0xffff8a3d);
+        proHeader (g, *this, "EROSION", "ORGANIC ERA", "push it and it tires: the highs wear off, bubbles crackle.  starve it and it sinks into rumble.  silence stays silent", col);
+        const auto S = slab().toFloat();
+        const float sens = proc.erosion.sensitivity.load(), thr = kk::pro::ErosionState::thresholdDb (sens), flo = kk::pro::ErosionState::floorDb (sens);
+        const float heat = jlimit (0.0f, 1.0f, (level - thr) / 6.0f);
+        // the material
+        g.setGradientFill (ColourGradient (Colour (0xff8a8f98), S.getX(), S.getY(), Colour (0xff3d424b), S.getRight(), S.getBottom(), false));
+        g.fillRoundedRectangle (S, 14);
+        {
+            Graphics::ScopedSaveState ss (g); g.reduceClipRegion (S.toNearestInt());
+            Random gr (99);
+            for (int i = 0; i < 900; ++i) { g.setColour (Colours::black.withAlpha (0.06f + 0.1f * gr.nextFloat())); g.fillRect (S.getX() + gr.nextFloat() * S.getWidth(), S.getY() + gr.nextFloat() * S.getHeight(), 2.0f, 2.0f); }
+            if (heat > 0) { g.setGradientFill (ColourGradient (col.withAlpha (0.45f * heat), S.getCentreX(), S.getY(), col.withAlpha (0.0f), S.getCentreX(), S.getY() + S.getHeight() * 0.5f, false)); g.fillRect (S); }
+            // the highs wear off: the surface loses its shine as it tires
+            g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.22f * (1.0f - fat)), S.getX(), S.getY(), Colours::white.withAlpha (0.0f), S.getX() + S.getWidth() * 0.4f, S.getY() + S.getHeight() * 0.4f, false)); g.fillRect (S);
+            auto px = [&S] (Point<float> n) { return Point<float> (S.getX() + n.x * S.getWidth(), S.getY() + n.y * S.getHeight()); };
+            for (auto& c : cracks)
+                if (c.born < fat)
+                {
+                    const float grow = jlimit (0.0f, 1.0f, (fat - c.born) * 40.0f);
+                    const auto a = px (c.a), b = a + (px (c.b) - a) * grow;
+                    g.setColour (Colour (0xff120c08).withAlpha (0.85f)); g.drawLine (Line<float> (a, b), 1.0f + 3.0f * c.w * jmin (1.0f, fat * 1.5f));
+                    g.setColour (col.withAlpha (0.35f * heat)); g.drawLine (Line<float> (a, b), 0.8f);
+                }
+            for (auto& b : bubbles)
+                if (b.born < fat)
+                {
+                    const float pop = std::fmod (phase * (0.6f + b.ph) + b.ph * 7.0f, 1.0f);
+                    const float r = b.r * S.getWidth() * (0.4f + 0.8f * pop) * jmin (1.0f, (fat - b.born) * 6.0f);
+                    const auto c = px (b.p);
+                    g.setColour (Colours::white.withAlpha (0.7f * (1.0f - pop))); g.drawEllipse (c.x - r, c.y - r, 2 * r, 2 * r, 1.4f);
+                    if (pop > 0.85f) { g.setColour (col.withAlpha (0.8f)); for (int k = 0; k < 5; ++k) { const float an = (float) k * 1.2566f + b.ph * 6.0f; g.fillEllipse (c.x + std::cos (an) * r * 1.5f - 1.5f, c.y + std::sin (an) * r * 1.5f - 1.5f, 3, 3); } }
+                }
+            // starving: dark sediment rises and the surface wobbles
+            if (starve > 0.005f)
+            {
+                const float top = S.getBottom() - S.getHeight() * (0.06f + 0.5f * starve);
+                Path sed; sed.startNewSubPath (S.getX(), S.getBottom());
+                for (int i = 0; i <= 80; ++i) { const float u = (float) i / 80.0f; sed.lineTo (S.getX() + S.getWidth() * u, top + std::sin (u * 9.0f + phase * 0.7f) * 8.0f * starve + std::sin (u * 23.0f - phase * 1.7f) * 4.0f * starve); }
+                sed.lineTo (S.getRight(), S.getBottom()); sed.closeSubPath();
+                g.setGradientFill (ColourGradient (Colour (0xff2b1d12).withAlpha (0.75f + 0.2f * starve), 0, top, Colour (0xff070503), 0, S.getBottom(), false)); g.fillPath (sed);
+                Random sr (5);
+                for (int i = 0; i < (int) (160 * starve); ++i)
+                {
+                    const float x = S.getX() + sr.nextFloat() * S.getWidth(), y = top + 14 + sr.nextFloat() * (S.getBottom() - top - 14) + std::sin (phase * 0.5f + (float) i) * 3.0f;
+                    g.setColour (Colour (0xffb08a5a).withAlpha (0.25f + 0.3f * sr.nextFloat())); g.fillEllipse (x, y, 2.5f, 2.5f);
+                }
+                for (int w = 0; w < 3; ++w)   // rumble waves
+                {
+                    Path rw; const float y0 = top + 30.0f + (float) w * 26.0f;
+                    for (int i = 0; i <= 60; ++i) { const float u = (float) i / 60.0f, y = y0 + std::sin (u * 5.0f + phase * (0.8f + 0.3f * (float) w)) * 6.0f * starve; if (i == 0) rw.startNewSubPath (S.getX() + u * S.getWidth(), y); else rw.lineTo (S.getX() + u * S.getWidth(), y); }
+                    g.setColour (Colour (0xffb08a5a).withAlpha (0.2f * starve)); g.strokePath (rw, PathStrokeType (1.5f));
+                }
+            }
+        }
+        g.setColour (Colours::black.withAlpha (0.5f)); g.drawRoundedRectangle (S, 14, 2.0f);
+        g.setColour (Colours::white.withAlpha (0.9f)); g.setFont (kk::modern::font (15.0f, true, 0.25f));
+        g.drawText (fat > 0.6f ? "WORN OUT" : fat > 0.2f ? "TIRING" : starve > 0.3f ? "SINKING" : level < kk::pro::ErosionDsp::gateDb ? "AT REST" : "HOLDING", S.reduced (20, 16).removeFromTop (20), Justification::centredLeft);
+        // meters
+        const auto C = column();
+        auto meter = [&] (int row, const String& name, float u, Colour c, const String& val)
+        {
+            const auto r = Rectangle<float> ((float) C.getX(), (float) C.getY() + (float) row * 62.0f + 20.0f, (float) C.getWidth(), 16.0f);
+            g.setColour (t.dim); g.setFont (kk::modern::font (11.0f, true, 0.25f)); g.drawText (name, (int) r.getX(), (int) r.getY() - 18, 200, 14, Justification::centredLeft);
+            g.setColour (t.text); g.setFont (kk::modern::font (12.5f, true, 0.05f)); g.drawText (val, (int) r.getRight() - 120, (int) r.getY() - 18, 120, 14, Justification::centredRight);
+            g.setColour (Colours::black.withAlpha (0.45f)); g.fillRoundedRectangle (r, 8);
+            g.setGradientFill (ColourGradient (c.darker (0.4f), r.getX(), 0, c.brighter (0.3f), r.getRight(), 0, false)); g.fillRoundedRectangle (r.withWidth (r.getWidth() * jlimit (0.0f, 1.0f, u)), 8);
+            return r;
+        };
+        meter (0, "FATIGUE", fat, col, String (roundToInt (fat * 100)) + " %");
+        meter (1, "STARVE", starve, Colour (0xffb08a5a), String (roundToInt (starve * 100)) + " %");
+        const auto lr = meter (2, "INPUT LOAD", (level + 80.0f) / 80.0f, Colour (0xff9ca3af), level > -99.0f ? String (level, 1) + " dB" : String ("--"));
+        auto mark = [&] (float db, Colour c) { const float x = lr.getX() + lr.getWidth() * jlimit (0.0f, 1.0f, (db + 80.0f) / 80.0f); g.setColour (c); g.fillRect (x - 1.0f, lr.getY() - 4, 2.0f, lr.getHeight() + 8); };
+        mark (thr, col); mark (flo, Colour (0xffb08a5a)); mark (kk::pro::ErosionDsp::gateDb, t.dim);
+        g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.1f));
+        g.drawText ("silence  |  starves below " + String (flo, 0) + "  |  tires above " + String (thr, 0) + " dB", (int) lr.getX(), (int) lr.getBottom() + 6, (int) lr.getWidth(), 14, Justification::centredLeft);
+        // what it does
+        const auto how = Rectangle<float> ((float) C.getX(), (float) C.getY() + 540, (float) C.getWidth(), (float) (S.getBottom() - C.getY() - 540));
+        if (how.getHeight() > 60)
+        {
+            kk::modern::well (g, how, 12.0f);
+            g.setColour (t.text); g.setFont (kk::modern::font (15.0f, true, 0.02f));
+            g.drawFittedText ("LOUD:  the top end wears off and comes back slowly, cavitation bubbles crackle - more the harder you push\n"
+                              "QUIET:  a subsonic rumble rises under it, the phase starts to drift\n"
+                              "SILENCE:  nothing - the material rests",
+                              how.reduced (18, 14).withHeight (150).toNearestInt(), Justification::topLeft, 8, 0.9f);
+            g.setColour (t.dim); g.setFont (kk::modern::font (13.0f, true, 0.02f));
+            g.drawFittedText ("SENSITIVITY  where the load starts\nFATIGUE  how fast it tires\nRECOVERY  how fast it heals",
+                              how.reduced (18, 14).withTrimmedTop (112).toNearestInt(), Justification::topLeft, 4, 0.9f);
+        }
+    }
+    void resized() override
+    {
+        onBtn.setBounds (300, 56, 70, 32);
+        const auto C = column();
+        const int kw = C.getWidth() / 2;
+        for (int i = 0; i < (int) knobs.size(); ++i) knobs[(size_t) i]->setBounds (C.getX() + (i % 2) * kw, C.getY() + 210 + (i / 2) * 160, kw - 8, 150);
+    }
+private:
+    struct Crack { Point<float> a, b; float born, w; };
+    struct Bubble { Point<float> p; float born, r, ph; };
+    Rectangle<int> slab() const { return { 24, 100, getWidth() - 24 - 470, getHeight() - 140 }; }
+    Rectangle<int> column() const { return { getWidth() - 440, 100, 416, getHeight() - 140 }; }
+    void refresh() { onBtn.selected = proc.erosion.on.load(); onBtn.setButtonText (proc.erosion.on.load() ? "ON" : "OFF"); onBtn.repaint(); for (auto& k : knobs) k->sync(); repaint(); }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        phase += 0.05f;
+        const bool on = proc.erosion.on.load();
+        fat += ((on ? proc.erosion.mFatigue.load() : 0.0f) - fat) * 0.3f; starve += ((on ? proc.erosion.mStarve.load() : 0.0f) - starve) * 0.3f;
+        level += ((on ? proc.erosion.mLevel.load() : -100.0f) - level) * 0.4f;
+        repaint();
+    }
+    KeysKillaProcessor& proc; KKLookAndFeel& lnf;
+    HotButton onBtn { lnf };
+    std::vector<std::unique_ptr<RackKnob>> knobs;
+    std::vector<Crack> cracks; std::vector<Bubble> bubbles;
+    float fat = 0, starve = 0, level = -100, phase = 0;
 };

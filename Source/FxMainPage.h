@@ -201,7 +201,7 @@ private:
 class FxMainPage : public Component
 {
 public:
-    static constexpr int numPages = 9;
+    static constexpr int numPages = 12;
     explicit FxMainPage (KeysKillaProcessor& p) : proc (p)
     {
         lnf.setSkin (Skin::all()[(size_t) kk::themeIndex()]);
@@ -214,15 +214,19 @@ public:
         pages[4] = std::make_unique<WarpPage> (proc, lnf);
         pages[5] = std::make_unique<DoodlePage> (proc, lnf);
         pages[6] = std::make_unique<BossPage> (proc, lnf);
-        pages[7] = std::make_unique<ChainsPage> (proc, lnf);
-        pages[8] = std::make_unique<ListenPage> (proc, lnf);
+        pages[7] = std::make_unique<LiquidPage> (proc, lnf);
+        pages[8] = std::make_unique<IntentPage> (proc, lnf);
+        pages[9] = std::make_unique<ErosionPage> (proc, lnf);
+        pages[10] = std::make_unique<ChainsPage> (proc, lnf);
+        pages[11] = std::make_unique<ListenPage> (proc, lnf);
         for (auto& pg : pages) addChildComponent (*pg);
-        static const char* names[] { "MIX LAB", "FX RACK", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DOODLE", "FINAL BOSS", "FEED", "NEURAL EAR" };
+        static const char* names[] { "MIX LAB", "FX RACK", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DOODLE", "FINAL BOSS", "LIQUID", "INTENT", "EROSION", "FEED", "NEURAL EAR" };
         static const char* tips[] { "EQ, compressor, vintage colour, space + echo - and the COACH", "SURPRISE FX, STEP FX and the RACK",
                                     "a 16-step reel that re-cuts the music: slices, loops, stops, filters", "old phones, voice notes, bad signal, walkie-talkies",
                                     "octaves, chipmunks, demons, alien frequency shifts", "draw a line - get a melody as MIDI",
-                                    "the master's last stage: LUFS loudness + PEAK SAFE", "ready-made chains of effects, and your own",
-                                    "the melody on this track becomes MIDI" };
+                                    "the master's last stage: LUFS loudness + PEAK SAFE", "the kick carves its hole in the bass - the bass flows around it",
+                                    "one breath moves many muscles: rasp, width, filter, frozen air", "push it and it tires, starve it and it sinks into rumble",
+                                    "ready-made chains of effects, and your own", "the melody on this track becomes MIDI" };
         for (int i = 0; i < numPages; ++i)
         {
             tabs[(size_t) i] = std::make_unique<HotButton> (lnf, names[i]);
@@ -257,14 +261,14 @@ public:
         g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.12f));
         g.drawText ("by TrapVST", 24, 78, 140, 16, Justification::centredLeft);
         // era groups next to the tabs
-        static const std::pair<int, const char*> eras[] { { 2, "ERAS" }, { 7, "SMART" } };
+        static const std::pair<int, const char*> eras[] { { 2, "ERAS" }, { 7, "ORGANIC" }, { 10, "SMART" } };
         g.setFont (kk::modern::font (9.0f, true, 0.25f));
         for (auto& [i, n] : eras) { g.setColour (t.dim.withAlpha (0.7f)); g.drawText (n, 20, tabs[(size_t) i]->getY() - 13, 150, 11, Justification::centredLeft); }
     }
     void resized() override
     {
         int y = 104;
-        for (int i = 0; i < numPages; ++i) { if (i == 2 || i == 7) y += 14; tabs[(size_t) i]->setBounds (18, y, 150, 46); y += 52; }
+        for (int i = 0; i < numPages; ++i) { if (i == 2 || i == 7 || i == 10) y += 14; tabs[(size_t) i]->setBounds (18, y, 150, 46); y += 52; }
         themeBtn.setBounds (18, getHeight() - 62, 150, 40);
         for (auto& pg : pages) pg->setBounds (184, 12, getWidth() - 196, getHeight() - 24);
     }
