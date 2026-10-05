@@ -97,3 +97,11 @@ Click a part of the item = that sound is re-shaped. No real brand / game / model
 - HARBOUR (boats / yachts) -> wide pads, bells, water; parts: hull, sail, deck, engine.
 - HANGAR (private jets) -> risers, swooshes, airy leads; parts: jet engine, wings, cabin.
 Higher tier = rarer, richer sounds (ties into GAME chests / rarity and COOK recipes). Built on ALCHEMY recipes, costs no memory.
+
+## PARTY (EVOLVE) + CLUB (FX PRO) (owner, 2026-10-05) - house / disco / dance scene
+EVOLVE PARTY: you are at a party. Turn the crowd up, the lights brighter, spin the disco ball faster -> the plugin makes dance sounds and
+parts (house chords, disco strings, organ stabs, plucks, basslines) - more energy = brighter, busier, euphoric; calm = deep, warm, sparse.
+FX PRO CLUB: your finished track plays in the club - disco-ball speed = filter / phaser sweep, strobe = gate / stutter, crowd noise =
+build-up and riser, how full the club is = space / reverb, a DROP gesture = the classic filter-drop.
+Rule: every EVOLVE world gets an FX PRO twin in another style (COOK -> SEASONING, PARTY -> CLUB, GARAGE -> engine / exhaust drive,
+BIOSPHERE -> its own idea, TBD).
