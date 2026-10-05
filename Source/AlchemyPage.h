@@ -107,15 +107,22 @@ public:
     void mouseDrag (const MouseEvent& e) override { if (sculptMode > 0) sculptDrag (e); else if (dragging) setMatter (e.position); }
     void mouseUp (const MouseEvent&) override
     {
-        if (sculptMode > 0) { sculptMode = 0; if (! sculptMoved) { ripple = 1.0f; } make (true); return; }
+        if (sculptMode > 0) { sculptMode = 0; if (! sculptMoved) { ripple = 1.0f; } hearSculpt(); return; }
         if (dragging) { dragging = false; make (true); }
     }
     void mouseDoubleClick (const MouseEvent& e) override
     {
-        if (sculpting && stage().contains (e.getPosition())) { stretch = bright = heat = cool = split = 0; make (true); }
+        if (sculpting && stage().contains (e.getPosition())) { stretch = bright = heat = cool = split = 0; hearSculpt(); }
     }
 
     void debugSet (int ex, int bo, float m, float s) { proc.alcExc = ex; proc.alcBody = bo; proc.alcMatter = m; proc.alcSize = s; cur = recipe(); repaint(); }
+    // SCULPT what is on the keys now (from the top bar): the current sound becomes the matter in your hands
+    void sculptCurrent()
+    {
+        sculptBase = proc.currentGenome(); useBase = sculptBase.valid();
+        stretch = bright = heat = cool = split = 0;
+        cur = recipe(); setView (true);
+    }
     void debugSculpt() { setView (true); stretch = 0.6f; heat = 0.5f; split = 0.45f; cur = recipe(); repaint(); }
 private:
     Rectangle<int> colArea (int col) const { const int w = (getWidth() - 48 - 40) / 3 - 20; return { 24 + col * (w + 20), 96, w, getHeight() - 120 }; }
@@ -135,6 +142,7 @@ private:
     }
     KeysKillaProcessor::Genome recipe() const
     {
+        if (useBase) return proc.sculpt (sculptBase, stretch, bright, heat, cool, split);
         return proc.sculpt (proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), proc.alcSeed), stretch, bright, heat, cool, split);
     }
     void setView (bool s) { sculpting = s; makeTab.selected = ! s; sculptTab.selected = s; makeTab.repaint(); sculptTab.repaint(); repaint(); }
@@ -171,6 +179,7 @@ private:
         lastPos = e.position;
         live();
     }
+    void hearSculpt() { cur = recipe(); proc.alcUse (cur, true); note.clear(); repaint(); }
     void live()
     {
         const auto now = Time::getMillisecondCounter();
@@ -232,6 +241,7 @@ private:
     }
     void make (bool audition)
     {
+        useBase = false;   // MAKE / MATTER / a new mutation: back to the alchemy recipe
         cur = recipe();
         proc.alcUse (cur, audition);
         note.clear();
@@ -339,7 +349,8 @@ private:
 
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
     HotButton playBtn { lnf }, mutateBtn { lnf }, plantBtn { lnf }, saveBtn { lnf }, useBtn { lnf }, makeTab { lnf }, sculptTab { lnf };
-    bool sculpting = false, sculptMoved = false;
+    bool sculpting = false, sculptMoved = false, useBase = false;
+    KeysKillaProcessor::Genome sculptBase;
     int sculptMode = 0, lastDir = 0;
     float stretch = 0, bright = 0, heat = 0, cool = 0, split = 0, ripple = 0;
     Point<float> downPos, lastPos;

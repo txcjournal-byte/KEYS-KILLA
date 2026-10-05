@@ -7050,9 +7050,14 @@ public:
         menuBtn.onClick = [this] { showMenu(); };  menuBtn.setTooltip ("Presets, A/B, undo, ADVANCED, size.");
         nameBtn.onClick = [this] { openTab (tabAlchemy); }; nameBtn.setTooltip ("The sound on your keys.  Click = ALCHEMY: make a new one from matter (no presets to browse)");
         heartBtn.onClick = [this] { savePresetAs(); }; heartBtn.setTooltip ("Love it?  Keep this sound (it goes into MY SOUNDS)");
-        editBtn.framed = true; editBtn.hero = true; editBtn.setButtonText ("EDIT");
-        editBtn.setTooltip ("SOUND EDIT: the whole sound on one page - oscillator, LFO, pitch, filter, envelopes and effects, with graphs you can drag.");
-        editBtn.onClick = [this] { openTab (tabEdit); };
+        editBtn.framed = true; editBtn.hero = true; editBtn.setButtonText ("SCULPT");
+        editBtn.setTooltip ("SCULPT: the sound on your keys becomes matter in your hands - stretch it, rub it, hold it, tear it.  Every detail: MENU > SOUND EDIT");
+        editBtn.onClick = [this]   // v0.44: the sound is shaped with your hands (every detail stays in MENU > SOUND EDIT)
+        {
+            if (proc.sampleActive() || proc.chopActive()) { openTab (tabEdit); return; }
+            if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy);
+            if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->sculptCurrent();
+        };
         addAndMakeVisible (editBtn);
         keysPill.framed = true; keysPill.setTooltip ("What the keys play now.  Playing a sample / a child?  Click = back to your sound");
         keysPill.onClick = [this] { if (proc.sampleActive() || proc.chopActive()) { proc.loadPreset (proc.getCurrentProgram()); labChanged(); } };
@@ -8016,7 +8021,7 @@ private:
         m.addItem (24, "Settings: window size, eco mode...");
         m.addItem (25, kk::themeIndex() == 0 ? "Switch to NIGHT (dark glass)" : "Switch to GLASS (day)");
         if (auto* ed = findParentComponentOfClass<KeysKillaEditor>()) m.addItem (26, "Metal case around the plugin", true, ed->frame() > 0);
-        m.addItem (15, "ADVANCED page...");
+        m.addItem (27, "SOUND EDIT: every detail of the sound...");
         m.addItem (16, "Eco mode (lower CPU)", true, proc.eco.load());
         m.addItem (18, "PANIC (all notes off)");
         for (int pct : { 50, 60, 70, 85, 100 }) size.addItem (100 + pct, String (pct) + " %", true, preferredScale() == pct);
@@ -8040,7 +8045,7 @@ private:
                 case 9: proc.redo(); break;
                 case 12: proc.switchAB(); break;
                 case 13: proc.copyAtoB(); break;
-                case 15: hidePanels(); ensureAdvanced(); advanced->setVisible (true); advanced->toFront (false); break;
+                case 27: openTab (tabEdit); break;
                 case 24: openTab (tabSettings); break;
                 case 25: setTheme (1 - kk::themeIndex()); break;
                 case 26: if (auto* ed = findParentComponentOfClass<KeysKillaEditor>()) ed->setFrame (ed->frame() == 0); break;
