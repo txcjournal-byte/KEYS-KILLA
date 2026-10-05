@@ -114,3 +114,10 @@ An empty field: type a word, a sentence, a name, anything -> 10 sounds appear. O
   (send a friend a word = a sound pack);
 - a sentence mixes all its words; the words light up when they shaped the sound. Click a sound = keys, KEEP / DRAG WAV / MY SOUNDS.
 FX PRO twin idea: type how the track should feel ("night drive", "underwater") -> the effects arrange themselves.
+
+## GRID (owner, 2026-10-05) - make a sound by clicking squares
+A page of graph paper (e.g. 16 x 10 squares). Click up to ~10 squares; every square holds a tiny hidden sound gene and its place means
+something (left -> right: dark -> bright, top -> bottom: short -> long, colour zones = material families). The chosen squares blend
+into ONE sound. Under the grid a WAV player loops it all the time (PLAY) and changes live with every square you click.
+When you stop choosing: edit the WAV - trim start / end, longer / shorter, fade, reverse - then DRAG WAV into FL, EXPORT, or SAVE to MY SOUNDS.
+No MIDI here: MIDI lives in MELODY - add "the sound from MY SOUNDS" as the melody sound there, so: GRID -> MY SOUNDS -> MELODY -> MIDI loops.
