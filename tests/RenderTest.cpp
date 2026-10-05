@@ -9,6 +9,7 @@
 #include "../Source/Dreams.h"
 #include "../Source/SoundPack.h"
 #include "../Source/Games.h"   // v0.45 GAME
+#include "../Source/Worlds.h"
 #include <cstdio>
 #include <set>
 
@@ -1528,6 +1529,154 @@ static int unitTests()
             check (ok == (int) test.size(), "v0.45 GAME: every reward genome is valid, named and audible");
         }
     }
+    // v0.45 WORLDS: BIOSPHERE, GARAGE, PARTY - every being part / item / item part / party kind maps to an audible genome, rolls are
+    // deterministic per seed and differ between items, tiers order (higher = richer), panic / shy / mutate bend the recipe the right
+    // way, party energy maps monotonically (brighter, busier)
+    {
+        using namespace kk::worlds;
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto audible = [&] (const KeysKillaProcessor::Genome& g)
+        {
+            if (! g.valid()) return false;
+            p.alcUse (g, false);
+            juce::AudioBuffer<float> b (2, 512); float peak = 0; bool bad = false;
+            for (int i = 0; i < 40; ++i)
+            {
+                juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                if (i == 30) mb.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                p.processBlock (b, mb);
+                for (int n = 0; n < 512; ++n) bad |= ! std::isfinite (b.getSample (0, n));
+                peak = std::max (peak, b.getMagnitude (0, 512));
+            }
+            p.panic(); for (int i = 0; i < 30; ++i) { juce::MidiBuffer mb; p.processBlock (b, mb); }
+            return ! bad && peak > 0.003f && peak < 2.0f;
+        };
+        int total = 0, ok = 0;
+        for (int k = 0; k < numKingdoms; ++k)
+            for (int b = 0; b < (int) beings (k).size(); ++b)
+                for (int pi = 0; pi < (int) beings (k)[(size_t) b].parts.size(); ++pi) { ++total; ok += audible (genome (p, bioRoll (k, b, 1u << pi, pi, {}, 3)[0])) ? 1 : 0; }
+        for (int tb = 0; tb < numGarage; ++tb)
+            for (int t = 0; t < 6; ++t)
+            {
+                const auto r = garageRoll (tb, t, 9);
+                ++total; ok += audible (genome (p, r[0])) ? 1 : 0;
+                if (t == 0 || t == 5) for (int pi = 0; pi < (int) garageParts (tb).size(); ++pi) { ++total; ok += audible (genome (p, applyPart (r[1], tb, pi, t))) ? 1 : 0; }
+            }
+        for (float e : { 0.0f, 0.5f, 1.0f }) for (auto& r : partyRoll (e, 4, numPartyKinds)) { ++total; ok += audible (genome (p, r)) ? 1 : 0; }
+        std::printf ("WORLDS: %d of %d world sounds are audible genomes\n", ok, total);
+        check (ok == total, "v0.45 WORLDS: every being part, garage item / part and party kind maps to a valid audible genome");
+
+        // deterministic per choice + seed; another seed / being / item = another roll
+        auto same = [] (const std::vector<Recipe>& a, const std::vector<Recipe>& b) { if (a.size() != b.size()) return false; for (size_t i = 0; i < a.size(); ++i) if (! (a[i] == b[i]) || a[i].name != b[i].name) return false; return true; };
+        auto alike = [] (const std::vector<Recipe>& a, const std::vector<Recipe>& b) { int n = 0; for (size_t i = 0; i < std::min (a.size(), b.size()); ++i) n += a[i].seed == b[i].seed ? 1 : 0; return n; };
+        const auto b1 = bioRoll (kAnimals, 0, 0b11u, 1, {}, 42), b2 = bioRoll (kAnimals, 0, 0b11u, 1, {}, 42), b3 = bioRoll (kAnimals, 0, 0b11u, 1, {}, 43);
+        check (b1.size() == 10 && same (b1, b2) && alike (b1, b3) == 0, "v0.45 BIOSPHERE: the same choice + seed = the same roll, another seed = another roll");
+        check (genome (p, b1[0]).v == genome (p, b2[0]).v, "v0.45 WORLDS: the same recipe = the same genome");
+        check (same (garageRoll (1, 3, 77), garageRoll (1, 3, 77)) && alike (garageRoll (1, 3, 77), garageRoll (1, 3, 78)) == 0
+               && same (partyRoll (0.6f, 8), partyRoll (0.6f, 8)), "v0.45 GARAGE / PARTY: rolls are deterministic per seed");
+        int diffItems = 0, itemPairs = 0, diffBeings = 0, beingPairs = 0; bool namesUnique = true;
+        for (int tb = 0; tb < numGarage; ++tb)
+            for (int t = 0; t < 6; ++t)
+            {
+                const auto r = garageRoll (tb, t, 9);
+                std::set<juce::String> nm; for (auto& x : r) nm.insert (x.name); namesUnique &= nm.size() == r.size();
+                for (int u = t + 1; u < 6; ++u) { ++itemPairs; diffItems += alike (r, garageRoll (tb, u, 9)) == 0 ? 1 : 0; }
+                for (int ob = tb + 1; ob < numGarage; ++ob) { ++itemPairs; diffItems += alike (r, garageRoll (ob, t, 9)) == 0 ? 1 : 0; }
+            }
+        for (int k = 0; k < numKingdoms; ++k)
+            for (int b = 0; b < (int) beings (k).size(); ++b)
+                for (int ob = b + 1; ob < (int) beings (k).size(); ++ob) { ++beingPairs; diffBeings += alike (bioRoll (k, b, 0, -1, {}, 9), bioRoll (k, ob, 0, -1, {}, 9)) == 0 ? 1 : 0; }
+        std::printf ("WORLDS: %d of %d item pairs and %d of %d being pairs roll differently\n", diffItems, itemPairs, diffBeings, beingPairs);
+        check (diffItems == itemPairs && diffBeings == beingPairs && namesUnique, "v0.45 WORLDS: every item / being rolls its own sounds (own names in a roll)");
+
+        // tiers: a higher rung = richer (bigger, longer, more layers) on every ladder
+        bool ordered = true, layers = true;
+        for (int tb = 0; tb < numGarage; ++tb)
+        {
+            float prev = -1.0f;
+            for (int t = 0; t < 6; ++t)
+            {
+                float rich = 0, split = 0; int n = 0;
+                for (uint32_t sd = 1; sd <= 6; ++sd) for (auto& r : garageRoll (tb, t, sd)) { rich += r.richness(); split += r.split; ++n; }
+                rich /= (float) n; split /= (float) n;
+                ordered &= rich > prev + 0.02f; prev = rich;
+                if (t == 0) layers &= split == 0.0f;
+                if (t == 5) layers &= split > 0.6f;
+            }
+        }
+        check (ordered, "v0.45 GARAGE: a higher tier is richer (bigger, longer, more layers) on every ladder");
+        check (layers, "v0.45 GARAGE: the worst item is one thin layer, the most expensive has two");
+        // a part click re-shapes the sound in its own direction
+        {
+            const auto r = garageRoll (gCars, 2, 5)[0];
+            const auto en = applyPart (r, gCars, 0, 2), ty = applyPart (r, gCars, 2, 2), tu = applyPart (r, gCars, 4, 2);
+            check (en.heat > r.heat && ty.stretch < r.stretch && tu.split > r.split && en.name.contains ("Engine"), "v0.45 GARAGE: ENGINE = hotter, TYRES = shorter, TURBO = more layers");
+        }
+
+        // living reactions: panic = wilder, shy = softer / darker, a mutation = a new seed torn in two
+        int wild = 0, soft = 0, mutant = 0, n = 0;
+        for (int b = 0; b < (int) beings (kAnimals).size(); ++b)
+            for (int pi = 0; pi < (int) beings (kAnimals)[(size_t) b].parts.size(); ++pi)
+            {
+                Mood calm, pm, sm, mm; pm.panic = 1.0f; sm.shy = 1.0f; mm.mutations = 1;
+                const auto r = bioRoll (kAnimals, b, 1u << pi, pi, calm, 5)[0], rp = bioRoll (kAnimals, b, 1u << pi, pi, pm, 5)[0];
+                const auto rs = bioRoll (kAnimals, b, 1u << pi, pi, sm, 5)[0], rm = bioRoll (kAnimals, b, 1u << pi, pi, mm, 5)[0];
+                ++n;
+                wild += rp.heat >= r.heat && rp.bright >= r.bright && rp.stretch <= r.stretch && (rp.heat - r.heat) + (rp.bright - r.bright) > 0.3f && rp.name.startsWith ("Wild") ? 1 : 0;
+                soft += rs.bright <= r.bright && rs.heat <= r.heat && rs.cool >= r.cool && (r.bright - rs.bright) + (r.heat - rs.heat) + (rs.cool - r.cool) > 0.3f ? 1 : 0;
+                mutant += rm.seed != r.seed && rm.split >= 0.45f && rm.name.startsWith ("Mutant") ? 1 : 0;
+            }
+        std::printf ("BIOSPHERE: panic wilder %d / %d, shy softer %d / %d, mutants %d / %d\n", wild, n, soft, n, mutant, n);
+        check (wild == n && soft == n && mutant == n, "v0.45 BIOSPHERE: panic = hotter / brighter / shorter, shy = darker / softer, mutate = new seed + torn in two");
+        {
+            Mood m; int ev = reactNone;
+            for (int i = 0; i < 20; ++i) { const int e = react (m, 0.9f, 2400.0f, 1.0f / 30.0f); if (e != reactNone) ev = e; }
+            Mood s; int evs = reactNone;
+            for (int i = 0; i < 40; ++i) { const int e = react (s, 0.8f, 120.0f, 1.0f / 30.0f); if (e != reactNone) evs = e; }
+            Mood l; int evl = reactNone;
+            for (int i = 0; i < 120; ++i) { const int e = react (l, 0.8f, 10.0f, 1.0f / 30.0f); if (e == reactMutate) evl = e; }
+            Mood f; f.panic = 1.0f; f.shy = 1.0f;
+            for (int i = 0; i < 90; ++i) react (f, 0.0f, 0.0f, 1.0f / 30.0f);
+            check (ev == reactPanic && m.panic > 0.5f && m.shy == 0.0f, "v0.45 BIOSPHERE: fast movement near it = PANIC");
+            check (evs == reactShy && s.shy > 0.5f && s.panic == 0.0f, "v0.45 BIOSPHERE: a slow approach = SHY");
+            check (evl == reactMutate && l.mutations == 1, "v0.45 BIOSPHERE: lingering = it MUTATES");
+            check (f.panic < 0.1f && f.shy < 0.1f, "v0.45 BIOSPHERE: left alone it calms down");
+        }
+        // a click on a part: the part is in the roll (first) and the roll changes when another part is coloured
+        {
+            const auto r1 = bioRoll (kBody, 0, 1u << 3, 3, {}, 4), r2 = bioRoll (kBody, 0, (1u << 3) | (1u << 2), 2, {}, 4);
+            check (r1[0].kind == 3 && r1[0].name == "Heart" && r2[0].kind == 2 && ! same (r1, r2), "v0.45 BIOSPHERE: the coloured part leads the roll");
+            const auto hp = partAt (kBody, 0, 0.535f, 0.335f), lp = partAt (kBody, 0, 0.42f, 0.30f), none = partAt (kBody, 0, 0.02f, 0.98f);
+            check (hp == 3 && lp == 2 && none == -1, "v0.45 BIOSPHERE: hit test finds the heart inside the lungs");
+        }
+
+        // PARTY: energy maps monotonically - brighter, glassier, busier
+        {
+            bool mono = true; float pb = -1.0e9f, pm = 1.0e9f; size_t pn = 0;
+            float b0 = 0, b1e = 0; size_t n0 = 0, n1 = 0;
+            for (int k = 0; k <= 20; ++k)
+            {
+                const float e = (float) k / 20.0f;
+                float bsum = 0, msum = 0; for (auto& r : partyRoll (e, 4)) { bsum += r.bright; msum += r.matter; }
+                const auto ph = partyPhrase (e, 4);
+                mono &= bsum >= pb - 1.0e-4f && msum <= pm + 1.0e-4f && ph.size() >= pn;
+                pb = bsum; pm = msum; pn = ph.size();
+                if (k == 0) { b0 = bsum; n0 = ph.size(); } if (k == 20) { b1e = bsum; n1 = ph.size(); }
+            }
+            std::printf ("PARTY: brightness %.2f -> %.2f, phrase notes %d -> %d\n", b0, b1e, (int) n0, (int) n1);
+            check (mono && b1e > b0 + 3.0f && n1 > n0 * 3, "v0.45 PARTY: more energy = brighter recipes and a busier phrase (monotonic)");
+            Party a, b; b.crowd = 0.9f; Party c = a; c.lights = 0.9f; Party d = a; d.spin = 0.9f;
+            check (b.energy() > a.energy() && c.energy() > a.energy() && d.energy() > a.energy(), "v0.45 PARTY: crowd, lights and the disco ball all raise the energy");
+            bool four = true, inRange = true;
+            for (float e : { 0.3f, 0.7f, 1.0f })
+            {
+                const auto ph = partyPhrase (e, 4);
+                for (int beat = 0; beat < 16; ++beat) { bool hit = false; for (auto& nt : ph) hit |= nt.low && std::abs (nt.start - (float) beat) < 1.0e-4f; four &= hit; }
+                for (auto& nt : ph) inRange &= nt.start >= 0.0f && nt.start + nt.len <= 16.01f && nt.note >= 24 && nt.note <= 108;
+            }
+            check (four && inRange, "v0.45 PARTY: a 4-on-the-floor bass on every beat, all notes inside the 4 bars");
+        }
+    }
     // v0.43 LIFE: gravity, predator, swarm, metabolism
     {
         auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)
@@ -2683,6 +2832,15 @@ int main (int argc, char** argv)
             juce::Image kkGameSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);
             auto img = kkGameSnapshot (p, juce::String (argv[4]).getIntValue() - 70);
+            juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+            out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
+            return 0;
+        }
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 80 && juce::String (argv[4]).getIntValue() <= 84)   // v0.45 WORLDS: 80 BIOSPHERE, 81 BODY, 82 CARS, 83 ARSENAL, 84 PARTY
+        {
+            juce::Image kkWorldsSnapshot (KeysKillaProcessor&, int);
+            p.prepareToPlay (44100, 512);
+            auto img = kkWorldsSnapshot (p, juce::String (argv[4]).getIntValue());
             juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);
             return 0;

@@ -7076,6 +7076,7 @@ static std::unique_ptr<Component> makeDoodlePage (KeysKillaProcessor& p, KKLookA
 #include "WordsPage.h"     // v0.45 EVOLVE: WORDS, GRID, CREATURE + DREAMS (SoundPack.h comes with Creature.h)
 #include "GridPage.h"
 #include "Creature.h"
+#include "WorldsPages.h"   // v0.45 WORLDS: BIOSPHERE, GARAGE, PARTY
 #include "GamePage.h"      // v0.45 GAME (ARCADE)
 
 //==============================================================================
@@ -7710,6 +7711,9 @@ private:
                 case tabWorld:    // v0.45 door WORLDS
                 {
                     auto d = std::make_unique<DoorPage> (lnf);
+                    d->addRoom ("BIOSPHERE", "Animals, nature, the human body - touch a part, it sounds; they panic, hide, mutate", [this] { return std::unique_ptr<Component> (std::make_unique<BiospherePage> (proc, lnf)); });
+                    d->addRoom ("GARAGE", "Arsenal, cars, yachts, jets - from the worst to the most expensive; click a part to re-shape", [this] { return std::unique_ptr<Component> (std::make_unique<GaragePage> (proc, lnf)); });
+                    d->addRoom ("PARTY", "A club: crowd, lights, the disco ball - the more energy, the more euphoric the sounds", [this] { return std::unique_ptr<Component> (std::make_unique<PartyPage> (proc, lnf)); });
                     d->addRoom ("SOUND WORLD", "The world map of sounds", [this] { return std::unique_ptr<Component> (std::make_unique<SoundWorldPage> (proc, lnf)); });
                     m = std::make_unique<InsetPage> (std::move (d)); break;
                 }
@@ -7869,7 +7873,7 @@ private:
                            || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0)
                            || openTabIndex == tabEdit    // SOUND EDIT: keep the loop running while you tweak the sound
                            || openTabIndex == tabMix     // v0.41 MIX LAB: you mix what plays
-                           || (owner == 4 && (openTabIndex == tabMelody || openTabIndex == tabLife || openTabIndex == tabAlchemy || openTabIndex == tabFeed));
+                           || (owner == 4 && (openTabIndex == tabMelody || openTabIndex == tabLife || openTabIndex == tabAlchemy || openTabIndex == tabFeed || openTabIndex == tabWorld || openTabIndex == tabGame));
             if (! keep) proc.stopLoop();
         }
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }
@@ -8848,3 +8852,19 @@ void KeysKillaEditor::paint (Graphics& g)
     g.fillAll (kk::theme().night ? Colour (0xff050607) : Colour (0xff5d636b));   // behind the chamfers (host background)
     g.drawImageAt (frameImg, 0, 0);
 }
+
+#if KK_TEST_BUILD
+// v0.45 WORLDS snapshots: 80 BIOSPHERE animals (a panicking bird), 81 the human body, 82 GARAGE cars, 83 ARSENAL, 84 PARTY at high energy
+juce::Image kkWorldsSnapshot (KeysKillaProcessor& p, int view)
+{
+    kk::themeIndex() = jlimit (0, 1, openSettings()->getIntValue ("theme", 0));
+    KKLookAndFeel lnf;
+    std::unique_ptr<Component> pg;
+    if (view <= 81) { auto b = std::make_unique<BiospherePage> (p, lnf); b->setBounds (0, 0, 1512, 798); b->debugShow (view); pg = std::move (b); }
+    else if (view <= 83) { auto b = std::make_unique<GaragePage> (p, lnf); b->setBounds (0, 0, 1512, 798); b->debugShow (view); pg = std::move (b); }
+    else { auto b = std::make_unique<PartyPage> (p, lnf); b->setBounds (0, 0, 1512, 798); b->debugShow (view); pg = std::move (b); }
+    auto img = pg->createComponentSnapshot (pg->getLocalBounds(), true, 1.0f);
+    pg.reset();
+    return img;
+}
+#endif
