@@ -1456,6 +1456,145 @@ static int unitTests()
             r2.chainReset();
             check (! r2.liquid.on.load() && ! r2.intent.on.load() && ! r2.erosion.on.load(), "v0.43 FX PRO: ALL OFF turns the organic modules off");
         }
+        {   // v0.44 INTENT MOOD MAP: a blend lies between its two states, blend 0 = the old single state
+            kk::pro::IntentDsp::Targets a, b, m, z;
+            kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 0.2f, a); kk::pro::IntentDsp::mapping (kk::pro::imCalm, 0.2f, b);
+            kk::pro::IntentDsp::mappingBlend (kk::pro::imOxygen, kk::pro::imCalm, 0.5f, 0.2f, m); kk::pro::IntentDsp::mappingBlend (kk::pro::imOxygen, kk::pro::imCalm, 0.0f, 0.2f, z);
+            check (std::abs (m.width - 0.5f * (a.width + b.width)) < 1e-4f && std::abs (m.rasp - 0.5f * (a.rasp + b.rasp)) < 1e-4f && z.width == a.width && z.lpHz == a.lpHz,
+                   "v0.44 INTENT MOOD MAP: the point blends the two nearest states");
+        }
+    }
+    // v0.44 EVOLVE FX PRO TOUCH modules: HOLOROOM, GRAB, SHAKE
+    {
+        const double rate = 44100.0; const int B = 512;
+        auto finite = [] (const juce::AudioBuffer<float>& b) { for (int c = 0; c < b.getNumChannels(); ++c) for (int i = 0; i < b.getNumSamples(); ++i) if (! std::isfinite (b.getSample (c, i))) return false; return true; };
+        auto energy = [] (const juce::AudioBuffer<float>& b, int ch, int from, int to) { double e = 0; for (int i = from; i < to; ++i) e += (double) b.getSample (ch, i) * b.getSample (ch, i); return e; };
+        auto db = [] (double a, double b2) { return (float) (10.0 * std::log10 ((a + 1e-20) / (b2 + 1e-20))); };
+        auto hpE = [&] (const juce::AudioBuffer<float>& b, float hz, int from, int to)   // 4-pole high-pass energy, both channels
+        {
+            kk::SvfCoef c; c.set (hz, 1.41421356f, (float) rate); double e = 0;
+            for (int ch = 0; ch < 2; ++ch) { kk::SvfState s1, s2; for (int i = 0; i < to; ++i) { s1.tick (c, b.getSample (ch, i)); s2.tick (c, s1.hp); if (i >= from) e += (double) s2.hp * s2.hp; } }
+            return e;
+        };
+        auto bandE = [&] (const juce::AudioBuffer<float>& b, float hz, int from, int to)   // narrow band energy (k = 0.1), left channel
+        {
+            kk::SvfCoef c; c.set (hz, 0.1f, (float) rate); kk::SvfState s; double e = 0;
+            for (int i = 0; i < to; ++i) { s.tick (c, b.getSample (0, i)); if (i >= from) e += (double) (0.1f * s.bp) * (0.1f * s.bp); }
+            return e;
+        };
+        {   // HOLOROOM: off = bit-identical, the default spot ~ transparent, far = quieter + darker + longer tail, hard left = left
+            const int N = 44100 * 2, burstEnd = 44100;
+            juce::AudioBuffer<float> in (2, N); kk::Rng r; r.seed (123);
+            for (int i = 0; i < N; ++i) { const float v = i < burstEnd ? 0.3f * r.bi() : 0.0f; in.setSample (0, i, v + (i < burstEnd ? 0.05f * r.bi() : 0.0f)); in.setSample (1, i, v + (i < burstEnd ? 0.05f * r.bi() : 0.0f)); }
+            auto run = [&] (bool on, float x, float depth)
+            {
+                kk::pro::HoloState st; st.on = on; st.x = x; st.depth = depth;
+                kk::pro::HoloDsp d; d.prepare (rate, B);
+                auto out = in;
+                for (int o = 0; o < N; o += B) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st);
+                return out;
+            };
+            const auto off = run (false, 0, 0.25f), def = run (true, 0, kk::pro::HoloState::defDepth), far = run (true, 0, 1.0f), left = run (true, -1.0f, kk::pro::HoloState::defDepth);
+            bool same = true; for (int c = 0; c < 2; ++c) for (int i = 0; i < N; ++i) same &= off.getSample (c, i) == in.getSample (c, i);
+            check (same, "v0.44 HOLOROOM: off = bit-identical");
+            const int a0 = 22050, a1 = burstEnd;
+            const float lvDef = db (energy (def, 0, a0, a1) + energy (def, 1, a0, a1), energy (in, 0, a0, a1) + energy (in, 1, a0, a1));
+            const float lvFar = db (energy (far, 0, a0, a1) + energy (far, 1, a0, a1), energy (def, 0, a0, a1) + energy (def, 1, a0, a1));
+            const float hfDef = db (hpE (def, 6000.0f, a0, a1), energy (def, 0, a0, a1) + energy (def, 1, a0, a1)), hfFar = db (hpE (far, 6000.0f, a0, a1), energy (far, 0, a0, a1) + energy (far, 1, a0, a1));
+            const int t0 = burstEnd + (int) (0.3 * rate), t1 = t0 + 4410;
+            const double tailDef = energy (def, 0, t0, t1) + energy (def, 1, t0, t1), tailFar = energy (far, 0, t0, t1) + energy (far, 1, t0, t1);
+            const float lr = db (energy (left, 0, a0, a1), energy (left, 1, a0, a1));
+            std::printf ("HOLOROOM: default spot %.2f dB, far %.1f dB quieter, > 6 kHz share near %.1f dB / far %.1f dB, tail 300 ms after: near %.2e far %.2e, hard left L/R %.1f dB\n",
+                         lvDef, -lvFar, hfDef, hfFar, tailDef, tailFar, lr);
+            check (std::abs (lvDef) < 1.5f, "v0.44 HOLOROOM: the default spot is practically transparent (within 1.5 dB)");
+            check (lvFar < -4.0f, "v0.44 HOLOROOM: far away is quieter (> 4 dB)");
+            check (hfFar < hfDef - 6.0f, "v0.44 HOLOROOM: far away is darker (> 6 kHz drops more than 6 dB relative)");
+            check (tailFar > tailDef * 2.0, "v0.44 HOLOROOM: far away has a longer tail");
+            check (lr > 6.0f, "v0.44 HOLOROOM: hard left = the left side is louder by more than 6 dB");
+            check (finite (def) && finite (far) && finite (left) && far.getMagnitude (0, N) < 1.5f, "v0.44 HOLOROOM: finite, bounded");
+        }
+        {   // GRAB: pull up = boost, push down = cut, the rest stays, squeeze tames peaks, tear adds harmonics, off = untouched
+            const int N = 44100;
+            auto sines = [&] (std::initializer_list<std::pair<float, float>> parts)
+            {
+                juce::AudioBuffer<float> b (2, N);
+                for (int i = 0; i < N; ++i) { float v = 0; for (auto& p : parts) v += p.second * std::sin (kk::twoPi * p.first * (float) i / (float) rate); b.setSample (0, i, v); b.setSample (1, i, v); }
+                return b;
+            };
+            auto run = [&] (const juce::AudioBuffer<float>& in, bool on, float gain, float squeeze, float tear)
+            {
+                kk::pro::GrabState st; st.on = on;
+                const int k = st.add (1000.0f); st.grips[(size_t) k].gainDb = gain; st.grips[(size_t) k].squeeze = squeeze; st.grips[(size_t) k].tear = tear;
+                kk::pro::GrabDsp d; d.prepare (rate, B);
+                auto out = in;
+                for (int o = 0; o < N; o += B) d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st);
+                return out;
+            };
+            const auto mixIn = sines ({ { 1000.0f, 0.2f }, { 100.0f, 0.2f } });
+            const auto up = run (mixIn, true, 12.0f, 0, 0), down = run (mixIn, true, -12.0f, 0, 0), off = run (mixIn, false, 12.0f, 0, 0);
+            const int f0 = N / 4;
+            const float up1k = db (bandE (up, 1000.0f, f0, N), bandE (mixIn, 1000.0f, f0, N)), up100 = db (bandE (up, 100.0f, f0, N), bandE (mixIn, 100.0f, f0, N));
+            const float dn1k = db (bandE (down, 1000.0f, f0, N), bandE (mixIn, 1000.0f, f0, N));
+            bool same = true; for (int c = 0; c < 2; ++c) for (int i = 0; i < N; ++i) same &= off.getSample (c, i) == mixIn.getSample (c, i);
+            std::printf ("GRAB: pulled up 1 kHz %+.1f dB (100 Hz %+.2f dB), pushed down 1 kHz %+.1f dB\n", up1k, up100, dn1k);
+            check (up1k > 5.0f && std::abs (up100) < 1.0f, "v0.44 GRAB: a grip pulled up boosts its frequency (> 5 dB) and leaves the rest (100 Hz within 1 dB)");
+            check (dn1k < -5.0f, "v0.44 GRAB: a grip pushed down cuts (> 5 dB)");
+            check (same, "v0.44 GRAB: off = bit-identical");
+            // squeeze: a 1 kHz tone that jumps between loud and quiet
+            juce::AudioBuffer<float> pulsed (2, N);
+            float a = 0.08f; for (int i = 0; i < N; ++i) { a += (((i % 8820) < 2205 ? 0.8f : 0.08f) - a) * 0.004f;   /* 50 ms bursts, smooth edges */ const float v = a * std::sin (kk::twoPi * 1000.0f * (float) i / (float) rate); pulsed.setSample (0, i, v); pulsed.setSample (1, i, v); }
+            auto crest = [&] (const juce::AudioBuffer<float>& b) { double e = 0; float pk = 0; for (int i = f0; i < N; ++i) { e += (double) b.getSample (0, i) * b.getSample (0, i); pk = std::max (pk, std::abs (b.getSample (0, i))); } return 20.0f * std::log10 (pk / (float) std::sqrt (e / (N - f0))); };
+            const auto sq = run (pulsed, true, 0.0f, 1.0f, 0.0f);
+            const float crIn = crest (pulsed), crSq = crest (sq);
+            std::printf ("GRAB: squeeze crest factor %.1f dB -> %.1f dB\n", crIn, crSq);
+            check (crSq < crIn - 1.5f && finite (sq), "v0.44 GRAB: SQUEEZE compresses the band (crest factor down)");
+            const auto tone = sines ({ { 1000.0f, 0.5f } });
+            const auto torn = run (tone, true, 0.0f, 0.0f, 1.0f);
+            const float h3 = db (bandE (torn, 3000.0f, f0, N), bandE (tone, 3000.0f, f0, N) + 1e-12);
+            std::printf ("GRAB: tear - energy at 3 kHz %+.1f dB\n", h3);
+            check (h3 > 10.0f && finite (torn) && torn.getMagnitude (0, N) < 1.5f, "v0.44 GRAB: TEAR adds harmonics (3 kHz rises)");
+            // the project keeps the grips
+            KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+            p.grab.on = true; const int k1 = p.grab.add (250.0f); p.grab.grips[(size_t) k1].gainDb = -7.5f; p.grab.grips[(size_t) k1].q = 3.0f;
+            const int k2 = p.grab.add (5000.0f); p.grab.grips[(size_t) k2].squeeze = 0.6f; p.grab.grips[(size_t) k2].tear = 0.4f;
+            p.holoroom.on = true; p.holoroom.x = -0.5f; p.holoroom.depth = 0.8f; p.holoroom.room = 0.9f;
+            juce::MemoryBlock mb; p.getStateInformation (mb);
+            KeysKillaProcessor r2; r2.prepareToPlay (44100, 512); r2.setStateInformation (mb.getData(), (int) mb.getSize());
+            const auto& g1 = r2.grab.grips[(size_t) k1]; const auto& g2 = r2.grab.grips[(size_t) k2];
+            check (r2.grab.on.load() && g1.active.load() && std::abs (g1.freq.load() - 250.0f) < 0.5f && std::abs (g1.gainDb.load() + 7.5f) < 0.01f && std::abs (g1.q.load() - 3.0f) < 0.01f
+                   && g2.active.load() && std::abs (g2.squeeze.load() - 0.6f) < 0.01f && std::abs (g2.tear.load() - 0.4f) < 0.01f && ! r2.grab.grips[2].active.load(), "v0.44 GRAB: the project keeps the grips");
+            check (r2.holoroom.on.load() && std::abs (r2.holoroom.x.load() + 0.5f) < 0.01f && std::abs (r2.holoroom.depth.load() - 0.8f) < 0.01f && std::abs (r2.holoroom.room.load() - 0.9f) < 0.01f, "v0.44 HOLOROOM: the project keeps the orb and the room");
+            r2.shake.energy = 0.7f; r2.chainReset();
+            bool none = true; for (auto& gp : r2.grab.grips) none &= ! gp.active.load();
+            check (! r2.grab.on.load() && ! r2.holoroom.on.load() && none && r2.shake.energy.load() == 0.0f, "v0.44 FX PRO: ALL OFF turns the TOUCH modules off and lets go of every grip");
+        }
+        {   // SHAKE: no energy = bit-identical, full energy = a glitched signal (safe), back to zero = back to the dry signal
+            const int N = 44100 * 3;
+            juce::AudioBuffer<float> in (2, N); kk::Rng r; r.seed (5);
+            for (int i = 0; i < N; ++i) { const float t = (float) i / (float) rate; const float v = 0.35f * std::sin (kk::twoPi * 220.0f * t) * (0.6f + 0.4f * std::sin (kk::twoPi * 3.0f * t)) + 0.1f * std::sin (kk::twoPi * 1375.0f * t) + 0.05f * r.bi(); in.setSample (0, i, v); in.setSample (1, i, v * 0.9f); }
+            kk::pro::ShakeState st; kk::pro::ShakeDsp d; d.prepare (rate, B);
+            auto out = in;
+            const int s1 = 44100 / 2, s2 = 44100 + 44100 / 2;   // 0.5 s clean, 1 s shaken, then let go
+            for (int o = 0; o < N; o += B)
+            {
+                st.energy = o >= s1 && o < s2 ? 1.0f : 0.0f;
+                d.process (out.getWritePointer (0) + o, out.getWritePointer (1) + o, std::min (B, N - o), st);
+            }
+            bool cleanSame = true; for (int c = 0; c < 2; ++c) for (int i = 0; i < s1; ++i) cleanSame &= out.getSample (c, i) == in.getSample (c, i);
+            double xy = 0, xx = 0, yy = 0; for (int i = s1 + 4410; i < s2; ++i) { const double a = in.getSample (0, i), b = out.getSample (0, i); xy += a * b; xx += a * a; yy += b * b; }
+            const double corr = xy / std::sqrt (xx * yy + 1e-20);
+            bool backSame = true; for (int c = 0; c < 2; ++c) for (int i = s2 + 22050; i < N; ++i) backSame &= out.getSample (c, i) == in.getSample (c, i);
+            const float pk = out.getMagnitude (0, N);
+            std::printf ("SHAKE: correlation while shaken %.3f, peak %.2f dBFS, clean before %d, clean 0.5 s after %d\n", corr, 20.0f * std::log10 (pk), (int) cleanSame, (int) backSame);
+            check (cleanSame, "v0.44 SHAKE: energy 0 = bit-identical");
+            check (corr < 0.9 && finite (out) && pk < std::pow (10.0f, 1.0f / 20.0f), "v0.44 SHAKE: full energy glitches the signal (correlation < 0.9), finite, never over +1 dBFS");
+            check (backSame, "v0.44 SHAKE: when the energy is gone the dry signal returns bit for bit");
+            // the energy drains by itself
+            kk::pro::ShakeState st2; st2.energy = 1.0f; auto tmp = in;
+            for (int o = 0; o < 44100 * 2; o += B) d.process (tmp.getWritePointer (0) + o, tmp.getWritePointer (1) + o, B, st2);
+            std::printf ("SHAKE: energy 2 s after the last shake %.3f\n", st2.energy.load());
+            check (st2.energy.load() == 0.0f, "v0.44 SHAKE: the energy fades back to clean within 2 s");
+        }
     }
     // v0.42 SAMPLER MELODY: a sample on the keys plays generated melodies, out as a WAV
     {
@@ -2202,16 +2341,31 @@ int main (int argc, char** argv)
         juce::PropertiesFile (o).setValue ("theme", th.containsIgnoreCase ("night") || th == "1" ? 1 : 0);
         juce::PropertiesFile (o).setValue ("scale", argc > 5 ? juce::String (argv[5]).getIntValue() : 60);
         p.setCurrentProgram (1);
-        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..101: the EVOLVE FX PRO pages (97 LIQUID, 98 INTENT, 99 EROSION)
+        if (argc > 4 && juce::String (argv[4]).getIntValue() >= 90)   // 90..103: the EVOLVE FX PRO pages = 90 + page index (92 HOLOROOM, 93 GRAB, 99 LIQUID, 100 INTENT, 101 EROSION)
         {
             juce::Image kkFxSnapshot (KeysKillaProcessor&, int);
             p.prepareToPlay (44100, 512);
             const int view = juce::String (argv[4]).getIntValue();
-            if (view == 92) p.chainApply (5);
-            if (view == 97) { p.liquid.on = true; const float h[] { 0.35f, 0.8f, 0.55f, 0.2f, 0.05f }; for (int b = 0; b < 5; ++b) p.liquid.mHole[(size_t) b] = h[b]; p.liquid.mKick = 0.8f; }   // a kick in the middle of its hit
-            if (view == 98) { p.intent.on = true; p.intent.mode = kk::pro::imOxygen; p.intent.level = 0.35f; kk::pro::IntentDsp::Targets tg; kk::pro::IntentDsp::mapping (kk::pro::imOxygen, 0.35f, tg);
-                              p.intent.mRasp = tg.rasp; p.intent.mWidth = tg.width; p.intent.mFreeze = tg.freeze; p.intent.mFilterHz = tg.lpHz; p.intent.mTremor = tg.tremor; }
-            if (view == 99) { p.erosion.on = true; p.erosion.mFatigue = 0.55f; p.erosion.mStarve = 0.3f; p.erosion.mLevel = -8.0f; }
+            if (view == 92) { p.holoroom.on = true; p.holoroom.x = -0.35f; p.holoroom.depth = 0.55f; p.holoroom.height = 0.3f; p.holoroom.room = 0.6f; p.holoroom.mLevel = 0.6f; p.holoroom.mWet = 0.12f; p.shake.energy = 0.7f; }
+            if (view == 93)
+            {
+                p.grab.on = true;
+                kk::Rng r; r.seed (3); float lp = 0, lp2 = 0;   // a beat-like spectrum for the ribbon
+                for (int i = 0; i < kk::pro::GrabState::ringSize; ++i)
+                {
+                    const float t = (float) i / 44100.0f, n = r.bi(); lp += (n - lp) * 0.05f; lp2 += (lp - lp2) * 0.05f;
+                    p.grab.ring[(size_t) i] = 0.5f * std::sin (kk::twoPi * 55.0f * t) + 0.25f * std::sin (kk::twoPi * 440.0f * t) + 1.2f * lp2 + 0.3f * lp + 0.02f * n;
+                }
+                p.grab.ringW = 0;
+                auto grip = [&p] (float hz, float g, float q, float s, float tr) { const int k = p.grab.add (hz); p.grab.grips[(size_t) k].gainDb = g; p.grab.grips[(size_t) k].q = q; p.grab.grips[(size_t) k].squeeze = s; p.grab.grips[(size_t) k].tear = tr; };
+                grip (80.0f, 7.0f, 1.2f, 0.0f, 0.0f); grip (420.0f, -8.0f, 2.0f, 0.0f, 0.0f); grip (2600.0f, 4.0f, 1.0f, 0.7f, 0.0f); grip (9000.0f, 3.0f, 2.5f, 0.0f, 0.8f);
+            }
+            if (view == 94) p.chainApply (5);
+            if (view == 99) { p.liquid.on = true; const float h[] { 0.35f, 0.8f, 0.55f, 0.2f, 0.05f }; for (int b = 0; b < 5; ++b) p.liquid.mHole[(size_t) b] = h[b]; p.liquid.mKick = 0.8f; }   // a kick in the middle of its hit
+            if (view == 100) { p.intent.on = true; p.intent.mode = kk::pro::imOxygen; p.intent.mode2 = kk::pro::imAggression; p.intent.blend = 0.3f; p.intent.level = 0.35f;
+                               kk::pro::IntentDsp::Targets tg; kk::pro::IntentDsp::mappingBlend (kk::pro::imOxygen, kk::pro::imAggression, 0.3f, 0.35f, tg);
+                               p.intent.mRasp = tg.rasp; p.intent.mWidth = tg.width; p.intent.mFreeze = tg.freeze; p.intent.mFilterHz = tg.lpHz; p.intent.mTremor = tg.tremor; }
+            if (view == 101) { p.erosion.on = true; p.erosion.mFatigue = 0.55f; p.erosion.mStarve = 0.3f; p.erosion.mLevel = -8.0f; }
             auto img = kkFxSnapshot (p, juce::String (argv[4]).getIntValue() - 90);
             juce::File out (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
             out.deleteFile(); juce::FileOutputStream os (out); juce::PNGImageFormat().writeImageToStream (img, os);

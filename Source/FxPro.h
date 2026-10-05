@@ -13,6 +13,7 @@
 // v0.43 organic modules (the sound behaves like a living thing):
 //   LIQUID (spectral cannibalism - the kick carves its hole, the bass flows around it), INTENT (one breath drives many muscles),
 //   EROSION (material fatigue: overload tires the sound, starving it lets it sink into rumble)
+// v0.44 TOUCH modules (no knobs - the hand shapes the sound): HOLOROOM, GRAB, SHAKE
 namespace kk::pro
 {
 // ---------------------------------------------------------------- REMIX REEL ----------------------------------------------------------------
@@ -476,6 +477,8 @@ struct IntentState
     std::atomic<bool> on { false };
     std::atomic<int> mode { imOxygen };
     std::atomic<float> level { 1.0f }, mix { 1.0f };
+    std::atomic<int> mode2 { imOxygen };   // v0.44 MOOD MAP: the second-nearest state ...
+    std::atomic<float> blend { 0.0f };     // ... and how much of it is mixed in (0 = only mode)
     std::atomic<float> mRasp { 0 }, mWidth { 1 }, mFreeze { 0 }, mFilterHz { 20000 }, mTremor { 0 }, mPulse { 0 };
 };
 class IntentDsp
@@ -496,6 +499,17 @@ public:
             default:           t.width = 1.0f + 0.5f * d; t.lpHz = 20000.0f * std::pow (0.25f, d); t.verbMix = 0.4f * d; t.verbFb = 0.75f + 0.2f * d; t.freeze = 0.25f * d * d; t.transient = -0.6f * d; break;
         }
     }
+    // v0.44 MOOD MAP: two neighbouring states blended (b = weight of the second one)
+    static void mappingBlend (int s1, int s2, float b, float level, Targets& t)
+    {
+        mapping (s1, level, t);
+        b = std::clamp (b, 0.0f, 1.0f);
+        if (b < 1.0e-4f || s1 == s2) return;
+        Targets u; mapping (s2, level, u);
+        auto mixf = [b] (float& a, float c) { a += (c - a) * b; };
+        mixf (t.rasp, u.rasp); mixf (t.width, u.width); mixf (t.verbMix, u.verbMix); mixf (t.verbFb, u.verbFb); mixf (t.freeze, u.freeze); mixf (t.tremor, u.tremor); mixf (t.transient, u.transient);
+        t.lpHz = std::exp (std::log (t.lpHz) + (std::log (u.lpHz) - std::log (t.lpHz)) * b);
+    }
     void prepare (double rate, int maxBlock)
     {
         (void) maxBlock; sr = (float) rate;
@@ -510,7 +524,7 @@ public:
     void process (float* L, float* R, int n, IntentState& st)
     {
         if (! st.on.load()) return;
-        Targets tg; mapping (st.mode.load(), st.level.load(), tg);
+        Targets tg; mappingBlend (st.mode.load(), st.mode2.load(), st.blend.load(), st.level.load(), tg);
         const float mix = std::clamp (st.mix.load(), 0.0f, 1.0f);
         float pk = 0;
         for (int i = 0; i < n; ++i)
@@ -652,5 +666,330 @@ private:
     int fltCount = 0; SvfCoef fc; Rng rng;
     std::array<std::array<SvfState, 2>, 2> lp; std::array<std::array<OnePole, 2>, 2> rum; std::array<DcBlock, 2> rumDc;
     std::array<Pop, 8> pops; std::array<Ap, 2> ap;
+};
+
+// ================================================================ v0.44 TOUCH ================================================================
+// No knobs: the sound is shaped by touching it.  HOLOROOM (a glowing orb in a 3D room), GRAB (the spectrum is matter you pull,
+// push, squeeze and tear), SHAKE (shake the mouse anywhere = glitch energy that fades back to clean).
+
+// ---------------------------------------------------------------- HOLOROOM ----------------------------------------------------------------
+// x: -1 left .. 1 right (pan + width), depth: 0 at your face .. 1 at the back wall (distance), height: -1 floor .. 1 ceiling (tilt),
+// room: 0 a small booth .. 1 a cathedral.  The default spot (centre, depth 0.25) is practically transparent.
+struct HoloState
+{
+    static constexpr float defDepth = 0.25f, defRoom = 0.4f;
+    std::atomic<bool> on { false };
+    std::atomic<float> x { 0.0f }, depth { defDepth }, height { 0.0f }, room { defRoom };
+    std::atomic<float> mLevel { 0 }, mWet { 0 };   // meters for the orb's glow and the reflections
+    void centre() { x = 0.0f; depth = defDepth; height = 0.0f; }
+    // 0..1 how close (in front of the default spot) / how far (behind it)
+    static float closeness (float d) { return std::clamp ((defDepth - d) / defDepth, 0.0f, 1.0f); }
+    static float farness (float d)   { return std::clamp ((d - defDepth) / (1.0f - defDepth), 0.0f, 1.0f); }
+};
+class HoloDsp
+{
+public:
+    void prepare (double rate, int maxBlock)
+    {
+        (void) maxBlock; sr = (float) rate;
+        for (auto& d : pre) d.prepare ((int) (rate * 0.4) + 8);
+        for (auto& d : fdn) d.prepare ((int) (rate * 0.16) + 8);
+        for (auto& s : prox) s.reset();
+        for (auto& s : pres) s.reset();
+        for (auto& o : air1) o.reset();
+        for (auto& o : air2) o.reset();
+        for (auto& o : tilt) { o.reset(); o.setHz (700.0f, sr); }
+        for (auto& d : damp) d = 0;
+        proxC.set (150.0f, 1.0f, sr); presC.set (3500.0f, 1.0f / 0.9f, sr);
+        env = 0; compG = 1; fltCount = 0; lvl = 0; wetMeter = 0; started = false;
+        aSm = std::exp (-1.0f / (0.04f * sr)); aAtt = std::exp (-1.0f / (0.004f * sr)); aRel = std::exp (-1.0f / (0.12f * sr));
+    }
+    void process (float* L, float* R, int n, HoloState& st)
+    {
+        if (! st.on.load()) { if (st.mLevel.load() > 0.0f) { st.mLevel = 0; st.mWet = 0; } started = false; return; }
+        const float tx = std::clamp (st.x.load(), -1.0f, 1.0f), td = std::clamp (st.depth.load(), 0.0f, 1.0f);
+        const float th = std::clamp (st.height.load(), -1.0f, 1.0f), tr = std::clamp (st.room.load(), 0.0f, 1.0f);
+        if (! started) { cx = tx; cd = td; ch = th; cr = tr; started = true; fltCount = 0; }
+        float pk = 0, wpk = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            cx += (tx - cx) * (1 - aSm); cd += (td - cd) * (1 - aSm); ch += (th - ch) * (1 - aSm); cr += (tr - cr) * (1 - aSm);
+            if (--fltCount <= 0)
+            {
+                fltCount = 32;
+                const float nn = HoloState::closeness (cd), f = HoloState::farness (cd);
+                gProx = std::pow (10.0f, 4.0f * nn / 20.0f) - 1.0f; gPres = std::pow (10.0f, 2.5f * nn / 20.0f) - 1.0f;
+                gLo = std::pow (10.0f, -4.5f * ch / 20.0f); gHi = std::pow (10.0f, 6.0f * ch / 20.0f);
+                const float airHz = 20000.0f * std::pow (0.11f, f);
+                for (int c = 0; c < 2; ++c) { air1[(size_t) c].setHz (airHz, sr); air2[(size_t) c].setHz (airHz * 1.3f, sr); }
+                airAmt = std::min (1.0f, f * 3.0f);
+                // pan (constant power, 1 at the centre) + width: the image narrows to the side and in the distance
+                const float a = (cx + 1.0f) * 0.25f * pi;
+                gl = 1.41421356f * std::cos (a); gr = 1.41421356f * std::sin (a);
+                width = std::clamp (1.0f - 0.65f * std::abs (cx) - 0.45f * f, 0.0f, 1.0f);
+                gDist = std::pow (10.0f, -11.0f * f / 20.0f);
+                // the room: early reflections + a 4-line tail that grow with the room and the distance
+                const float size = 0.35f + 1.9f * cr;
+                preD = (0.004f + 0.05f * f + 0.02f * cr) * sr;
+                static const float erMs[6] { 7.1f, 11.3f, 16.9f, 23.5f, 29.8f, 37.7f };
+                for (int k = 0; k < 6; ++k) erD[k] = preD * 0.3f + erMs[k] * 0.001f * sr * size;
+                static const float fdMs[4] { 29.7f, 37.1f, 41.1f, 43.7f };
+                const float rt = (0.25f + 3.2f * std::pow (cr, 1.4f)) * (1.0f + 0.8f * f);
+                for (int k = 0; k < 4; ++k) { fdLen[k] = fdMs[k] * 0.001f * sr * size; fdG[k] = std::pow (10.0f, -3.0f * fdLen[k] / (rt * sr)); }
+                dampK = 0.2f + 0.45f * f;
+                erAmt = 0.05f + 0.33f * f; tailAmt = 0.035f + 0.42f * f;
+                wetL = 1.0f - 0.5f * std::max (0.0f, cx); wetR = 1.0f - 0.5f * std::max (0.0f, -cx);
+                ratio = 1.0f + 2.0f * nn;
+            }
+            const float dl = L[i], dr = R[i];
+            float x[2] { dl, dr };
+            for (int c = 0; c < 2; ++c)
+            {
+                // height: a tilt around 700 Hz (up = airy, down = heavy)
+                const float lo = tilt[(size_t) c].lp (x[c]);
+                float v = lo * gLo + (x[c] - lo) * gHi;
+                // proximity: a little low shelf + presence when the orb is close
+                prox[(size_t) c].tick (proxC, v); pres[(size_t) c].tick (presC, v);
+                v += gProx * prox[(size_t) c].lp + gPres * presC.k * pres[(size_t) c].bp;
+                // air absorbs the highs in the distance
+                const float a2 = air2[(size_t) c].lp (air1[(size_t) c].lp (v));
+                x[c] = v + airAmt * (a2 - v);
+            }
+            // close = a gentle glue (level dependent, stereo linked)
+            const float a = std::max (std::abs (x[0]), std::abs (x[1]));
+            env = a > env ? aAtt * env + (1 - aAtt) * a : aRel * env + (1 - aRel) * a;
+            float gt = 1.0f;
+            if (ratio > 1.001f) { const float over = 20.0f * std::log10 (env + 1.0e-9f) + 20.0f; if (over > 0) gt = std::pow (10.0f, -over * (1.0f - 1.0f / ratio) / 20.0f); }
+            compG += (gt - compG) * 0.002f;
+            x[0] *= compG; x[1] *= compG;
+            // the room hears the source before it is panned
+            pre[0].push (x[0]); pre[1].push (x[1]);
+            float er[2] {};
+            for (int k = 0; k < 6; ++k) er[k & 1] += pre[(size_t) (k & 1)].read (erD[k]) * erG[k];
+            const float in0 = pre[0].read (preD), in1 = pre[1].read (preD);
+            float y[4]; for (int k = 0; k < 4; ++k) { y[k] = fdn[(size_t) k].read (fdLen[k]); damp[k] += (y[k] - damp[k]) * (1.0f - dampK); y[k] = damp[k]; }
+            const float h0 = 0.5f * (y[0] + y[1] + y[2] + y[3]), h1 = 0.5f * (y[0] - y[1] + y[2] - y[3]), h2 = 0.5f * (y[0] + y[1] - y[2] - y[3]), h3 = 0.5f * (y[0] - y[1] - y[2] + y[3]);
+            fdn[0].push (0.5f * in0 + fdG[0] * h0); fdn[1].push (0.5f * in1 + fdG[1] * h1); fdn[2].push (0.5f * in0 + fdG[2] * h2); fdn[3].push (0.5f * in1 + fdG[3] * h3);
+            const float tl = (y[0] + y[2]) * 0.7f, trr = (y[1] + y[3]) * 0.7f;
+            // the source: width, pan, distance
+            const float m = 0.5f * (x[0] + x[1]), s = 0.5f * (x[0] - x[1]) * width;
+            const float wl = erAmt * er[0] + tailAmt * tl, wr = erAmt * er[1] + tailAmt * trr;
+            L[i] = (m + s) * gl * gDist + wl * wetL;
+            R[i] = (m - s) * gr * gDist + wr * wetR;
+            pk = std::max (pk, std::max (std::abs (dl), std::abs (dr)));
+            wpk = std::max (wpk, std::max (std::abs (wl), std::abs (wr)));
+        }
+        lvl = std::max (pk, lvl * 0.9f); wetMeter = std::max (wpk, wetMeter * 0.9f);
+        st.mLevel = lvl; st.mWet = wetMeter;
+    }
+private:
+    static constexpr float erG[6] { 0.62f, -0.5f, 0.4f, -0.32f, 0.25f, -0.2f };
+    float sr = 44100, aSm = 0, aAtt = 0, aRel = 0, cx = 0, cd = HoloState::defDepth, ch = 0, cr = HoloState::defRoom;
+    float gProx = 0, gPres = 0, gLo = 1, gHi = 1, airAmt = 0, gl = 1, gr = 1, width = 1, gDist = 1, preD = 100, dampK = 0.2f;
+    float erD[6] {}, fdLen[4] {}, fdG[4] {}, damp[4] {}, erAmt = 0, tailAmt = 0, wetL = 1, wetR = 1, ratio = 1, env = 0, compG = 1, lvl = 0, wetMeter = 0;
+    int fltCount = 0; bool started = false;
+    SvfCoef proxC, presC; std::array<SvfState, 2> prox, pres;
+    std::array<OnePole, 2> tilt, air1, air2;
+    std::array<DelayLine, 2> pre; std::array<DelayLine, 4> fdn;
+};
+
+// ---------------------------------------------------------------- GRAB ----------------------------------------------------------------
+// Up to 6 grips on the live spectrum.  Each grip: a bell (pull up = louder, push down = quieter), a band compressor (SQUEEZE)
+// and a band drive (TEAR).  The audio thread also feeds a ring of mono samples that the page turns into the living ribbon.
+struct GripState
+{
+    std::atomic<bool> active { false };
+    std::atomic<float> freq { 1000.0f }, q { 1.4f }, gainDb { 0.0f }, squeeze { 0.0f }, tear { 0.0f };
+};
+struct GrabState
+{
+    static constexpr int numGrips = 6, ringSize = 4096;
+    static constexpr float minHz = 30.0f, maxHz = 18000.0f;
+    std::atomic<bool> on { false };
+    std::array<GripState, numGrips> grips;
+    std::array<std::atomic<float>, numGrips> mSqueeze {};   // 0..1 how hard each grip squeezes right now
+    std::array<std::atomic<float>, ringSize> ring {};       // the last mono samples (written by the audio thread)
+    std::atomic<int> ringW { 0 };
+    int add (float hz)
+    {
+        for (int i = 0; i < numGrips; ++i)
+            if (! grips[(size_t) i].active.load())
+            {
+                auto& g = grips[(size_t) i];
+                g.freq = std::clamp (hz, minHz, maxHz); g.q = 1.4f; g.gainDb = 0.0f; g.squeeze = 0.0f; g.tear = 0.0f; g.active = true;
+                return i;
+            }
+        return -1;
+    }
+    void releaseAll() { for (auto& g : grips) { g.active = false; g.gainDb = 0.0f; g.squeeze = 0.0f; g.tear = 0.0f; } }
+};
+class GrabDsp
+{
+public:
+    void prepare (double rate, int maxBlock)
+    {
+        (void) maxBlock; sr = (float) rate;
+        for (auto& v : voice) v = {};
+        aAtt = std::exp (-1.0f / (0.004f * sr)); aRel = std::exp (-1.0f / (0.025f * sr));
+    }
+    void process (float* L, float* R, int n, GrabState& st)
+    {
+        if (st.on.load())
+        {
+            // every grip follows its target smoothly; a released grip fades out before it stops
+            int live = 0;
+            const float a = std::min (1.0f, (float) n / (0.03f * sr));
+            for (int k = 0; k < GrabState::numGrips; ++k)
+            {
+                auto& g = st.grips[(size_t) k]; auto& v = voice[(size_t) k];
+                const bool act = g.active.load();
+                const float tg = act ? std::clamp (g.gainDb.load(), -24.0f, 24.0f) : 0.0f, ts = act ? std::clamp (g.squeeze.load(), 0.0f, 1.0f) : 0.0f, tt = act ? std::clamp (g.tear.load(), 0.0f, 1.0f) : 0.0f;
+                const float tf = std::log (std::clamp (g.freq.load(), GrabState::minHz, GrabState::maxHz)), tq = std::clamp (g.q.load(), 0.3f, 10.0f);
+                if (! v.live)
+                {
+                    if (! act) continue;
+                    v = {}; v.live = true; v.lf = tf; v.q = tq;
+                }
+                v.g += (tg - v.g) * a; v.s += (ts - v.s) * a; v.t += (tt - v.t) * a; v.lf += (tf - v.lf) * a; v.q += (tq - v.q) * a;
+                if (! act && std::abs (v.g) < 0.01f && v.s < 0.002f && v.t < 0.002f) { v.live = false; continue; }
+                v.setCoefs (std::exp (v.lf), v.q, v.g, sr);
+                ++live;
+            }
+            if (live > 0)
+                for (int i = 0; i < n; ++i)
+                {
+                    float x[2] { L[i], R[i] };
+                    for (auto& v : voice)
+                    {
+                        if (! v.live) continue;
+                        float bp[2];
+                        for (int c = 0; c < 2; ++c)
+                        {
+                            x[c] = v.bq[c].tick (v.b0, v.b1, v.b2, v.a1, v.a2, x[c]);
+                            v.sv[c].tick (v.svc, x[c]); bp[c] = v.svc.k * v.sv[c].bp;   // unity gain at the grip
+                        }
+                        if (v.s > 0.002f)   // SQUEEZE: the band is compressed
+                        {
+                            const float e = std::max (std::abs (bp[0]), std::abs (bp[1]));
+                            v.env = e > v.env ? e : aRel * v.env + (1 - aRel) * e;   // instant attack: the peaks never slip through
+                            const float over = 20.0f * std::log10 (v.env + 1.0e-9f) + 6.0f + 24.0f * v.s;   // threshold -6 .. -30 dBFS
+                            const float ratio = 1.0f + 5.0f * v.s, slope = 1.0f - 1.0f / ratio;
+                            const float makeup = 0.35f * 24.0f * v.s * slope;   // the squeezed band gets denser, not just quieter
+                            const float gdyn = std::pow (10.0f, ((over > 0 ? -over * slope : 0.0f) + makeup) / 20.0f);
+                            v.gr = std::min (v.gr, gdyn);
+                            for (int c = 0; c < 2; ++c) { x[c] += (gdyn - 1.0f) * bp[c]; bp[c] *= gdyn; }
+                        }
+                        if (v.t > 0.002f)   // TEAR: the band is driven into saturation
+                        {
+                            const float k = 1.0f + 15.0f * v.t, mk = 1.0f / std::sqrt (k), w = std::min (1.0f, v.t * 4.0f);
+                            for (int c = 0; c < 2; ++c) x[c] += w * (fastTanh (k * bp[c]) * mk - bp[c]);
+                        }
+                    }
+                    L[i] = x[0]; R[i] = x[1];
+                }
+        }
+        for (int k = 0; k < GrabState::numGrips; ++k) { auto& v = voice[(size_t) k]; st.mSqueeze[(size_t) k] = v.live ? 1.0f - v.gr : 0.0f; v.gr = std::min (1.0f, v.gr + 0.15f); }
+        // the ribbon's food
+        int w = st.ringW.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i) { st.ring[(size_t) w].store (0.5f * (L[i] + R[i]), std::memory_order_relaxed); w = (w + 1) & (GrabState::ringSize - 1); }
+        st.ringW.store (w, std::memory_order_release);
+    }
+private:
+    struct Biquad
+    {
+        float z1 = 0, z2 = 0;
+        inline float tick (float b0, float b1, float b2, float a1, float a2, float x) { const float y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
+    };
+    struct Voice
+    {
+        bool live = false;
+        float lf = 6.9f, q = 1.4f, g = 0, s = 0, t = 0, env = 0, gr = 1;
+        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+        Biquad bq[2]; SvfCoef svc; SvfState sv[2];
+        void setCoefs (float hz, float qq, float gainDb, float rate)   // RBJ peaking bell + the band's SVF
+        {
+            hz = std::min (hz, rate * 0.45f);
+            const float A = std::pow (10.0f, gainDb / 40.0f), w0 = twoPi * hz / rate, al = std::sin (w0) / (2.0f * qq), cw = std::cos (w0);
+            const float a0 = 1.0f + al / A;
+            b0 = (1.0f + al * A) / a0; b1 = -2.0f * cw / a0; b2 = (1.0f - al * A) / a0; a1 = -2.0f * cw / a0; a2 = (1.0f - al / A) / a0;
+            svc.set (hz, 1.0f / qq, rate);
+        }
+    };
+    float sr = 44100, aAtt = 0, aRel = 0;
+    std::array<Voice, GrabState::numGrips> voice;
+};
+
+// ---------------------------------------------------------------- SHAKE ----------------------------------------------------------------
+// Shake the mouse anywhere over the window: the energy charges stutters (30-120 ms slices, tempo-free), grit (sample rate + bits)
+// and pitch dives.  The energy drains on its own (about 1.5 s to clean); at zero the signal passes bit for bit.
+struct ShakeState
+{
+    std::atomic<float> energy { 0.0f };   // 0..1, charged by the page, drained by the audio thread
+    void charge (float amount) { float e = energy.load(); while (! energy.compare_exchange_weak (e, std::clamp (e + amount, 0.0f, 1.0f))) {} }
+};
+class ShakeDsp
+{
+public:
+    void prepare (double rate, int maxBlock)
+    {
+        (void) maxBlock; sr = (float) rate;
+        for (auto& d : buf) d.prepare ((int) (rate * 0.9) + 8);   // the longest stutter: 6 x 120 ms back in time
+        eSm = 0; active = false; holdN = 0; held[0] = held[1] = 0; rng.seed (9001);
+        aUp = std::exp (-1.0f / (0.01f * sr)); aDown = std::exp (-1.0f / (0.03f * sr));
+    }
+    void process (float* L, float* R, int n, ShakeState& st)
+    {
+        float target = std::clamp (st.energy.load(), 0.0f, 1.0f);
+        if (target > 0.0f)   // the energy drains by itself (tau 0.35 s)
+        {
+            float e = st.energy.load(), ne = e * std::exp (-(float) n / (0.35f * sr));
+            if (ne < 0.01f) ne = 0.0f;
+            st.energy.compare_exchange_strong (e, ne);
+        }
+        if (target <= 0.0f && eSm <= 0.0f)
+        {
+            for (int i = 0; i < n; ++i) { buf[0].push (L[i]); buf[1].push (R[i]); }
+            active = false;
+            return;
+        }
+        const float fade = 0.002f * sr;
+        for (int i = 0; i < n; ++i)
+        {
+            eSm = target > eSm ? aUp * eSm + (1 - aUp) * target : aDown * eSm + (1 - aDown) * target;
+            if (target <= 0.0f && eSm < 1.0e-4f) eSm = 0.0f;
+            const float dl = L[i], dr = R[i];
+            buf[0].push (dl); buf[1].push (dr);
+            if (eSm <= 0.0f) { active = false; continue; }
+            // a new stutter: a slice of what just played, repeated, maybe diving in pitch
+            if (! active && rng.uni() < eSm * 45.0f / sr)
+            {
+                active = true;
+                sliceLen = (0.03f + 0.09f * (1.0f - eSm * rng.uni())) * sr;
+                total = sliceLen * (float) (2 + (int) (rng.uni() * (1.0f + 4.0f * eSm)));
+                pos = 0; played = 0;
+                dive = rng.uni() < 0.5f ? 0.65f * eSm : 0.0f;
+            }
+            float wl = dl, wr = dr;
+            if (active)
+            {
+                const float rate = 1.0f - dive * played / total;
+                const float ph = std::fmod (pos, sliceLen);
+                const float win = std::min (1.0f, std::min (ph / fade, (sliceLen - ph) / fade));
+                const float d = sliceLen + 1.0f - ph + played;   // the slice stays where it was in the past while the buffer moves on
+                wl = buf[0].read (d) * win; wr = buf[1].read (d) * win;
+                pos += rate; played += 1.0f;
+                if (played >= total) active = false;
+            }
+            // grit: a lower sample rate and fewer bits
+            if (--holdN <= 0) { holdN = 1 + (int) (eSm * 9.0f); const float lv = std::exp2 (13.0f - 9.0f * eSm); held[0] = std::round (wl * lv) / lv; held[1] = std::round (wr * lv) / lv; }
+            wl += (held[0] - wl) * eSm; wr += (held[1] - wr) * eSm;
+            const float amt = std::min (1.0f, eSm * 1.6f);
+            L[i] = dl + (wl - dl) * amt; R[i] = dr + (wr - dr) * amt;
+        }
+    }
+private:
+    float sr = 44100, eSm = 0, aUp = 0, aDown = 0, sliceLen = 1000, total = 1000, pos = 0, played = 0, dive = 0, held[2] {};
+    bool active = false; int holdN = 0; Rng rng;
+    std::array<DelayLine, 2> buf;
 };
 } // namespace kk::pro

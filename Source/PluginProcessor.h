@@ -285,6 +285,7 @@ public:
     // v0.42 EVOLVE FX PRO modules
     kk::pro::ReelState reel; kk::pro::DialState dial; kk::pro::WarpState warp; kk::pro::BossState boss;
     kk::pro::LiquidState liquid; kk::pro::IntentState intent; kk::pro::ErosionState erosion;   // v0.43 organic modules
+    kk::pro::HoloState holoroom; kk::pro::GrabState grab; kk::pro::ShakeState shake;           // v0.44 TOUCH modules
     juce::ValueTree proToTree() const;
     void proFromTree (const juce::ValueTree& t);
     int coachGenre = kk::mel::gTrap;
@@ -596,6 +597,7 @@ private:
     kk::MixLabDsp mixDsp;
     kk::pro::ReelDsp reelDsp; kk::pro::DialDsp dialDsp; kk::pro::WarpDsp warpDsp; kk::pro::BossDsp bossDsp;
     kk::pro::LiquidDsp liquidDsp; kk::pro::IntentDsp intentDsp; kk::pro::ErosionDsp erosionDsp;
+    kk::pro::HoloDsp holoDsp; kk::pro::GrabDsp grabDsp; kk::pro::ShakeDsp shakeDsp;           // v0.44 TOUCH
     juce::AudioBuffer<float> scIn;                               // LIQUID: the sidechain (EVOLVE FX PRO), copied before the buffer is cleared
     // MATCH (background search)
     juce::ThreadPool matchPool { 1 };

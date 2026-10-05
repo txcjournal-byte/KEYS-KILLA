@@ -166,6 +166,7 @@ void KeysKillaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     mixDsp.prepare (sampleRate, samplesPerBlock);
     reelDsp.prepare (sampleRate); dialDsp.prepare (sampleRate); warpDsp.prepare (sampleRate); bossDsp.prepare (sampleRate);
     liquidDsp.prepare (sampleRate, samplesPerBlock); intentDsp.prepare (sampleRate, samplesPerBlock); erosionDsp.prepare (sampleRate, samplesPerBlock);
+    holoDsp.prepare (sampleRate, samplesPerBlock); grabDsp.prepare (sampleRate, samplesPerBlock); shakeDsp.prepare (sampleRate, samplesPerBlock);   // v0.44 TOUCH
     scIn.setSize (2, std::max (64, samplesPerBlock) * 2);
    #if KK_FX_BUILD
     setLatencySamples (kk::pro::BossDsp::lookahead (sampleRate));   // FINAL BOSS looks 1.5 ms ahead (always, so the latency never changes)
@@ -890,6 +891,9 @@ void KeysKillaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         liquidDsp.process (L, R, n, liquid, hasSc ? scIn.getReadPointer (0) : nullptr, hasSc ? scIn.getReadPointer (1) : nullptr);   // v0.43 LIQUID, INTENT, EROSION
         intentDsp.process (L, R, n, intent);
         erosionDsp.process (L, R, n, erosion);
+        holoDsp.process (L, R, n, holoroom);              // v0.44 TOUCH: HOLOROOM, GRAB, then SHAKE right before MIX LAB
+        grabDsp.process (L, R, n, grab);
+        shakeDsp.process (L, R, n, shake);
         mixDsp.process (L, R, n, mixLab);                 // v0.41 MIX LAB
        #if KK_FX_BUILD
         bossDsp.process (L, R, n, boss);                  // FINAL BOSS: the very last stage
@@ -5288,6 +5292,7 @@ void KeysKillaProcessor::chainReset()
     stepOn = false;
     reel.on = false; dial.on = false; warp.on = false;   // v0.42 FX PRO modules off too (FINAL BOSS stays: it is the master safety)
     liquid.on = false; intent.on = false; erosion.on = false;
+    holoroom.on = false; grab.on = false; grab.releaseAll(); shake.energy = 0.0f;   // v0.44 TOUCH
 }
 
 void KeysKillaProcessor::chainApply (int i)
@@ -5531,6 +5536,15 @@ juce::ValueTree KeysKillaProcessor::proToTree() const
     t.setProperty ("intent", juce::String ((int) intent.on.load()) + "," + juce::String (intent.mode.load()) + "," + juce::String (intent.level.load(), 3) + "," + juce::String (intent.mix.load(), 3), nullptr);
     t.setProperty ("erosion", juce::String ((int) erosion.on.load()) + "," + juce::String (erosion.sensitivity.load(), 3) + "," + juce::String (erosion.fatigue.load(), 3) + ","
                               + juce::String (erosion.recovery.load(), 3) + "," + juce::String (erosion.mix.load(), 3), nullptr);
+    t.setProperty ("intentMap", juce::String (intent.mode2.load()) + "," + juce::String (intent.blend.load(), 3), nullptr);   // v0.44 MOOD MAP
+    // v0.44 TOUCH: HOLOROOM + GRAB (its grips)
+    t.setProperty ("holoroom", juce::String ((int) holoroom.on.load()) + "," + juce::String (holoroom.x.load(), 3) + "," + juce::String (holoroom.depth.load(), 3) + ","
+                               + juce::String (holoroom.height.load(), 3) + "," + juce::String (holoroom.room.load(), 3), nullptr);
+    juce::String grips;
+    for (auto& gp : grab.grips)
+        grips << (int) gp.active.load() << "," << juce::String (gp.freq.load(), 1) << "," << juce::String (gp.q.load(), 3) << "," << juce::String (gp.gainDb.load(), 2) << ","
+              << juce::String (gp.squeeze.load(), 3) << "," << juce::String (gp.tear.load(), 3) << ";";
+    t.setProperty ("grab", (int) grab.on.load(), nullptr); t.setProperty ("grips", grips, nullptr);
     return t;
 }
 
@@ -5556,4 +5570,21 @@ void KeysKillaProcessor::proFromTree (const juce::ValueTree& t)
     { intent.on = m[0].getIntValue() != 0; intent.mode = juce::jlimit (0, (int) kk::pro::numIntentModes - 1, m[1].getIntValue()); intent.level = m[2].getFloatValue(); intent.mix = m[3].getFloatValue(); }
     if (const auto e = vals (t.getProperty ("erosion", "")); e.size() >= 5)
     { erosion.on = e[0].getIntValue() != 0; erosion.sensitivity = e[1].getFloatValue(); erosion.fatigue = e[2].getFloatValue(); erosion.recovery = e[3].getFloatValue(); erosion.mix = e[4].getFloatValue(); }
+    // v0.44 MOOD MAP + TOUCH (older projects: the defaults)
+    if (const auto m = vals (t.getProperty ("intentMap", "")); m.size() >= 2) { intent.mode2 = juce::jlimit (0, (int) kk::pro::numIntentModes - 1, m[0].getIntValue()); intent.blend = juce::jlimit (0.0f, 1.0f, m[1].getFloatValue()); }
+    else { intent.mode2 = intent.mode.load(); intent.blend = 0.0f; }
+    if (const auto h = vals (t.getProperty ("holoroom", "")); h.size() >= 5)
+    { holoroom.on = h[0].getIntValue() != 0; holoroom.x = juce::jlimit (-1.0f, 1.0f, h[1].getFloatValue()); holoroom.depth = juce::jlimit (0.0f, 1.0f, h[2].getFloatValue()); holoroom.height = juce::jlimit (-1.0f, 1.0f, h[3].getFloatValue()); holoroom.room = juce::jlimit (0.0f, 1.0f, h[4].getFloatValue()); }
+    else { holoroom.on = false; holoroom.centre(); holoroom.room = kk::pro::HoloState::defRoom; }
+    grab.on = (int) t.getProperty ("grab", 0) != 0;
+    grab.releaseAll();
+    const auto gl = juce::StringArray::fromTokens (t.getProperty ("grips", "").toString(), ";", "");
+    for (int i = 0; i < kk::pro::GrabState::numGrips && i < gl.size(); ++i)
+        if (const auto g = vals (gl[i]); g.size() >= 6)
+        {
+            auto& gp = grab.grips[(size_t) i];
+            gp.freq = juce::jlimit (kk::pro::GrabState::minHz, kk::pro::GrabState::maxHz, g[1].getFloatValue()); gp.q = juce::jlimit (0.3f, 10.0f, g[2].getFloatValue());
+            gp.gainDb = juce::jlimit (-24.0f, 24.0f, g[3].getFloatValue()); gp.squeeze = juce::jlimit (0.0f, 1.0f, g[4].getFloatValue()); gp.tear = juce::jlimit (0.0f, 1.0f, g[5].getFloatValue());
+            gp.active = g[0].getIntValue() != 0;
+        }
 }

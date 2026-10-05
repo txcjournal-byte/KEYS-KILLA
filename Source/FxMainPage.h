@@ -197,11 +197,12 @@ private:
 };
 
 #include "FxProPages.h"
+#include "FxTouchPages.h"
 
-class FxMainPage : public Component
+class FxMainPage : public Component, private Timer
 {
 public:
-    static constexpr int numPages = 12;
+    static constexpr int numPages = 14;
     explicit FxMainPage (KeysKillaProcessor& p) : proc (p)
     {
         lnf.setSkin (Skin::all()[(size_t) kk::themeIndex()]);
@@ -209,19 +210,22 @@ public:
         setLookAndFeel (&lnf);
         pages[0] = std::make_unique<MixLabPage> (proc, lnf);
         pages[1] = std::make_unique<FxRackPage> (proc, lnf);
-        pages[2] = std::make_unique<ReelPage> (proc, lnf);
-        pages[3] = std::make_unique<DialPage> (proc, lnf);
-        pages[4] = std::make_unique<WarpPage> (proc, lnf);
-        pages[5] = std::make_unique<DoodlePage> (proc, lnf);
-        pages[6] = std::make_unique<BossPage> (proc, lnf);
-        pages[7] = std::make_unique<LiquidPage> (proc, lnf);
-        pages[8] = std::make_unique<IntentPage> (proc, lnf);
-        pages[9] = std::make_unique<ErosionPage> (proc, lnf);
-        pages[10] = std::make_unique<ChainsPage> (proc, lnf);
-        pages[11] = std::make_unique<ListenPage> (proc, lnf);
+        pages[2] = std::make_unique<HoloroomPage> (proc, lnf);   // v0.44 TOUCH
+        pages[3] = std::make_unique<GrabPage> (proc, lnf);
+        pages[4] = std::make_unique<ReelPage> (proc, lnf);
+        pages[5] = std::make_unique<DialPage> (proc, lnf);
+        pages[6] = std::make_unique<WarpPage> (proc, lnf);
+        pages[7] = std::make_unique<DoodlePage> (proc, lnf);
+        pages[8] = std::make_unique<BossPage> (proc, lnf);
+        pages[9] = std::make_unique<LiquidPage> (proc, lnf);
+        pages[10] = std::make_unique<IntentPage> (proc, lnf);
+        pages[11] = std::make_unique<ErosionPage> (proc, lnf);
+        pages[12] = std::make_unique<ChainsPage> (proc, lnf);
+        pages[13] = std::make_unique<ListenPage> (proc, lnf);
         for (auto& pg : pages) addChildComponent (*pg);
-        static const char* names[] { "MIX LAB", "FX RACK", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DOODLE", "FINAL BOSS", "LIQUID", "INTENT", "EROSION", "FEED", "NEURAL EAR" };
+        static const char* names[] { "MIX LAB", "FX RACK", "HOLOROOM", "GRAB", "REMIX REEL", "DIAL-UP", "WARP DRIVE", "DOODLE", "FINAL BOSS", "LIQUID", "INTENT", "EROSION", "FEED", "NEURAL EAR" };
         static const char* tips[] { "EQ, compressor, vintage colour, space + echo - and the COACH", "SURPRISE FX, STEP FX and the RACK",
+                                    "the sound is a glowing orb in a 3D room - drag it near, far, left, right, up, down", "grab the living spectrum: pull it, push it, squeeze it, tear it",
                                     "a 16-step reel that re-cuts the music: slices, loops, stops, filters", "old phones, voice notes, bad signal, walkie-talkies",
                                     "octaves, chipmunks, demons, alien frequency shifts", "draw a line - get a melody as MIDI",
                                     "the master's last stage: LUFS loudness + PEAK SAFE", "the kick carves its hole in the bass - the bass flows around it",
@@ -246,9 +250,12 @@ public:
             repaint(); for (auto& pg : pages) pg->repaint();
         };
         addAndMakeVisible (themeBtn);
+        addMouseListener (this, true);   // v0.44 SHAKE: the mouse is watched over the whole window
+        shown = jlimit (0.0f, 1.0f, proc.shake.energy.load());
         show (0);
+        startTimerHz (30);
     }
-    ~FxMainPage() override { for (auto& pg : pages) pg.reset(); for (auto& tb : tabs) tb.reset(); setLookAndFeel (nullptr); }
+    ~FxMainPage() override { removeMouseListener (this); for (auto& pg : pages) pg.reset(); for (auto& tb : tabs) tb.reset(); setLookAndFeel (nullptr); }
     void showView (int v) { show (jlimit (0, numPages - 1, v)); }
     void paint (Graphics& g) override
     {
@@ -260,20 +267,78 @@ public:
         g.drawText ("FX PRO", 24, 56, 90, 22, Justification::centredLeft);
         g.setColour (t.dim); g.setFont (kk::modern::font (10.5f, true, 0.12f));
         g.drawText ("by TrapVST", 24, 78, 140, 16, Justification::centredLeft);
-        // era groups next to the tabs
-        static const std::pair<int, const char*> eras[] { { 2, "ERAS" }, { 7, "ORGANIC" }, { 10, "SMART" } };
+        paintShake (g);
+        // groups next to the tabs
+        static const std::pair<int, const char*> groups[] { { 2, "TOUCH" }, { 4, "ERAS" }, { 9, "ORGANIC" }, { 12, "SMART" } };
         g.setFont (kk::modern::font (9.0f, true, 0.25f));
-        for (auto& [i, n] : eras) { g.setColour (t.dim.withAlpha (0.7f)); g.drawText (n, 20, tabs[(size_t) i]->getY() - 13, 150, 11, Justification::centredLeft); }
+        for (auto& [i, n] : groups) { g.setColour (t.dim.withAlpha (0.75f)); g.drawText (n, 20, tabs[(size_t) i]->getY() - 13, 150, 11, Justification::centredLeft); }
     }
     void resized() override
     {
-        int y = 104;
-        for (int i = 0; i < numPages; ++i) { if (i == 2 || i == 7 || i == 10) y += 14; tabs[(size_t) i]->setBounds (18, y, 150, 46); y += 52; }
+        int y = shakeArea().getBottom() + 20;
+        for (int i = 0; i < numPages; ++i) { if (i == 2 || i == 4 || i == 9 || i == 12) y += 14; tabs[(size_t) i]->setBounds (18, y, 150, 38); y += 42; }
         themeBtn.setBounds (18, getHeight() - 62, 150, 40);
         for (auto& pg : pages) pg->setBounds (184, 12, getWidth() - 196, getHeight() - 24);
     }
     int preferredScale() const { return jlimit (50, 100, openSettings()->getIntValue ("fxScale", 80)); }
+    // v0.44 SHAKE: fast reversals of the hovering mouse charge the glitch energy
+    void mouseMove (const MouseEvent& e) override
+    {
+        if (e.eventTime == lastMoveTime) return;   // this component hears its own moves twice (as itself and as its own listener)
+        lastMoveTime = e.eventTime;
+        const auto p = e.getScreenPosition().toFloat();
+        const double now = e.eventTime.toMilliseconds();
+        for (int ax = 0; ax < 2; ++ax)
+        {
+            auto& a = axes[ax];
+            const float v = ax == 0 ? p.x : p.y, d = v - a.last;
+            a.last = v;
+            if (std::abs (d) < 1.5f) continue;
+            const int dir = d > 0 ? 1 : -1;
+            a.travel += std::abs (d);
+            if (a.dir != 0 && dir != a.dir)
+            {
+                if (a.travel > 14.0f && now - a.lastRev < 220.0) proc.shake.charge (jlimit (0.04f, 0.16f, a.travel / 900.0f + 0.04f));
+                a.lastRev = now; a.travel = 0;
+            }
+            a.dir = dir;
+        }
+    }
 private:
+    struct Axis { float last = 0, travel = 0; int dir = 0; double lastRev = 0; };
+    Rectangle<int> shakeArea() const { return { 18, 102, 150, 44 }; }
+    void paintShake (Graphics& g)
+    {
+        const auto& t = kk::theme();
+        const auto r = shakeArea().toFloat();
+        const float e = shown;
+        const Colour c (0xffff4fd8), c2 (0xff3ee8ff);
+        auto pill = r.withHeight (24.0f);
+        if (e > 0.01f) { g.setGradientFill (ColourGradient (c.withAlpha (0.6f * e), pill.getCentreX(), pill.getCentreY(), c.withAlpha (0.0f), pill.getRight() + 10, pill.getCentreY(), true)); g.fillRoundedRectangle (pill.expanded (8, 6), 14); }
+        g.setColour (c.withAlpha (0.12f + 0.35f * e)); g.fillRoundedRectangle (pill, 12);
+        g.setColour (c.interpolatedWith (c2, e).withAlpha (0.5f + 0.5f * e)); g.drawRoundedRectangle (pill.reduced (0.5f), 12, 1.0f + e);
+        // the word itself trembles with the energy
+        Random jr ((int64) (phaseShake * 100.0f));
+        const float jx = e * 3.0f * (jr.nextFloat() - 0.5f), jy = e * 2.0f * (jr.nextFloat() - 0.5f);
+        g.setColour ((t.night ? Colours::white : t.text).withAlpha (0.55f + 0.45f * e)); g.setFont (kk::modern::font (12.0f, true, 0.45f));
+        g.drawText ("SHAKE", pill.withTrimmedLeft (14).translated (jx, jy), Justification::centredLeft);
+        for (int k = 0; k < 5; ++k)   // charge dots
+        {
+            const bool lit = e > (float) k / 5.0f + 0.02f;
+            g.setColour (lit ? c.interpolatedWith (c2, (float) k / 4.0f) : t.dim.withAlpha (0.3f));
+            g.fillEllipse (pill.getRight() - 46 + (float) k * 7.0f, pill.getCentreY() - 2.5f, 5, 5);
+        }
+        g.setColour (t.dim); g.setFont (kk::modern::font (9.5f, true, 0.05f));
+        g.drawText ("shake the mouse = glitch", r.withTrimmedTop (27).toNearestInt(), Justification::centredLeft);
+    }
+    void timerCallback() override
+    {
+        const float e = jlimit (0.0f, 1.0f, proc.shake.energy.load());
+        shown = e > shown ? e : shown + (e - shown) * 0.3f;
+        if (shown < 0.005f) shown = 0.0f;
+        if (shown > 0.0f || lastShown > 0.0f) { phaseShake += 1.0f; repaint (shakeArea().expanded (12, 8)); }
+        lastShown = shown;
+    }
     void show (int i)
     {
         for (int k = 0; k < numPages; ++k) { pages[(size_t) k]->setVisible (k == i); tabs[(size_t) k]->selected = k == i; tabs[(size_t) k]->repaint(); }
@@ -284,4 +349,7 @@ private:
     std::array<std::unique_ptr<Component>, numPages> pages;
     std::array<std::unique_ptr<HotButton>, numPages> tabs;
     HotButton themeBtn { lnf };
+    Axis axes[2];
+    Time lastMoveTime;
+    float shown = 0, lastShown = 0, phaseShake = 0;
 };
