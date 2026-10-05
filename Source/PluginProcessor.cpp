@@ -5464,6 +5464,49 @@ KeysKillaProcessor::Genome KeysKillaProcessor::alchemy (int exc, int body, float
     return g;
 }
 
+KeysKillaProcessor::Genome KeysKillaProcessor::sculpt (const Genome& base, float stretch, float bright, float heat, float cool, float split) const
+{
+    Genome g = base;
+    if (! g.valid()) return g;
+    auto real = [&] (const char* id) { auto it = idIndex.find (id); return it == idIndex.end() ? 0.0f : params[(size_t) it->second]->convertFrom0to1 (base.v[(size_t) it->second]); };
+    auto set = [&] (const char* id, float x) { if (auto it = idIndex.find (id); it != idIndex.end()) { auto& r = params[(size_t) it->second]->getNormalisableRange(); g.v[(size_t) it->second] = params[(size_t) it->second]->convertTo0to1 (r.snapToLegalValue (juce::jlimit (r.start, r.end, x))); } };
+    if (std::abs (stretch) + std::abs (bright) + heat + cool + split < 1.0e-4f) return g;   // untouched matter
+    stretch = juce::jlimit (-1.0f, 1.0f, stretch); bright = juce::jlimit (-1.0f, 1.0f, bright);
+    heat = juce::jlimit (0.0f, 1.0f, heat); cool = juce::jlimit (0.0f, 1.0f, cool); split = juce::jlimit (0.0f, 1.0f, split);
+    const float len = std::pow (2.0f, stretch * 2.0f);                              // x0.25 .. x4
+    set (ID::release, real (ID::release) * len);
+    set (ID::decay, real (ID::decay) * std::pow (2.0f, stretch * 1.5f));
+    set (ID::fdecay, real (ID::fdecay) * std::pow (2.0f, stretch));
+    if (stretch < 0) set (ID::m7, juce::jmin (1.0f, real (ID::m7) - 0.5f * stretch));      // squashed = punchier
+    set (ID::cutoff, real (ID::cutoff) * std::pow (2.0f, bright * 2.2f));
+    set (ID::eqHigh, real (ID::eqHigh) + 5.0f * bright);
+    set (ID::drive, juce::jmin (1.0f, real (ID::drive) + 0.6f * heat));
+    set (ID::crush, juce::jmin (1.0f, real (ID::crush) + 0.25f * heat * heat));
+    set (ID::eqLow, real (ID::eqLow) + 2.0f * heat);
+    // frozen: slow attack, a long tail, big space - the sound becomes a pad
+    set (ID::attack, real (ID::attack) + 0.6f * cool * cool);
+    set (ID::release, real (ID::release) * len * (1.0f + 3.0f * cool));
+    if (cool > 0.01f)
+    {
+        set (ID::sustain, juce::jmax (real (ID::sustain), cool * 0.8f));
+        set (ID::revMix, juce::jmax (real (ID::revMix), 0.45f * cool));
+        set (ID::revSize, juce::jmax (real (ID::revSize), 0.5f + 0.5f * cool));
+    }
+    if (split > 0.05f)
+    {
+        set (ID::layerB, 1.0f);
+        set (ID::octaveB, split > 0.6f ? 1.0f : -1.0f);
+        set (ID::detuneB, 0.15f + 0.5f * split);
+        set (ID::levelB, 0.35f + 0.4f * split);
+        set (ID::width, juce::jmin (1.0f, real (ID::width) + 0.4f * split));
+    }
+    juce::String tag;
+    if (heat > 0.4f) tag << "Hot "; if (cool > 0.4f) tag << "Frozen "; if (split > 0.4f) tag << "Split ";
+    if (stretch > 0.5f) tag << "Long "; else if (stretch < -0.5f) tag << "Short ";
+    g.name = (tag + base.name).trim();
+    return g;
+}
+
 void KeysKillaProcessor::alcUse (const Genome& g, bool preview)
 {
     if (! g.valid()) return;

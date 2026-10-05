@@ -188,7 +188,7 @@ inline GravityField randomField (uint32_t seed)
 }
 
 // ------------------------------------------------------------------ PREDATOR ------------------------------------------------------------------
-struct Hunt { float hunger = 0.6f, preySpeed = 0.5f, rate = 0.5f; bool escape = false; uint32_t seed = 1; };
+struct Hunt { float hunger = 0.6f, preySpeed = 0.5f, rate = 0.5f; bool escape = false; uint32_t seed = 1; std::vector<juce::Point<float>> preyPath; };   // preyPath: YOU are the prey (your drawn route, looped over the bars)
 enum HuntState { hsChase, hsCircle, hsPounce, hsRest };
 inline const char* huntStateName (int s) { static const char* n[] { "CHASE", "CIRCLE", "POUNCE", "REST" }; return n[juce::jlimit (0, 3, s)]; }
 
@@ -210,10 +210,19 @@ inline HuntResult predator (const Hunt& h, int key, int scale, int bars)
         stateT += dt;
         // the prey wanders (and flees when the hunter is close)
         const auto away = prey - me; const float dist = away.getDistanceFromOrigin();
-        if (rr.uni() < 0.02f) preyVel = { (rr.uni() - 0.5f) * h.preySpeed, (rr.uni() - 0.5f) * h.preySpeed };
-        if (dist < 0.25f && state != hsPounce) preyVel += away / std::max (0.05f, dist) * 0.02f * h.preySpeed;
-        preyVel *= 0.99f;
-        prey += preyVel * dt * 2.0f;
+        if (h.preyPath.size() >= 2)
+        {
+            const float u = t / r.beats * (float) (h.preyPath.size() - 1);
+            const size_t i0 = std::min (h.preyPath.size() - 2, (size_t) u);
+            prey = h.preyPath[i0] + (h.preyPath[i0 + 1] - h.preyPath[i0]) * (u - (float) i0);
+        }
+        else
+        {
+            if (rr.uni() < 0.02f) preyVel = { (rr.uni() - 0.5f) * h.preySpeed, (rr.uni() - 0.5f) * h.preySpeed };
+            if (dist < 0.25f && state != hsPounce) preyVel += away / std::max (0.05f, dist) * 0.02f * h.preySpeed;
+            preyVel *= 0.99f;
+            prey += preyVel * dt * 2.0f;
+        }
         prey.x = juce::jlimit (0.05f, 0.95f, prey.x); prey.y = juce::jlimit (0.08f, 0.92f, prey.y);
         if (prey.x <= 0.05f || prey.x >= 0.95f) preyVel.x = -preyVel.x;
         if (prey.y <= 0.08f || prey.y >= 0.92f) preyVel.y = -preyVel.y;
@@ -243,7 +252,7 @@ inline HuntResult predator (const Hunt& h, int key, int scale, int bars)
                     const int d = deg (me.y) + 4;
                     r.notes.push_back ({ std::round (t * 4.0f) / 4.0f, 1.5f, kk::mel::degreeToPitch (d, key, scale, 0.5f), 1.0f, -2.0f });
                     state = hsRest; stateT = 0; nextNote = std::round (t * 4.0f) / 4.0f + 1.75f;
-                    prey = { 0.1f + 0.8f * rr.uni(), 0.1f + 0.8f * rr.uni() };          // the prey gets away to a new place
+                    if (h.preyPath.size() < 2) prey = { 0.1f + 0.8f * rr.uni(), 0.1f + 0.8f * rr.uni() };          // the prey gets away to a new place
                 }
                 break;
             }
@@ -282,7 +291,7 @@ inline HuntResult predator (const Hunt& h, int key, int scale, int bars)
 }
 
 // ------------------------------------------------------------------ SWARM ------------------------------------------------------------------
-struct Flock { int birds = 12; float cohesion = 0.7f, calm = 0.6f; std::vector<float> startles; uint32_t seed = 1; };   // startles: beats when something frightens it
+struct Flock { int birds = 12; float cohesion = 0.7f, calm = 0.6f; std::vector<float> startles; uint32_t seed = 1; std::vector<juce::Point<float>> lurePath; };   // lurePath: the flock follows your drawn route   // startles: beats when something frightens it
 
 struct SwarmResult : Result { std::vector<float> spreadAt; };
 
@@ -307,7 +316,13 @@ inline SwarmResult swarm (const Flock& fl, int key, int scale, int bars)
         }
         panic = std::max (0.0f, panic - dt * (0.15f + 0.6f * fl.calm));
         juce::Point<float> c; for (auto& x : b) c += x.p; c /= (float) b.size();
-        const juce::Point<float> home (0.5f + 0.3f * std::sin (t * 0.41f + wander), 0.45f + 0.3f * std::sin (t * 0.27f + 2.0f * wander));   // the flock travels - the harmony moves
+        juce::Point<float> home (0.5f + 0.3f * std::sin (t * 0.41f + wander), 0.45f + 0.3f * std::sin (t * 0.27f + 2.0f * wander));
+        if (fl.lurePath.size() >= 2)
+        {
+            const float u = t / r.beats * (float) (fl.lurePath.size() - 1);
+            const size_t i0 = std::min (fl.lurePath.size() - 2, (size_t) u);
+            home = fl.lurePath[i0] + (fl.lurePath[i0 + 1] - fl.lurePath[i0]) * (u - (float) i0);
+        }   // the flock travels - the harmony moves
         for (auto& x : b)
         {
             juce::Point<float> sep, ali;

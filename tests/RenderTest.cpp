@@ -1180,6 +1180,35 @@ static int unitTests()
         auto a1 = p.alchemy (1, 2, 0.4f, 0.5f, 3), a2 = p.alchemy (1, 2, 0.4f, 0.5f, 3), a3 = p.alchemy (1, 2, 0.4f, 0.5f, 4);
         check (a1.v == a2.v && a1.v != a3.v, "v0.43 ALCHEMY: the same recipe = the same sound, a new mutation = another");
     }
+    // v0.44 SCULPT: untouched = the same sound; stretched = a longer tail; hot = dirtier; torn = a second layer
+    {
+        KeysKillaProcessor p; p.prepareToPlay (44100, 512);
+        auto base = p.alchemy (0, 1, 0.3f, 0.5f, 5);
+        auto same = p.sculpt (base, 0, 0, 0, 0, 0);
+        auto tail = [&] (const KeysKillaProcessor::Genome& g, double& rough)
+        {
+            p.alcUse (g, false);
+            juce::AudioBuffer<float> b (2, 512); double late = 0, e = 0, d = 0; float last = 0;
+            for (int i = 0; i < 140; ++i)
+            {
+                juce::MidiBuffer mb; if (i == 0) mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+                if (i == 20) mb.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+                p.processBlock (b, mb);
+                for (int n = 0; n < 512; ++n) { const float x = b.getSample (0, n); if (i > 60) late += x * x; if (i < 20) { e += x * x; d += (x - last) * (x - last); } last = x; }
+            }
+            p.panic(); for (int i = 0; i < 60; ++i) { juce::MidiBuffer mb; p.processBlock (b, mb); }
+            rough = d / std::max (1.0e-12, e);
+            return late;
+        };
+        double r0 = 0, r1 = 0, r2 = 0;
+        const double t0 = tail (base, r0), t1 = tail (p.sculpt (base, 1.0f, 0, 0, 0.6f, 0), r1);
+        tail (p.sculpt (base, 0, 0.6f, 1.0f, 0, 0), r2);
+        auto torn = p.sculpt (base, 0, 0, 0, 0, 0.8f);
+        std::printf ("SCULPT: tail raw %.4f stretched+frozen %.4f, roughness raw %.3f hot %.3f\n", t0, t1, r0, r2);
+        check (same.v == base.v, "v0.44 SCULPT: untouched matter = the same sound");
+        check (t1 > t0 * 2.0 && r2 > r0 * 1.2, "v0.44 SCULPT: stretched + frozen rings longer, heated is rougher");
+        check (torn.v != base.v && torn.name.contains ("Split"), "v0.44 SCULPT: torn in two = a second layer");
+    }
     // v0.43 LIFE: gravity, predator, swarm, metabolism
     {
         auto inScale = [] (const std::vector<kk::live::LNote>& ns, int key, int scale)

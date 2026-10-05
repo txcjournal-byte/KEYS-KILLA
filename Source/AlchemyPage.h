@@ -19,10 +19,13 @@ public:
         });
         btn (useBtn, "USE IT", "Use this sound", [this] { if (cur.valid() && onPicked) { auto fn = onPicked; onPicked = nullptr; useBtn.setVisible (false); fn(); } });
         useBtn.hero = true; useBtn.setVisible (false);
+        btn (makeTab, "MAKE", "MAKE: what excites the matter and the body that resonates", [this] { setView (false); });
+        btn (sculptTab, "SCULPT", "SCULPT: the sound is a lump of matter in your hands - stretch it, rub it, hold it, tear it", [this] { setView (true); });
+        makeTab.selected = true;
         dragWav.makeFile = [this] { return cur.valid() ? proc.exportGenomeWav (cur) : File(); };
         dragWav.setTooltip ("Drag the sound into FL as a WAV");
         addAndMakeVisible (dragWav);
-        cur = proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), proc.alcSeed);
+        cur = recipe();
         startTimerHz (30);
     }
     // the chooser mode: title + what happens with the sound
@@ -60,8 +63,12 @@ public:
                 g.drawFittedText (parts[(size_t) i].hint, r.withTrimmedLeft (r.getHeight()).withTrimmedTop (34).withTrimmedRight (8).toNearestInt(), Justification::topLeft, 2, 0.85f);
             }
         };
-        column (0, "1   EXCITE", ex, proc.alcExc.load());
-        column (1, "2   BODY", bo, proc.alcBody.load());
+        if (sculpting) drawSculpt (g);
+        else
+        {
+            column (0, "1   EXCITE", ex, proc.alcExc.load());
+            column (1, "2   BODY", bo, proc.alcBody.load());
+        }
         drawMatter (g);
         // the result
         const auto res = resultArea().toFloat();
@@ -78,9 +85,11 @@ public:
         playBtn.setBounds (res.getX(), res.getY() + 62, bw, 40); mutateBtn.setBounds (res.getX() + bw + 10, res.getY() + 62, bw, 40); plantBtn.setBounds (res.getX() + 2 * (bw + 10), res.getY() + 62, bw, 40);
         saveBtn.setBounds (res.getX(), res.getY() + 150, bw, 40); dragWav.setBounds (res.getX() + bw + 10, res.getY() + 148, bw, 44);
         useBtn.setBounds (res.getX() + 2 * (bw + 10), res.getY() + 148, bw, 44);
+        makeTab.setBounds (getWidth() - 250, 14, 110, 34); sculptTab.setBounds (getWidth() - 134, 14, 110, 34);
     }
     void mouseMove (const MouseEvent& e) override
     {
+        if (sculpting) return;
         int hc = -1, hk = -1;
         for (int col = 0; col < 2; ++col) for (int i = 0; i < 5; ++i) if (card (col, i).contains (e.getPosition())) { hc = col; hk = i; }
         if (hc != hoverCol || hk != hoverCard) { hoverCol = hc; hoverCard = hk; repaint(); }
@@ -88,15 +97,26 @@ public:
     void mouseExit (const MouseEvent&) override { hoverCol = hoverCard = -1; repaint(); }
     void mouseDown (const MouseEvent& e) override
     {
+        if (sculpting && stage().contains (e.getPosition())) { sculptDown (e); return; }
+        if (! sculpting)
         for (int col = 0; col < 2; ++col)
             for (int i = 0; i < 5; ++i)
                 if (card (col, i).contains (e.getPosition())) { (col == 0 ? proc.alcExc : proc.alcBody) = i; make (true); return; }
         if (padArea().contains (e.getPosition())) { dragging = true; setMatter (e.position); }
     }
-    void mouseDrag (const MouseEvent& e) override { if (dragging) setMatter (e.position); }
-    void mouseUp (const MouseEvent&) override { if (dragging) { dragging = false; make (true); } }
+    void mouseDrag (const MouseEvent& e) override { if (sculptMode > 0) sculptDrag (e); else if (dragging) setMatter (e.position); }
+    void mouseUp (const MouseEvent&) override
+    {
+        if (sculptMode > 0) { sculptMode = 0; if (! sculptMoved) { ripple = 1.0f; } make (true); return; }
+        if (dragging) { dragging = false; make (true); }
+    }
+    void mouseDoubleClick (const MouseEvent& e) override
+    {
+        if (sculpting && stage().contains (e.getPosition())) { stretch = bright = heat = cool = split = 0; make (true); }
+    }
 
-    void debugSet (int ex, int bo, float m, float s) { proc.alcExc = ex; proc.alcBody = bo; proc.alcMatter = m; proc.alcSize = s; cur = proc.alchemy (ex, bo, m, s, proc.alcSeed); repaint(); }
+    void debugSet (int ex, int bo, float m, float s) { proc.alcExc = ex; proc.alcBody = bo; proc.alcMatter = m; proc.alcSize = s; cur = recipe(); repaint(); }
+    void debugSculpt() { setView (true); stretch = 0.6f; heat = 0.5f; split = 0.45f; cur = recipe(); repaint(); }
 private:
     Rectangle<int> colArea (int col) const { const int w = (getWidth() - 48 - 40) / 3 - 20; return { 24 + col * (w + 20), 96, w, getHeight() - 120 }; }
     Rectangle<int> card (int col, int i) const { const auto c = colArea (col); const int h = (c.getHeight() - 4 * 10) / 5; return { c.getX(), c.getY() + i * (h + 10), c.getWidth(), h }; }
@@ -113,9 +133,106 @@ private:
         if (now - lastLive > 110) { lastLive = now; make (false); }   // live while you drag (no note spam)
         repaint();
     }
+    KeysKillaProcessor::Genome recipe() const
+    {
+        return proc.sculpt (proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), proc.alcSeed), stretch, bright, heat, cool, split);
+    }
+    void setView (bool s) { sculpting = s; makeTab.selected = ! s; sculptTab.selected = s; makeTab.repaint(); sculptTab.repaint(); repaint(); }
+    Rectangle<int> stage() const { const auto a = colArea (0), b = colArea (1); return a.getUnion (b); }
+    // ---- SCULPT gestures: stretch / squash (sideways from the edge), bright / dark (up / down), rub = heat, hold still = it freezes,
+    //      right-drag = tear it in two (a second layer), click = poke it (hear it), double-click = back to the raw matter
+    void sculptDown (const MouseEvent& e)
+    {
+        sculptMode = e.mods.isPopupMenu() ? 3 : 1; sculptMoved = false;
+        downPos = lastPos = e.position; downMs = lastMoveMs = Time::getMillisecondCounter(); lastDir = 0;
+        s0.x = stretch; s0.y = bright; s0.z = split;
+    }
+    void sculptDrag (const MouseEvent& e)
+    {
+        const auto d = e.position - downPos;
+        if (! sculptMoved && d.getDistanceFromOrigin() > 6) sculptMoved = true;
+        const auto st = stage().toFloat(); const float cx = st.getCentreX();
+        if (sculptMode == 3) split = jlimit (0.0f, 1.0f, s0.z + std::abs (d.x) / 320.0f);
+        else if (sculptMoved)
+        {
+            // rubbing: fast changes of direction heat the matter
+            const float mx = e.position.x - lastPos.x;
+            const int dir = mx > 2 ? 1 : mx < -2 ? -1 : 0;
+            if (dir != 0 && lastDir != 0 && dir != lastDir && Time::getMillisecondCounter() - lastMoveMs < 220) heat = jmin (1.0f, heat + 0.05f);
+            if (dir != 0) lastDir = dir;
+            if (e.position.getDistanceFrom (lastPos) > 2) lastMoveMs = Time::getMillisecondCounter();
+            if (std::abs (d.x) > std::abs (d.y) * 1.2f)
+            {
+                const float outward = (downPos.x < cx ? -d.x : d.x);
+                stretch = jlimit (-1.0f, 1.0f, s0.x + outward / 260.0f);
+            }
+            else if (std::abs (d.y) > std::abs (d.x) * 1.2f) bright = jlimit (-1.0f, 1.0f, s0.y - d.y / 220.0f);
+        }
+        lastPos = e.position;
+        live();
+    }
+    void live()
+    {
+        const auto now = Time::getMillisecondCounter();
+        if (now - lastLive > 110) { lastLive = now; cur = recipe(); proc.alcUse (cur, false); }
+        repaint();
+    }
+    void drawSculpt (Graphics& g)
+    {
+        const auto& t = kk::theme();
+        const auto st = stage().toFloat();
+        g.setColour (Colour (0xff05070c).withAlpha (t.night ? 0.7f : 0.88f)); g.fillRoundedRectangle (st, 18);
+        g.setColour (t.text.withAlpha (0.85f)); g.setFont (kk::modern::font (14.0f, true, 0.3f));
+        g.drawText ("SCULPT THE SOUND", (int) st.getX(), (int) st.getY() - 24, 300, 20, Justification::centredLeft);
+        const auto c = st.getCentre();
+        const float rad = std::min (st.getWidth(), st.getHeight()) * 0.26f;
+        const float sx = 1.0f + 0.45f * stretch, sy = 1.0f - 0.25f * stretch;
+        const auto hot = Colour (0xffff5a1f), ice = Colour (0xff9be7ff);
+        auto base = Colour (0xff8f7cff).interpolatedWith (hot, heat).interpolatedWith (ice, cool * 0.85f);
+        const float freezeSlow = 1.0f - 0.85f * cool;
+        auto lump = [&] (Point<float> centre, float scale, float seedPh)
+        {
+            Path p; const int n = 72;
+            for (int i = 0; i <= n; ++i)
+            {
+                const float a = (float) i / (float) n * MathConstants<float>::twoPi;
+                float k = 1.0f + 0.06f * std::sin (a * 3.0f + phase * 1.3f * freezeSlow + seedPh) + 0.04f * std::sin (a * 5.0f - phase * 2.1f * freezeSlow);
+                k += heat * 0.08f * std::sin (a * 23.0f + phase * 9.0f);                                       // hot: it boils
+                k += bright * 0.22f * std::pow (std::max (0.0f, -std::sin (a)), 6.0f);                          // bright: a peak on top
+                k -= std::min (0.0f, bright) * 0.18f * std::pow (std::max (0.0f, std::sin (a)), 2.0f);          // dark: it sags
+                if (cool > 0.05f) k += cool * 0.12f * (std::abs (std::fmod (a / MathConstants<float>::twoPi * 8.0f, 1.0f) - 0.5f) - 0.25f);   // frozen: facets
+                const auto pt = centre + Point<float> (std::cos (a) * rad * scale * sx * k, std::sin (a) * rad * scale * sy * k);
+                if (i == 0) p.startNewSubPath (pt); else p.lineTo (pt);
+            }
+            p.closeSubPath();
+            g.setColour (base.withAlpha (0.18f + 0.2f * heat)); g.fillPath (p, AffineTransform::scale (1.25f, 1.25f, centre.x, centre.y));
+            g.setGradientFill (ColourGradient (base.brighter (0.7f), centre.x - rad * 0.5f, centre.y - rad * 0.6f, base.darker (0.6f), centre.x + rad, centre.y + rad, true));
+            g.fillPath (p);
+            g.setColour (Colours::white.withAlpha (0.35f + 0.4f * cool)); g.strokePath (p, PathStrokeType (1.6f));
+        };
+        const float gap = split * rad * 1.3f;
+        if (split > 0.05f) { lump (c - Point<float> (gap, 0), 0.8f, 0.0f); lump (c + Point<float> (gap, 0), 0.8f - 0.25f * split, 2.0f); }
+        else lump (c, 1.0f, 0.0f);
+        if (ripple > 0) { const float r = rad * (1.6f - ripple * 0.5f); g.setColour (Colours::white.withAlpha (ripple * 0.5f)); g.drawEllipse (c.x - r * sx, c.y - r * sy, r * 2 * sx, r * 2 * sy, 2.0f); }
+        if (cool > 0.05f) for (int i = 0; i < 18; ++i) { Random rr (i + 3); const auto p = c + Point<float> ((rr.nextFloat() - 0.5f) * rad * 2.6f * sx, (rr.nextFloat() - 0.5f) * rad * 2.2f); g.setColour (ice.withAlpha (0.5f * cool)); g.drawLine (p.x - 4, p.y, p.x + 4, p.y, 1.0f); g.drawLine (p.x, p.y - 4, p.x, p.y + 4, 1.0f); }
+        // what your hands did
+        g.setFont (kk::modern::font (12.0f, true, 0.25f));
+        auto tag = [&] (int i, const String& n, float v, Colour col)
+        {
+            const auto r = Rectangle<float> (st.getX() + 20 + (float) i * 150, st.getBottom() - 46, 140, 26);
+            g.setColour (col.withAlpha (0.12f + 0.5f * std::abs (v))); g.fillRoundedRectangle (r, 13);
+            g.setColour (Colours::white.withAlpha (0.5f + 0.5f * std::abs (v))); g.drawText (n, r.toNearestInt(), Justification::centred);
+        };
+        tag (0, stretch >= 0 ? "STRETCHED" : "SQUASHED", stretch, Colour (0xff8f7cff));
+        tag (1, bright >= 0 ? "SHARP" : "SAGGING", bright, Colour (0xffffd23f));
+        tag (2, "HOT", heat, hot); tag (3, "FROZEN", cool, ice); tag (4, "TORN", split, Colour (0xffff4fd8));
+        g.setColour (t.dim); g.setFont (kk::modern::font (12.5f, true, 0.03f));
+        g.drawFittedText ("drag sideways from its edge = stretch / squash      up / down = sharp / sagging      rub it = heat\nhold it still = it freezes      right-drag = tear it in two      click = hear it      double-click = raw matter",
+                          st.reduced (20, 14).withHeight (40).toNearestInt(), Justification::topLeft, 2);
+    }
     void make (bool audition)
     {
-        cur = proc.alchemy (proc.alcExc.load(), proc.alcBody.load(), proc.alcMatter.load(), proc.alcSize.load(), proc.alcSeed);
+        cur = recipe();
         proc.alcUse (cur, audition);
         note.clear();
         repaint();
@@ -206,10 +323,28 @@ private:
         }
         g.strokePath (p, st);
     }
-    void timerCallback() override { if (! isShowing()) return; phase += 0.05f; repaint (padArea().expanded (4)); }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        phase += 0.05f;
+        if (sculpting)
+        {
+            // holding still on the matter: it freezes
+            if (sculptMode == 1 && Time::getMillisecondCounter() - lastMoveMs > 450 && cool < 1.0f) { cool = jmin (1.0f, cool + 0.02f); live(); }
+            if (ripple > 0) ripple = jmax (0.0f, ripple - 0.05f);
+            repaint (stage().expanded (4));
+        }
+        repaint (padArea().expanded (4));
+    }
 
     KeysKillaProcessor& proc; KKLookAndFeel& lnf;
-    HotButton playBtn { lnf }, mutateBtn { lnf }, plantBtn { lnf }, saveBtn { lnf }, useBtn { lnf };
+    HotButton playBtn { lnf }, mutateBtn { lnf }, plantBtn { lnf }, saveBtn { lnf }, useBtn { lnf }, makeTab { lnf }, sculptTab { lnf };
+    bool sculpting = false, sculptMoved = false;
+    int sculptMode = 0, lastDir = 0;
+    float stretch = 0, bright = 0, heat = 0, cool = 0, split = 0, ripple = 0;
+    Point<float> downPos, lastPos;
+    struct { float x = 0, y = 0, z = 0; } s0;
+    uint32 downMs = 0, lastMoveMs = 0;
     DragFileButton dragWav { "DRAG WAV", TC (0xff36ff6a) };
     KeysKillaProcessor::Genome cur;
     std::function<void()> onPicked;

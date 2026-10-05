@@ -211,6 +211,9 @@ public:
     // v0.43 ALCHEMY: a sound from EXCITER x BODY x MATTER (glass..mud) x SIZE - the bank is only hidden DNA
     Genome alchemy (int exciter, int body, float matter, float size, uint32_t seed);
     void alcUse (const Genome& g, bool preview);                 // on the keys (and heard)
+    // v0.43 SCULPT: the sound as matter you deform - stretch (-1 short .. 1 long), bright (-1 dark .. 1 bright),
+    // heat (rubbing: dirt, grit), cool (holding still: it freezes into a pad), split (tear it in two: a second layer)
+    Genome sculpt (const Genome& base, float stretch, float bright, float heat, float cool, float split) const;
     std::atomic<int> alcExc { 0 }, alcBody { 3 }; std::atomic<float> alcMatter { 0.3f }, alcSize { 0.5f }; uint32_t alcSeed = 1;
     // v0.41 MATCH: drop a WAV - four strands of synth sounds grow toward it in the background (any strand can be planted at any time)
     struct MatchStrand { Genome g; float match = 0; std::array<float, 64> wave {}; int gen = 0; };

@@ -5534,6 +5534,14 @@ static void drawTileIcon (Graphics& g, int k, Rectangle<float> r, bool lit)
             g.fillEllipse (cx + w * 0.3f, cy + w * 0.18f, w * 0.18f, w * 0.18f);
             break;
         }
+        case 14:  // FEED: two cards, the front one swiped
+        {
+            g.drawRoundedRectangle (cx - w * 0.42f, cy - w * 0.38f, w * 0.6f, w * 0.8f, 3.0f, 1.0f);
+            g.addTransform (AffineTransform::rotation (0.3f, cx, cy + w * 0.4f));
+            g.drawRoundedRectangle (cx - w * 0.2f, cy - w * 0.45f, w * 0.6f, w * 0.8f, 3.0f, 1.5f);
+            g.addTransform (AffineTransform::rotation (-0.3f, cx, cy + w * 0.4f));
+            break;
+        }
         case 8:   // EVOLVE: a seed with six children around it
         {
             const float rr = w * 0.42f;
@@ -5587,13 +5595,13 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 11, studioAt = 8;
-    // v0.43: EVOLVE / ALCHEMY / LIFE / MELODY / SOUND WORLD / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX / MIX LAB
-    static int tileId (int v) { static const int ids[numTiles] { 8, 12, 13, 9, 11, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static constexpr int numTiles = 12, studioAt = 9;
+    // v0.44: EVOLVE / FEED / ALCHEMY / LIFE / MELODY / SOUND WORLD / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX / MIX LAB
+    static int tileId (int v) { static const int ids[numTiles] { 8, 14, 12, 13, 9, 11, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB", "SOUND\nWORLD", "ALCHEMY", "LIFE" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB", "SOUND\nWORLD", "ALCHEMY", "LIFE", "FEED" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -5640,7 +5648,7 @@ public:
             const auto ic = Rectangle<float> (r.getX() + 7, r.getCentreY() - bs * 0.5f, bs, bs);
             drawTileIcon (g, k, ic, on);
             g.setColour (on ? TC (0xffffffff) : TC (0xffe6e3ff));
-            g.setFont (serif (16.0f, true, 0.1f));   // v0.37: readable at FL's usual size
+            g.setFont (serif (r.getHeight() < 40.0f ? 14.0f : 16.0f, true, 0.1f));   // v0.37: readable at FL's usual size
             g.drawFittedText (String (names[k]), r.withTrimmedLeft (bs + 12).toNearestInt(), Justification::centredLeft, 2, 0.8f);
             if (k == 7 && isOn && isOn (k))   // FX RACK: lit when an effect is on
             {
@@ -7172,6 +7180,8 @@ private:
 #include "SoundWorldPage.h"
 #include "AlchemyPage.h"
 #include "LifePage.h"
+#include "MatterStrip.h"
+#include "FeedPage.h"
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7308,6 +7318,7 @@ public:
             if (k == 11) { if (! (openTabIndex == tabWorld && isPanelVisible())) openTab (tabWorld); return; }
             if (k == 12) { if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy); return; }
             if (k == 13) { if (! (openTabIndex == tabLife && isPanelVisible())) openTab (tabLife); return; }
+            if (k == 14) { if (! (openTabIndex == tabFeed && isPanelVisible())) openTab (tabFeed); return; }
             if (k == 0) { hidePanels(); openTabIndex = -1; updateTabs(); return; }
             const int target[] { 0, tabTree, tabPair, tabVst, tabSounds, tabSampler, tab808 + lastDrum, tabFxRack };
             if (! (openTabIndex == target[k] && isPanelVisible())) openTab (target[k]);
@@ -7377,6 +7388,11 @@ public:
             addAndMakeVisible (*cap);
             captions.push_back (std::move (cap));
         }
+        // v0.44: no knobs - the eight macros are one landscape you paint (the knobs stay hidden, their attachments keep the host in sync)
+        for (auto& k : macros) k->setVisible (false);
+        for (auto& c : captions) c->setVisible (false);
+        matterStrip = std::make_unique<MatterStrip> (proc, std::vector<const char*> { macroIds, macroIds + 8 });
+        addAndMakeVisible (*matterStrip);
 
         // ---- meter, wheels, keyboard
         addAndMakeVisible (meter);
@@ -7528,6 +7544,8 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
+        if (v == 55) { openTab (tabFeed); if (auto* ip = dynamic_cast<InsetPage*> (module (tabFeed))) if (auto* fp = dynamic_cast<FeedPage*> (ip->page())) fp->debugSwipes(); }
+        if (v == 56) { openTab (tabAlchemy); if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->debugSculpt(); }
         if (v >= 50 && v <= 54)   // v0.43 ALCHEMY (50, 54 = as the chooser), LIFE (51 gravity, 52 predator, 53 swarm)
         {
             if (v == 50 || v == 54)
@@ -7715,6 +7733,7 @@ public:
             captions[(size_t) i]->setBounds (kx[i] - 62, 757, 124, 22);
         }
         meter.setBounds (R (1337, 716, 1595, 761));
+        if (matterStrip) matterStrip->setBounds (R (86, 676, 1266, 792));
         pitchWheel.setBounds (R (70, 808, 110, 894)); modWheel.setBounds (R (124, 808, 164, 894));
         keyboard.setBounds (R (200, 815, 1640, 923));
         keysPill.setBounds (R (1180, 921, 1640, 941));
@@ -7730,13 +7749,13 @@ public:
         editBtn.setBounds (R (1556, 40, 1660, 87));
         for (int i = 0; i < numPages; ++i)
             if (modules[(size_t) i]) modules[(size_t) i]->setBounds (i == tabPair || i == tabVst ? R (150, 96, 1662, 612)
-                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld || i == tabAlchemy || i == tabLife ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
+                                                                 : i == tabSampler || i == tabFxRack || i == tabSounds || i == tabMelody || i == tabMix || i == tabWorld || i == tabAlchemy || i == tabLife || i == tabFeed ? R (10, 8, 1662, 806) : R (0, 0, 1672, 941));   // drum pages get the whole window; SAMPLER / FX RACK keep the keys
         labSwitch.setBounds (R (16, 98, 138, 606));
         if (evolve != nullptr) evolve->setBounds (R (0, 0, 1672, 806));
     }
 
 private:
-    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, tabAlchemy, tabLife, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, tabAlchemy, tabLife, tabFeed, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -7770,6 +7789,7 @@ private:
                 case tabWorld:    m = std::make_unique<InsetPage> (std::make_unique<SoundWorldPage> (proc, lnf)); break;   // v0.42
                 case tabAlchemy:  m = std::make_unique<InsetPage> (std::make_unique<AlchemyPage> (proc, lnf)); break;     // v0.43
                 case tabLife:     m = std::make_unique<InsetPage> (std::make_unique<LifePage> (proc, lnf)); break;        // v0.43
+                case tabFeed:     m = std::make_unique<InsetPage> (std::make_unique<FeedPage> (proc, lnf)); break;        // v0.44
                 default:          m = std::make_unique<InsetPage> (std::make_unique<FxRackPage> (proc, lnf)); break;
             }
             addChildComponent (*m); noFocus (*m); resized();
@@ -7875,7 +7895,7 @@ private:
         if (! isPanelVisible()) openTabIndex = -1;
         const bool treeOn = openTabIndex == tabTree;
         const int sw = openTabIndex < 0 ? 0 : treeOn ? 1 : openTabIndex == tabPair ? 2 : openTabIndex == tabVst ? 3 : openTabIndex == tabSounds ? 4 : openTabIndex == tabSampler ? 5
-                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : openTabIndex == tabAlchemy ? 12 : openTabIndex == tabLife ? 13 : -1;
+                     : (openTabIndex >= tab808 && openTabIndex < numTabs) ? 6 : openTabIndex == tabFxRack ? 7 : openTabIndex == tabMelody ? 9 : openTabIndex == tabMix ? 10 : openTabIndex == tabWorld ? 11 : openTabIndex == tabAlchemy ? 12 : openTabIndex == tabLife ? 13 : openTabIndex == tabFeed ? 14 : -1;
         if (openTabIndex >= tab808 && openTabIndex < numTabs) lastDrum = openTabIndex - tab808;
         else proc.kitPlay = false;   // PLAY KIT is a preview on the drum pages
         if (labSwitch.sel != sw) { labSwitch.sel = sw; labSwitch.repaint(); }
@@ -7886,7 +7906,7 @@ private:
                            || (owner == 3 && openTabIndex < 0) || (owner != 1 && owner != 2 && owner != 3 && openTabIndex < 0)
                            || openTabIndex == tabEdit    // SOUND EDIT: keep the loop running while you tweak the sound
                            || openTabIndex == tabMix     // v0.41 MIX LAB: you mix what plays
-                           || (owner == 4 && (openTabIndex == tabMelody || openTabIndex == tabLife || openTabIndex == tabAlchemy));
+                           || (owner == 4 && (openTabIndex == tabMelody || openTabIndex == tabLife || openTabIndex == tabAlchemy || openTabIndex == tabFeed));
             if (! keep) proc.stopLoop();
         }
         for (int i = 0; i < numTabs; ++i) { tabs[(size_t) i]->selected = i == openTabIndex; tabs[(size_t) i]->repaint(); }
@@ -8247,6 +8267,7 @@ private:
             captions[(size_t) i]->repaint();
             macros[(size_t) i]->setTooltip (sampleMode ? String (tipsN[i]) + "  (on the sample that plays)" : String (bass ? tipsB[i] : tipsN[i]));
         }
+        if (matterStrip) { StringArray nm; for (auto& c : captions) nm.add (c->text); matterStrip->setNames (nm); }
         if (proc.labVersion() != lastLab || proc.pairVer.load() != lastPairVer)
         {
             lastLab = proc.labVersion(); lastPairVer = proc.pairVer.load();
@@ -8368,6 +8389,7 @@ private:
     std::unique_ptr<InsetPage> sampleEdit;
     HotButton editBtn { lnf };
     std::unique_ptr<PresetBrowser> browser;
+    std::unique_ptr<MatterStrip> matterStrip;
     std::array<std::unique_ptr<Component>, numPages> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
