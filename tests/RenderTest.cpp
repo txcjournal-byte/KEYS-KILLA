@@ -1394,6 +1394,24 @@ static int unitTests()
                && ! kk::pack::exportFolder (empty, dir.getSiblingFile ("kk empty.zip"), "x").ok, "v0.45 PACK: the zip holds every WAV + a readme (name, list, made with EVOLVE by TrapVST)");
         dir.deleteRecursively(); zipF.deleteFile();
     }
+    // v0.45.1 PINBALL: a weak shot that falls back onto the plunger can be fired again (it used to go dead after the first launch)
+    {
+        kk::game::Pinball pb; kk::game::Key pkey; pb.start (1u, pkey);
+        for (int i = 0; i < 3; ++i) pb.step (1.0f / 60.0f, false, false, true);     // a tiny tap
+        pb.step (1.0f / 60.0f, false, false, false);
+        bool back = false; for (int i = 0; i < 600 && ! back; ++i) { pb.step (1.0f / 60.0f, false, false, false); back = pb.inLane; }
+        int launches = 0;
+        for (int round = 0; round < 3; ++round)
+        {
+            for (int i = 0; i < 300 && ! pb.inLane; ++i) pb.step (1.0f / 60.0f, false, false, false);
+            for (int i = 0; i < 10; ++i) pb.step (1.0f / 60.0f, false, false, true);
+            const auto ev = pb.step (1.0f / 60.0f, false, false, false);
+            for (auto& e : ev) launches += e.kind == kk::game::Pinball::evLaunch;
+            for (int i = 0; i < 30; ++i) pb.step (1.0f / 60.0f, true, true, false);
+        }
+        std::printf ("PINBALL: weak shot back on the plunger %s, %d of 3 later launches fired\n", back ? "yes" : "no", launches);
+        check (back && launches == 3, "v0.45.1 PINBALL: the plunger fires again and again");
+    }
     // v0.45 GAME: invaders collision + scoring, duel damage + CPU loop ends, pinball stays on the table and sings in key,
     //            chest rarity distribution, deterministic unlock recipes, every reward genome valid and audible
     {

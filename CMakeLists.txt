@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Version lives here only
-project(KEYS_KILLA VERSION 0.45.0 LANGUAGES C CXX)
+project(KEYS_KILLA VERSION 0.45.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

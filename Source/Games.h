@@ -348,6 +348,8 @@ struct Pinball
         for (auto& b : bumpers) b.flash = std::max (0.0f, b.flash - dt * 3);
         for (auto& r : ramps) { r.flash = std::max (0.0f, r.flash - dt * 2); r.cd = std::max (0.0f, r.cd - dt); }
         // the plunger: hold = charge, release = launch
+        // a ball lying anywhere low in the lane can always be fired again
+        if (! inLane && plunger && bx > laneX && by > 1.35f && std::abs (vy) < 0.6f) { by = plungerY - R - 0.001f; vx = vy = 0; inLane = true; }
         if (inLane)
         {
             if (plunger) { charging = true; power = std::min (1.0f, power + dt * 1.1f); }
@@ -427,7 +429,8 @@ struct Pinball
             // safety: never leave the table
             if (bx < R) { bx = R; vx = std::abs (vx) * 0.5f; } if (bx > W - R) { bx = W - R; vx = -std::abs (vx) * 0.5f; }
             if (by < R) { by = R; vy = std::abs (vy) * 0.5f; }
-            if (bx > laneX && by > 1.3f && by >= plungerY - R - 0.003f && std::abs (vy) < 0.15f) { by = plungerY - R - 0.001f; vx = vy = 0; inLane = true; }   // back on the plunger
+            // back on the plunger (the plunger's own surface holds the ball 0.004 above it - the old check missed that and the plunger went dead)
+            if (bx > laneX && by > 1.3f && by >= plungerY - R - 0.008f && std::abs (vy) < 0.35f) { by = plungerY - R - 0.001f; vx = vy = 0; inLane = true; }
             if (by > H - R * 0.5f || (by > 1.5f && bx < laneX - R))
             {
                 ev.push_back ({ evDrain, bx, by, key.pitch (-5, 0.0f), 0.7f, balls });
