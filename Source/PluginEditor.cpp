@@ -1837,7 +1837,7 @@ private:
             if (! isPositiveAndBelow (row, page->shown.size())) return;
             page->sel = row; page->proc.auditionFile (page->shown[row]); page->soundList.repaint(); page->grabKeyboardFocus();
         }
-        void listBoxItemDoubleClicked (int row, const MouseEvent&) override { page->sel = row; page->toPair(); }
+        void listBoxItemDoubleClicked (int row, const MouseEvent&) override { page->sel = row; page->toKeys(); }   // v0.45.1: double-click = play it on the keys (INTO BREED LAB is a button)
         var getDragSourceDescription (const SparseSet<int>& rows) override { return rows.isEmpty() ? var() : var (rows[0]); }
     } soundModel;
 
@@ -1924,6 +1924,15 @@ private:
         repaint();
     }
     int pairRound = 0;
+    void toKeys()
+    {
+        const auto f = selected(); if (! f.existsAsFile()) return;
+        auto snd = kk::PairLab::fromFile (f, proc.getSampleRate() > 0 ? proc.getSampleRate() : 44100.0);
+        if (snd == nullptr) { note = "could not read " + f.getFileName(); repaint(); return; }
+        proc.useSample (snd, true);
+        note = f.getFileNameWithoutExtension() + " is on your keys - play it (FL piano roll, your MIDI keys or the keys below)";
+        repaint();
+    }
     void deleteSound()
     {
         const auto f = selected(); if (! f.existsAsFile()) return;
