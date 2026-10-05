@@ -105,3 +105,12 @@ FX PRO CLUB: your finished track plays in the club - disco-ball speed = filter /
 build-up and riser, how full the club is = space / reverb, a DROP gesture = the classic filter-drop.
 Rule: every EVOLVE world gets an FX PRO twin in another style (COOK -> SEASONING, PARTY -> CLUB, GARAGE -> engine / exhaust drive,
 BIOSPHERE -> its own idea, TBD).
+
+## WORDS (owner, 2026-10-05) - type anything, get 10 sounds
+An empty field: type a word, a sentence, a name, anything -> 10 sounds appear. Offline, no internet / AI service:
+- a built-in dictionary (EN + CZ) maps meaning words to ALCHEMY: dark / glass / rain / metal / soft / angry / space / water / fire ...
+  -> exciter, body, matter, size, heat, freeze;
+- every other word (names, nonsense) is hashed: the same word always gives the same 10 sounds - every word in the world has its sounds
+  (send a friend a word = a sound pack);
+- a sentence mixes all its words; the words light up when they shaped the sound. Click a sound = keys, KEEP / DRAG WAV / MY SOUNDS.
+FX PRO twin idea: type how the track should feel ("night drive", "underwater") -> the effects arrange themselves.
