@@ -5442,13 +5442,14 @@ public:
     std::function<void (int)> onSwitch;
     std::function<bool (int)> isOn;   // VOODOO / EFFECTOR: lit when switched on
     int sel = 0;
-    static constexpr int numTiles = 12, studioAt = 9;
-    // v0.44: EVOLVE / FEED / ALCHEMY / LIFE / MELODY / SOUND WORLD / BREED LAB / FAMILY TREE / MY SOUNDS, STUDIO: SAMPLER / FX / MIX LAB
-    static int tileId (int v) { static const int ids[numTiles] { 8, 14, 12, 13, 9, 11, 0, 1, 4, 5, 7, 10 }; return ids[jlimit (0, numTiles - 1, v)]; }
+    static constexpr int numTiles = 10, studioAt = 7;
+    // v0.45 fewer doors: EVOLVE / FEED / CREATE / WORLDS / LIFE / MELODY / MY SOUNDS, STUDIO: BREED LAB / SAMPLER / FX + MIX
+    // (FAMILY TREE is inside BREED LAB, MIX LAB is inside FX, DOODLE inside LIFE, SOUND WORLD inside WORLDS)
+    static int tileId (int v) { static const int ids[numTiles] { 8, 14, 12, 11, 13, 9, 4, 0, 5, 7 }; return ids[jlimit (0, numTiles - 1, v)]; }
     void paint (Graphics& g) override
     {
         const auto& s = *lnf.skin;
-        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX", "EVOLVE", "MELODY", "MIX\nLAB", "SOUND\nWORLD", "ALCHEMY", "LIFE", "FEED" };
+        static const char* names[] { "BREED\nLAB", "FAMILY\nTREE", "PAIR\nYOUR OWN", "PAIR\nFROM VST", "MY\nSOUNDS", "SAMPLER", "DRUM\nKIT", "FX\n+ MIX", "EVOLVE", "MELODY", "MIX\nLAB", "WORLDS", "CREATE", "LIFE", "FEED" };
         // each extra wears its plugin's colours
         static const Colour face[] { Colour (0), Colour (0) };
         static const Colour ink[] { Colour (0), Colour (0) };
@@ -6660,7 +6661,7 @@ public:
         btn (prevSnd, "<", "The previous mutation", [this] { stepSound (-1); });
         btn (nextSnd, ">", "A new mutation of this matter", [this] { stepSound (1); });
         btn (curSoundBtn, "", "", [this] {}); curSoundBtn.setVisible (false);
-        btn (pickSoundBtn, "ALCHEMY", "Make the sound the melodies play with in ALCHEMY (then USE IT)", [this] { if (onPickSound) onPickSound(); });
+        btn (pickSoundBtn, "SOUND", "The sound the melodies play: make one, or take one of YOUR sounds from MY SOUNDS", [this] { soundMenu(); });
         btn (listenBtn, "LISTEN", "LISTEN: press it, then play your melody in FL - press it again when it has played once.  Notes on EVOLVE's channel are caught as MIDI.  Another plugin (Nexus ...)? Put EVOLVE as an EFFECT on that plugin's mixer track: LISTEN hears its sound and turns it into notes", [this]
         {
             if (proc.melListening()) { proc.melListen (false); note = proc.melHasMine ? "got it" + String (proc.melListenSource == "AUDIO" ? " (from the sound)" : "") + ": " + String ((int) proc.melMine.notes.size()) + " notes, " + kk::mel::keyName (proc.melMine.key) + " " + kk::mel::scaleName (proc.melMine.scale) : String ("nothing heard - play your melody in FL while LISTEN is on (or EVOLVE as an effect on the plugin's track)"); }
@@ -6965,6 +6966,37 @@ private:
         startAnim();
     }
     void startAnim() { animStart = Time::getMillisecondCounter(); refresh(); }
+    // v0.45: the melody sound - made in the plugin, or one of your own from MY SOUNDS (GRID / COOK / games save there)
+    void soundMenu()
+    {
+        PopupMenu m; m.addItem (1, "Make a new sound...");
+        const auto folders = kk::Library::folders();
+        std::vector<File> files;
+        PopupMenu mine;
+        for (auto& fo : folders)
+        {
+            PopupMenu sub;
+            for (auto& f : kk::Library::sounds (fo)) { files.push_back (f); sub.addItem (100 + (int) files.size() - 1, f.getFileNameWithoutExtension()); }
+            if (sub.getNumItems() > 0) mine.addSubMenu (fo, sub);
+        }
+        if (mine.getNumItems() > 0) m.addSubMenu ("From MY SOUNDS", mine); else m.addItem (2, "From MY SOUNDS (empty - save sounds there first)", false);
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&pickSoundBtn), [this, files, safe = SafePointer<MelodyPage> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (r == 1) { if (onPickSound) onPickSound(); return; }
+            if (r >= 100 && r - 100 < (int) files.size())
+            {
+                const double rate = proc.getSampleRate() > 0 ? proc.getSampleRate() : 44100.0;
+                if (auto snd = kk::PairLab::fromFile (files[(size_t) (r - 100)], rate))
+                {
+                    const int playing = proc.melPlaying;
+                    proc.useSample (snd, playing == -1);
+                    if (playing >= 0) proc.melPlay (playing); else if (playing == -2) proc.melPlayMine();
+                    note = "the melodies play your sound: " + snd->name; repaint();
+                }
+            }
+        });
+    }
     void stepSound (int dir)
     {
         proc.alcExc = jmax (0, catBox.getSelectedId() - 1);
@@ -7029,6 +7061,9 @@ private:
 #include "LifePage.h"
 #include "MatterStrip.h"
 #include "FeedPage.h"
+#include "SoundDock.h"
+#include "DoorPage.h"
+static std::unique_ptr<Component> makeDoodlePage (KeysKillaProcessor& p, KKLookAndFeel& l);   // defined after FxMainPage.h (DOODLE lives there)
 
 //==============================================================================
 class MainPage : public Component, private Timer
@@ -7056,12 +7091,14 @@ public:
         {
             if (proc.sampleActive() || proc.chopActive()) { openTab (tabEdit); return; }
             if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy);
-            if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->sculptCurrent();
+            if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->sculptCurrent();
         };
         addAndMakeVisible (editBtn);
         keysPill.framed = true; keysPill.setTooltip ("What the keys play now.  Playing a sample / a child?  Click = back to your sound");
         keysPill.onClick = [this] { if (proc.sampleActive() || proc.chopActive()) { proc.loadPreset (proc.getCurrentProgram()); labChanged(); } };
-        addAndMakeVisible (keysPill);
+        addChildComponent (keysPill);   // v0.45: the SOUND DOCK shows what the keys play (name + waveform)
+        dock = std::make_unique<SoundDock> (proc, lnf);
+        addAndMakeVisible (*dock);
         worldBtn.framed = true; worldBtn.setButtonText ("WORLD"); worldBtn.onClick = [this] { worldMenu(); };
         worldBtn.setTooltip ("SOUND WORLD: one click colours the whole sound (rompler, analog, glassy, hi-fi, organic ...).  TRANCE GATE and CLIPPER are here too.");
         addAndMakeVisible (worldBtn);
@@ -7396,26 +7433,26 @@ public:
         if (v == 12) { proc.breed(); while (proc.renderNextThumbnail()) {} proc.selectChild (2); labChanged(); }
         if (v == 27) { proc.setParentPreset (0, 3); while (proc.renderNextThumbnail()) {} labChanged(); breedBtn.prime(); }
         if (v == 12) breedBtn.prime();
-        if (v == 55) { openTab (tabFeed); if (auto* ip = dynamic_cast<InsetPage*> (module (tabFeed))) if (auto* fp = dynamic_cast<FeedPage*> (ip->page())) fp->debugSwipes(); }
-        if (v == 56) { openTab (tabAlchemy); if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->debugSculpt(); }
+        if (v == 55) { openTab (tabFeed); if (auto* fp = pageOf<FeedPage> (tabFeed)) fp->debugSwipes(); }
+        if (v == 56) { openTab (tabAlchemy); if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->debugSculpt(); }
         if (v >= 50 && v <= 54)   // v0.43 ALCHEMY (50, 54 = as the chooser), LIFE (51 gravity, 52 predator, 53 swarm)
         {
             if (v == 50 || v == 54)
             {
                 openTab (tabAlchemy);
-                if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->debugSet (0, 3, v == 54 ? 0.8f : 0.25f, 0.6f);
+                if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->debugSet (0, 3, v == 54 ? 0.8f : 0.25f, 0.6f);
                 if (v == 54) openAlchemy ("PARENT A", [] {});
             }
             else
             {
                 openTab (tabLife);
-                if (auto* ip = dynamic_cast<InsetPage*> (module (tabLife))) if (auto* lp = dynamic_cast<LifePage*> (ip->page())) lp->debugMode (v - 51);
+                if (auto* lp = pageOf<LifePage> (tabLife)) lp->debugMode (v - 51);
             }
         }
         if (v == 41 || v == 42)   // v0.40 MELODY: 8 melodies (42: from your melody)
         {
             openTab (tabMelody);
-            if (auto* ip = dynamic_cast<InsetPage*> (module (tabMelody))) if (auto* mp = dynamic_cast<MelodyPage*> (ip->page()))
+            if (auto* mp = pageOf<MelodyPage> (tabMelody))
             {
                 if (v == 42)
                 {
@@ -7448,7 +7485,7 @@ public:
             if (v == 45) { kk::applyEra (proc.mixLab, 0.25f); proc.mixLab.tmOn = true; }
             if (v == 46) { proc.mixLab.spOn = true; proc.mixLab.spMode = kk::spCloud; proc.mixLab.dlOn = true; proc.mixLab.dlMode = kk::dlPingPong; }
             openTab (tabMix);
-            if (auto* ip = dynamic_cast<InsetPage*> (module (tabMix))) if (auto* mp = dynamic_cast<MixLabPage*> (ip->page()))
+            if (auto* mp = pageOf<MixLabPage> (tabMix))
             {
                 AudioBuffer<float> b (2, 512); MidiBuffer mb;
                 mp->debugShow (v == 46 ? 3 : v - 43);
@@ -7587,7 +7624,8 @@ public:
         meter.setBounds (R (1337, 716, 1595, 761));
         if (matterStrip) matterStrip->setBounds (R (86, 676, 1266, 792));
         pitchWheel.setBounds (R (70, 808, 110, 894)); modWheel.setBounds (R (124, 808, 164, 894));
-        keyboard.setBounds (R (200, 815, 1640, 923));
+        if (dock) dock->setBounds (R (200, 812, 1640, 860));   // v0.45 SOUND DOCK: the same player on every page
+        keyboard.setBounds (R (200, 864, 1640, 935));
         keysPill.setBounds (R (1180, 921, 1640, 941));
         updateKeysPill();
         keyboard.setKeyWidth (1440.0f / 40.0f);
@@ -7608,6 +7646,13 @@ public:
 
 private:
     enum { tab808, tabSnare, tabHat, tabKick, tabOpenHat, tabPerc, tabDrumFx, numTabs, tabSampler, tabFxRack, tabPair, tabVst, tabSounds, tabMelody, tabMix, tabWorld, tabAlchemy, tabLife, tabFeed, numPages, tabBrowser = 99, tabSettings = 100, tabTree = 101, tabParams = 102, tabEdit = 103 };
+    // a page behind a tab: directly in its InsetPage, or one of the rooms behind a door
+    template <class T> T* pageOf (int t)
+    {
+        auto* ip = dynamic_cast<InsetPage*> (module (t)); if (ip == nullptr) return nullptr;
+        if (auto* d = dynamic_cast<DoorPage*> (ip->page())) return d->find<T>();
+        return dynamic_cast<T*> (ip->page());
+    }
     Component* module (int t)
     {
         auto& m = modules[(size_t) t];
@@ -7638,11 +7683,33 @@ private:
                     m = std::make_unique<InsetPage> (std::move (pg)); break;
                 }
                 case tabMix:      m = std::make_unique<InsetPage> (std::make_unique<MixLabPage> (proc, lnf)); break;   // v0.41
-                case tabWorld:    m = std::make_unique<InsetPage> (std::make_unique<SoundWorldPage> (proc, lnf)); break;   // v0.42
-                case tabAlchemy:  m = std::make_unique<InsetPage> (std::make_unique<AlchemyPage> (proc, lnf)); break;     // v0.43
-                case tabLife:     m = std::make_unique<InsetPage> (std::make_unique<LifePage> (proc, lnf)); break;        // v0.43
+                case tabWorld:    // v0.45 door WORLDS
+                {
+                    auto d = std::make_unique<DoorPage> (lnf);
+                    d->addRoom ("SOUND WORLD", "The world map of sounds", [this] { return std::unique_ptr<Component> (std::make_unique<SoundWorldPage> (proc, lnf)); });
+                    m = std::make_unique<InsetPage> (std::move (d)); break;
+                }
+                case tabAlchemy:  // v0.45 door CREATE
+                {
+                    auto d = std::make_unique<DoorPage> (lnf);
+                    d->addRoom ("ALCHEMY", "Make a sound from matter, sculpt it with your hands", [this] { return std::unique_ptr<Component> (std::make_unique<AlchemyPage> (proc, lnf)); });
+                    m = std::make_unique<InsetPage> (std::move (d)); break;
+                }
+                case tabLife:     // v0.45 door LIFE: behaviour + drawing
+                {
+                    auto d = std::make_unique<DoorPage> (lnf);
+                    d->addRoom ("LIFE", "Gravity, a predator, a swarm - melodies from behaviour", [this] { return std::unique_ptr<Component> (std::make_unique<LifePage> (proc, lnf)); });
+                    d->addRoom ("DOODLE", "Draw lines - they become a melody in your key", [this] { return makeDoodlePage (proc, lnf); });
+                    m = std::make_unique<InsetPage> (std::move (d)); break;
+                }
                 case tabFeed:     m = std::make_unique<InsetPage> (std::make_unique<FeedPage> (proc, lnf)); break;        // v0.44
-                default:          m = std::make_unique<InsetPage> (std::make_unique<FxRackPage> (proc, lnf)); break;
+                default:          // v0.45 door FX: the rack + MIX LAB
+                {
+                    auto d = std::make_unique<DoorPage> (lnf);
+                    d->addRoom ("FX RACK", "Effects on every sound", [this] { return std::unique_ptr<Component> (std::make_unique<FxRackPage> (proc, lnf)); });
+                    d->addRoom ("MIX LAB", "EQ, compressor, vintage colour, space + echo - and the COACH", [this] { return std::unique_ptr<Component> (std::make_unique<MixLabPage> (proc, lnf)); });
+                    m = std::make_unique<InsetPage> (std::move (d)); break;
+                }
             }
             addChildComponent (*m); noFocus (*m); resized();
         }
@@ -7778,7 +7845,7 @@ private:
     void openAlchemy (const String& title, std::function<void()> then)
     {
         if (! (openTabIndex == tabAlchemy && isPanelVisible())) openTab (tabAlchemy);
-        if (auto* ip = dynamic_cast<InsetPage*> (module (tabAlchemy))) if (auto* ap = dynamic_cast<AlchemyPage*> (ip->page())) ap->pick (title, std::move (then));
+        if (auto* ap = pageOf<AlchemyPage> (tabAlchemy)) ap->pick (title, std::move (then));
     }
     KeysKillaProcessor::Genome randomMatter()
     {
@@ -8242,6 +8309,7 @@ private:
     HotButton editBtn { lnf };
     std::unique_ptr<PresetBrowser> browser;
     std::unique_ptr<MatterStrip> matterStrip;
+    std::unique_ptr<SoundDock> dock;
     std::array<std::unique_ptr<Component>, numPages> modules;
     std::unique_ptr<FamilyTreePanel> treePanel;
     LabSwitch labSwitch { lnf };
@@ -8379,6 +8447,7 @@ private:
 
 //==============================================================================
 #include "FxMainPage.h"
+static std::unique_ptr<Component> makeDoodlePage (KeysKillaProcessor& p, KKLookAndFeel& l) { return std::make_unique<DoodlePage> (p, l); }
 
 #if KK_TEST_BUILD
 // test snapshots of the EVOLVE FX page (the test app is built as EVOLVE)
