@@ -70,3 +70,16 @@ Plus (owner's list):
 5. GAME section (light, vector-drawn, runs only when visible): finishing levels unlocks sounds (rarity COMMON / RARE / EPIC / LEGENDARY),
    a collection book, unlocked sounds go to MY SOUNDS > UNLOCKED. Game ideas: SOUND INVADERS, BLOCK BEAT, PIXEL DUEL (win = steal the
    rival's sound), WAVE RUNNER (run on the waveform), EAR QUEST (ear training). FX PRO: games unlock effect chains.
+
+## COOK (owner, 2026-10-05) - "cooking beats"
+One page COOK replaces ALCHEMY + SCULPT (fewer doors). Ingredients into the pot (metal spoon, bone broth, sparkling gas, honey,
+crystal sugar, hot coals, breath / mint, bass flour); gestures = cooking: STIR (blend), FRY (heat / drive), BAKE (longer, warmer,
+darker), BOIL (movement), CHOP (pluck), BLEND (pad), FREEZE (endless tail); SEASON: salt = bright, pepper = grit, chilli = aggression,
+sugar = shine. The dish plays a phrase on a plate -> LIFE melodies / drag WAV / MY SOUNDS. RECIPE = SOUND CODE, a COOKBOOK of recipes.
+Games: CHEF CHALLENGE (cook what the guest ordered in 30 s), rare ingredients only from games. FX PRO: SEASONING a finished track.
+Order: fewer doors + performance -> COOK + RECIPES -> GAME (SOUND INVADERS, PIXEL DUEL, chests, collection) -> SOUND PACK export -> DREAM, CREATURE.
+
+## BIOSPHERE (owner, 2026-10-05) - EVOLVE only (FX PRO gets something different, TBD)
+A section to choose ANIMALS, PLANTS / TREES / NATURE or the HUMAN BODY (an anatomy model like at school). Touch / colour a part of the
+animal / tree / body = it makes or changes a sound. Living reactions with animation: movement makes an animal PANIC, become SHY, or MUTATE.
+(Today only LIFE has behaviour: PREDATOR hunts, SWARM panics when frightened; INTENT shows lungs.)
