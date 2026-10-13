@@ -49,6 +49,8 @@ public:
     // browsing (all message thread)
     void loadPreset (int bankIndex, bool audition);     // select in the processor + recent + optional preview note
     void step (int delta, bool wrap);                   // through the CURRENT filtered list
+    void stepToEnd (bool last);                         // first / last sound of the filtered list (Home / End)
+    int pageRows() const;                               // rows per page of the list (Page Up / Page Down)
     void randomSound();
     void auditionCurrent();
     void syncFromProcessor();                           // follows host automation / state restore (timer)
@@ -68,7 +70,9 @@ public:
     vui::VaultKeyboard& keys() { return keyboard; }
     VaultThumbs& thumbnails() { return thumbs; }
     VaultBrowserModel& browser() { return model; }
-    juce::File renderWavForDrag();                      // the current sound, C4, 2 s, as a WAV in the temp folder
+    vui::PresetList& presetList() { return list; }
+    VaultInfoPanel& infoPanel() { return info; }
+    juce::File renderWavForDrag();                      // the current sound (C4; 808 & Bass C3), 2 s, with the macros, as a WAV in the temp folder
 
     void updateToggles();                               // RECENT / FAVORITES / preview / scale pills follow the state
     void giveFocusBack();                               // keyboard focus back to the editor (arrows, PC keys)
@@ -90,7 +94,7 @@ private:
     } searchKeys { *this };
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void filterChanged (bool scrollToCurrent = true);
+    void filterChanged (bool scrollToCurrent = true, bool keepScroll = false);
     void setShown (int bankIndex);
     void showScaleMenu();
     static int logoWidth();
@@ -109,7 +113,7 @@ private:
     vui::ChipBar chips;
     vui::PresetList list;
     VaultInfoPanel info;
-    vui::PillButton previewBtn { "Preview on click", vui::PillButton::Icon::none, 12.0f }, scaleBtn { "100 %", vui::PillButton::Icon::none, 12.0f };
+    vui::PillButton previewBtn { "Preview on click", vui::PillButton::Icon::none, 12.5f }, scaleBtn { "100 %", vui::PillButton::Icon::none, 12.5f };
     vui::VaultKeyboard keyboard;
 
     int shown = -2;

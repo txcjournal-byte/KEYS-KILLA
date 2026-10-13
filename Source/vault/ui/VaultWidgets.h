@@ -13,7 +13,7 @@ class PillButton : public juce::Button
 {
 public:
     enum class Icon { none, heart, dice, clock };
-    PillButton (const juce::String& text, Icon i = Icon::none, float fontPx = 12.5f) : juce::Button (text), icon (i), px (fontPx)
+    PillButton (const juce::String& text, Icon i = Icon::none, float fontPx = 13.0f) : juce::Button (text), icon (i), px (fontPx)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
@@ -102,7 +102,7 @@ public:
             auto t = r.reduced (12.0f, 0.0f);
             const auto name = cat < 0 ? juce::String ("All Sounds") : vault::categoryNames()[cat];
             const auto cnt = thousands (model.categoryCount (cat));
-            const auto cf = font (12.0f, on);
+            const auto cf = font (12.5f, on);
             const float cw = textWidth (cf, cnt) + 2.0f;
             g.setFont (cf);
             g.setColour (on ? col::ice : col::dim);
@@ -154,7 +154,7 @@ public:
         const auto f = font (12.5f);
         auto add = [&] (int group, int value, const juce::String& txt, int rowIdx, int& x)
         {
-            const int w = (int) std::ceil (textWidth (font (12.5f, true), txt)) + 22;
+            const int w = (int) std::ceil (textWidth (font (13.0f, true), txt)) + 22;
             chips.push_back ({ group, value, txt, { x, padTop + rowIdx * rowPitch, w, chipH } });
             x += w + 6;
         };
@@ -167,7 +167,7 @@ public:
         add (2, 0, "All", 2, x);
         for (int i = 1; i <= vault::maxParts; ++i) add (2, i, juce::String (i), 2, x);
         const auto ct = juce::String ("Clear filters");
-        const int cw = (int) std::ceil (textWidth (font (12.5f), ct)) + 18;
+        const int cw = (int) std::ceil (textWidth (font (13.0f), ct)) + 18;
         clearRect = { getWidth() - 14 - cw, padTop + 2 * rowPitch, cw, chipH };
     }
 
@@ -184,13 +184,13 @@ public:
             auto r = c.r.toFloat().reduced (0.5f);
             if (on) { g.setColour (col::ice); g.fillRoundedRectangle (r, r.getHeight() * 0.5f); }
             else { g.setColour (over ? col::ice2 : col::fieldLine); g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f); }
-            g.setFont (font (12.5f, true));
+            g.setFont (font (13.0f, true));
             g.setColour (on ? col::ink : over ? col::text : col::muted);
             g.drawText (c.text, c.r, juce::Justification::centred, false);
         }
         if (filter.anyChip())
         {
-            g.setFont (font (12.5f));
+            g.setFont (font (13.0f));
             g.setColour (hover == clearIndex ? col::ice : col::dim);
             g.drawText ("Clear filters", clearRect, juce::Justification::centred, false);
         }
@@ -324,10 +324,13 @@ private:
         g.setFont (font (14.0f, true));
         g.setColour (sel ? col::silver : col::text);
         g.drawText (p.name, c.name, juce::Justification::centredLeft, true);
-        // category · styles
-        auto tags = vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)];
-        if (const auto st = vault::namesOfMask (p.styles, vault::styleNames()); ! st.isEmpty()) tags << midDot() << st.joinIntoString (", ");
-        g.setFont (font (12.5f));
+        // category · styles (inside one category the category name is left out - more room for the styles)
+        juce::String tags;
+        if (model.filter.category < 0)
+            tags = vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)];
+        if (const auto st = vault::namesOfMask (p.styles, vault::styleNames()); ! st.isEmpty())
+            tags << (tags.isEmpty() ? juce::String() : midDot()) << st.joinIntoString (", ");
+        g.setFont (font (13.0f));
         g.setColour (col::dim);
         g.drawText (tags, c.tags, juce::Justification::centredLeft, true);
         // layer badge
@@ -341,7 +344,7 @@ private:
             b.removeFromLeft (3.0f);
         }
         b.removeFromLeft (4.0f);
-        g.setFont (font (12.0f));
+        g.setFont (font (12.5f));
         g.setColour (col::muted);
         g.drawText (juce::String (n) + (n == 1 ? " layer" : " layers"), b, juce::Justification::centredLeft, false);
         // heart
@@ -428,7 +431,7 @@ protected:
         if (note % 12 == 0)
         {
             g.setColour (juce::Colour (isDown ? 0xff1d3561 : 0xff5a6478));
-            g.setFont (font (10.5f, true));
+            g.setFont (font (11.0f, true));
             g.drawText ("C" + juce::String (note / 12 - 1), k.removeFromBottom (18.0f), juce::Justification::centred, false);
         }
         if (note >= pcBase && note < pcBase + 17)
@@ -464,7 +467,7 @@ public:
         g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
         g.setColour (over ? col::ice : col::btnLine);
         g.drawRoundedRectangle (r, r.getHeight() * 0.5f, 1.0f);
-        const auto f = font (12.0f, true, 0.08f);
+        const auto f = font (12.5f, true, 0.08f);
         const juce::String t ("DRAG WAV");
         const float w = 12.0f + 7.0f + textWidth (f, t);
         float x = r.getCentreX() - w * 0.5f;

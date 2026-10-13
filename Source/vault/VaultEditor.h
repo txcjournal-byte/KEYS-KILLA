@@ -8,13 +8,15 @@ class VaultMainView;
 class VaultSettings;
 
 // CHROME VAULT editor: the preset browser (search, categories, filter chips, list, info panel with macros, keyboard).
-// Everything is laid out at the base size 1180 x 760 and scaled as one piece (70 % .. 150 %, aspect kept, remembered).
+// Everything is laid out at the base size 1180 x 760 and scaled as one piece (70 % .. 175 %, aspect kept, remembered).
+// 70 % = 826 x 532 (small laptop next to a DAW), 175 % = 2065 x 1330 (4K screens).
 class VaultEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     static constexpr int baseWidth = 1180, baseHeight = 760;
-    static constexpr float minScale = 0.7f, maxScale = 1.5f;
-    static const std::vector<float>& scalePresets();   // 70 80 90 100 115 125 150 %
+    static constexpr float minScale = 0.7f, maxScale = 1.75f;
+    static const std::vector<float>& scalePresets();   // 70 80 90 100 115 125 150 175 %
+    static float firstOpenScale (juce::Rectangle<int> usableArea);   // largest preset <= 100 % that fits 85 % of the area
 
     explicit VaultEditor (VaultProcessor&);
     ~VaultEditor() override;
@@ -27,7 +29,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;   // (also from all children) - clicks outside the search box return focus here
     void visibilityChanged() override;
 
-    void setUiScale (float scale);                       // clamps to 70 % .. 150 %, resizes the window and remembers it
+    void setUiScale (float scale);                       // clamps to 70 % .. 175 %, resizes the window and remembers it
     float getUiScale() const { return uiScale; }
 
     // test / snapshot hooks

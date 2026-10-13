@@ -36,6 +36,7 @@ VaultInfoPanel::VaultInfoPanel (VaultProcessor& p, VaultBrowserModel& m, VaultTh
         k.setTitle (vault::macroNames()[i]);
         addAndMakeVisible (k);
         knobAtt[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, VaultProcessor::idMacro[i], k);
+        k.onValueChange = [this] { repaint (waveR); };   // the waveform follows the macros
     }
     volume.setName ("VOLUME");
     volume.setTitle ("Volume");
@@ -126,7 +127,7 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     {
         auto tags = vault::namesOfMask (p->styles, vault::styleNames());
         tags.addArray (vault::namesOfMask (p->chars, vault::characterNames()));
-        const auto f = font (12.0f);
+        const auto f = font (12.5f);
         float x = (float) tagsR.getX(), y = (float) tagsR.getY();
         const float h = 22.0f;
         for (int i = 0; i < tags.size(); ++i)
@@ -153,7 +154,9 @@ void VaultInfoPanel::paint (juce::Graphics& g)
         g.drawRoundedRectangle (w.reduced (0.5f), 12.0f, 1.0f);
         VaultThumbs::Thumb t;
         auto inner = w.reduced (10.0f, 6.0f);
-        if (thumbs.get (preset, t))
+        float macros[vault::numMacros];
+        for (int i = 0; i < vault::numMacros; ++i) macros[i] = proc.getMacro (i);
+        if (thumbs.getLive (preset, macros, t))   // follows the 4 macro knobs
         {
             g.setGradientFill (ColourGradient (col::deep, inner.getX(), 0, col::ice, inner.getRight(), 0, false));
             const float step = inner.getWidth() / (float) VaultThumbs::numBins;
@@ -198,9 +201,9 @@ void VaultInfoPanel::paint (juce::Graphics& g)
             String right = String (roundToInt (part.level * 100.0f)) + " %";
             const int tr = part.octave * 12 + part.semi;
             if (tr != 0) right = (tr % 12 == 0 ? (tr > 0 ? "+" : "") + String (tr / 12) + " oct" : (tr > 0 ? "+" : "") + String (tr) + " st") + "   " + right;
-            g.setFont (font (12.0f));
+            g.setFont (font (12.5f));
             g.setColour (col::dim);
-            const float rw = textWidth (font (12.0f), right) + 2.0f;
+            const float rw = textWidth (font (12.5f), right) + 2.0f;
             g.drawText (right, t.removeFromRight (rw), Justification::centredRight, false);
             g.setFont (font (13.0f));
             g.setColour (col::text);
@@ -287,7 +290,7 @@ VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> 
         }
         else showStatus ("Could not write the WAV file.");
     };
-    info.dragPill.onClickOnly = [this] { showStatus ("Drag the DRAG WAV button into your DAW to drop this sound in as a WAV (C4, 2 s)."); };
+    info.dragPill.onClickOnly = [this] { showStatus ("Drag this button into your DAW or a folder to drop the sound in as a 2 s WAV."); };
     addAndMakeVisible (info);
 
     previewBtn.setClickingTogglesState (false);
@@ -411,7 +414,7 @@ void VaultMainView::paint (juce::Graphics& g)
         const float y = (float) st.getY(), h = (float) st.getHeight();
         auto put = [&] (const String& s, bool strong)
         {
-            const auto f = font (12.5f, strong);
+            const auto f = font (13.0f, strong);
             g.setFont (f);
             g.setColour (strong ? col::ice : col::dim);
             const float w = textWidth (f, s);
@@ -473,6 +476,19 @@ void VaultMainView::step (int delta, bool wrap)
     if (next >= 0 && next != shown) loadPreset (next, true);
 }
 
+int VaultMainView::pageRows() const
+{
+    return std::max (1, list.getHeight() / vui::PresetList::rowH - 1);
+}
+
+void VaultMainView::stepToEnd (bool last)
+{
+    const auto& v = model.visible();
+    if (v.empty()) return;
+    const int target = last ? v.back() : v.front();
+    if (target != shown) loadPreset (target, true);
+}
+
 void VaultMainView::randomSound()
 {
     const auto& v = model.visible();
@@ -489,12 +505,13 @@ void VaultMainView::syncFromProcessor()
     if (statusUntil != 0 && juce::Time::getMillisecondCounter() >= statusUntil) { statusUntil = 0; repaint (statusRect()); }
 }
 
-void VaultMainView::filterChanged (bool scrollToCurrent)
+void VaultMainView::filterChanged (bool scrollToCurrent, bool keepScroll)
 {
     model.refilter();
     list.refresh();
     const int row = model.rowOf (shown);
-    if (scrollToCurrent && row >= 0) list.showRow (row); else list.scrollToTop();
+    if (scrollToCurrent && row >= 0) list.showRow (row);
+    else if (! keepScroll) list.scrollToTop();
     categories.setSelected (model.filter.category);
     chips.repaint();
     updateToggles();
@@ -513,7 +530,7 @@ void VaultMainView::toggleFavorite (int idx)
 {
     model.setFavorite (idx, ! model.isFavorite (idx));
     settings->setFavorites (model.favoriteIds());
-    if (model.filter.favoritesOnly) filterChanged (false);
+    if (model.filter.favoritesOnly) filterChanged (false, true);   // the row goes away, the list stays where it is
     list.refresh();
     info.repaint();
 }
@@ -554,7 +571,7 @@ void VaultMainView::changeListenerCallback (juce::ChangeBroadcaster*)
     if (fresh != mine)
     {
         model.setFavoriteIds (fresh);
-        if (model.filter.favoritesOnly) filterChanged (false);
+        if (model.filter.favoritesOnly) filterChanged (false, true);
         list.refresh();
         info.repaint();
     }
@@ -586,10 +603,11 @@ juce::File VaultMainView::renderWavForDrag()
     float macros[vault::numMacros];
     for (int i = 0; i < vault::numMacros; ++i) macros[i] = proc.getMacro (i);
     constexpr double sr = 44100.0;
-    const auto buf = VaultEngine::render (*p, 60, 0.8f, 2.0, sr, macros);
+    const bool low = p->category == vault::cat808Bass;   // same note as the preview: 808s / basses at C3, the rest at C4
+    const auto buf = VaultEngine::render (*p, low ? 48 : 60, 0.8f, 2.0, sr, macros);
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("CHROME VAULT");
     dir.createDirectory();
-    const auto f = dir.getChildFile (juce::File::createLegalFileName (p->name + " C4") + ".wav");
+    const auto f = dir.getChildFile (juce::File::createLegalFileName (p->name + (low ? " C3" : " C4")) + ".wav");
     f.deleteFile();
     juce::WavAudioFormat wav;
     std::unique_ptr<juce::OutputStream> os (f.createOutputStream());
@@ -605,7 +623,17 @@ juce::File VaultMainView::renderWavForDrag()
 //==============================================================================
 const std::vector<float>& VaultEditor::scalePresets()
 {
-    static const std::vector<float> s { 0.7f, 0.8f, 0.9f, 1.0f, 1.15f, 1.25f, 1.5f };
+    static const std::vector<float> s { 0.7f, 0.8f, 0.9f, 1.0f, 1.15f, 1.25f, 1.5f, 1.75f };
+    return s;
+}
+
+float VaultEditor::firstOpenScale (juce::Rectangle<int> usable)
+{
+    if (usable.isEmpty()) return 1.0f;
+    const auto area = usable.toFloat() * 0.85f;
+    float s = minScale;
+    for (float c : scalePresets())
+        if (c <= 1.0f && (float) baseWidth * c <= area.getWidth() && (float) baseHeight * c <= area.getHeight()) s = c;
     return s;
 }
 
@@ -623,18 +651,15 @@ VaultEditor::VaultEditor (VaultProcessor& p) : AudioProcessorEditor (p), proc (p
     main->onScaleChosen = [this] (float s) { setUiScale (s); };
     addAndMakeVisible (*main);
 
-    // first open: the largest preset up to 100 % that fits 85 % of the screen; later: the remembered scale
+    // first open: the largest preset up to 100 % that fits 85 % of the screen the plugin opens on (the one under the mouse -
+    // the user just clicked the plugin in the DAW there); later: the remembered scale
     float s = settings->scale();
     if (s <= 0.0f)
     {
-        s = minScale;
-        if (const auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-        {
-            const auto area = d->userBounds * 0.85f;
-            for (float c : scalePresets())
-                if (c <= 1.0f && (float) baseWidth * c <= area.getWidth() && (float) baseHeight * c <= area.getHeight()) s = c;
-        }
-        else s = 1.0f;
+        const auto& displays = juce::Desktop::getInstance().getDisplays();
+        const auto* d = displays.getDisplayForPoint (juce::Desktop::getMousePosition());
+        if (d == nullptr) d = displays.getPrimaryDisplay();
+        s = d != nullptr ? firstOpenScale (d->userArea) : 1.0f;
     }
     s = juce::jlimit (minScale, maxScale, s);
 
@@ -671,9 +696,13 @@ void VaultEditor::paint (juce::Graphics& g) { g.fillAll (vui::col::ink); }
 void VaultEditor::resized()
 {
     if (main == nullptr) return;
-    uiScale = juce::jlimit (minScale, maxScale, (float) getWidth() / (float) baseWidth);
+    // the scale that fits both sides (a host may ignore the aspect ratio), the view centred in any leftover space
+    const float fit = std::min ((float) getWidth() / (float) baseWidth, (float) getHeight() / (float) baseHeight);
+    uiScale = juce::jlimit (minScale, maxScale, fit);
+    const float dx = std::max (0.0f, ((float) getWidth() - (float) baseWidth * uiScale) * 0.5f);
+    const float dy = std::max (0.0f, ((float) getHeight() - (float) baseHeight * uiScale) * 0.5f);
     main->setBounds (0, 0, baseWidth, baseHeight);
-    main->setTransform (juce::AffineTransform::scale (uiScale));
+    main->setTransform (juce::AffineTransform::scale (uiScale).translated (std::round (dx), std::round (dy)));
     if (! settingSize) settings->setScale (uiScale);
     main->updateToggles();
     main->repaint();
@@ -712,7 +741,12 @@ bool VaultEditor::keyPressed (const juce::KeyPress& k)
     if (code == juce::KeyPress::upKey)    { main->step (-1, false); return true; }
     if (code == juce::KeyPress::rightKey) { main->step (1, true); return true; }
     if (code == juce::KeyPress::leftKey)  { main->step (-1, true); return true; }
-    if (code == juce::KeyPress::returnKey || code == juce::KeyPress::spaceKey) { main->auditionCurrent(); return true; }
+    if (code == juce::KeyPress::pageDownKey) { main->step (main->pageRows(), false); return true; }
+    if (code == juce::KeyPress::pageUpKey)   { main->step (-main->pageRows(), false); return true; }
+    if (code == juce::KeyPress::homeKey)     { main->stepToEnd (false); return true; }
+    if (code == juce::KeyPress::endKey)      { main->stepToEnd (true); return true; }
+    if (code == juce::KeyPress::returnKey) { main->auditionCurrent(); return true; }
+    // Space is NOT used: it stays with the DAW (play / stop)
     const auto ch = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
     if (ch == 'z' || ch == 'x')
     {

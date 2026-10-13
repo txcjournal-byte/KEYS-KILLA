@@ -7,6 +7,7 @@
 // Waveform / level thumbnails of presets, rendered lazily on a low-priority background thread with VaultEngine::render
 // (one short note, preset defaults) and cached for the editor's lifetime. The UI never waits: get() returns false until
 // the thumbnail is ready, then `onReady` is called on the message thread.
+// getLive(): the same with the current macro settings (one "live" slot, the newest request wins - knob drags never queue up).
 class VaultThumbs : private juce::Thread, private juce::AsyncUpdater
 {
 public:
@@ -53,6 +54,49 @@ public:
         wake.signal();
     }
     bool isReady (int index) const { const juce::ScopedLock sl (lock); return done.count (index) != 0; }
+
+    // message thread: the thumbnail of `index` played with `macros` (4 values 0..1). At the preset's own macro settings this is
+    // get(). Otherwise the live render is requested; until it is ready the last live picture of this preset (or the
+    // default one) is returned, so the display never blinks while a knob turns.
+    bool getLive (int index, const float* macros, Thumb& out)
+    {
+        if (! juce::isPositiveAndBelow (index, (int) bank.size()) || macros == nullptr) return false;
+        std::array<float, vault::numMacros> m {};
+        bool atDefaults = true;
+        for (int i = 0; i < vault::numMacros; ++i)
+        {
+            m[(size_t) i] = std::round (juce::jlimit (0.0f, 1.0f, macros[i]) * 100.0f) / 100.0f;
+            atDefaults &= std::abs (m[(size_t) i] - bank[(size_t) index].macroDefaults[(size_t) i]) < 0.006f;
+        }
+        if (atDefaults) return get (index, out);
+        {
+            const juce::ScopedLock sl (lock);
+            if (live.ready && live.index == index && live.macros == m) { out = live.thumb; return true; }
+            if (! (liveReq.index == index && liveReq.macros == m)) { liveReq.index = index; liveReq.macros = m; liveWanted = true; }
+        }
+        wake.signal();
+        {
+            const juce::ScopedLock sl (lock);
+            if (live.ready && live.index == index) { out = live.thumb; return true; }
+        }
+        return get (index, out);
+    }
+    // tests: block until the live picture for exactly these macros is ready
+    bool waitForLive (int index, const float* macros, int timeoutMs)
+    {
+        Thumb t;
+        const auto end = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+        while (juce::Time::getMillisecondCounter() < end)
+        {
+            getLive (index, macros, t);
+            {
+                const juce::ScopedLock sl (lock);
+                if (! liveWanted && live.ready && live.index == index && live.macros == liveReq.macros) return true;
+            }
+            juce::Thread::sleep (5);
+        }
+        return false;
+    }
     // tests / snapshots: block until `index` is ready (or the timeout)
     bool waitFor (int index, int timeoutMs)
     {
@@ -63,11 +107,11 @@ public:
         return isReady (index);
     }
 
-    static Thumb analyse (const VaultPreset& p)
+    static Thumb analyse (const VaultPreset& p, const float* macros = nullptr)
     {
         constexpr double sr = 22050.0, secs = 2.0;
         const int note = p.category == vault::cat808Bass ? 48 : 60;
-        const auto buf = VaultEngine::render (p, note, 0.8f, secs, sr);
+        const auto buf = macros != nullptr ? VaultEngine::render (p, note, 0.8f, secs, sr, macros) : VaultEngine::render (p, note, 0.8f, secs, sr);
         Thumb t;
         const int n = buf.getNumSamples(), per = std::max (1, n / numBins);
         float pk = 0.0f;
@@ -93,9 +137,24 @@ private:
         while (! threadShouldExit())
         {
             int idx = -1;
+            LiveSlot req;
+            bool doLive = false;
             {
                 const juce::ScopedLock sl (lock);
-                if (! queue.empty()) { idx = queue.front(); queue.pop_front(); }
+                if (liveWanted) { req = liveReq; liveWanted = false; doLive = true; }
+                else if (! queue.empty()) { idx = queue.front(); queue.pop_front(); }
+            }
+            if (doLive)
+            {
+                req.thumb = analyse (bank[(size_t) req.index], req.macros.data());
+                req.ready = true;
+                {
+                    const juce::ScopedLock sl (lock);
+                    live = req;
+                    readyList.push_back (req.index);
+                }
+                triggerAsyncUpdate();
+                continue;
             }
             if (idx < 0) { wake.wait (1000); continue; }
             const auto t = analyse (bank[(size_t) idx]);
@@ -114,7 +173,11 @@ private:
         if (onReady) for (int i : ready) onReady (i);
     }
 
+    struct LiveSlot { int index = -1; std::array<float, vault::numMacros> macros {}; Thumb thumb; bool ready = false; };
+
     const std::vector<VaultPreset>& bank;
+    LiveSlot live, liveReq;
+    bool liveWanted = false;
     juce::CriticalSection lock;
     std::map<int, Thumb> done;
     std::deque<int> queue;

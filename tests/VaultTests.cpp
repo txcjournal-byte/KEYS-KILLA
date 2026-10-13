@@ -6,7 +6,7 @@
 //                           VaultTests -uitest                   editor behaviour (keys, filters, favorites, persistence, WAV drag)
 //                           VaultTests -shot <out.png> [state]   the browser UI with a 3-layer preset + a filter (xvfb-run)
 //                                      state: comma list of  scale:<pct> search:<text> cat:<n> style:<n> char:<n> layers:<n>
-//                                      favs recent empty keys   (default "main" = its category + a style chip + a held chord)
+//                                      favs recent empty keys knobs   (default "main" = its category + a style chip + a held chord)
 //                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
 #include "../Source/vault/VaultProcessor.h"
 #include "../Source/vault/VaultEditor.h"
@@ -550,6 +550,264 @@ juce::File uiSetup (const juce::String& name)
     return tmp;
 }
 
+// adversarial editor QA: speed with 5,000 rows, more keys, macros (sound + waveform), click-free browsing through the whole
+// plugin, WAV drag, odd host window sizes, first-open size, state restore with the editor open
+double msSince (double t0) { return juce::Time::getMillisecondCounterHiRes() - t0; }
+
+void uiQaTests (VaultProcessor& p)
+{
+    const auto& bank = p.bank();
+    const int n = (int) bank.size();
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    v.setCategory (-1); v.setQuery ({}); v.setStyle (-1); v.setCharacter (-1); v.setLayers (0); v.setFavoritesOnly (false); v.setRecentOnly (false);
+
+    // ---- speed: every filter change re-filters 5,000 rows and repaints; only the visible rows are painted
+    {
+        double worst = 0, total = 0; int ops = 0;
+        auto op = [&] (std::function<void()> f)
+        {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            f();
+            const double ms = msSince (t0);
+            worst = std::max (worst, ms); total += ms; ++ops;
+        };
+        for (int c = -1; c < vault::numCategories; ++c) op ([&] { v.setCategory (c); });
+        for (int st = -1; st < vault::numStyles; ++st) op ([&] { v.setStyle (st); });
+        for (int ch = -1; ch < vault::numCharacters; ++ch) op ([&] { v.setCharacter (ch); });
+        v.setCategory (-1); v.setStyle (-1); v.setCharacter (-1);
+        for (int l = 0; l <= vault::maxParts; ++l) op ([&] { v.setLayers (l); });
+        juce::String q;
+        for (auto c : juce::String ("dark bell"))
+        {
+            q << juce::String::charToString (c);
+            op ([&] { v.setQuery (q); });
+        }
+        v.setQuery ({}); v.setLayers (0);
+        check (worst < 25.0, "ui: filter change on 5,000 rows (" + juce::String (ops) + " changes, avg " + juce::String (total / ops, 2)
+                                 + " ms, worst " + juce::String (worst, 2) + " ms)");
+        auto& lb = v.presetList().listBox();
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        int frames = 0;
+        for (int row = 0; row < n; row += 97, ++frames)
+        {
+            lb.scrollToEnsureRowIsOnscreen (row);
+            auto img = v.presetList().createComponentSnapshot (v.presetList().getLocalBounds(), true, 1.0f);
+            juce::ignoreUnused (img);
+        }
+        const double perFrame = msSince (t0) / std::max (1, frames);
+        int rowComps = 0;
+        for (auto* c : lb.getViewport()->getViewedComponent()->getChildren()) rowComps += c->isVisible() ? 1 : 0;
+        check (perFrame < 16.0 && rowComps < 40, "ui: list scroll + repaint " + juce::String (perFrame, 2) + " ms per frame, "
+                                                    + juce::String (rowComps) + " row components for " + juce::String (n) + " rows");
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 40; ++i) v.loadPreset ((i * 131) % n, false);
+        check (msSince (t1) / 40.0 < 5.0, "ui: loading a sound from the list costs " + juce::String (msSince (t1) / 40.0, 3) + " ms on the UI thread");
+    }
+
+    // ---- keys: Page Down / End / Home walk the filtered list, Space is left to the DAW (play / stop)
+    {
+        v.setCategory (vault::catLeads);
+        const auto rows = v.browser().visible();
+        v.loadPreset (rows.front(), false);
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::pageDownKey));
+        const int afterPage = v.browser().rowOf (p.currentPreset());
+        check (afterPage == v.pageRows() && afterPage >= 5, "ui: Page Down jumps " + juce::String (afterPage) + " rows");
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::endKey));
+        check (p.currentPreset() == rows.back(), "ui: End loads the last sound of the list");
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::homeKey));
+        check (p.currentPreset() == rows.front(), "ui: Home loads the first sound of the list");
+        check (! ed.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey)), "ui: Space is not taken from the DAW");
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        check (p.currentPreset() == rows[1], "ui: right arrow loads the next sound");
+        v.setCategory (-1);
+    }
+
+    // ---- macros: each knob moves the sound, and the waveform follows the knobs
+    {
+        int moved[vault::numMacros] {}, tested = 0;
+        juce::Random r (11);
+        for (int k = 0; k < 24; ++k, ++tested)
+        {
+            const auto& pr = bank[(size_t) r.nextInt (n)];
+            const int note = pr.category == vault::cat808Bass ? 48 : 60;
+            float m[vault::numMacros];
+            for (int i = 0; i < vault::numMacros; ++i) m[i] = pr.macroDefaults[i];
+            const auto base = VaultEngine::render (pr, note, 0.8f, 1.5, 22050.0, m);
+            for (int i = 0; i < vault::numMacros; ++i)
+            {
+                float mm[vault::numMacros];
+                std::copy (std::begin (m), std::end (m), std::begin (mm));
+                float diffMax = 0;
+                for (float target : { 0.0f, 1.0f })
+                {
+                    mm[i] = target;
+                    const auto b = VaultEngine::render (pr, note, 0.8f, 1.5, 22050.0, mm);
+                    double d = 0, e = 0;
+                    for (int c = 0; c < 2; ++c)
+                        for (int s = 0; s < b.getNumSamples(); ++s)
+                        {
+                            const double x = base.getSample (c, s), y = b.getSample (c, s);
+                            d += (x - y) * (x - y); e += x * x;
+                        }
+                    diffMax = std::max (diffMax, (float) std::sqrt (d / std::max (1e-12, e)));
+                }
+                if (diffMax > 0.05f) ++moved[i];
+            }
+        }
+        juce::String s;
+        bool all = true;
+        for (int i = 0; i < vault::numMacros; ++i) { s << vault::macroNames()[i] << " " << moved[i] << "/" << tested << " "; all &= moved[i] >= tested * 9 / 10; }
+        check (all, "ui: every macro audibly changes the sound (" + s.trim() + ")");
+
+        const int idx = v.shownPreset();
+        auto& knob = v.infoPanel().knob[1];
+        knob.setValue (1.0, juce::sendNotificationSync);
+        check (std::abs (p.getMacro (1) - 1.0f) < 1e-4f, "ui: SPACE knob drives the macro parameter");
+        float mac[vault::numMacros];
+        for (int i = 0; i < vault::numMacros; ++i) mac[i] = p.getMacro (i);
+        VaultThumbs::Thumb def, liveT;
+        v.thumbnails().waitFor (idx, 10000);
+        v.thumbnails().get (idx, def);
+        const bool ok = v.thumbnails().waitForLive (idx, mac, 10000) && v.thumbnails().getLive (idx, mac, liveT);
+        float d = 0;
+        for (int b = 0; b < VaultThumbs::numBins; ++b) d += std::abs (def.level[(size_t) b] - liveT.level[(size_t) b]);
+        check (ok && d > 0.5f, "ui: the waveform follows the macros (difference " + juce::String (d, 2) + ")");
+        knob.setValue (bank[(size_t) idx].macroDefaults[1], juce::sendNotificationSync);
+    }
+
+    // ---- browsing through the whole plugin while a chord is held: instant, click-free, never silent, never clipping
+    {
+        constexpr double sr = 48000.0;
+        constexpr int block = 256;
+        p.setPlayConfigDetails (0, 2, sr, block);
+        p.prepareToPlay (sr, block);
+        v.setCategory (vault::catPads);
+        v.loadPreset (v.browser().visible().front(), false);
+        auto& ks = p.getKeyboardState();
+        for (int nn : { 60, 63, 67 }) ks.noteOn (1, nn, 0.8f);
+        const int switchEvery = (int) (0.25 * sr / block), numSwitches = 24, blocks = switchEvery * (numSwitches + 1);
+        juce::AudioBuffer<float> all (2, blocks * block), buf (2, block);
+        std::vector<int> switchAt, switchTo;
+        int lateBlocks = 0;
+        for (int k = 0; k < blocks; ++k)
+        {
+            if (k > 0 && k % switchEvery == 0)
+            {
+                const int before = p.currentPreset();
+                v.step (1, false);                        // the down key
+                if (p.currentPreset() == before) ++lateBlocks;
+                switchAt.push_back (k * block);
+                switchTo.push_back (p.currentPreset());
+            }
+            juce::MidiBuffer m;
+            p.processBlock (buf, m);
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, k * block, buf, c, 0, block);
+        }
+        for (int nn : { 60, 63, 67 }) ks.noteOff (1, nn, 0.0f);
+        if (juce::SystemStats::getEnvironmentVariable ("CV_QA_DEBUG", {}).isNotEmpty())
+            writeWav (all, sr, juce::File::getCurrentWorkingDirectory().getChildFile ("browse.wav"));
+        // a click = a sample-to-sample jump far above what the sounds on both sides of the switch do on their own
+        float worstRatio = 0, worstJump = 0, minRms = 1, peak = 0;
+        for (size_t si = 0; si < switchAt.size(); ++si)
+        {
+            const int sw = switchAt[si];
+            const int len = switchEvery * block;
+            const float around = stats (all, sw - 64, sw + (int) (0.025 * sr)).maxJump;
+            // the new sound's own attack: the same chord struck fresh (the switch re-strikes it after the 10 ms fade-out)
+            juce::MidiBuffer chord;
+            for (int nn : { 60, 63, 67 }) chord.addEvent (juce::MidiMessage::noteOn (1, nn, 0.8f), 0);
+            const auto fresh = VaultEngine::renderMidi (bank[(size_t) switchTo[si]], chord, (int) (0.03 * sr), sr);
+            const float own = std::max ({ stats (all, sw - len / 2, sw - 64).maxJump, stats (all, sw + (int) (0.04 * sr), sw + len - 64).maxJump,
+                                          stats (fresh).maxJump });
+            worstRatio = std::max (worstRatio, around / std::max (1e-4f, own));
+            if (juce::SystemStats::getEnvironmentVariable ("CV_QA_DEBUG", {}).isNotEmpty())
+            {
+                int at = -1; float mj = 0;
+                for (int c = 0; c < 2; ++c) for (int i = sw - 63; i < sw + (int) (0.025 * sr); ++i) { const float j = std::abs (all.getSample (c, i) - all.getSample (c, i - 1)); if (j > mj) { mj = j; at = i - sw; } }
+                juce::String fxs;
+                for (auto& [id, val] : bank[(size_t) switchTo[si]].parts.front().values)
+                    if (id == ID::chorus || id == ID::revMix || id == ID::delayMix || id == ID::flanger || id == ID::phaser || id == ID::revType || id == ID::body || id == ID::reverse)
+                        fxs << id << "=" << juce::String (val, 2) << " ";
+                std::printf ("   switch @%d: jump %.4f at %+d samples, own %.4f -> %d %s | %s\n", sw, around, at, own, switchTo[si],
+                             bank[(size_t) switchTo[si]].name.toRawUTF8(), fxs.toRawUTF8());
+            }
+            worstJump = std::max (worstJump, around);
+            minRms = std::min (minRms, stats (all, sw + (int) (0.05 * sr), sw + len - 64).rms);
+        }
+        peak = stats (all).peak;
+        check (lateBlocks == 0, "ui: a picked sound is active in the very next audio block");
+        check (worstRatio < 1.6f, "ui: browsing " + juce::String (numSwitches) + " pads with a held chord has no clicks (worst jump "
+                                       + juce::String (worstJump, 4) + ", " + juce::String (worstRatio, 2) + "x the sounds' own)");
+        check (minRms > 1e-3f && peak < 1.0f && stats (all).finite, "ui: every sound plays the held chord, no clipping (min rms "
+                                                                       + juce::String (minRms, 4) + ", peak " + juce::String (peak, 3) + ")");
+        p.releaseResources();
+        v.setCategory (-1);
+    }
+
+    // ---- DRAG WAV: rendered quickly, 808s at C3, file written
+    {
+        int bass = -1;
+        for (int i = 0; i < n && bass < 0; ++i) if (bank[(size_t) i].category == vault::cat808Bass) bass = i;
+        v.loadPreset (bass, false);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto f = v.renderWavForDrag();
+        const double ms = msSince (t0);
+        check (f.existsAsFile() && f.getFileName().endsWith (" C3.wav") && f.getSize() > 100000 && ms < 400.0,
+               "ui: DRAG WAV of an 808 -> " + f.getFileName() + " (" + juce::String (f.getSize() / 1024) + " KB, " + juce::String (ms, 0) + " ms)");
+    }
+
+    // ---- window: a host that ignores the aspect ratio gets a centred, fully visible view; first-open size per screen
+    {
+        ed.setSize (1600, 760);
+        auto b = v.getBoundsInParent();
+        check (ed.getLocalBounds().contains (b) && std::abs (b.getCentreX() - 800) <= 2 && b.getHeight() == 760,
+               "ui: odd host size 1600x760 -> view " + b.toString());
+        ed.setSize (1180, 1000);
+        b = v.getBoundsInParent();
+        check (ed.getLocalBounds().contains (b) && b.getWidth() == 1180 && std::abs (b.getCentreY() - 500) <= 2,
+               "ui: odd host size 1180x1000 -> view " + b.toString());
+        ed.setUiScale (1.0f);
+        check (VaultEditor::firstOpenScale ({ 0, 0, 1366, 728 }) == 0.8f && VaultEditor::firstOpenScale ({ 0, 0, 1920, 1040 }) == 1.0f
+                   && VaultEditor::firstOpenScale ({ 0, 0, 1280, 680 }) == 0.7f && VaultEditor::firstOpenScale ({ 0, 0, 3840, 2100 }) == 1.0f,
+               "ui: first-open size fits 85 % of the screen (1366x768 -> 80 %, 1920x1080 -> 100 %)");
+    }
+
+    // ---- favorites view: un-favoriting a row keeps the list where it is
+    {
+        for (int i = 0; i < 60; ++i) if (! v.browser().isFavorite (i * 7)) v.toggleFavorite (i * 7);
+        v.setFavoritesOnly (true);
+        auto& lb = v.presetList().listBox();
+        lb.getViewport()->setViewPosition (0, 20 * vui::PresetList::rowH);
+        const int y0 = lb.getViewport()->getViewPositionY();
+        v.toggleFavorite (v.browser().visible()[25]);
+        check (y0 > 0 && lb.getViewport()->getViewPositionY() == y0, "ui: un-favoriting in the favorites view keeps the scroll position");
+        for (int i = 0; i < 60; ++i) if (v.browser().isFavorite (i * 7)) v.toggleFavorite (i * 7);
+        v.setFavoritesOnly (false);
+    }
+
+    // ---- host state restore while the editor is open: sound, knobs and the list follow
+    {
+        VaultProcessor other;
+        const int target = n - 3;
+        other.selectPreset (target);
+        other.setMacro (0, 0.15f); other.setMacro (3, 0.9f); other.setVolumeDb (-6.0f);
+        juce::MemoryBlock st;
+        other.getStateInformation (st);
+        p.setStateInformation (st.getData(), (int) st.getSize());
+        v.syncFromProcessor();
+        check (p.currentPreset() == target && v.shownPreset() == target && v.presetList().listBox().getModel()->getNumRows() > 0,
+               "ui: state restore with the editor open shows the restored sound");
+        check (std::abs (v.infoPanel().knob[0].getValue() - 0.15) < 1e-3 && std::abs (v.infoPanel().knob[3].getValue() - 0.9) < 1e-3
+                   && std::abs (v.infoPanel().volume.getValue() + 6.0) < 0.05,
+               "ui: state restore moves the knobs and the volume slider");
+        juce::MemoryBlock junk ("not a state", 11);
+        p.setStateInformation (junk.getData(), (int) junk.getSize());
+        p.setStateInformation (nullptr, 0);
+        check (p.currentPreset() == target, "ui: a broken state is ignored");
+    }
+}
+
 // editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
 // host automation is followed, DRAG WAV renders a valid file
 int uiTests()
@@ -612,7 +870,7 @@ int uiTests()
         ed.setUiScale (1.25f);
         check (ed.getWidth() == 1475 && ed.getHeight() == 950, "ui: scale 125 %");
         ed.setUiScale (3.0f);
-        check (ed.getWidth() == 1770, "ui: scale clamps at 150 %");
+        check (ed.getWidth() == 2065 && ed.getHeight() == 1330, "ui: scale clamps at 175 %");
         ed.setUiScale (1.25f);
     }
     {
@@ -624,6 +882,7 @@ int uiTests()
         const auto f = VaultSettings::fileOverride();
         check (f.existsAsFile() && f.loadFileAsString().contains (bank[(size_t) fav].id), "ui: settings file " + f.getFileName());
     }
+    uiQaTests (p);
     return fails;
 }
 
@@ -644,6 +903,7 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     v.loadPreset (pick, false);
     const auto& pr = bank[(size_t) pick];
 
+    bool macrosAfterLoad = false;   // "knobs": SPACE + MOTION up, the waveform follows
     auto tokens = juce::StringArray::fromTokens (stateArg.isEmpty() ? "main" : stateArg, ",", "");
     for (auto t : tokens)
     {
@@ -662,6 +922,7 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
         else if (key == "layers")  v.setLayers (val.getIntValue());
         else if (key == "empty")   v.setQuery ("zzqx nothing");
         else if (key == "recent")  v.setRecentOnly (true);
+        else if (key == "knobs")   { macrosAfterLoad = true; }
         else if (key == "favs")
         {
             for (int i = 0; i < 9; ++i) v.toggleFavorite ((pick + i * 13) % (int) bank.size());
@@ -670,6 +931,14 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     }
     v.loadPreset (pick, false);
     v.thumbnails().waitFor (pick, 10000);
+    if (macrosAfterLoad)
+    {
+        p.setMacro (1, 1.0f); p.setMacro (3, 0.95f); p.setMacro (0, 0.2f);
+        float m[vault::numMacros];
+        for (int i = 0; i < vault::numMacros; ++i) m[i] = p.getMacro (i);
+        v.thumbnails().waitForLive (pick, m, 10000);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    }
     const auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     const juce::File f = juce::File::getCurrentWorkingDirectory().getChildFile (outPath);
     f.deleteFile();
