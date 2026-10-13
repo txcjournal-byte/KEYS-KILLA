@@ -136,7 +136,8 @@ all little-endian (juce::MemoryOutputStream). Round trips bit-exactly. ~760 one-
    At most 5,000 presets are used (`VaultProcessor::maxPresets`).
 4. Check a bank: `VaultTests -bankinfo` (per-category / per-layer counts vs targets), `VaultTests` (all tests over the
    loaded bank: every preset validates, ids unique, two renders per category clean), `VaultTests -wav <index> out.wav [note] [seconds]`.
-   With `CHROME_VAULT_BANK=/abs/path/bank.cvb` these use that file.
+   With `CHROME_VAULT_BANK=/abs/path/bank.cvb` these use that file. `VaultTests -writestarter out.cvb` writes the starter
+   bank as a sample `.cvb`; `xvfb-run -a VaultTests -snapshot editor.png` paints the editor into a PNG.
 
 ## API for the bank generator (`Source/vault/VaultEngine.h`)
 
