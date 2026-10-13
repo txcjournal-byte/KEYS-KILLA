@@ -16,7 +16,8 @@ plugin code `Cvlt`, product name `CHROME VAULT`, version 0.1.0.
 | `Source/vault/VaultTypes.h/.cpp` | `VaultPart`, `VaultPreset`, name tables, the `CVB1` bank format (light: juce_core only in the header) |
 | `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - 4 synth parts -> master FX -> macros -> mono lows -> trim -> volume -> limiter; offline `render()` |
 | `Source/vault/VaultProcessor.h/.cpp` | `VaultProcessor` - the `juce::AudioProcessor` (parameters, bank loading, state) |
-| `Source/vault/VaultEditor.h/.cpp` | PLACEHOLDER editor (logo, preset name, prev / next, macros, keyboard). The real UI replaces this pair. |
+| `Source/vault/VaultEditor.h/.cpp` | the editor: browser UI (see "Editor UI" below); `VaultMainView` / `VaultInfoPanel` are implemented here too |
+| `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h` (palette, fonts, icons, LookAndFeel), `VaultBrowserModel.h` (search / filters / favorites / recent, no GUI), `VaultSettings.h` (user settings file), `VaultThumbs.h` (background waveform thumbnails), `VaultWidgets.h` (pills, category list, chips, preset list, keyboard, DRAG WAV), `VaultMainView.h` |
 | `tests/VaultTests.cpp` | console target `VaultTests` |
 | `resources/vault/*.cvb` | the preset bank(s) embedded into the plugin |
 
@@ -210,10 +211,41 @@ class VaultProcessor : public juce::AudioProcessor {
 };
 ```
 
-Favorites / recent / search / filters are UI-side (store them with `juce::PropertiesFile` in
-`userApplicationDataDirectory/TrapWin/CHROME VAULT/` keyed by preset `id`). Design mockup and colours: ink `#04060A`,
-panel `#0A0F18` / `#0B111C`, line `#1A2333`, silver `#E6EAF2`, text `#E6ECF7`, muted `#A9B6CC`, dim `#6B7890`,
-ice `#9FC3FF`, ice2 `#7FA6E8`, deep `#4676C4`; chrome gradient logo "CHROME VAULT" + "BY TRAPWIN", pill buttons, rounded panels.
+## Editor UI (`VaultEditor`)
+
+Laid out at the base size **1180 x 760** and scaled as one piece with an affine transform (vector drawing, crisp at any
+scale): 70 / 80 / 90 / 100 / 115 / 125 / 150 % from the scale pill in the status bar, or by dragging the corner (aspect kept).
+First open: the largest preset up to 100 % that fits 85 % of the primary display; afterwards the last size is remembered.
+
+* Top bar: chrome logo, search (every word must match the name, category, layer labels, style / character tags or
+  "n layers"; filters as you type; Up / Down still step while typing, Esc clears, Return goes back to the list),
+  current sound with ◀ ▶ (wrap through the filtered list), RANDOM (from the filtered list), RECENT (last 30 played,
+  newest first), FAVORITES.
+* Left: All Sounds + 16 categories with the real counts of the loaded bank.
+* Centre: chips STYLE / CHARACTER (one per row, click again = off) / LAYERS (All 1 2 3 4), "Clear filters";
+  the list is a `juce::ListBox` (only visible rows exist). Row: selected dot, name, category · styles, layer badge, heart.
+  Single click = load + a short audition note (C4, C3 for 808 & Bass) when "Preview on click" is on (default).
+* Right: name, category, tag pills, waveform thumbnail (rendered by `VaultThumbs` on a low-priority thread with
+  `VaultEngine::render`, cached; never blocks), LAYERS · n stack (A-D, label, transpose, level %), DRAG WAV (renders the
+  current sound with the current macros, C4, 2 s, 44.1 kHz 24-bit stereo, into the temp folder `CHROME VAULT/` and starts an
+  external file drag), the macro knobs TONE SPACE DRIVE MOTION (ring = distance from "as designed", double click = preset
+  default) and VOLUME, all attached to the APVTS parameters.
+* Bottom: status bar (Showing N of total, hints, temporary messages), Preview on click, scale; 4-octave keyboard C2-B5
+  (`juce::MidiKeyboardComponent` restyled) feeding `getKeyboardState()`.
+* Keys (when the search box does not have focus): Up / Down = next / previous sound (clamped), Left / Right = same with
+  wrap, Space / Return = audition again, PC keys `A W S E D F T G Y H U J K O L P ;` play from C4, Z / X octave down / up.
+  Clicking anywhere except the search box gives the keys back to the browser. `EDITOR_WANTS_KEYBOARD_FOCUS` is TRUE for
+  ChromeVault (needed for typing on macOS).
+* Settings (`VaultSettings`, one shared object per process, other open windows follow favorite changes):
+  `juce::PropertiesFile` "CHROME VAULT.settings" in `userApplicationDataDirectory/TrapWin/CHROME VAULT/`
+  (macOS: `~/Library/Application Support/TrapWin/CHROME VAULT/`): `favorites` and `recent` (preset ids, one per line),
+  `uiScale`, `previewOnClick`.
+* Palette (from the approved mockup): ink `#0B0F16`, panels `#111722` / `#151C28`, lines `#222B3A`, text `#E3E8F0`,
+  secondary `#A9B6CC`, tertiary `#8593AB` (darkest colour used for text), ice `#9FC3FF` / `#7FA6E8` / deep `#4676C4`
+  only for selection, focus and active chips. Fonts: JUCE default sans, bold weights.
+* Check it: `xvfb-run -a VaultTests -uitest` (behaviour) and `xvfb-run -a VaultTests -shot out.png [state]` (PNG of the
+  real UI; states: `main` (default), `scale:70`, `search:dark bell`, `cat:<n>`, `style:<n>`, `char:<n>`, `layers:<n>`,
+  `favs`, `recent`, `empty`, `keys`, comma-separated). Without a real bank both use a generated 5,000-preset demo bank.
 
 State (`getStateInformation`): XML `CHROMEVAULT` with `presetId` (restored by id first, so bank re-ordering is safe),
 `presetIndex`, `macro1..4`, `volume`.

@@ -164,7 +164,8 @@ juce_add_plugin(ChromeVault
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    # --- vault-ui --- TRUE: the search box must get typing on macOS (FALSE = the window ignores key presses), arrows + PC keys
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     VST3_CATEGORIES Instrument Synth
     AU_MAIN_TYPE kAudioUnitType_MusicDevice
     FORMATS VST3 AU Standalone
