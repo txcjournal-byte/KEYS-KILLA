@@ -11,7 +11,7 @@
 # Output: build/installer-vault/CHROME-VAULT-<version>-macOS.pkg
 #         build/pkgroot-vault/... (the staged, signed-if-possible bundles; CI zips them from here)
 set -euo pipefail
-VERSION="${1:-0.1.0}"
+VERSION="${1:-1.0.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ART="$ROOT/build/ChromeVault_artefacts/Release"
 STAGE="$ROOT/build/pkgroot-vault"

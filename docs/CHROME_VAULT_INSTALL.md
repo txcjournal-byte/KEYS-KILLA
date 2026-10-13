@@ -149,7 +149,7 @@ Open **Options** in the app window to pick your audio output and MIDI input.
   when tests, auval and pluginval passed, it uploads the zip + `CHROME-VAULT-Setup-Mac.pkg` to the `test` release
   (and creates the release if it is missing).
 
-The CHROME VAULT version comes from `CV_VERSION_STRING` in `CMakeLists.txt` (separate from the EVOLVE version).
-Local installer builds: `ISCC.exe /DAppVersion=0.1.0 installer\win\chromevault.iss` (Windows, after
+The CHROME VAULT version comes from `set(CV_VERSION ...)` in `CMakeLists.txt` (separate from the EVOLVE version).
+Local installer builds: `ISCC.exe /DAppVersion=1.0.0 installer\win\chromevault.iss` (Windows, after
 `cmake --build build --config Release --target ChromeVault_VST3 ChromeVault_Standalone`) and
-`installer/mac/build_vault_pkg.sh 0.1.0` (Mac, after building into `build/`).
+`installer/mac/build_vault_pkg.sh 1.0.0` (Mac, after building into `build/`).

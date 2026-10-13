@@ -1,11 +1,12 @@
-# CHROME VAULT by TrapWin - foundation
+# CHROME VAULT by TrapWin
 
 A separate plugin product (target `ChromeVault`, VST3 / AU / Standalone) next to EVOLVE (`KeysKilla`) and
 EVOLVE FX PRO (`EvolveFX`). A fast preset-bank instrument: open, click a sound, play. 5,000 presets in 16
 categories, each preset is 1-4 layers ("parts"). UI 100 % English, no real brand / product / company names anywhere.
 
 Identity (never change after release): company `TrapWin`, bundle `com.trapwin.chromevault`, manufacturer code `Trpw`,
-plugin code `Cvlt`, product name `CHROME VAULT`, version 0.1.0.
+plugin code `Cvlt`, product name `CHROME VAULT`, version 1.0.0 (`set(CV_VERSION ...)` in `CMakeLists.txt`, separate
+from the EVOLVE project version). Installers, CI artifacts and end-user install notes: `docs/CHROME_VAULT_INSTALL.md`.
 
 ## Files
 
@@ -193,6 +194,8 @@ How it builds the bank:
 8. **Tags** from the measured sound: Bright / Dark = spectral-centroid percentile in the category, Warm = 150-900 Hz share,
    Wide = side / mid percentile, Hard / Soft = attack time, Dirty / Clean = drive + crush (+ 808 saturation); 1-3 each.
    Styles scored from category + character + space / lo-fi / glide (e.g. 808 with glide -> Drill, soft / warm plucks -> Pluggnb).
+   Trap stays a usable filter: in the trap categories (808 & Bass, Bells, Plucks, Strings, Brass, Winds, Orchestral) only the
+   most trap-like 70 % (90 % for 808 & Bass) by a hard / dirty / dark vs. soft / roomy score carry it.
 9. **Names**: invented "<adjective> <noun> <instrument>" (adjective family follows the character tags), <= 22 characters,
    unique, no word stems repeated, checked against a brand / product word list (`vaultqc::isCleanName`). Part labels are short
    instrument words ("Ice Bell", "Dark Pad", "Sub 808", "Grit"). Ids `cv.<category>.<nnnn>` (808, bell, keys, pluck, lead, pad,

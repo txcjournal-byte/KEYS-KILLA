@@ -153,8 +153,10 @@ endif()
 # =============================================================================
 # CHROME VAULT by TrapWin - a separate preset-bank instrument (Source/vault, docs/VAULT.md).
 # Its own company / codes - NEVER change the codes after release, hosts identify saved projects by them.
+# Its own version (separate from EVOLVE's project version); CI reads it from this line for the installers.
+set(CV_VERSION "1.0.0")
 juce_add_plugin(ChromeVault
-    VERSION 0.1.0
+    VERSION ${CV_VERSION}
     COMPANY_NAME "TrapWin"
     BUNDLE_ID com.trapwin.chromevault
     PLUGIN_MANUFACTURER_CODE Trpw
@@ -193,7 +195,7 @@ target_compile_definitions(ChromeVault PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     ${CV_BANK_DEF}
-    CV_VERSION_STRING="0.1.0")
+    CV_VERSION_STRING="${CV_VERSION}")
 target_link_libraries(ChromeVault
     PRIVATE
         ${CV_DATA_LIB}
@@ -210,7 +212,7 @@ if(KK_BUILD_TESTS)
     target_sources(VaultTests PRIVATE tests/VaultTests.cpp ${CV_SOURCES} ${CV_SHARED_SOURCES})
     target_compile_definitions(VaultTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
-        JucePlugin_Name="CHROME VAULT" JucePlugin_IsSynth=1 JucePlugin_VersionString="0.1.0")
+        JucePlugin_Name="CHROME VAULT" JucePlugin_IsSynth=1 JucePlugin_VersionString="${CV_VERSION}")
     target_link_libraries(VaultTests PRIVATE
         ${CV_DATA_LIB}
         juce::juce_audio_utils juce::juce_dsp

@@ -578,7 +578,15 @@ int uiTests()
         ed.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));
         check (p.currentPreset() == rows.back(), "ui: left arrow wraps to the end");
         v.setLayers (2);
-        v.setQuery ("stack");
+        // a search word taken from the loaded bank (works with the shipped bank and the demo bank)
+        juce::String word ("stack");
+        for (const auto& x : bank)
+            if (x.category == vault::catPads && x.parts.size() == 2)
+            {
+                word = x.name.upToFirstOccurrenceOf (" ", false, false).toLowerCase();
+                break;
+            }
+        v.setQuery (word);
         bool allOk = v.visibleCount() > 0;
         for (int i : v.browser().visible()) allOk &= bank[(size_t) i].parts.size() == 2 && bank[(size_t) i].category == vault::catPads;
         check (allOk, "ui: search + layers chip + category combine (" + juce::String (v.visibleCount()) + ")");

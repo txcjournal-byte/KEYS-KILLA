@@ -1,10 +1,10 @@
 ; Inno Setup script for CHROME VAULT by TrapWin (Windows x64, VST3 + Standalone)
 ; Build (from the repo root, after building ChromeVault_VST3 + ChromeVault_Standalone into build\ with --config Release):
-;   ISCC.exe /DAppVersion=0.1.0 installer\win\chromevault.iss
+;   ISCC.exe /DAppVersion=1.0.0 installer\win\chromevault.iss
 ; Output: build\installer-vault\CHROME-VAULT-<version>-Windows-Setup.exe
 ; (a separate folder from EVOLVE's build\installer, so the two products' CI steps never pick up each other's installer)
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "1.0.0"
 #endif
 #define Artefacts "..\..\build\ChromeVault_artefacts\Release"
 

@@ -1195,6 +1195,8 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
         cen[c].push_back (in[i].centroid); war[c].push_back (in[i].warmth); wid[c].push_back (in[i].width);
     }
     for (auto* arr : { &cen, &war, &wid }) for (auto& v : *arr) std::sort (v.begin(), v.end());
+    std::vector<float> trapScore (bank.size(), 0.0f);
+    std::array<std::vector<float>, vault::numCategories> trapSorted;
     for (size_t i = 0; i < bank.size(); ++i)
     {
         auto& c = bank[i];
@@ -1221,13 +1223,33 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
             chars |= 1u << k; ++n;
         }
         if (chars == 0) chars = 1u << (t.dirty > 0.2f ? charDirty : charWarm);
+        c.preset.chars = chars;
+        // how "trap" a sound is (hard / dirty / dark up, soft / roomy down), small deterministic jitter breaks ties
+        Rng tr (seedOf (778, (uint64_t) i));
+        trapScore[i] = ((chars & (1u << charHard)) ? 0.18f : 0.0f) + ((chars & (1u << charDirty)) ? 0.05f : 0.0f)
+                     + ((chars & (1u << charDark)) ? 0.05f : 0.0f) - ((chars & (1u << charSoft)) ? 0.12f : 0.0f)
+                     - (t.space > 0.42f ? 0.1f : 0.0f) + tr.range (0.0f, 0.04f);
+        trapSorted[(size_t) cat].push_back (trapScore[i]);
+    }
+    for (auto& v : trapSorted) std::sort (v.begin(), v.end());
 
+    for (size_t i = 0; i < bank.size(); ++i)
+    {
+        auto& c = bank[i];
+        const auto& t = in[i];
+        const int cat = c.category;
+        const uint32_t chars = c.preset.chars;
         // styles: scored from the category and the measured character
-        float st[vault::numStyles] {};
         const bool dark = chars & (1u << charDark), bright = chars & (1u << charBright), dirty = chars & (1u << charDirty),
                    wide = chars & (1u << charWide), soft = chars & (1u << charSoft), warm = chars & (1u << charWarm);
         auto catIs = [&] (std::initializer_list<int> cs) { for (int x : cs) if (x == cat) return true; return false; };
-        st[styleTrap] = 0.5f + (catIs ({ cat808Bass, catBellsMallets, catBrassHorns, catFlutesWinds, catStrings, catPlucks, catOrchestral }) ? 0.35f : 0.0f);
+        // Trap is the house style but must stay a real filter: in the trap categories only the most trap-like share keeps it
+        float st[vault::numStyles] {};
+        const float trapRaw = trapScore[i];
+        if (catIs ({ cat808Bass, catBellsMallets, catBrassHorns, catFlutesWinds, catStrings, catPlucks, catOrchestral }))
+            st[styleTrap] = percentile (trapSorted[(size_t) cat], trapRaw) >= (cat == cat808Bass ? 0.1f : 0.3f) ? 0.9f : 0.3f;
+        else
+            st[styleTrap] = 0.4f + trapRaw;
         st[styleRage] = (catIs ({ catLeads, catSynth, catArpsSequences, cat808Bass }) ? 0.3f : 0.0f) + (bright ? 0.25f : 0.0f) + (dirty ? 0.3f : 0.0f)
                       + (wide ? 0.15f : 0.0f) - (soft ? 0.4f : 0.0f);
         st[styleDrill] = (catIs ({ catStrings, catPianoKeys, catVocalsChoir, catBellsMallets, catOrchestral, catBrassHorns }) ? 0.3f : 0.0f)
@@ -1248,7 +1270,6 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
         uint32_t styles = 1u << sv[0].second;
         for (int k = 1; k < 3; ++k) if (sv[(size_t) k].first >= 0.55f) styles |= 1u << sv[(size_t) k].second;
         c.preset.styles = styles;
-        c.preset.chars = chars;
     }
 }
 
