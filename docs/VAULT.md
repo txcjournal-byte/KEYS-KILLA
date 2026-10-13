@@ -304,8 +304,15 @@ class VaultProcessor : public juce::AudioProcessor {
 ## Editor UI (`VaultEditor`)
 
 Laid out at the base size **1180 x 760** and scaled as one piece with an affine transform (vector drawing, crisp at any
-scale): 70 / 80 / 90 / 100 / 115 / 125 / 150 % from the scale pill in the status bar, or by dragging the corner (aspect kept).
-First open: the largest preset up to 100 % that fits 85 % of the primary display; afterwards the last size is remembered.
+scale): 80 / 90 / 100 / 115 / 130 / 150 / 175 / 200 % from the scale pill in the status bar (sizes that would not fit
+the screen are greyed out), or by dragging the corner (aspect kept). Minimum 80 % = 944 x 608.
+First open: the largest preset up to 100 % (never more, even on 4K) that fits 85 % of the screen's usable area (the
+display showing the editor, else the main display): 1366 x 768 laptop -> 80 %, 1920 x 1080 and up -> 100 %. Afterwards the
+user's choice is remembered in the settings file and restored, shrunk to the largest preset that fits the screen it opens
+on (200 % chosen on 4K opens at 90 % on a 1366 x 768 laptop; the 200 % choice stays saved).
+Readability: no text is smaller than 14 px in the base layout (11.2 px at 80 %), text colours are never darker than
+#8593AB, primary text #E3E8F0; `VaultTests -uitest` paints the editor at 80 / 100 / 150 / 200 % and checks the smallest
+font, and that every bank name and "category · styles" line fits its list column without "...".
 
 * Top bar: chrome logo, search (every word must match the name, category, layer labels, style / character tags or
   "n layers"; filters as you type; Up / Down still step while typing, Esc clears, Return goes back to the list),

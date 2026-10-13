@@ -65,9 +65,9 @@ void VaultInfoPanel::resized()
     auto r = getLocalBounds().reduced (18, 16);
     nameR = r.removeFromTop (28);
     r.removeFromTop (2);
-    catR = r.removeFromTop (18);
+    catR = r.removeFromTop (20);
     r.removeFromTop (8);
-    tagsR = r.removeFromTop (50);
+    tagsR = r.removeFromTop (54);
     r.removeFromTop (12);
     waveR = r.removeFromTop (58);
     r.removeFromTop (14);
@@ -77,14 +77,14 @@ void VaultInfoPanel::resized()
 
     volumeR = r.removeFromBottom (26);
     r.removeFromBottom (12);
-    knobsR = r.removeFromBottom (80);
+    knobsR = r.removeFromBottom (84);
     const int kw = knobsR.getWidth() / vault::numMacros;
     for (int i = 0; i < vault::numMacros; ++i) knob[i].setBounds (knobsR.getX() + i * kw, knobsR.getY(), kw, knobsR.getHeight());
     auto v = volumeR;
-    v.removeFromLeft (66);
-    v.removeFromRight (62);
+    v.removeFromLeft (volumeLabelW);
+    v.removeFromRight (volumeValueW + 6);
     volume.setBounds (v);
-    dragPill.setBounds (layersLabelR.withLeft (layersLabelR.getRight() - 108));
+    dragPill.setBounds (layersLabelR.withLeft (layersLabelR.getRight() - 118));
 }
 
 juce::Rectangle<float> VaultInfoPanel::heartRect() const
@@ -105,7 +105,7 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     if (p == nullptr)
     {
         g.setColour (col::dim);
-        g.setFont (font (14.0f));
+        g.setFont (font (15.0f));
         g.drawText ("No sound loaded", nameR, Justification::centredLeft);
         return;
     }
@@ -118,7 +118,7 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     g.fillPath (heartPath (heartRect().reduced (5.0f)));
 
     const int n = (int) p->parts.size();
-    g.setFont (font (13.0f));
+    g.setFont (font (14.0f));
     g.setColour (col::dim);
     g.drawText (vault::categoryNames()[jlimit (0, (int) vault::numCategories - 1, p->category)] + midDot() + String (n) + " " + layerWord (n),
                 catR, Justification::centredLeft, true);
@@ -127,12 +127,12 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     {
         auto tags = vault::namesOfMask (p->styles, vault::styleNames());
         tags.addArray (vault::namesOfMask (p->chars, vault::characterNames()));
-        const auto f = font (12.5f);
+        const auto f = font (14.0f);
         float x = (float) tagsR.getX(), y = (float) tagsR.getY();
-        const float h = 22.0f;
+        const float h = 24.0f;
         for (int i = 0; i < tags.size(); ++i)
         {
-            const float w = textWidth (f, tags[i]) + 20.0f;
+            const float w = textWidth (f, tags[i]) + 18.0f;
             if (x + w > (float) tagsR.getRight() && x > (float) tagsR.getX()) { x = (float) tagsR.getX(); y += h + 6.0f; }
             if (y + h > (float) tagsR.getBottom() + 0.5f) break;
             const Rectangle<float> pill (x, y, w, h);
@@ -174,7 +174,7 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     }
 
     // layers
-    g.setFont (font (11.5f, true, 0.16f));
+    g.setFont (font (14.0f, true, 0.08f));
     g.setColour (col::ice);
     g.drawText ("LAYERS" + midDot() + String (n), layersLabelR, Justification::centredLeft, false);
     {
@@ -195,17 +195,17 @@ void VaultInfoPanel::paint (juce::Graphics& g)
             g.setColour (col::layerLine);
             g.drawRoundedRectangle (row.reduced (0.5f), 10.0f, 1.0f);
             auto t = row.reduced (10.0f, 0.0f);
-            g.setFont (font (11.5f, true));
+            g.setFont (font (14.0f, true));
             g.setColour (col::ice);
             g.drawText (String::charToString ((juce_wchar) ('A' + i)), t.removeFromLeft (20.0f), Justification::centredLeft, false);
             String right = String (roundToInt (part.level * 100.0f)) + " %";
             const int tr = part.octave * 12 + part.semi;
             if (tr != 0) right = (tr % 12 == 0 ? (tr > 0 ? "+" : "") + String (tr / 12) + " oct" : (tr > 0 ? "+" : "") + String (tr) + " st") + "   " + right;
-            g.setFont (font (12.5f));
+            g.setFont (font (14.0f));
             g.setColour (col::dim);
-            const float rw = textWidth (font (12.5f), right) + 2.0f;
+            const float rw = textWidth (font (14.0f), right) + 2.0f;
             g.drawText (right, t.removeFromRight (rw), Justification::centredRight, false);
-            g.setFont (font (13.0f));
+            g.setFont (font (14.0f));
             g.setColour (col::text);
             g.drawText (part.label.isNotEmpty() ? part.label : "Layer " + String::charToString ((juce_wchar) ('A' + i)),
                         t.withTrimmedRight (8.0f), Justification::centredLeft, true);
@@ -213,13 +213,13 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     }
 
     // volume
-    g.setFont (font (11.5f, true, 0.12f));
+    g.setFont (font (14.0f, true, 0.04f));
     g.setColour (col::dim);
-    g.drawText ("VOLUME", volumeR.withWidth (66), Justification::centredLeft, false);
+    g.drawText ("VOLUME", volumeR.withWidth (volumeLabelW), Justification::centredLeft, false);
     const float db = proc.getVolumeDb();
-    g.setFont (font (12.5f));
+    g.setFont (font (14.0f));
     g.setColour (volume.isMouseOverOrDragging() ? col::ice : col::muted);
-    g.drawText (db <= -59.9f ? String ("-inf dB") : String (db, 1) + " dB", volumeR.withLeft (volumeR.getRight() - 58), Justification::centredRight, false);
+    g.drawText (db <= -59.9f ? String ("-inf dB") : String (db, 1) + " dB", volumeR.withLeft (volumeR.getRight() - volumeValueW), Justification::centredRight, false);
 }
 
 void VaultInfoPanel::mouseMove (const juce::MouseEvent& e)
@@ -245,7 +245,7 @@ VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> 
     model.setRecentIds (settings->recent());
     model.refilter();
 
-    search.setFont (font (14.5f));
+    search.setFont (font (15.0f));
     search.setTextToShowWhenEmpty ("Search: dark bell, glide 808", col::dim);
     search.setIndents (0, 0);
     search.setJustification (juce::Justification::centredLeft);
@@ -326,10 +326,10 @@ int VaultMainView::logoWidth()
 juce::Rectangle<int> VaultMainView::searchRect() const
 {
     const int left = 20 + logoWidth() + 22, curW = 268;
-    const int right = randomBtn.getX() - 12 - curW - 14;
+    const int right = randomBtn.getX() - 10 - curW - 12;
     return { left, 14, right - left, 38 };
 }
-juce::Rectangle<int> VaultMainView::curRect() const { return { randomBtn.getX() - 12 - 268, 15, 268, 36 }; }
+juce::Rectangle<int> VaultMainView::curRect() const { return { randomBtn.getX() - 10 - 268, 15, 268, 36 }; }
 juce::Rectangle<int> VaultMainView::statusRect() const { return { 0, getHeight() - keysH - statusH, getWidth(), statusH }; }
 juce::Rectangle<int> VaultMainView::keysRect() const { return { 0, getHeight() - keysH, getWidth(), keysH }; }
 
@@ -373,12 +373,12 @@ void VaultMainView::paint (juce::Graphics& g)
     g.setColour (col::line);
     g.fillRect (0.0f, (float) topH - 1.0f, b.getWidth(), 1.0f);
     {   // logo
-        g.setGradientFill (chromeGradient (13.0f, 38.0f));
+        g.setGradientFill (chromeGradient (9.0f, 34.0f));
         g.setFont (font (22.0f, true, 0.14f));
-        g.drawText ("CHROME VAULT", 20, 12, logoWidth() + 10, 28, Justification::centredLeft, false);
+        g.drawText ("CHROME VAULT", 20, 8, logoWidth() + 10, 28, Justification::centredLeft, false);
         g.setColour (col::dim);
-        g.setFont (font (10.5f, true, 0.3f));
-        g.drawText ("BY TRAPWIN", 21, 38, 200, 14, Justification::centredLeft, false);
+        g.setFont (font (14.0f, true, 0.2f));
+        g.drawText ("BY TRAPWIN", 21, 36, 200, 20, Justification::centredLeft, false);
     }
     {   // search field
         const auto r = searchRect().toFloat();
@@ -396,7 +396,7 @@ void VaultMainView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (r.reduced (0.5f), r.getHeight() * 0.5f, 1.0f);
         const auto* p = proc.currentPresetData();
         g.setColour (col::silver);
-        g.setFont (font (13.5f, true));
+        g.setFont (font (14.5f, true));
         g.drawText (p != nullptr ? p->name : String ("No sounds"), r.reduced (38.0f, 0.0f), Justification::centred, true);
     }
 
@@ -414,7 +414,7 @@ void VaultMainView::paint (juce::Graphics& g)
         const float y = (float) st.getY(), h = (float) st.getHeight();
         auto put = [&] (const String& s, bool strong)
         {
-            const auto f = font (13.0f, strong);
+            const auto f = font (14.0f, strong);
             g.setFont (f);
             g.setColour (strong ? col::ice : col::dim);
             const float w = textWidth (f, s);
@@ -583,9 +583,16 @@ void VaultMainView::showScaleMenu()
     juce::PopupMenu m;
     m.setLookAndFeel (&getLookAndFeel());
     const float cur = currentScale ? currentScale() : 1.0f;
+    // sizes that would not fit on this screen are greyed out (the window must never be larger than the screen)
+    const auto* ed = findParentComponentOfClass<VaultEditor>();
+    const auto area = ed != nullptr ? ed->displayArea() : juce::Rectangle<int>();
     int id = 1;
     for (float s : VaultEditor::scalePresets())
-        m.addItem (id++, juce::String (juce::roundToInt (s * 100.0f)) + " %", true, std::abs (s - cur) < 0.005f);
+    {
+        const bool ticked = std::abs (s - cur) < 0.005f;
+        const bool ok = area.isEmpty() || ticked || s <= VaultEditor::minScale || VaultEditor::fits (s, area);
+        m.addItem (id++, juce::String (juce::roundToInt (s * 100.0f)) + " %", ok, ticked);
+    }
     juce::Component::SafePointer<VaultMainView> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&scaleBtn).withMinimumWidth (scaleBtn.getWidth()),
                      [safe] (int r)
@@ -623,18 +630,43 @@ juce::File VaultMainView::renderWavForDrag()
 //==============================================================================
 const std::vector<float>& VaultEditor::scalePresets()
 {
-    static const std::vector<float> s { 0.7f, 0.8f, 0.9f, 1.0f, 1.15f, 1.25f, 1.5f, 1.75f };
+    static const std::vector<float> s { 0.8f, 0.9f, 1.0f, 1.15f, 1.3f, 1.5f, 1.75f, 2.0f };
     return s;
+}
+
+bool VaultEditor::fits (float scale, juce::Rectangle<int> area)
+{
+    return juce::roundToInt ((float) baseWidth * scale) <= area.getWidth() && juce::roundToInt ((float) baseHeight * scale) <= area.getHeight();
 }
 
 float VaultEditor::firstOpenScale (juce::Rectangle<int> usable)
 {
     if (usable.isEmpty()) return 1.0f;
-    const auto area = usable.toFloat() * 0.85f;
+    const auto area = (usable.toFloat() * 0.85f).toNearestInt();   // 85 % of the screen: room for the DAW's own window frame
     float s = minScale;
     for (float c : scalePresets())
-        if (c <= 1.0f && (float) baseWidth * c <= area.getWidth() && (float) baseHeight * c <= area.getHeight()) s = c;
+        if (c <= 1.0f && fits (c, area)) s = c;
     return s;
+}
+
+float VaultEditor::restoredScale (float saved, juce::Rectangle<int> usable)
+{
+    saved = juce::jlimit (minScale, maxScale, saved);
+    if (usable.isEmpty() || fits (saved, usable)) return saved;
+    float s = minScale;   // a screen smaller than 80 % gets 80 % (the smallest readable size)
+    for (float c : scalePresets())
+        if (c < saved && fits (c, usable)) s = c;
+    return s;
+}
+
+juce::Rectangle<int> VaultEditor::displayArea() const
+{
+    if (! simulatedDisplay().isEmpty()) return simulatedDisplay();
+    const auto& displays = juce::Desktop::getInstance().getDisplays();
+    const juce::Displays::Display* d = nullptr;
+    if (isShowing()) d = displays.getDisplayForRect (getScreenBounds());
+    if (d == nullptr) d = displays.getPrimaryDisplay();
+    return d != nullptr ? d->userBounds.getSmallestIntegerContainer() : juce::Rectangle<int>();
 }
 
 namespace
@@ -651,17 +683,11 @@ VaultEditor::VaultEditor (VaultProcessor& p) : AudioProcessorEditor (p), proc (p
     main->onScaleChosen = [this] (float s) { setUiScale (s); };
     addAndMakeVisible (*main);
 
-    // first open: the largest preset up to 100 % that fits 85 % of the screen the plugin opens on (the one under the mouse -
-    // the user just clicked the plugin in the DAW there); later: the remembered scale
-    float s = settings->scale();
-    if (s <= 0.0f)
-    {
-        const auto& displays = juce::Desktop::getInstance().getDisplays();
-        const auto* d = displays.getDisplayForPoint (juce::Desktop::getMousePosition());
-        if (d == nullptr) d = displays.getPrimaryDisplay();
-        s = d != nullptr ? firstOpenScale (d->userArea) : 1.0f;
-    }
-    s = juce::jlimit (minScale, maxScale, s);
+    // first open: the largest preset up to 100 % that fits 85 % of the screen; later the remembered scale, but never a
+    // window larger than the screen (e.g. 200 % chosen on a 4K screen, now opened on a laptop) - the choice itself stays saved
+    const float saved = settings->scale();
+    const auto area = displayArea();
+    const float s = saved <= 0.0f ? firstOpenScale (area) : restoredScale (saved, area);
 
     setWantsKeyboardFocus (true);
     addMouseListener (this, true);
@@ -689,6 +715,24 @@ void VaultEditor::setUiScale (float s)
 {
     s = juce::jlimit (minScale, maxScale, s);
     setSize (juce::roundToInt (baseWidth * s), juce::roundToInt (baseHeight * s));
+    settings->setScale (s);   // the user's choice (also when it equals the first-open size)
+}
+
+void VaultEditor::applyScale (float s)
+{
+    s = juce::jlimit (minScale, maxScale, s);
+    const juce::ScopedValueSetter<bool> svs (settingSize, true);
+    setSize (juce::roundToInt (baseWidth * s), juce::roundToInt (baseHeight * s));
+}
+
+void VaultEditor::fitToDisplay()
+{
+    // the constructor only knew the main display; the editor may have opened on another one
+    const auto area = displayArea();
+    if (area.isEmpty()) return;
+    const float saved = settings->scale();
+    const float target = saved <= 0.0f ? firstOpenScale (area) : restoredScale (saved, area);
+    if (std::abs (target - uiScale) > 0.001f) applyScale (target);
 }
 
 void VaultEditor::paint (juce::Graphics& g) { g.fillAll (vui::col::ink); }
@@ -698,12 +742,13 @@ void VaultEditor::resized()
     if (main == nullptr) return;
     // the scale that fits both sides (a host may ignore the aspect ratio), the view centred in any leftover space
     const float fit = std::min ((float) getWidth() / (float) baseWidth, (float) getHeight() / (float) baseHeight);
+    const float old = uiScale;
     uiScale = juce::jlimit (minScale, maxScale, fit);
     const float dx = std::max (0.0f, ((float) getWidth() - (float) baseWidth * uiScale) * 0.5f);
     const float dy = std::max (0.0f, ((float) getHeight() - (float) baseHeight * uiScale) * 0.5f);
     main->setBounds (0, 0, baseWidth, baseHeight);
     main->setTransform (juce::AffineTransform::scale (uiScale).translated (std::round (dx), std::round (dy)));
-    if (! settingSize) settings->setScale (uiScale);
+    if (! settingSize && std::abs (uiScale - old) > 0.001f) settings->setScale (uiScale);   // corner drag / host resize
     main->updateToggles();
     main->repaint();
 }
@@ -717,6 +762,11 @@ void VaultEditor::timerCallback()
 {
     if (main == nullptr) return;
     main->syncFromProcessor();
+    if (! displayChecked && isShowing())
+    {
+        displayChecked = true;
+        fitToDisplay();
+    }
     if (! focusGrabbed && isShowing())
     {
         focusGrabbed = true;

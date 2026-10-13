@@ -33,9 +33,16 @@ inline const juce::Colour infoA     { 0xff0b111c }, infoB { 0xff070b12 };
 inline const juce::Colour plugA     { 0xff0e1522 }, plugB { 0xff06090f };
 } // namespace col
 
+// Readability: the smallest text of the base layout is 14 px -> 11.2 px at the smallest window scale (80 %), 14 px at 100 %.
+inline constexpr float minTextPx = 14.0f;
+// test hook: the smallest font size asked for since the last reset (VaultTests checks it after painting at 80 / 100 %)
+inline float& smallestFontPx() { static float s = 1000.0f; return s; }
+
 // font size in CSS-like pixels (point height) - the mockup's sizes map 1:1
 inline juce::Font font (float px, bool bold = false, float tracking = 0.0f)
 {
+    jassert (px >= minTextPx);
+    smallestFontPx() = std::min (smallestFontPx(), px);
     auto o = juce::FontOptions (px, bold ? juce::Font::bold : juce::Font::plain).withPointHeight (px);
     if (tracking != 0.0f) o = o.withKerningFactor (tracking);
     return juce::Font (o);
@@ -151,7 +158,7 @@ public:
         setColour (Slider::rotarySliderOutlineColourId, col::line);
     }
 
-    juce::Font getPopupMenuFont() override { return font (14.0f); }
+    juce::Font getPopupMenuFont() override { return font (15.0f); }
 
     void drawPopupMenuBackground (juce::Graphics& g, int w, int h) override
     {
@@ -185,7 +192,7 @@ public:
                            juce::Slider& s) override
     {
         using namespace juce;
-        const float labelH = 18.0f;
+        const float labelH = 20.0f;
         auto area = Rectangle<float> ((float) x, (float) y, (float) width, (float) height);
         auto label = area.removeFromBottom (labelH);
         const float d = std::min (area.getWidth(), area.getHeight()) - 10.0f;
@@ -231,7 +238,7 @@ public:
         // label / value
         const bool showValue = s.isMouseButtonDown() || s.isMouseOverOrDragging();
         g.setColour (showValue ? col::ice : col::dim);
-        g.setFont (font (11.5f, true, 0.12f));
+        g.setFont (font (14.0f, true, 0.04f));
         const auto txt = showValue ? String (roundToInt (s.getValue() * 100.0)) + " %" : s.getName();
         g.drawText (txt, label, Justification::centred, false);
     }

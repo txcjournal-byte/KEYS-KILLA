@@ -8,15 +8,21 @@ class VaultMainView;
 class VaultSettings;
 
 // CHROME VAULT editor: the preset browser (search, categories, filter chips, list, info panel with macros, keyboard).
-// Everything is laid out at the base size 1180 x 760 and scaled as one piece (70 % .. 175 %, aspect kept, remembered).
-// 70 % = 826 x 532 (small laptop next to a DAW), 175 % = 2065 x 1330 (4K screens).
+// Everything is laid out at the base size 1180 x 760 (= 100 %) and scaled as one piece (80 % .. 200 %, aspect kept).
+// 80 % = 944 x 608 (1366 x 768 laptop next to a DAW), 200 % = 2360 x 1520.
+// Size on open: first time the largest preset <= 100 % that fits 85 % of the screen; later the remembered scale, shrunk
+// (not forgotten) when the screen it opens on is too small for it.
 class VaultEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     static constexpr int baseWidth = 1180, baseHeight = 760;
-    static constexpr float minScale = 0.7f, maxScale = 1.75f;
-    static const std::vector<float>& scalePresets();   // 70 80 90 100 115 125 150 175 %
-    static float firstOpenScale (juce::Rectangle<int> usableArea);   // largest preset <= 100 % that fits 85 % of the area
+    static constexpr float minScale = 0.8f, maxScale = 2.0f;
+    static const std::vector<float>& scalePresets();   // 80 90 100 115 130 150 175 200 %
+    static bool fits (float scale, juce::Rectangle<int> area);                // the window at this scale fits inside the area
+    static float firstOpenScale (juce::Rectangle<int> usableArea);          // largest preset <= 100 % that fits 85 % of the area
+    static float restoredScale (float saved, juce::Rectangle<int> usableArea);// saved, or the largest smaller preset that fits
+    // tests: pretend to be on a display with this user area (empty = the real displays)
+    static juce::Rectangle<int>& simulatedDisplay() { static juce::Rectangle<int> r; return r; }
 
     explicit VaultEditor (VaultProcessor&);
     ~VaultEditor() override;
@@ -29,8 +35,9 @@ public:
     void mouseDown (const juce::MouseEvent&) override;   // (also from all children) - clicks outside the search box return focus here
     void visibilityChanged() override;
 
-    void setUiScale (float scale);                       // clamps to 70 % .. 175 %, resizes the window and remembers it
+    void setUiScale (float scale);                       // clamps to 80 % .. 200 %, resizes the window and remembers it
     float getUiScale() const { return uiScale; }
+    juce::Rectangle<int> displayArea() const;            // user area of the display showing the editor, else the main display
 
     // test / snapshot hooks
     VaultMainView& view() { return *main; }
@@ -38,6 +45,8 @@ public:
 private:
     void timerCallback() override;
     void releasePcNotes();
+    void fitToDisplay();                                 // once shown: re-check the size against the display it is really on
+    void applyScale (float scale);                       // resize without remembering (first-open / display fit)
 
     VaultProcessor& proc;
     vui::VaultLookAndFeel lnf;
@@ -45,6 +54,7 @@ private:
     std::unique_ptr<VaultMainView> main;
     float uiScale = 1.0f;
     bool settingSize = false;
+    bool displayChecked = false;
     // PC keyboard -> notes ("A W S E D F T G Y H U J K O L P ;" from C, Z / X = octave down / up)
     int pcOctaveBase = 60;
     std::array<int, 17> pcNoteDown;   // note playing per key (-1 = up)

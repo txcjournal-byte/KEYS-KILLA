@@ -31,6 +31,7 @@ private:
     int preset = -1;
     bool heartOver = false;
     // fixed layout (base coordinates) - nothing moves while browsing
+    static constexpr int volumeLabelW = 78, volumeValueW = 70;
     juce::Rectangle<int> nameR, catR, tagsR, waveR, layersLabelR, stackR, knobsR, volumeR;
 };
 
@@ -113,7 +114,7 @@ private:
     vui::ChipBar chips;
     vui::PresetList list;
     VaultInfoPanel info;
-    vui::PillButton previewBtn { "Preview on click", vui::PillButton::Icon::none, 12.5f }, scaleBtn { "100 %", vui::PillButton::Icon::none, 12.5f };
+    vui::PillButton previewBtn { "Preview on click", vui::PillButton::Icon::none, 14.0f }, scaleBtn { "100 %", vui::PillButton::Icon::none, 14.0f };
     vui::VaultKeyboard keyboard;
 
     int shown = -2;

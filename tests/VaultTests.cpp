@@ -769,7 +769,7 @@ void uiQaTests (VaultProcessor& p)
                "ui: odd host size 1180x1000 -> view " + b.toString());
         ed.setUiScale (1.0f);
         check (VaultEditor::firstOpenScale ({ 0, 0, 1366, 728 }) == 0.8f && VaultEditor::firstOpenScale ({ 0, 0, 1920, 1040 }) == 1.0f
-                   && VaultEditor::firstOpenScale ({ 0, 0, 1280, 680 }) == 0.7f && VaultEditor::firstOpenScale ({ 0, 0, 3840, 2100 }) == 1.0f,
+                   && VaultEditor::firstOpenScale ({ 0, 0, 1280, 680 }) == 0.8f && VaultEditor::firstOpenScale ({ 0, 0, 3840, 2100 }) == 1.0f,
                "ui: first-open size fits 85 % of the screen (1366x768 -> 80 %, 1920x1080 -> 100 %)");
     }
 
@@ -808,19 +808,131 @@ void uiQaTests (VaultProcessor& p)
     }
 }
 
+// window size per screen: never too big on screen (first open <= 100 % and inside 85 % of the screen, a remembered size
+// shrinks to fit a smaller screen without forgetting the choice), scale menu choices that do not fit are greyed out
+void windowSizeTests (VaultProcessor& p)
+{
+    auto settings = VaultSettings::get();
+    const float before = settings->scale();
+    struct Screen { const char* name; juce::Rectangle<int> user; };
+    const Screen laptop { "1366x768", { 0, 0, 1366, 728 } }, fullHd { "1920x1080", { 0, 0, 1920, 1040 } },
+                 uhd { "3840x2160", { 0, 0, 3840, 2120 } }, tiny { "1024x600", { 0, 0, 1024, 560 } };
+    auto open = [&] (const Screen& sc, float saved)
+    {
+        VaultEditor::simulatedDisplay() = sc.user;
+        settings->setScale (saved);
+        VaultEditor ed (p);
+        return std::make_pair (ed.getBounds(), ed.getUiScale());
+    };
+    auto str = [] (juce::Rectangle<int> b) { return juce::String (b.getWidth()) + "x" + juce::String (b.getHeight()); };
+    auto inside85 = [] (juce::Rectangle<int> b, juce::Rectangle<int> user)
+    {
+        return b.getWidth() <= user.getWidth() * 0.85 && b.getHeight() <= user.getHeight() * 0.85;
+    };
+
+    // first open (nothing saved)
+    auto [b1, s1] = open (laptop, 0.0f);
+    check (std::abs (s1 - 0.8f) < 0.001f && b1.getWidth() == 944 && b1.getHeight() == 608 && inside85 (b1, laptop.user),
+           "ui: first open on 1366x768 (user area 1366x728) -> 80 % " + str (b1) + ", inside 85 % of the screen");
+    auto [b2, s2] = open (fullHd, 0.0f);
+    check (std::abs (s2 - 1.0f) < 0.001f && b2.getWidth() == 1180 && b2.getHeight() == 760 && inside85 (b2, fullHd.user),
+           "ui: first open on 1920x1080 -> 100 % " + str (b2));
+    auto [b3, s3] = open (uhd, 0.0f);
+    check (std::abs (s3 - 1.0f) < 0.001f && b3.getWidth() == 1180, "ui: first open on 3840x2160 -> 100 % " + str (b3) + " (never bigger)");
+    auto [b4, s4] = open (tiny, 0.0f);
+    check (std::abs (s4 - 0.8f) < 0.001f, "ui: first open on a 1024x600 netbook -> the 80 % minimum " + str (b4));
+    check (settings->scale() <= 0.0f, "ui: the first-open size is not stored as a user choice");
+
+    // restore: the user's choice, clamped to the screen it opens on
+    auto [r1, rs1] = open (laptop, 2.0f);
+    check (laptop.user.contains (r1.withPosition (0, 0)) && std::abs (rs1 - 0.9f) < 0.001f,
+           "ui: 200 % chosen on 4K, reopened on 1366x768 -> " + str (r1) + " (90 %), inside the screen");
+    check (std::abs (settings->scale() - 2.0f) < 0.001f, "ui: ... and the 200 % choice is kept for the big screen");
+    auto [r2, rs2] = open (fullHd, 1.5f);
+    check (fullHd.user.contains (r2.withPosition (0, 0)) && std::abs (rs2 - 1.3f) < 0.001f, "ui: 150 % reopened on 1920x1080 -> 130 % " + str (r2));
+    auto [r3, rs3] = open (fullHd, 1.15f);
+    check (std::abs (rs3 - 1.15f) < 0.001f && r3.getWidth() == 1357, "ui: 115 % fits 1920x1080 and is restored as chosen " + str (r3));
+    auto [r4, rs4] = open (uhd, 2.0f);
+    check (std::abs (rs4 - 2.0f) < 0.001f && r4.getWidth() == 2360, "ui: 200 % restored on 3840x2160 " + str (r4));
+    auto [r5, rs5] = open (laptop, 0.9f);
+    check (std::abs (rs5 - 0.9f) < 0.001f, "ui: 90 % restored on 1366x768 " + str (r5));
+    bool allFit = true;
+    for (const auto* sc : { &laptop, &fullHd, &uhd })
+        for (float sv : VaultEditor::scalePresets())
+        {
+            auto [rb, rs] = open (*sc, sv);
+            allFit &= sc->user.contains (rb.withPosition (0, 0));
+        }
+    check (allFit, "ui: every remembered scale on every screen opens inside the screen");
+
+    // the scale menu greys out what does not fit
+    check (VaultEditor::fits (0.9f, laptop.user) && ! VaultEditor::fits (1.0f, laptop.user) && VaultEditor::fits (1.3f, fullHd.user)
+               && ! VaultEditor::fits (1.5f, fullHd.user) && VaultEditor::fits (2.0f, uhd.user),
+           "ui: scale menu offers 80-90 % on 1366x768, up to 130 % on 1920x1080, all on 4K");
+    settings->setScale (before);
+    VaultEditor::simulatedDisplay() = fullHd.user;
+}
+
+// readability: every font painted at 80 % renders >= 11 px and at 100 % >= 13 px (tags, counts, labels included)
+void readabilityTests (VaultProcessor& p)
+{
+    VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    const auto& bank = p.bank();
+    int pick = 0;
+    for (int i = 0; i < (int) bank.size(); ++i) if (bank[(size_t) i].parts.size() >= 3 && bank[(size_t) i].styles != 0) { pick = i; break; }
+    v.loadPreset (pick, false);
+    v.setStyle (0);   // "Clear filters" is painted too
+    for (float sc : { 0.8f, 1.0f, 1.5f, 2.0f })
+    {
+        ed.setUiScale (sc);
+        vui::smallestFontPx() = 1000.0f;
+        juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
+        const float rendered = vui::smallestFontPx() * sc;
+        const float need = sc < 0.95f ? 11.0f : 13.0f;
+        check (rendered >= need - 0.01f, "ui: smallest text at " + juce::String (juce::roundToInt (sc * 100)) + " % = "
+                                             + juce::String (rendered, 1) + " px (>= " + juce::String (need, 0) + ")");
+    }
+    // no "..." hiding information in the list: every name and every "category · styles" line of the bank fits its column
+    {
+        ed.setUiScale (1.0f);
+        const auto cols = vui::PresetList::columns ((float) v.presetList().listBox().getVisibleRowWidth(), (float) vui::PresetList::rowH);
+        int namesCut = 0, tagsCut = 0;
+        juce::String worst;
+        for (const auto& x : bank)
+        {
+            if (vui::textWidth (vui::PresetList::nameFont(), x.name) > cols.name.getWidth()) { ++namesCut; worst = x.name; }
+            const auto t = vui::PresetList::tagText (x, true);
+            if (vui::textWidth (vui::PresetList::tagFont(), t) > cols.tags.getWidth()) { ++tagsCut; worst = t; }
+        }
+        check (namesCut == 0 && tagsCut == 0, "ui: every name (" + juce::String (cols.name.getWidth(), 0) + " px) and tag line ("
+                                                  + juce::String (cols.tags.getWidth(), 0) + " px) of the bank fits its list column ("
+                                                  + juce::String (namesCut) + " / " + juce::String (tagsCut) + " cut" + (worst.isEmpty() ? "" : ": " + worst) + ")");
+    }
+    // text colours: nothing darker than the "dim" tertiary text on the dark panels, primary text #E3E8F0
+    const auto lum = [] (juce::Colour c) { return 0.2126f * c.getFloatRed() + 0.7152f * c.getFloatGreen() + 0.0722f * c.getFloatBlue(); };
+    check (vui::col::dim == juce::Colour (0xff8593ab) && vui::col::text == juce::Colour (0xffe3e8f0)
+               && lum (vui::col::muted) >= lum (vui::col::dim) && lum (vui::col::ice) >= lum (vui::col::dim),
+           "ui: text colours (dim #8593AB is the darkest, primary #E3E8F0)");
+    v.setStyle (-1);
+    VaultSettings::get()->setScale (1.0f);
+}
+
 // editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
 // host automation is followed, DRAG WAV renders a valid file
 int uiTests()
 {
     uiSetup ("uitest");
+    VaultEditor::simulatedDisplay() = { 0, 0, 1920, 1040 };   // 1920 x 1080 with a taskbar (xvfb's own screen is 1280 x 1024)
     VaultProcessor p;
     const auto& bank = p.bank();
     int fav = -1, pads0 = -1;
     {
         VaultEditor ed (p);
         auto& v = ed.view();
-        check (ed.getWidth() >= 826 && ed.getWidth() <= 1180 && std::abs ((double) ed.getWidth() / ed.getHeight() - 1180.0 / 760.0) < 0.01,
-               "ui: first-open size " + juce::String (ed.getWidth()) + "x" + juce::String (ed.getHeight()));
+        check (ed.getWidth() == 1180 && ed.getHeight() == 760,
+               "ui: first-open size " + juce::String (ed.getWidth()) + "x" + juce::String (ed.getHeight()) + " on 1920x1080");
         v.setCategory (vault::catPads);
         const auto rows = v.browser().visible();
         check (! rows.empty() && v.visibleCount() == (int) std::count_if (bank.begin(), bank.end(), [] (const VaultPreset& x) { return x.category == vault::catPads; }),
@@ -867,21 +979,27 @@ int uiTests()
         if (rd != nullptr) { juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples); rd->read (&b, 0, b.getNumSamples(), 0, true, true); pk = b.getMagnitude (0, b.getNumSamples()); }
         check (rd != nullptr && rd->numChannels == 2 && rd->lengthInSamples == 88200 && pk > 0.01f && pk < 1.0f,
                "ui: DRAG WAV file " + wavFile.getFileName() + " (peak " + juce::String (pk, 3) + ")");
-        ed.setUiScale (1.25f);
-        check (ed.getWidth() == 1475 && ed.getHeight() == 950, "ui: scale 125 %");
+        ed.setUiScale (1.3f);
+        check (ed.getWidth() == 1534 && ed.getHeight() == 988, "ui: scale 130 %");
         ed.setUiScale (3.0f);
-        check (ed.getWidth() == 2065 && ed.getHeight() == 1330, "ui: scale clamps at 175 %");
-        ed.setUiScale (1.25f);
+        check (ed.getWidth() == 2360 && ed.getHeight() == 1520, "ui: scale clamps at 200 %");
+        ed.setUiScale (0.5f);
+        check (ed.getWidth() == 944 && ed.getHeight() == 608, "ui: scale clamps at 80 % (944x608)");
+        ed.setUiScale (1.3f);
     }
     {
         VaultEditor ed (p);   // reopened: favorites, recent and size are remembered
         auto& v = ed.view();
         check (v.browser().isFavorite (fav) && v.browser().numFavorites() == 1, "ui: favorites persist");
         check (! v.browser().recentList().empty() && v.browser().recentList().front() == pads0, "ui: recent persists (newest first)");
-        check (ed.getWidth() == 1475, "ui: window size persists");
+        check (ed.getWidth() == 1534, "ui: window size persists");
         const auto f = VaultSettings::fileOverride();
         check (f.existsAsFile() && f.loadFileAsString().contains (bank[(size_t) fav].id), "ui: settings file " + f.getFileName());
     }
+    windowSizeTests (p);
+    readabilityTests (p);
+    VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
+    VaultSettings::get()->setScale (1.0f);
     uiQaTests (p);
     return fails;
 }
@@ -889,6 +1007,7 @@ int uiTests()
 int shot (const juce::String& outPath, const juce::String& stateArg)
 {
     uiSetup ("shot");
+    VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };   // a big screen: every scale fits
     VaultSettings::get()->setScale (1.0f);   // shots start at 100 % ("scale:<pct>" changes it)
     VaultProcessor p;
     auto ed = std::make_unique<VaultEditor> (p);
@@ -939,15 +1058,16 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
         v.thumbnails().waitForLive (pick, m, 10000);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
     }
+    vui::smallestFontPx() = 1000.0f;
     const auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     const juce::File f = juce::File::getCurrentWorkingDirectory().getChildFile (outPath);
     f.deleteFile();
     juce::FileOutputStream os (f);
     juce::PNGImageFormat png;
     const bool ok = os.openedOk() && png.writeImageToStream (img, os);
-    std::printf ("%s | preset %d \"%s\" (%d layers) | showing %d of %d | editor %dx%d -> %s %s\n", p.bankDescription().toRawUTF8(), pick,
-                 pr.name.toRawUTF8(), (int) pr.parts.size(), v.visibleCount(), (int) bank.size(), ed->getWidth(), ed->getHeight(),
-                 outPath.toRawUTF8(), ok ? "ok" : "FAILED");
+    std::printf ("%s | preset %d \"%s\" (%d layers) | showing %d of %d | editor %dx%d, smallest text %.1f px -> %s %s\n",
+                 p.bankDescription().toRawUTF8(), pick, pr.name.toRawUTF8(), (int) pr.parts.size(), v.visibleCount(), (int) bank.size(),
+                 ed->getWidth(), ed->getHeight(), vui::smallestFontPx() * ed->getUiScale(), outPath.toRawUTF8(), ok ? "ok" : "FAILED");
     for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOff (1, n, 0.0f);
     ed.reset();
     return ok ? 0 : 1;
