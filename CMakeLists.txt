@@ -215,3 +215,15 @@ if(KK_BUILD_TESTS)
         juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags)
 endif()
+
+# --- vault bank ---------------------------------------------------------------
+# VaultBankGen: generates the 5,000-preset factory bank resources/vault/factory.cvb + docs/VAULT_BANK_REPORT.md
+# (tools/vault/BankGen.cpp, quality gate tools/vault/BankQC.h). Run from the repo root: VaultBankGen [-threads N] [-scale 0.1]
+# The generated .cvb is committed, so normal builds / CI never need to run it.
+if(KK_BUILD_TESTS)
+    juce_add_console_app(VaultBankGen PRODUCT_NAME "VaultBankGen")
+    target_sources(VaultBankGen PRIVATE tools/vault/BankGen.cpp Source/vault/VaultTypes.cpp Source/vault/VaultEngine.cpp Source/Presets.cpp)
+    target_compile_definitions(VaultBankGen PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 CV_HAS_BANK=0)
+    target_link_libraries(VaultBankGen PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+endif()
+# --- end vault bank -------------------------------------------------------------

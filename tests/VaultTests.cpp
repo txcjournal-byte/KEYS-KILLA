@@ -5,9 +5,12 @@
 //                           VaultTests -snapshot <out.png>       paint the editor into a PNG (Linux: under xvfb-run)
 #include "../Source/vault/VaultProcessor.h"
 #include "../Source/ParamKeys.h"
+#include "../tools/vault/BankQC.h"
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <atomic>
 #include <cstdio>
 #include <set>
+#include <thread>
 
 namespace
 {
@@ -130,6 +133,92 @@ struct DummyProc : juce::AudioProcessor
     juce::AudioProcessorValueTreeState apvts;
 };
 
+// the shipped factory bank (resources/vault/*.cvb, or the CHROME_VAULT_BANK file): exact counts, unique ids / names, valid tags,
+// clean names, and a deterministic random sample of 200 presets through the generator's quality gate (tools/vault/BankQC.h)
+void shippedBankTests (const VaultProcessor& proc)
+{
+    const auto& bank = proc.bank();
+    check (proc.bankSource() != VaultProcessor::BankSource::factoryFallback, "factory bank loaded: " + proc.bankDescription());
+    check ((int) bank.size() == VaultProcessor::maxPresets, "the bank has exactly " + juce::String (VaultProcessor::maxPresets) + " presets ("
+                                                             + juce::String ((int) bank.size()) + ")");
+    int cats[vault::numCategories] {}, layers[vault::maxParts + 1] {};
+    for (auto& p : bank) { ++cats[juce::jlimit (0, vault::numCategories - 1, p.category)]; ++layers[juce::jlimit (0, (int) vault::maxParts, (int) p.parts.size())]; }
+    bool catsOk = true, layersOk = true;
+    for (int c = 0; c < vault::numCategories; ++c)
+        if (cats[c] != vault::categoryTarget (c)) { catsOk = false; std::printf ("   %s: %d / %d\n", vault::categoryNames()[c].toRawUTF8(), cats[c], vault::categoryTarget (c)); }
+    for (int l = 1; l <= vault::maxParts; ++l)
+        if (layers[l] != vault::layerCountTarget (l)) { layersOk = false; std::printf ("   %d layers: %d / %d\n", l, layers[l], vault::layerCountTarget (l)); }
+    check (catsOk, "presets per category match the plan (808 & Bass 520 ... FX & Atmos 240)");
+    check (layersOk, "layer mix matches the plan (1600 / 1900 / 1100 / 400)");
+
+    std::set<juce::String> ids, names;
+    int badName = 0, badTags = 0, badLabel = 0;
+    auto bits = [] (uint32_t m) { int n = 0; for (; m != 0; m &= m - 1) ++n; return n; };
+    for (auto& p : bank)
+    {
+        ids.insert (p.id);
+        names.insert (p.name.toLowerCase());
+        const bool nameOk = p.name.trim() == p.name && p.name.isNotEmpty() && p.name.length() <= 22 && vaultqc::isCleanName (p.name)
+                            && p.name.containsOnly ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -'&");
+        if (! nameOk && badName++ < 5) std::printf ("   bad name: '%s'\n", p.name.toRawUTF8());
+        const bool tagsOk = (p.styles >> vault::numStyles) == 0 && (p.chars >> vault::numCharacters) == 0
+                            && bits (p.styles) >= 1 && bits (p.styles) <= 3 && bits (p.chars) >= 1 && bits (p.chars) <= 3;
+        if (! tagsOk && badTags++ < 5) std::printf ("   bad tags: %s styles %x chars %x\n", p.id.toRawUTF8(), p.styles, p.chars);
+        for (auto& part : p.parts)
+            if ((part.label.isEmpty() || part.label.length() > 16 || ! vaultqc::isCleanName (part.label)) && badLabel++ < 5)
+                std::printf ("   bad part label: %s '%s'\n", p.id.toRawUTF8(), part.label.toRawUTF8());
+    }
+    check (ids.size() == bank.size(), "preset ids are unique (" + juce::String ((int) ids.size()) + ")");
+    check (names.size() == bank.size(), "preset names are unique (" + juce::String ((int) names.size()) + ")");
+    check (badName == 0, "names: English, <= 22 characters, no brand words (" + juce::String (badName) + " bad)");
+    check (badTags == 0, "tags: 1-3 styles and 1-3 characters from the fixed lists (" + juce::String (badTags) + " bad)");
+    check (badLabel == 0, "part labels set, short, clean (" + juce::String (badLabel) + " bad)");
+
+    // a deterministic random sample through the quality gate (two notes, 48 kHz - exactly the generator's gate)
+    juce::Random rnd (20261013);
+    std::set<int> chosen;
+    while ((int) chosen.size() < std::min (200, (int) bank.size())) chosen.insert (rnd.nextInt ((int) bank.size()));
+    const std::vector<int> sample (chosen.begin(), chosen.end());
+    std::vector<juce::String> why (sample.size());
+    std::vector<vaultqc::Print> prints (sample.size());
+    std::vector<float> loud (sample.size());
+    std::atomic<int> next { 0 };
+    std::vector<std::thread> pool;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    for (int t = 0; t < (int) std::max (1u, std::min (8u, std::thread::hardware_concurrency())); ++t)
+        pool.emplace_back ([&]
+        {
+            for (int k = next++; k < (int) sample.size(); k = next++)
+            {
+                const auto& p = bank[(size_t) sample[(size_t) k]];
+                const auto aL = vaultqc::renderAndAnalyse (p, vaultqc::noteLow (p.category));
+                const auto aH = vaultqc::renderAndAnalyse (p, vaultqc::noteHigh (p.category));
+                auto w = vaultqc::gate (aL, p.category, 1.0f, false);
+                if (w.isEmpty()) w = vaultqc::gate (aH, p.category, 1.0f, false);
+                loud[(size_t) k] = 0.5f * (aL.loud + aH.loud);
+                if (w.isEmpty() && std::abs (loud[(size_t) k] - vaultqc::targetLoudness (p.category)) > vaultqc::loudnessTolerance)
+                    w = "loudness " + juce::String (loud[(size_t) k], 2) + " dB";
+                why[(size_t) k] = w;
+                prints[(size_t) k] = aL.print;
+            }
+        });
+    for (auto& th : pool) th.join();
+    int failed = 0;
+    float worstDev = 0;
+    for (size_t k = 0; k < sample.size(); ++k)
+    {
+        const auto& p = bank[(size_t) sample[k]];
+        worstDev = std::max (worstDev, std::abs (loud[k] - vaultqc::targetLoudness (p.category)));
+        if (why[k].isNotEmpty() && failed++ < 8) std::printf ("   gate: %s %s: %s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), why[k].toRawUTF8());
+    }
+    check (failed == 0, juce::String ((int) sample.size()) + " random presets pass the quality gate (" + juce::String (failed) + " failed, loudness within "
+                        + juce::String (worstDev, 2) + " dB of the category targets, " + juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0, 1) + " s)");
+    float closest = 1.0e9f;   // no two sampled presets sound alike (low-note fingerprint)
+    for (size_t a = 0; a < prints.size(); ++a)
+        for (size_t b = a + 1; b < prints.size(); ++b) closest = std::min (closest, vaultqc::printDistance (prints[a], prints[b]));
+    check (closest > 1.0f, "sampled presets are distinct (closest fingerprint distance " + juce::String (closest, 2) + ")");
+}
+
 int unitTests()
 {
     const double sr = 44100.0;
@@ -171,6 +260,12 @@ int unitTests()
         int used = 0; for (int c : cats) used += c > 0;
         check (fb.size() >= 150 && used >= 12, "fallback bank: " + juce::String ((int) fb.size()) + " presets in " + juce::String (used) + " categories");
     }
+
+   #if CV_HAS_BANK
+    shippedBankTests (proc);
+   #else
+    if (proc.bankSource() == VaultProcessor::BankSource::file) shippedBankTests (proc);
+   #endif
 
     // ---- serializer round trip (compressed and raw), damaged data is refused
     {
