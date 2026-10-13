@@ -1,6 +1,7 @@
 name: build
 
-# Builds, tests and packages EVOLVE for Windows (VST3 + Standalone) and macOS (VST3 + AU + Standalone).
+# Builds, tests and packages EVOLVE for Windows (VST3 + Standalone) and macOS (VST3 + AU + Standalone),
+# and the separate product CHROME VAULT by TrapWin (steps marked "CHROME VAULT", docs/CHROME_VAULT_INSTALL.md).
 on:
   push:
   pull_request:
@@ -51,6 +52,37 @@ jobs:
           if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "EVOLVE - latest test build" --notes $notes --target ${{ github.sha }} }
           else { gh release edit test --notes $notes }
           gh release upload test out\KEYS-KILLA-Setup-Windows.exe out\KEYS-KILLA-VST3-Windows.zip --clobber
+
+      # --- CHROME VAULT (separate product, TrapWin) ---------------------------------------------------------------
+      # Built after EVOLVE is published, so a CHROME VAULT problem never holds back the EVOLVE test build.
+      # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Setup-Windows.exe
+      # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-VST3-Windows.zip
+      - name: Build CHROME VAULT
+        run: cmake --build build --config Release --parallel --target ChromeVault_VST3 ChromeVault_Standalone
+
+      - name: CHROME VAULT installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'CV_VERSION_STRING="([0-9.]+)"').Matches[0].Groups[1].Value
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\win\chromevault.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Publish CHROME VAULT test build (fixed link)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force out, out\cv-stage | Out-Null
+          Copy-Item (Get-ChildItem build\installer-vault\CHROME-VAULT-*.exe | Select-Object -First 1).FullName out\CHROME-VAULT-Setup-Windows.exe
+          # zip root = "CHROME VAULT.vst3" (debug symbols / linker files left out)
+          Copy-Item -LiteralPath "build\ChromeVault_artefacts\Release\VST3\CHROME VAULT.vst3" -Destination out\cv-stage -Recurse -Force
+          Get-ChildItem out\cv-stage -Recurse -File -Include *.pdb,*.ilk,*.exp,*.lib | Remove-Item -Force
+          Compress-Archive -LiteralPath "out\cv-stage\CHROME VAULT.vst3" -DestinationPath out\CHROME-VAULT-VST3-Windows.zip -Force
+          gh release view test *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "EVOLVE - latest test build" --notes "Latest test build" --target ${{ github.sha }} }
+          gh release upload test out\CHROME-VAULT-Setup-Windows.exe out\CHROME-VAULT-VST3-Windows.zip --clobber
+      # --- end CHROME VAULT ---------------------------------------------------------------------------------------
 
   windows:
     runs-on: windows-latest
@@ -132,8 +164,67 @@ jobs:
           name: KEYS-KILLA-Windows-Installer
           path: build/installer/*.exe
 
+      # --- CHROME VAULT (separate product, TrapWin) ---------------------------------------------------------------
+      # The steps above already built every target (ChromeVault_VST3 / _Standalone / VaultTests included).
+      # They run even when an EVOLVE step failed, so both products always report their own result.
+      - name: CHROME VAULT tests
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & build\VaultTests_artefacts\Release\VaultTests.exe
+          $code = $LASTEXITCODE
+          Write-Host ("VaultTests exit code: {0} (0x{1:X8})" -f $code, $code)
+          exit $code
+
+      - name: CHROME VAULT pluginval (strictness 10)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (-not (Test-Path .\pluginval\pluginval.exe)) {
+            Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+            Expand-Archive pluginval.zip -DestinationPath pluginval -Force
+          }
+          & .\pluginval\pluginval.exe --strictness-level 10 --verbose --output-dir pluginval-logs-vault --validate "build\ChromeVault_artefacts\Release\VST3\CHROME VAULT.vst3" 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { "[stderr] $($_.ToString())" } else { "$_" }
+          }
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host ("pluginval exit code: {0} (0x{1:X8})" -f $code, $code)
+            Get-Content "$env:TEMP\pluginval_crash.txt" -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+      - name: CHROME VAULT installer (Inno Setup)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'CV_VERSION_STRING="([0-9.]+)"').Matches[0].Groups[1].Value
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\win\chromevault.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload CHROME VAULT VST3 + Standalone
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHROME-VAULT-Windows-VST3
+          path: |
+            build/ChromeVault_artefacts/Release/VST3/
+            build/ChromeVault_artefacts/Release/Standalone/
+
+      - name: Upload CHROME VAULT installer
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHROME-VAULT-Windows-Installer
+          path: build/installer-vault/*.exe
+      # --- end CHROME VAULT ---------------------------------------------------------------------------------------
+
   macos:
     runs-on: macos-latest
+    permissions:
+      contents: write   # CHROME VAULT publishes CHROME-VAULT-Mac.zip to the "test" release (not on pull requests)
     steps:
       - uses: actions/checkout@v5
 
@@ -188,3 +279,99 @@ jobs:
         with:
           name: KEYS-KILLA-macOS-Installer
           path: build/installer/*.pkg
+
+      # --- CHROME VAULT (separate product, TrapWin) ---------------------------------------------------------------
+      # "Build" above already built every target universal (arm64 + x86_64): ChromeVault VST3 / AU / Standalone + VaultTests.
+      # These steps run even when an EVOLVE step failed, so both products always report their own result.
+      # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Mac.zip
+      # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Setup-Mac.pkg
+      - name: CHROME VAULT tests
+        id: cv_tests
+        if: ${{ !cancelled() }}
+        run: |
+          ./build/VaultTests_artefacts/Release/VaultTests
+          lipo -info "build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3/Contents/MacOS/CHROME VAULT"
+          lipo -info "build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component/Contents/MacOS/CHROME VAULT"
+
+      - name: CHROME VAULT auval
+        id: cv_auval
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          rm -rf ~/Library/Audio/Plug-Ins/Components/"CHROME VAULT.component"
+          cp -R "build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 5
+          auval -v aumu Cvlt Trpw
+
+      - name: CHROME VAULT pluginval (strictness 10)
+        id: cv_pluginval
+        if: ${{ !cancelled() }}
+        run: |
+          if [ ! -x ./pluginval.app/Contents/MacOS/pluginval ]; then
+            curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+            unzip -q -o pluginval.zip
+          fi
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3"
+
+      - name: CHROME VAULT installer (pkg; signed + notarized when secrets exist)
+        id: cv_pkg
+        if: ${{ !cancelled() }}
+        env:
+          MAC_APP_SIGN_ID: ${{ secrets.MAC_APP_SIGN_ID }}
+          MAC_INST_SIGN_ID: ${{ secrets.MAC_INST_SIGN_ID }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          VERSION=$(sed -n 's/.*CV_VERSION_STRING="\([0-9.]*\)".*/\1/p' CMakeLists.txt | head -n 1)
+          installer/mac/build_vault_pkg.sh "$VERSION"
+
+      - name: CHROME VAULT zip (VST3 + AU)
+        id: cv_zip
+        if: ${{ !cancelled() }}
+        run: |
+          # take the bundles the pkg step staged (code-signed when MAC_APP_SIGN_ID exists), else the raw build output
+          if [ -d "build/pkgroot-vault/Library/Audio/Plug-Ins/VST3/CHROME VAULT.vst3" ]; then
+            VST3="build/pkgroot-vault/Library/Audio/Plug-Ins/VST3/CHROME VAULT.vst3"
+            AU="build/pkgroot-vault/Library/Audio/Plug-Ins/Components/CHROME VAULT.component"
+          else
+            VST3="build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3"
+            AU="build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component"
+          fi
+          rm -rf build/cv-zip out-vault && mkdir -p build/cv-zip out-vault
+          ditto "$VST3" "build/cv-zip/CHROME VAULT.vst3"
+          ditto "$AU" "build/cv-zip/CHROME VAULT.component"
+          (cd build/cv-zip && zip -qry ../../out-vault/CHROME-VAULT-Mac.zip "CHROME VAULT.vst3" "CHROME VAULT.component")
+          cp build/installer-vault/CHROME-VAULT-*-macOS.pkg out-vault/CHROME-VAULT-Setup-Mac.pkg 2>/dev/null || echo "no pkg (installer step failed) - zip only"
+          unzip -l out-vault/CHROME-VAULT-Mac.zip | tail -n 3
+
+      - name: Upload CHROME VAULT plugins
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHROME-VAULT-macOS
+          path: |
+            build/ChromeVault_artefacts/Release/VST3/
+            build/ChromeVault_artefacts/Release/AU/
+            build/ChromeVault_artefacts/Release/Standalone/
+
+      - name: Upload CHROME VAULT installer
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHROME-VAULT-macOS-Installer
+          path: build/installer-vault/*.pkg
+
+      - name: Publish CHROME VAULT test build (fixed link)
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.cv_tests.outcome == 'success' && steps.cv_auval.outcome == 'success' && steps.cv_pluginval.outcome == 'success' && steps.cv_zip.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # windows-quick normally creates the release first; create it here only if it is still missing
+          if ! gh release view test > /dev/null 2>&1; then
+            gh release create test --prerelease --title "EVOLVE - latest test build" --notes "Latest test build" --target "${{ github.sha }}" \
+              || gh release view test > /dev/null
+          fi
+          gh release upload test out-vault/CHROME-VAULT-Mac.zip $( [ -f out-vault/CHROME-VAULT-Setup-Mac.pkg ] && echo out-vault/CHROME-VAULT-Setup-Mac.pkg ) --clobber
+      # --- end CHROME VAULT ---------------------------------------------------------------------------------------
