@@ -3,6 +3,7 @@
 #include <functional>
 #include "PluginEditor.h"
 #include "BinaryData.h"
+#include "VoiceBuild.h"
 
 static bool writeWavFile (const juce::AudioBuffer<float>& b, double rate, const juce::File& f);
 namespace
@@ -49,6 +50,7 @@ struct KeysKillaProcessor::Idx
    #undef KK_DECL
     int mmSrc[numModSlots] {}, mmDst[numModSlots] {}, mmAmt[numModSlots] {};
     int arpStep[16] {}, arpNote[16] {}, arpLen[16] {};
+    std::array<int, kk::vk::count> vk {};   // kk::vk key -> parameter index (VoiceBuild.h)
 };
 
 KeysKillaProcessor::KeysKillaProcessor (bool withModules)
@@ -93,6 +95,7 @@ KeysKillaProcessor::KeysKillaProcessor (bool withModules)
         ix->mmSrc[s] = indexOf (ID::mmSrc (s)); ix->mmDst[s] = indexOf (ID::mmDst (s)); ix->mmAmt[s] = indexOf (ID::mmAmt (s));
     }
     for (int st = 0; st < 16; ++st) { ix->arpStep[st] = indexOf (ID::arpStep (st)); ix->arpNote[st] = indexOf (ID::arpNote (st)); ix->arpLen[st] = indexOf (ID::arpLen (st)); }
+    for (int k = 0; k < kk::vk::count; ++k) ix->vk[(size_t) k] = indexOf (kk::vk::info (k).id);
     for (auto& bank : cornerBank) for (auto& c : bank) c.assign (params.size(), 0.0f);
     for (auto* prm : params)
     {
@@ -230,147 +233,17 @@ float KeysKillaProcessor::value (int i) const
 
 void KeysKillaProcessor::buildVoiceParams (kk::VoiceParams& v, kk::FxParams& f)
 {
-    const auto& I = *ix;
-    auto P = [this] (int i) { return value (i); };
-    auto B = [this] (int i) { return value (i) > 0.5f; };
-
-    // morph weights: TL classic, TR melodic, BL raw, BR aggressive
-    const float x = raw[(size_t) I.morphX]->load(), y = raw[(size_t) I.morphY]->load();
-    morphW[0] = (1 - x) * y; morphW[1] = x * y; morphW[2] = (1 - x) * (1 - y); morphW[3] = x * (1 - y);
-
-    const bool bass = B (I.bassMode);
-    float cutOct = 0, drive = P (I.drive), crush = P (I.crush), wow = P (I.wow), chorus = P (I.chorus);
-    float dMix = P (I.delayMix), rMix = P (I.revMix), rSize = P (I.revSize), width = P (I.width), detune = P (I.detune);
-    float lfoF = P (I.lfoFilter), lfoP = P (I.lfoPitch), sub = P (I.sub), glide = P (I.glide), punch = 0, wobble = 0;
-    const float m1 = raw[(size_t) I.m1]->load(), m2 = raw[(size_t) I.m2]->load(), m3 = raw[(size_t) I.m3]->load();
-    const float m4 = raw[(size_t) I.m4]->load(), m5 = raw[(size_t) I.m5]->load(), m6 = raw[(size_t) I.m6]->load();
-    const float m7 = raw[(size_t) I.m7]->load(), m8 = raw[(size_t) I.m8]->load();
-
-    if (! bass)
-    {
-        cutOct += (0.5f - m1) * 5.0f;   // DARK
-        rMix += m2 * 0.45f; dMix += m2 * 0.25f; rSize += m2 * 0.3f;
-        drive += m3 * 0.8f;
-        crush += m4 * 0.45f; wow += m4 * 0.7f;
-        lfoF += m5 * 0.3f; chorus += m5 * 0.45f; lfoP += m5 * 0.06f;
-        width += (m6 - 0.5f); detune += (m6 - 0.5f) * 0.4f;
-    }
-    else
-    {
-        sub += m1; wobble = m2; drive += m3 * 0.8f; glide += m4 * 0.4f;
-        cutOct += (m5 - 0.5f) * 5.0f; punch = m6;
-    }
-
-    if (! morphActive.load())   // character morph (no corner presets assigned)
-    {
-        const float dC = morphW[0] - 0.25f, dM = morphW[1] - 0.25f, dR = morphW[2] - 0.25f, dA = morphW[3] - 0.25f;
-        crush += dC * 0.35f; width -= dC * 0.3f; chorus -= dC * 0.2f; rMix += dC * 0.1f;
-        rMix += dM * 0.35f; chorus += dM * 0.5f; dMix += dM * 0.3f; cutOct -= dM * 0.5f;
-        rMix -= dR * 0.4f; dMix -= dR * 0.3f; drive += dR * 0.15f; cutOct += dR * 0.3f; width -= dR * 0.2f;
-        drive += dA * 0.9f; cutOct += dA * 1.0f; width += dA * 0.4f;
-    }
-
-    // ERA: move the sound through the production eras (difference between the chosen era and the preset's own era)
-    float eraRelMul = 1.0f, eraDetune = 0, eraReverse = 0, eraGhost = 0, eraCircuit = 0, eraPunch = 0, eraDrift = 0, eraAlive = 0;
-    {
-        const float home = P (I.eraHome), target = P (I.era);
-        if (std::abs (target - home) > 1.0e-3f)
-        {
-            const auto a = eraProfile (home), b = eraProfile (target);
-            const float k = bass ? 0.4f : 1.0f;   // bass keeps its low end: only a hint of the era
-            crush += (b.crush - a.crush) * k; wow += (b.wow - a.wow) * k; width += (b.width - a.width) * k;
-            rMix += (b.rev - a.rev) * k; dMix += (b.dly - a.dly) * k; chorus += (b.chorus - a.chorus) * k; drive += (b.drive - a.drive);
-            cutOct += (b.cutOct - a.cutOct) * k; eraDetune = (b.detune - a.detune) * k; eraReverse = (b.reverse - a.reverse) * k;
-            eraGhost = (b.ghost - a.ghost) * k; eraCircuit = b.circuit - a.circuit; eraPunch = b.punch - a.punch;
-            eraDrift = (b.drift - a.drift) * k; eraAlive = (b.alive - a.alive) * k; eraRelMul = b.relMul / a.relMul;
-            detune += eraDetune;
-        }
-    }
-    // FUTURE: ORIGINAL -> HYBRID -> UNKNOWN. Same seed = same result, so a session reopens exactly.
-    const float fut = P (I.future);
-    float futWave = 0, futFm = 0, futHalf = 0, futBodyMix = 0; int futBody = 0;
-    if (fut > 1.0e-3f)
-    {
-        const uint32_t h = kk::hash32 ((uint32_t) P (I.seed) * 2654435761u + 17u);
-        eraReverse += fut * 0.45f; eraGhost += fut * (bass ? 0.1f : 0.4f); eraCircuit += fut * 0.3f; chorus += fut * 0.25f;
-        rMix += bass ? 0.0f : fut * 0.25f; width += bass ? 0.0f : fut * 0.2f; eraDrift += fut * 0.35f; eraAlive += fut * 3.0f;
-        futWave = fut * (0.15f + 0.3f * (float) (h & 255u) / 255.0f) * ((h & 256u) ? 1.0f : -1.0f);
-        futFm = fut * 0.35f;
-        futHalf = std::max (0.0f, fut - 0.7f) * (bass ? 0.0f : 1.2f);
-        futBody = 1 + (int) ((h >> 9) % 6u); futBodyMix = std::max (0.0f, fut - 0.25f) * 0.8f;
-    }
-
-    // TIME macro: 0 TIGHT .. 0.33 NATURAL (neutral) .. DREAM .. >0.9 FROZEN
-    const float tm = P (I.timeM);
-    float relMul = 1.0f, dFb = P (I.delayFb); bool freeze = B (I.freeze);
-    if (tm < 0.33f)
-    {
-        const float k = (0.33f - tm) / 0.33f;   // tighter
-        relMul = 1.0f - 0.8f * k; rMix *= 1.0f - 0.7f * k; dMix *= 1.0f - 0.7f * k; rSize -= 0.3f * k;
-    }
-    else
-    {
-        const float k = std::min (1.0f, (tm - 0.33f) / 0.57f);   // dreamier
-        relMul = 1.0f + 3.0f * k; rMix += 0.35f * k; rSize += 0.4f * k; dMix += 0.15f * k;
-        dFb = std::min (0.9f, dFb + 0.3f * k);
-        if (tm > 0.9f) freeze = true;
-    }
-
-    {   // MIX macro: overall effect balance, 0.5 = as designed
-        const float wet = 0.2f + 1.6f * m8;
-        rMix *= wet; dMix *= wet; chorus *= wet; eraReverse *= wet;
-    }
-
-    auto c01 = kk::clamp01;
-    auto layer = [&] (kk::LayerParams& L, bool on, int eng, int oct, int sem, int fin, int wav, int uni, int det, int r1, int r2, int fa, int alg, int wm, int lvl, float detOverride)
-    {
-        L.on = on; L.engine = (int) P (eng); L.octave = (int) P (oct); L.semi = (int) P (sem); L.fine = P (fin);
-        L.wave = P (wav); L.unison = juce::jlimit (1, 8, (int) P (uni)); L.detune = detOverride >= 0 ? detOverride : P (det);
-        L.fmRatio = P (r1); L.fmRatio2 = P (r2); L.fmAmt = P (fa); L.fmAlgo = (int) P (alg); L.warpMode = (int) P (wm); L.level = P (lvl);
-    };
-    layer (v.layer[0], true, I.engine, I.octave, I.semi, I.fine, I.wave, I.unison, I.detune, I.fmRatio, I.fmRatio2, I.fmAmt, I.fmAlgo, I.warpMode, I.levelA, c01 (detune));
-    layer (v.layer[1], B (I.layerB), I.engineB, I.octaveB, I.semiB, I.fineB, I.waveB, I.unisonB, I.detuneB, I.fmRatioB, I.fmRatio2B, I.fmAmtB, I.fmAlgoB, I.warpModeB, I.levelB, -1);
-
-    v.sub = c01 (sub); v.filterType = (int) P (I.filterType);
-    v.cutoff = juce::jlimit (40.0f, 20000.0f, P (I.cutoff) * std::exp2 (cutOct));
-    v.reso = P (I.reso); v.keyTrack = P (I.keyTrack); v.fenv = P (I.fenv);
-    v.fA = P (I.fattack); v.fD = P (I.fdecay); v.fS = P (I.fsustain); v.fR = P (I.frelease);
-    v.attack = P (I.attack) * (1.0f - 0.6f * m7); v.decay = P (I.decay); v.sustain = P (I.sustain); v.release = std::min (8.0f, P (I.release) * relMul * eraRelMul); v.velSens = P (I.velSens);
-    v.e3A = P (I.e3attack); v.e3D = P (I.e3decay); v.e3S = P (I.e3sustain); v.e3R = P (I.e3release);
-    v.lfoPitch = c01 (lfoP); v.lfoFilter = c01 (lfoF); v.lfoAmp = P (I.lfoAmp);
-    v.wobTarget = (int) P (I.wobTarget); v.wobble = c01 (wobble);
-    v.mono = B (I.mono); v.legato = B (I.legato); v.glide = juce::jlimit (0.0f, 1.0f, glide);
-    v.bendRange = raw[(size_t) I.bendRange]->load();
-    v.ghost = c01 (P (I.ghost) + eraGhost); v.ghostOct = (int) P (I.ghostOct);
-    v.bend = P (I.bend); v.bendMode = (int) P (I.bendMode); v.bendSemis = P (I.bendSemis); v.tape = B (I.tape);
-    v.punch = punch;
-    v.alive = juce::jlimit (0.0f, 5.0f, P (I.alive) + eraAlive); v.drift = c01 (P (I.drift) + eraDrift);
-    f.punch = c01 (P (I.punch) + eraPunch + m7 * 0.9f); f.halftime = c01 (P (I.halftime) + futHalf);
-    f.master = c01 (P (I.master));
-    for (auto& L : v.layer) { L.wave = c01 (L.wave + futWave); L.fmAmt = c01 (L.fmAmt + futFm); }
-    v.pitchWheel = juce::jlimit (-1.0f, 1.0f, midiPitch + guiPitch.load());
-    v.modWheel = std::max (midiMod, guiMod.load());
-    v.aftertouch = midiAT;
-    for (int s = 0; s < numModSlots; ++s)
-    {
-        v.mmSrc[s] = (int) P (I.mmSrc[s]); v.mmDst[s] = (int) P (I.mmDst[s]); v.mmAmt[s] = P (I.mmAmt[s]);
-    }
-    v.eco = eco.load();
-
-    f.drive = c01 (drive); f.driveType = (int) P (I.driveType); f.cleanLow = bass; f.monoLows = bass;
-    f.crush = c01 (crush); f.wow = c01 (wow); f.chorus = c01 (chorus); f.phaser = P (I.phaser); f.flanger = P (I.flanger);
-    f.delayMix = c01 (dMix); f.delayFb = dFb; f.delayBeats = Choices::delayBeats ((int) P (I.delayTime)); f.delayMode = (int) P (I.delayMode);
-    f.revMix = c01 (rMix); f.revSize = c01 (rSize); f.revType = (int) P (I.revType); f.freeze = freeze;
-    f.eqLow = P (I.eqLow); f.eqHigh = P (I.eqHigh); f.reverse = c01 (P (I.reverse) + eraReverse);
-    f.width = c01 (width);
-    f.ghost = c01 (P (I.ghost) + eraGhost); f.ghostBlur = P (I.ghostBlur); f.ghostRev = B (I.ghostRev);
-    f.circuit = c01 (P (I.circuit) + eraCircuit); f.circBeats = Choices::circBeats ((int) P (I.circRate));
-    f.body = (int) P (I.body); f.bodyMix = P (I.bodyMix);
-    if (futBodyMix > 0 && f.body == 0) { f.body = futBody; f.bodyMix = futBodyMix; }
-    f.outGain = juce::Decibels::decibelsToGain (P (I.gain));
-    f.seed = (uint32_t) P (I.seed);
-    f.eco = v.eco;
-    for (int i = 0; i < kk::numFxSlots; ++i) f.order[(size_t) i] = fxOrder[(size_t) i].load();
+    // v0.47: the conversion lives in VoiceBuild.h (shared with CHROME VAULT); values come from the APVTS / morph corners
+    kk::VoiceBuildContext ctx;
+    ctx.morphActive = morphActive.load();
+    ctx.morphW = morphW;
+    ctx.pitchWheel = juce::jlimit (-1.0f, 1.0f, midiPitch + guiPitch.load());
+    ctx.modWheel = std::max (midiMod, guiMod.load());
+    ctx.aftertouch = midiAT;
+    ctx.eco = eco.load();
+    for (int i = 0; i < kk::numFxSlots; ++i) ctx.fxOrder[(size_t) i] = fxOrder[(size_t) i].load();
+    const auto& vkIdx = ix->vk;
+    kk::buildVoiceParamsFrom ([this, &vkIdx] (int k) { return value (vkIdx[(size_t) k]); }, ctx, v, f);
 }
 
 void KeysKillaProcessor::handleMidi (const juce::MidiMessage& m)

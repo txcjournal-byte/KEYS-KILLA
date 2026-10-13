@@ -1,0 +1,238 @@
+# CHROME VAULT by TrapWin - foundation
+
+A separate plugin product (target `ChromeVault`, VST3 / AU / Standalone) next to EVOLVE (`KeysKilla`) and
+EVOLVE FX PRO (`EvolveFX`). A fast preset-bank instrument: open, click a sound, play. 5,000 presets in 16
+categories, each preset is 1-4 layers ("parts"). UI 100 % English, no real brand / product / company names anywhere.
+
+Identity (never change after release): company `TrapWin`, bundle `com.trapwin.chromevault`, manufacturer code `Trpw`,
+plugin code `Cvlt`, product name `CHROME VAULT`, version 0.1.0.
+
+## Files
+
+| File | What |
+| --- | --- |
+| `Source/ParamKeys.h` | `kk::vk` - the synth parameters as small integer keys (frozen order), with range / default / integer flag |
+| `Source/VoiceBuild.h` | `kk::buildVoiceParamsFrom` - parameter values -> `kk::VoiceParams` + `kk::FxParams` (shared with EVOLVE) |
+| `Source/vault/VaultTypes.h/.cpp` | `VaultPart`, `VaultPreset`, name tables, the `CVB1` bank format (light: juce_core only in the header) |
+| `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - 4 synth parts -> master FX -> macros -> mono lows -> trim -> volume -> limiter; offline `render()` |
+| `Source/vault/VaultProcessor.h/.cpp` | `VaultProcessor` - the `juce::AudioProcessor` (parameters, bank loading, state) |
+| `Source/vault/VaultEditor.h/.cpp` | PLACEHOLDER editor (logo, preset name, prev / next, macros, keyboard). The real UI replaces this pair. |
+| `tests/VaultTests.cpp` | console target `VaultTests` |
+| `resources/vault/*.cvb` | the preset bank(s) embedded into the plugin |
+
+Every `Source/vault/*.cpp` is compiled into `ChromeVault` and `VaultTests` automatically (CMake `file(GLOB ... CONFIGURE_DEPENDS)`),
+so new UI files only need to live in `Source/vault/`. Shared EVOLVE code used: `Synth.h`, `Fx.h`, `Studio.h`, `DspUtil.h`,
+`Wavetable.h`, `Params.h`, `Presets.h/.cpp` (header-only DSP; `Presets.cpp` for the starter bank). The EVOLVE editor / processor
+are NOT part of CHROME VAULT.
+
+## Architecture
+
+```
+MIDI ─┬─> part 0: kk::SynthEngine (32 voices, 2 osc layers, filter, envs, LFOs)  x level, pan ─┐
+      ├─> part 1  (transposed by octave*12+semi)                                             ├─> sum ─> kk::FxRack (FX values of PART 0)
+      ├─> part 2                                                                              │        drive, chorus, phaser, delay, reverb,
+      └─> part 3                                                                              ┘        EQ, width, MASTER glue + limiter
+   ─> side high-pass 150 Hz 6th order (everything under ~120 Hz is mono) ─> preset gain trim ─> master volume
+   ─> 10 ms switch fade ─> safety limiter (-1 dBFS, instant attack, 120 ms release) + soft ceiling 0.98 ─> out
+```
+
+* Each part is a complete EVOLVE synth patch (`VaultPart::values`, real parameter values with EVOLVE parameter IDs,
+  anything missing = the EVOLVE default). The conversion values -> `VoiceParams` is the exact EVOLVE one
+  (`kk::buildVoiceParamsFrom`), so an EVOLVE factory preset copied into one part sounds the same.
+* FX: one shared master `kk::FxRack`, built from **part 0's** FX values (drive, crush, chorus, delay*, rev*, eq*, width,
+  ghost, body, punch, master, `gain`, ...). FX values in parts 1-3 are ignored, except `bassMode` (any part) which
+  protects the lows from drive. So a generator should put the preset's FX into part 0.
+* Gain: part 0's `gain` (dB) is the FX output gain (as in EVOLVE). Parts 1-3 are scaled by `dB(gain_k - gain_0)` on top of
+  their `level`. `VaultPreset::gain` (linear) is the loudness trim after the FX.
+* Macros (0..1, **0.5 = exactly as designed**; below 0.5 scales the designed amount down to 0, above 0.5 adds):
+  * TONE: cutoff of every part x 2^((2t-1)*1.5) and a master tilt (high shelf +-5 dB, low shelf -+2.5 dB)
+  * SPACE: reverb mix / delay mix (scaled, then +0.45 / +0.25), reverb size +0.3, width
+  * DRIVE: FX drive (scaled, then +0.7)
+  * MOTION: LFO1 -> filter / pitch / amp depth, chorus, phaser, flanger, + pitch drift above 0.5
+* Preset switch: `setPreset` is allocation-free (presets are pre-compiled to `VaultCompiledPreset`); the output fades out
+  over 10 ms, voices are cleared, the program swaps, keys still held are struck again with the new sound, fade in 10 ms.
+* CPU: about 3 % of one core for a held 4-layer note (10 s of a 4-layer preset renders in ~0.3 s). Memory: ~4 MB per prepared part.
+
+## Data model (`Source/vault/VaultTypes.h`)
+
+```cpp
+struct VaultPart {
+    std::vector<std::pair<juce::String, float>> values;   // REAL param values, EVOLVE IDs (Params.h); missing = default
+    float level = 1.0f;     // 0..2 linear
+    float pan = 0.0f;       // -1..1, equal power (unity at centre)
+    int octave = 0;         // -3..3 (MIDI transpose of this part)
+    int semi = 0;           // -12..12
+    juce::String label;     // UI layer name, e.g. "Ice Bell"
+};
+struct VaultPreset {
+    juce::String id;        // stable unique id, e.g. "cv.808.0001" - saved in projects, never change
+    juce::String name;      // English display name, invented (no real brands / products / companies)
+    int category = 0;       // vault::CategoryIndex
+    uint32_t styles = 0;    // bit i = vault::styleNames()[i]
+    uint32_t chars = 0;     // bit i = vault::characterNames()[i]
+    std::vector<VaultPart> parts;          // 1..4
+    float gain = 1.0f;                     // loudness trim, linear, after the FX
+    float macroDefaults[4] { 0.5f, 0.5f, 0.5f, 0.5f };   // TONE SPACE DRIVE MOTION
+};
+namespace vault {
+  enum { numCategories = 16, numStyles = 8, numCharacters = 8, maxParts = 4, numMacros = 4 };
+  enum Macro { macroTone, macroSpace, macroDrive, macroMotion };
+  enum CategoryIndex { cat808Bass, catBellsMallets, catPianoKeys, catPlucks, catLeads, catPads, catStrings, catBrassHorns,
+                       catFlutesWinds, catGuitars, catVocalsChoir, catSynth, catArpsSequences, catOrchestral, catWorld, catFxAtmos };
+  enum StyleIndex { styleTrap, styleRage, styleDrill, stylePluggnb, styleDark, styleEmo, styleLoFi, styleAmbient };
+  enum CharIndex  { charBright, charDark, charWarm, charWide, charHard, charSoft, charDirty, charClean };
+  const juce::StringArray& categoryNames();   // "808 & Bass", "Bells & Mallets", ... "FX & Atmos"
+  int categoryTarget (int category);          // 520, 480, 420, ... (sum 5000)
+  int layerCountTarget (int numParts);        // 1: 1600, 2: 1900, 3: 1100, 4: 400
+  const juce::StringArray& styleNames();      // Trap Rage Drill Pluggnb Dark Emo Lo-Fi Ambient
+  const juce::StringArray& characterNames();  // Bright Dark Warm Wide Hard Soft Dirty Clean
+  const juce::StringArray& macroNames();      // TONE SPACE DRIVE MOTION
+  juce::StringArray namesOfMask (uint32_t mask, const juce::StringArray& names);
+  uint32_t maskOfNames (const juce::StringArray& tags, const juce::StringArray& names);
+
+  juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool compress = true);
+  bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& out, juce::String* error = nullptr);
+  bool saveBankFile (const juce::File& file, const std::vector<VaultPreset>& bank);
+  bool loadBankFile (const juce::File& file, std::vector<VaultPreset>& out, juce::String* error = nullptr);
+  bool validatePreset (const VaultPreset& p, juce::String* why = nullptr);   // 1..4 parts, ranges, known param IDs, finite
+}
+```
+
+Parameter IDs and real ranges: `Source/Params.h` (`createLayout()`); the sound-relevant subset with min / max / default
+is `kk::vk::info (key)` in `Source/ParamKeys.h` (`kk::vk::keyOf (id)`, `kk::vk::count`). Useful IDs: `engine` (0 VA, 1 FM,
+2 Pluck, 3 Vox, 4 Organ, 5 Flute, 6 Sub 808, 7 Wavetable, 8 Orchestral, 9 Modal), `wave`, `unison`, `detune`, `fmAmt`,
+`fmAlgo`, `layerB` + `...B` keys (second oscillator layer inside one part), `sub`, `filterType`, `cutoff`, `reso`, `fenv`,
+`attack` `decay` `sustain` `release`, `lfoRate` `lfoPitch` `lfoFilter`, `mono` `glide` `bassMode` (808 / bass: mono,
+clean lows), `drive` `driveType`, `chorus`, `delayMix`, `revMix` `revSize` `revType`, `width`, `gain` (dB), `macro1..8`
+(EVOLVE macros, leave at default), `mmSrc1..8 / mmDst1..8 / mmAmt1..8` (mod matrix). Performance IDs (`arp`, `chord`,
+`keyLock`, ...) are not sound parameters and are refused by `validatePreset`.
+
+## Bank file format `CVB1`
+
+```
+"CVB1" | uint16 version = 1 | uint16 flags (bit0 = gzip/zlib payload) | uint32 presetCount | uint32 rawPayloadSize | payload
+payload:  uint16 keyCount, keyCount x UTF-8 zero-terminated param-ID strings (the file's own key table; written in kk::vk order,
+          then any other ID used)
+          per preset: id, name (UTF-8 z-strings), uint8 category, uint32 styles, uint32 chars, float gain, 4 x float macroDefaults,
+                      uint8 partCount, per part: label (z-string), float level, float pan, int8 octave, int8 semi,
+                                                 uint16 valueCount, valueCount x (uint8 keyIndex, float32 value)
+all little-endian (juce::MemoryOutputStream). Round trips bit-exactly. ~760 one-layer presets = 30 KB compressed.
+```
+
+## How a bank is produced and loaded
+
+1. The bank generator builds `std::vector<VaultPreset>`, validates each with `vault::validatePreset`, renders with
+   `VaultEngine::render` to check / calibrate, and writes `vault::saveBankFile (file, bank)`.
+2. Put the file(s) in `resources/vault/` (any name ending in `.cvb`, e.g. `chrome_vault.cvb`, or one file per category:
+   `01_808_bass.cvb`, ...). CMake globs `resources/vault/*.cvb` (CONFIGURE_DEPENDS: a new file re-runs the configure step);
+   when there is at least one file it creates the binary-data target `ChromeVaultData` (namespace `VaultData`, header
+   `VaultData.h`), links it into `ChromeVault` and `VaultTests` and defines `CV_HAS_BANK=1`.
+3. At start the plugin loads (once per process, shared by all instances):
+   1. the file named by the environment variable `CHROME_VAULT_BANK` (absolute path) - for development / generator checks
+      without rebuilding;
+   2. else every embedded `.cvb`, concatenated in file-name order;
+   3. else the **starter bank**: one 1-layer preset per EVOLVE factory sound (757 now), categorised into the 16 vault
+      categories (`VaultProcessor::buildFallbackBank()`, ids `cv.fb.<slug>`).
+   At most 5,000 presets are used (`VaultProcessor::maxPresets`).
+4. Check a bank: `VaultTests -bankinfo` (per-category / per-layer counts vs targets), `VaultTests` (all tests over the
+   loaded bank: every preset validates, ids unique, two renders per category clean), `VaultTests -wav <index> out.wav [note] [seconds]`.
+   With `CHROME_VAULT_BANK=/abs/path/bank.cvb` these use that file.
+
+## API for the bank generator (`Source/vault/VaultEngine.h`)
+
+```cpp
+// Offline, no GUI / plugin needed, thread-safe (each call has its own engine - render presets in parallel).
+// Note on at 0, note off at 70 % of `seconds`, release tail to the end. Stereo, 2 channels. Macro defaults of the preset, volume 1.
+static juce::AudioBuffer<float> VaultEngine::render (const VaultPreset& preset, int midiNote, float velocity, double seconds, double sampleRate);
+static juce::AudioBuffer<float> VaultEngine::render (const VaultPreset& preset, int midiNote, float velocity, double seconds, double sampleRate,
+                                                     const float* macros /* 4 values or nullptr */);
+static juce::AudioBuffer<float> VaultEngine::renderMidi (const VaultPreset& preset, const juce::MidiBuffer& midi, int numSamples,
+                                                         double sampleRate, const float* macros = nullptr);
+static float VaultEngine::measureLoudnessDb (const juce::AudioBuffer<float>& buffer, double sampleRate);   // loudest 400 ms RMS, dBFS
+static constexpr float VaultEngine::targetLoudnessDb = -15.0f;
+// loudness: render at gain 1, then preset.gain = juce::Decibels::decibelsToGain (targetLoudnessDb - measured)
+static VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset);
+```
+
+Rendering is deterministic (same preset + note = same samples), so near-duplicate detection can compare renders.
+Use note 36-48 for 808 & Bass, 60 for the rest. The safety limiter holds every output under 0.98; a preset that hits
+it is too hot - lower its gain (check the render peak < 0.89 before the limiter would act, i.e. keep loudness at the target).
+
+Engine (real-time) API, used by the processor:
+
+```cpp
+struct VaultTransport { double bpm = 120.0; double ppq = 0.0; bool playing = false; };
+class VaultEngine {
+    void prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare = vault::maxParts);   // allocates
+    void releaseResources();
+    bool isPrepared() const;
+    void setPreset (const VaultCompiledPreset& p, bool instant = false);   // audio thread, no allocation, 10 ms declick
+    void setMacro (int index, float value01);  float getMacro (int index) const;   // any thread
+    void setVolume (float linearGain);                                           // any thread, smoothed
+    void process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi, const VaultTransport& t = VaultTransport());
+    void allNotesOff (bool hard);
+    static constexpr int chunk = 128;  static constexpr float monoBelowHz = 120.0f, sideHighPassHz = 150.0f;
+};
+```
+
+## API for the editor (`Source/vault/VaultProcessor.h`)
+
+The editor class must stay `class VaultEditor : public juce::AudioProcessorEditor` with constructor
+`explicit VaultEditor (VaultProcessor&)` in `Source/vault/VaultEditor.h/.cpp` (created by `VaultProcessor::createEditor`).
+Everything below is message-thread API:
+
+```cpp
+class VaultProcessor : public juce::AudioProcessor {
+    static constexpr const char* idPreset = "presetIndex";                        // AudioParameterInt 0..4999, automatable
+    static constexpr const char* idMacro[4] { "macro1", "macro2", "macro3", "macro4" };   // TONE SPACE DRIVE MOTION 0..1
+    static constexpr const char* idVolume = "volume";                             // dB -60..+6, default 0 (-60 = mute)
+    static constexpr int maxPresets = 5000;
+    enum class BankSource { embedded, file, factoryFallback };
+
+    const std::vector<VaultPreset>& bank() const;    // immutable for the plugin's lifetime (safe to keep indices / pointers)
+    BankSource bankSource() const;
+    juce::String bankDescription() const;            // "757 presets (starter bank)"
+    void selectPreset (int index);                   // instant (next audio block), resets the 4 macros to the preset defaults,
+                                                     // notifies the host (sets the presetIndex parameter)
+    int currentPreset() const;                       // index into bank()
+    const VaultPreset* currentPresetData() const;
+    int findPreset (const juce::String& id) const;   // -1 if unknown
+    float getMacro (int index) const;                // 0..1
+    void setMacro (int index, float value01);        // with host notification (or attach sliders to apvts / idMacro[i])
+    float getVolumeDb() const;  void setVolumeDb (float dB);
+    void previewNote (int midiNote, float velocity = 0.8f, double seconds = 0.9);   // audition on click (any thread)
+    float getOutputPeak() const;                     // peak of the last block (meter)
+    juce::MidiKeyboardState& getKeyboardState();     // for a juce::MidiKeyboardComponent
+    juce::AudioProcessorValueTreeState apvts;        // SliderAttachment etc.
+    static std::vector<VaultPreset> buildFallbackBank();
+    static int vaultCategoryOfFactory (int kkCategory);
+};
+```
+
+Favorites / recent / search / filters are UI-side (store them with `juce::PropertiesFile` in
+`userApplicationDataDirectory/TrapWin/CHROME VAULT/` keyed by preset `id`). Design mockup and colours: ink `#04060A`,
+panel `#0A0F18` / `#0B111C`, line `#1A2333`, silver `#E6EAF2`, text `#E6ECF7`, muted `#A9B6CC`, dim `#6B7890`,
+ice `#9FC3FF`, ice2 `#7FA6E8`, deep `#4676C4`; chrome gradient logo "CHROME VAULT" + "BY TRAPWIN", pill buttons, rounded panels.
+
+State (`getStateInformation`): XML `CHROMEVAULT` with `presetId` (restored by id first, so bank re-ordering is safe),
+`presetIndex`, `macro1..4`, `volume`.
+
+## Build and test
+
+```
+cmake -B build-vault -DCMAKE_BUILD_TYPE=Release [-DKK_JUCE_DIR=/path/to/JUCE]
+cmake --build build-vault --target ChromeVault_VST3 ChromeVault_Standalone VaultTests -j8
+build-vault/VaultTests_artefacts/Release/VaultTests          # "vault failures: 0"
+pluginval --strictness-level 8 --skip-gui-tests --validate "build-vault/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3"
+```
+
+VaultTests covers: key table == `createLayout()`, serializer round trip (gzip + raw, unknown IDs, UTF-8), damaged files refused,
+render of hand-made 1-4 layer presets + two presets per category (non-silent, finite, peak < 0.99, side under 90 Hz < -30 dB,
+clean note start / end, deterministic, macros at 0 / 1), loudness range, preset switch with a held note (no click, note
+continues), processBlock, state save / restore, macro reset on select, presetIndex automation.
+
+## EVOLVE refactor note
+
+`KeysKillaProcessor::buildVoiceParams` now calls `kk::buildVoiceParamsFrom` with a lookup into its APVTS / morph values
+(`Idx::vk` maps `kk::vk` keys to parameter indices). Behaviour is unchanged (same code, same order; EVOLVE unit tests pass).
+Never reorder `KK_VOICE_KEYS` - append only.

@@ -149,3 +149,69 @@ if(KK_BUILD_TESTS)
         juce::juce_audio_utils juce::juce_dsp juce::juce_opengl
         juce::juce_recommended_config_flags)
 endif()
+
+# =============================================================================
+# CHROME VAULT by TrapWin - a separate preset-bank instrument (Source/vault, docs/VAULT.md).
+# Its own company / codes - NEVER change the codes after release, hosts identify saved projects by them.
+juce_add_plugin(ChromeVault
+    VERSION 0.1.0
+    COMPANY_NAME "TrapWin"
+    BUNDLE_ID com.trapwin.chromevault
+    PLUGIN_MANUFACTURER_CODE Trpw
+    PLUGIN_CODE Cvlt
+    PRODUCT_NAME "CHROME VAULT"
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    VST3_CATEGORIES Instrument Synth
+    AU_MAIN_TYPE kAudioUnitType_MusicDevice
+    FORMATS VST3 AU Standalone
+    COPY_PLUGIN_AFTER_BUILD FALSE)
+
+# every .cpp in Source/vault (engine, processor, editor and its UI parts) + the shared EVOLVE factory sounds
+file(GLOB CV_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/*.cpp)
+set(CV_SHARED_SOURCES Source/Presets.cpp)
+
+# the preset bank: every resources/vault/*.cvb is embedded (loaded in file-name order). No files = the plugin
+# falls back to a small starter bank made from the EVOLVE factory sounds.
+file(GLOB CV_BANK_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/vault/*.cvb)
+set(CV_DATA_LIB)
+set(CV_BANK_DEF CV_HAS_BANK=0)
+if(CV_BANK_FILES)
+    juce_add_binary_data(ChromeVaultData HEADER_NAME VaultData.h NAMESPACE VaultData SOURCES ${CV_BANK_FILES})
+    set(CV_DATA_LIB ChromeVaultData)
+    set(CV_BANK_DEF CV_HAS_BANK=1)
+endif()
+
+target_sources(ChromeVault PRIVATE ${CV_SOURCES} ${CV_SHARED_SOURCES})
+target_compile_definitions(ChromeVault PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    ${CV_BANK_DEF}
+    CV_VERSION_STRING="0.1.0")
+target_link_libraries(ChromeVault
+    PRIVATE
+        ${CV_DATA_LIB}
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags)
+
+if(KK_BUILD_TESTS)
+    # VaultTests: serializer, offline render, mono lows, declick, state (tests/VaultTests.cpp)
+    juce_add_console_app(VaultTests PRODUCT_NAME "VaultTests")
+    target_sources(VaultTests PRIVATE tests/VaultTests.cpp ${CV_SOURCES} ${CV_SHARED_SOURCES})
+    target_compile_definitions(VaultTests PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
+        JucePlugin_Name="CHROME VAULT" JucePlugin_IsSynth=1 JucePlugin_VersionString="0.1.0")
+    target_link_libraries(VaultTests PRIVATE
+        ${CV_DATA_LIB}
+        juce::juce_audio_utils juce::juce_dsp
+        juce::juce_recommended_config_flags)
+endif()
