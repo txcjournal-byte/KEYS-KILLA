@@ -50,9 +50,9 @@ inline float targetLoudness (int category)
 }
 constexpr float loudnessTolerance = 1.0f;
 constexpr float peakCeiling = 0.89f;        // the engine's safety limiter acts above this: a preset must stay under it
-inline float tailLimitSeconds (int category)  // release tail to -60 dB (pads and atmospheres may ring longer)
+inline float tailLimitSeconds (int)  // release tail to -60 dB (estimate; the generator also renders the real tail, BankAudit.h)
 {
-    return category == vault::catPads || category == vault::catFxAtmos ? 16.0f : 8.0f;
+    return 8.0f;
 }
 
 // length of the QC render: 1.5 s, longer for slow attacks so the loudness is measured on the full note
@@ -318,7 +318,13 @@ inline const juce::StringArray& bannedWords()
                                        "les paul", "dx7", "tr-808", "tr808", "909", "linn", "emu", "e-mu", "ensoniq", "waldorf", "sequential", "access",
                                        "virus", "novation", "behringer", "elektron", "teenage", "op-1", "ableton", "fl studio", "logic", "cubase",
                                        "splice", "apple", "google", "sony", "playstation", "xbox", "tesla", "gucci", "prada", "rolex", "nike", "adidas",
-                                       "trapwin", "evolve", "keys killa" };
+                                       "trapwin", "evolve", "keys killa",
+                                       // a firearm brand (reads as one in this genre), and real titles / brands / places made of ordinary words
+                                       "glock", "mystic river", "shadow empire", "crystal castle", "frozen throne", "iron throne", "lost planet",
+                                       "lonely planet", "crimson tide", "blue moon", "crystal palace", "hidden valley", "night fury", "jade empire",
+                                       "royal crown", "crown royal", "arctic wolf", "neon abyss", "desert storm", "crimson viper", "golden state",
+                                       "red bull", "silent hill", "twilight zone", "night city", "diamond city", "neon genesis", "electric avenue",
+                                       "phantom thread", "velvet underground", "purple rain", "black panther", "silver surfer", "ghost rider" };
     return b;
 }
 inline bool isCleanName (const juce::String& s)

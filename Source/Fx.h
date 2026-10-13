@@ -145,6 +145,28 @@ public:
 
     float peakPre = 0;   // pre-limiter peak (for overload warning), reset by owner
 
+    // Silences every delay line / filter state without allocating (audio thread safe). Used by CHROME VAULT at a preset
+    // switch: the new sound starts in a clean rack, so the old content can't jump when the FX settings change (a reverb
+    // size change moves the read points of lines still full of the old sound -> clicks). EVOLVE does not call it.
+    void clearState()
+    {
+        os.reset();
+        for (int c = 0; c < 2; ++c)
+            for (auto* d : { &wowDl[c], &chDl[c], &flDl[c], &dly[c], &ring[c], &revRing[c], &htRing[c] }) d->clear();
+        ghostRing.clear(); ghostDly.clear();
+        ghostRev.reset(); fdn.reset(); mastering.reset();
+        for (auto* f : { &splitA[0], &splitA[1], &splitB[0], &splitB[1], &sideLp[0], &sideLp[1], &tapeLp[0], &tapeLp[1], &ghostHp }) f->reset();
+        for (auto& d : dc) d.x1 = d.y1 = 0;
+        for (auto& b : bodyS) for (auto& s : b) s.reset();
+        for (auto& b : eq) b.z1 = b.z2 = 0;
+        for (auto& b : subsonic) b.z1 = b.z2 = 0;
+        for (auto& a : apState) for (auto& v : a) v = 0;
+        apFb[0] = apFb[1] = 0;
+        envFast = envSlow = 0; noiseEnv = 0;
+        smDrive = smChorus = smDelay = smBody = smPhaser = smFlanger = smReverse = smPunch = smHalf = 0; smDelaySamples = -1;
+        holdCount = 0; holdL = holdR = 0;
+    }
+
 private:
     // ---------------------------------------------------------------------------------
     void drive (float* L, float* R, int n, const FxParams& p)

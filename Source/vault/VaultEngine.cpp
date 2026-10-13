@@ -71,10 +71,10 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
     partL.assign ((size_t) (vault::maxParts * chunk), 0.0f); partR.assign ((size_t) (vault::maxParts * chunk), 0.0f);
     lfo1.assign ((size_t) (vault::maxParts * chunk), 0.0f); lfo2.assign ((size_t) (vault::maxParts * chunk), 0.0f);
 
-    {   // 6th-order Butterworth high-pass at 150 Hz on the side signal: -12 dB at 120 Hz, -21 dB at 100 Hz, -36 dB at 75 Hz
-        static const double qs[3] { 0.51763809, 0.70710678, 1.93185165 };
+    {   // 8th-order Butterworth high-pass at 160 Hz on the side signal: -20 dB at 120 Hz, -33 dB at 100 Hz, -48 dB at 80 Hz
+        static const double qs[4] { 0.50979558, 0.60134489, 0.89997622, 2.56291545 };
         const double w = juce::MathConstants<double>::twoPi * sideHighPassHz / sr, cs = std::cos (w);
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < 4; ++i)
         {
             auto& h = sideHp[i];
             const double al = std::sin (w) / (2.0 * qs[i]), a0 = 1.0 + al;
@@ -82,6 +82,7 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
             h.a1 = (float) (-2 * cs / a0); h.a2 = (float) ((1 - al) / a0); h.z1 = h.z2 = 0;
         }
     }
+    dcX = dcY = 0; dcA = (float) std::exp (-juce::MathConstants<double>::twoPi * dcBlockHz / sr);
     limEnv = 0; limRel = (float) std::exp (-1.0 / (0.12 * sr));
     fade = Fade::none; fadeGain = 1.0f; fadeStep = (float) (1.0 / (fadeSeconds * sr));
     held.fill (0.0f); pitchWheel = modWheel = aftertouch = 0; sustain = false; freeBeat = 0;
@@ -132,6 +133,11 @@ void VaultEngine::switchToPending()
     std::swap (active, pending);
     hasPending = false;
     for (auto& p : parts) if (p) { p->synth.allOff (true); p->synth.setSustain (false); p->synth.setSustain (sustain); }
+    // the output is silent here (end of the switch fade-out): the new sound starts in a clean FX rack. The old reverb / delay
+    // content would otherwise jump when the FX settings change and come back as a click inside the fade-in.
+    if (fx != nullptr) fx->clearState();
+    dcX = dcY = 0;
+    for (auto& h : sideHp) h.z1 = h.z2 = 0;
     gainSm = active->gain;
     for (auto& p : parts) if (p) { p->ph1 = p->ph2 = 0; }
     updateParams (freeBeat, 120.0);
@@ -316,10 +322,12 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
         const float volTarget = volumeTarget.load (std::memory_order_relaxed);
         for (int i = 0; i < len; ++i)
         {
-            // mono below 120 Hz: the side signal is high-passed (36 dB/oct)
-            const float m = (busL[(size_t) i] + busR[(size_t) i]) * 0.5f;
+            // mono below 120 Hz: the side signal is high-passed (48 dB/oct); DC blocker on the mid
+            const float mIn = (busL[(size_t) i] + busR[(size_t) i]) * 0.5f;
+            const float m = mIn - dcX + dcA * dcY;
+            dcX = mIn; dcY = m;
             float s = (busL[(size_t) i] - busR[(size_t) i]) * 0.5f;
-            s = sideHp[2].tick (sideHp[1].tick (sideHp[0].tick (s)));
+            s = sideHp[3].tick (sideHp[2].tick (sideHp[1].tick (sideHp[0].tick (s))));
             // declick fades on preset switches
             if (fade == Fade::out) fadeGain = std::max (0.0f, fadeGain - fadeStep);
             else if (fade == Fade::in) { fadeGain = std::min (1.0f, fadeGain + fadeStep); if (fadeGain >= 1.0f) fade = Fade::none; }
@@ -333,7 +341,7 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             if (limEnv > limThresh) { const float lg = limThresh / limEnv; l *= lg; r *= lg; }
             auto soft = [] (float x) { const float a = std::abs (x); return a < 0.9f ? x : std::copysign (0.9f + 0.08f * std::tanh ((a - 0.9f) / 0.08f), x); };
             l = soft (l); r = soft (r);
-            if (! std::isfinite (l) || ! std::isfinite (r)) { l = r = 0; limEnv = 0; for (auto& h : sideHp) h.z1 = h.z2 = 0; }
+            if (! std::isfinite (l) || ! std::isfinite (r)) { l = r = 0; limEnv = 0; dcX = dcY = 0; for (auto& h : sideHp) h.z1 = h.z2 = 0; }
             if (outR != nullptr) { outL[c0 + i] = l; outR[c0 + i] = r; }
             else outL[c0 + i] = 0.5f * (l + r);
         }

@@ -1,6 +1,9 @@
 // CHROME VAULT factory bank generator (target VaultBankGen).
 //
 //   VaultBankGen [-out resources/vault/factory.cvb] [-report docs/VAULT_BANK_REPORT.md] [-threads N] [-scale 0.1]
+//   VaultBankGen -audit <bank.cvb> [-csv out.tsv] [-every N]   independent audio audit of a bank (BankAudit.h), exit 0 = no failures
+//   VaultBankGen -check <bank.cvb> | -list <bank.cvb>           re-run the gate / list ids, names, layers, tags
+//   VaultBankGen -env <bank.cvb> <id> | -switch <bank.cvb> <first> [count]   debugging: level curve / preset-switch clicks
 //
 // Deterministic: the same source tree gives the same bank (own RNG, every candidate seeded by its slot; candidates are
 // rendered in parallel but accepted in slot order). Builds exactly vault::categoryTarget(c) presets per category and the
@@ -14,6 +17,7 @@
 // and must not be a near-duplicate of an accepted preset (spectral + envelope fingerprint). Names and tags are invented
 // from the measured sound. Writes the CVB1 bank and a markdown QC report.
 #include "BankQC.h"
+#include "BankAudit.h"
 #include "../../Source/Presets.h"
 #include "../../Source/Params.h"
 #include <atomic>
@@ -953,6 +957,7 @@ struct Candidate
     int repairs = 0;
     float loud = 0, loudLow = 0, loudHigh = 0, peak = 0, tail = 0;
     vaultqc::Analysis aLow, aHigh;
+    vaultaudit::Result audit;         // the audit's spec render at the final gain (real tail, low band, own fingerprint)
 };
 
 int effOctave (const Patch& p, const VaultPart& part) { return (int) p[K::octave] + part.octave; }
@@ -1075,9 +1080,22 @@ bool repair (Candidate& cd, const juce::String& why)
     else if (why == "click-end")
         forAllParts (p, [] (Patch& pt, int) { pt.set (K::release, std::max (pt[K::release], 0.08f)); pt.set (K::frelease, std::max (pt[K::frelease], 0.05f)); });
     else if (why == "long-tail")
-        forAllParts (p, [&] (Patch& pt, int k) { pt.set (K::release, std::min (pt[K::release], cd.category == vault::catPads ? 3.0f : 1.6f));
-                                                 if (k == 0) { pt.set (K::revSize, std::min (pt[K::revSize], 0.6f)); pt.mul (K::revMix, 0.75f);
-                                                               pt.set (K::delayFb, std::min (pt[K::delayFb], 0.35f)); pt.set (K::freeze, 0); pt.set (K::timeM, 0.33f); } });
+    {
+        // progressively shorter: 1st time trims the release / reverb / delay feedback, 2nd time also caps the reverb decay time
+        // (cloud reverb RT60 = 5 + 15 x size s, hall 1 + 5 x size s), 3rd time swaps a cloud reverb for a hall
+        int level = 0;
+        for (auto& n : cd.notes) level += n == "repair long-tail";
+        const bool padLike = cd.category == vault::catPads || cd.category == vault::catFxAtmos;
+        forAllParts (p, [&] (Patch& pt, int k)
+        {
+            pt.set (K::release, std::min (pt[K::release], (padLike ? 3.0f : 1.6f) * (level >= 1 ? 0.7f : 1.0f)));
+            if (k != 0) return;
+            pt.set (K::revSize, std::min (pt[K::revSize], level == 0 ? 0.6f : 0.45f)); pt.mul (K::revMix, 0.8f);
+            pt.set (K::delayFb, std::min (pt[K::delayFb], level == 0 ? 0.35f : 0.25f)); pt.set (K::freeze, 0); pt.set (K::timeM, 0.33f);
+            if ((int) pt[K::revType] == 2) pt.set (K::revSize, std::min (pt[K::revSize], level == 0 ? 0.3f : 0.12f));   // cloud: RT60 <= 9.5 / 6.8 s
+            if (level >= 2 && (int) pt[K::revType] == 2) { pt.set (K::revType, 0); pt.set (K::revSize, 0.8f); }
+        });
+    }
     else if (why == "mono-collapse" || why == "low-side")
     {
         forAllParts (p, [] (Patch& pt, int k) { if (k == 0) { pt.set (K::width, std::min (pt[K::width], 0.5f)); pt.mul (K::chorus, 0.5f); pt.set (K::phaser, 0); pt.set (K::flanger, 0); }
@@ -1097,7 +1115,7 @@ bool repair (Candidate& cd, const juce::String& why)
 
 void evaluate (Candidate& cd)
 {
-    for (int round = 0; round < 4; ++round)
+    for (int round = 0; round < 5; ++round)
     {
         auto& p = cd.preset;
         p.gain = 0.25f;
@@ -1124,12 +1142,41 @@ void evaluate (Candidate& cd)
             const float pk = std::max (aL.peak, aH.peak);
             if (pk * g / g0 >= vaultqc::peakCeiling * 0.98f) g = vaultqc::peakCeiling * 0.97f * g0 / pk;   // allowed -1 dB under the target
             g = std::min (g, 16.0f);
+            {   // the low test note is the note the audit (and most players) hit: pull it toward the target, keeping the mean of
+                // both notes within 0.85 dB of the target and the peak under the ceiling
+                const float meanDev = loud0 + juce::Decibels::gainToDecibels (g / g0) - target;
+                const float lowDev = aL.loud + juce::Decibels::gainToDecibels (g / g0) - target;
+                const float headroom = juce::Decibels::gainToDecibels (vaultqc::peakCeiling * 0.97f * g0 / (pk * g));
+                const float d = std::min (headroom, std::max (-0.85f - meanDev, std::min (0.85f - meanDev, -lowDev)));
+                g = std::min (16.0f, g * juce::Decibels::decibelsToGain (d));
+            }
             const float scale = g / g0;
             why = vaultqc::gate (aL, cd.category, scale, false);
             if (why.isEmpty()) why = vaultqc::gate (aH, cd.category, scale, false);
             const float loud = loud0 + juce::Decibels::gainToDecibels (scale);
             if (why.isEmpty() && std::abs (loud - target) > vaultqc::loudnessTolerance - 0.1f)   // 0.1 dB margin for the shipped-bank test
                 why = g >= 16.0f ? "loudness" : "clip";
+            // the low note itself within 1.5 dB of the target (the audit flags 2 dB from the category median)
+            if (why.isEmpty() && std::abs (aL.loud + juce::Decibels::gainToDecibels (scale) - target) > 1.5f) why = "loudness-spread";
+            if (why.isEmpty())
+            {   // the audit's spec render at the final gain: real tail, low band, clicks, DC, mono loss (with a little margin)
+                p.gain = g;
+                vaultaudit::Result ar;
+                vaultaudit::Limits lim;
+                lim.tail = 7.6f; lim.monoLoss = 2.7f; lim.lowSideTot -= 3.0f; lim.lowSideVsMid -= 3.0f; lim.spike = 6.0f;
+                if (! vaultaudit::measureSpec (p, ar)) why = "nan";
+                else
+                {
+                    vaultaudit::specFails (ar, lim);
+                    if (! ar.fails.isEmpty())
+                    {
+                        const auto& f = ar.fails[0];
+                        why = f == "tail>8s" ? "long-tail" : f == "mono-loss" || f == "low-side" ? "mono-collapse" : f == "limiter" || f == "peak>-0.5dB" ? "clip"
+                            : f == "click-spike" ? "click-end" : f;
+                    }
+                }
+                cd.audit = std::move (ar);
+            }
             if (why.isEmpty())
             {
                 p.gain = g;
@@ -1138,13 +1185,13 @@ void evaluate (Candidate& cd)
                 cd.loudLow = aL.loud + juce::Decibels::gainToDecibels (scale);
                 cd.loudHigh = aH.loud + juce::Decibels::gainToDecibels (scale);
                 cd.peak = std::max (aL.peak, aH.peak) * scale;
-                cd.tail = std::max (aL.tailSeconds, aH.tailSeconds);
+                cd.tail = cd.audit.tail;
                 cd.aLow = aL; cd.aHigh = aH;
                 return;
             }
         }
         cd.reason = why;
-        if (why == "silent" || why == "nan" || why == "dc" || round == 3 || ! repair (cd, why)) return;
+        if (why == "silent" || why == "nan" || why == "dc" || round == 4 || ! repair (cd, why)) return;
     }
 }
 
@@ -1322,7 +1369,7 @@ juce::StringArray typeWords (const Candidate& c, const Library& lib)
             if (k == "musicbox") return { "Music Box", "Lullaby", "Box" };
             if (k == "thumb") return { "Thumb Keys", "Tines", "Mallet" };
             if (k == "mallet") return { "Mallet", "Vibes", "Celesta", "Chime" };
-            return { "Bell", "Bells", "Chime", "Chimes", "Glock", "Toll" };
+            return { "Bell", "Bells", "Chime", "Chimes", "Glockenspiel", "Toll" };
         case vault::catPianoKeys:
             if (k == "organ") return { "Organ", "Chapel Keys", "Drawbar" };
             if (k == "ep") return { "EP", "Keys", "Tines", "E-Piano" };
@@ -1380,7 +1427,7 @@ juce::String makeName (const Candidate& c, const Library& lib, std::set<juce::St
                     clash = words[a].substring (0, 4).equalsIgnoreCase (words[b].substring (0, 4));
             if (clash) continue;
         }
-        if (name.length() > 22 || used.count (name.toLowerCase()) || ! vaultqc::isCleanName (name)) continue;
+        if (name.length() > 22 || used.count (name.toLowerCase()) || vaultaudit::nameProblem (name).isNotEmpty()) continue;
         used.insert (name.toLowerCase());
         return name;
     }
@@ -1429,6 +1476,156 @@ struct Stats
 };
 
 juce::String fmt (float x, int d = 1) { return juce::String (x, d); }
+
+//==============================================================================
+// -audit: every preset through BankAudit.h + bank-wide checks (loudness outliers, CPU outliers, near-duplicates, names)
+int runAudit (const juce::File& bankFile, const juce::File& csv, int threads, int every)
+{
+    using namespace vaultaudit;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    std::vector<VaultPreset> b;
+    juce::String err;
+    if (! vault::loadBankFile (bankFile, b, &err)) { std::printf ("cannot load: %s\n", err.toRawUTF8()); return 1; }
+    if (every > 1) { std::vector<VaultPreset> s; for (size_t i = 0; i < b.size(); i += (size_t) every) s.push_back (b[i]); b.swap (s); }
+    const int n = (int) b.size();
+    std::vector<Result> res ((size_t) n);
+    std::atomic<int> done { 0 };
+    parallelFor (n, threads, [&] (int i)
+    {
+        res[(size_t) i] = analysePreset (b[(size_t) i]);
+        if (const int d = ++done; d % 500 == 0) std::printf ("  %d / %d (%.0f s)\n", d, n, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+    });
+
+    auto median = [] (std::vector<float> v) { if (v.empty()) return 0.0f; std::sort (v.begin(), v.end()); return v[v.size() / 2]; };
+    // loudness outliers per category (full-note loudness = how the sound plays; the fixed 1.5 s value is reported too)
+    float catMed[vault::numCategories] {}, catMedSpec[vault::numCategories] {};
+    for (int c = 0; c < vault::numCategories; ++c)
+    {
+        std::vector<float> l, ls;
+        for (int i = 0; i < n; ++i) if (b[(size_t) i].category == c && res[(size_t) i].finite) { l.push_back (res[(size_t) i].loudFull); ls.push_back (res[(size_t) i].loud); }
+        catMed[c] = median (l); catMedSpec[c] = median (ls);
+    }
+    int specLoudOutliers = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        auto& r = res[(size_t) i];
+        if (! r.finite) continue;
+        const int c = b[(size_t) i].category;
+        if (std::abs (r.loudFull - catMed[c]) > loudnessOutlierDb) r.fails.add (juce::String::formatted ("loudness%+.1f", r.loudFull - catMed[c]));
+        if (std::abs (r.loud - catMedSpec[c]) > loudnessOutlierDb) { ++specLoudOutliers; r.infos.add ("loudness-1.5s"); }
+    }
+    // CPU: against the median of the presets with the same number of layers, and against the global median
+    float cpuMed[vault::maxParts + 1] {};
+    std::vector<float> all;
+    for (int k = 1; k <= vault::maxParts; ++k)
+    {
+        std::vector<float> v;
+        for (int i = 0; i < n; ++i) if ((int) b[(size_t) i].parts.size() == k) v.push_back (res[(size_t) i].cpu);
+        cpuMed[k] = median (v);
+        all.insert (all.end(), v.begin(), v.end());
+    }
+    const float cpuMedAll = median (all);
+    int cpuGlobalOutliers = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        auto& r = res[(size_t) i];
+        const int k = (int) b[(size_t) i].parts.size();
+        if (r.cpu > cpuOutlierFactor * cpuMed[k]) r.fails.add (juce::String::formatted ("cpu x%.1f", r.cpu / cpuMed[k]));
+        if (r.cpu > cpuOutlierFactor * cpuMedAll) { ++cpuGlobalOutliers; r.infos.add ("cpu>3x-global-median"); }
+    }
+    // near-duplicates (all pairs, any category)
+    std::vector<float> nn ((size_t) n, 1.0e9f);
+    std::vector<int> nnIdx ((size_t) n, -1);
+    parallelFor (n, threads, [&] (int i)
+    {
+        for (int j = 0; j < n; ++j)
+            if (j != i) { const float d = distance (res[(size_t) i].print, res[(size_t) j].print); if (d < nn[(size_t) i]) { nn[(size_t) i] = d; nnIdx[(size_t) i] = j; } }
+    });
+    for (int i = 0; i < n; ++i)
+        if (nn[(size_t) i] < dupDistance && i > nnIdx[(size_t) i])   // the later one of the pair is the duplicate
+            res[(size_t) i].fails.add ("duplicate-of " + b[(size_t) nnIdx[(size_t) i]].id + juce::String::formatted (" (%.2f)", nn[(size_t) i]));
+    // names
+    std::map<juce::String, int> seen;
+    for (int i = 0; i < n; ++i)
+    {
+        const auto& p = b[(size_t) i];
+        auto& r = res[(size_t) i];
+        if (const auto w = nameProblem (p.name); w.isNotEmpty()) r.fails.add ("name: " + w);
+        if (const auto it = seen.find (p.name.toLowerCase()); it != seen.end()) r.fails.add ("name: duplicate of " + b[(size_t) it->second].id);
+        seen[p.name.toLowerCase()] = i;
+        for (auto& part : p.parts) if (const auto w = nameProblem (part.label); w.isNotEmpty()) r.fails.add ("label '" + part.label + "': " + w);
+    }
+
+    // report
+    std::map<juce::String, int> failCount, infoCount;
+    int failed = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        auto& r = res[(size_t) i];
+        for (auto& f : r.fails)
+            ++failCount[f.startsWith ("loudness") ? juce::String ("loudness") : f.startsWith ("name") ? juce::String ("name")
+                        : f.startsWith ("label") ? juce::String ("label") : f.upToFirstOccurrenceOf (" ", false, false)];
+        for (auto& f : r.infos) ++infoCount[f];
+        if (! r.fails.isEmpty() && failed++ < 60)
+            std::printf ("FAIL %s %-24s %s\n", b[(size_t) i].id.toRawUTF8(), b[(size_t) i].name.toRawUTF8(), r.fails.joinIntoString ("; ").toRawUTF8());
+    }
+    auto stat = [&] (const char* what, auto get)
+    {
+        std::vector<float> v; for (int i = 0; i < n; ++i) if (res[(size_t) i].finite) v.push_back (get (res[(size_t) i]));
+        std::sort (v.begin(), v.end());
+        if (v.empty()) return;
+        std::printf ("  %-26s min %8.3f  p50 %8.3f  p99 %8.3f  max %8.3f\n", what, v.front(), v[v.size() / 2], v[v.size() * 99 / 100], v.back());
+    };
+    std::printf ("\nmetrics over %d presets:\n", n);
+    stat ("peak (vel 0.8)", [] (const Result& r) { return r.peak; });
+    stat ("peak (vel 1.0)", [] (const Result& r) { return r.peak127; });
+    stat ("peak extremes (24/96)", [] (const Result& r) { return r.extremePeak; });
+    stat ("DC / rms", [] (const Result& r) { return r.dcRel; });
+    stat ("first sample", [] (const Result& r) { return r.firstSample; });
+    stat ("onset jump / later", [] (const Result& r) { return r.onJump / std::max (1.0e-6f, r.laterJump); });
+    stat ("note-off jump / before", [] (const Result& r) { return r.offJump / std::max (1.0e-6f, r.preOffJump); });
+    stat ("spike ratio", [] (const Result& r) { return r.spike; });
+    stat ("mono-sum loss dB", [] (const Result& r) { return r.monoLossDb; });
+    stat ("side<120 vs total dB", [] (const Result& r) { return r.lowSideTotDb; });
+    stat ("side<120 vs mid<120 dB", [] (const Result& r) { return r.lowSideMidDb; });
+    stat ("tail s", [] (const Result& r) { return r.tail; });
+    stat ("cpu (s per s audio)", [] (const Result& r) { return r.cpu; });
+    std::printf ("  cpu medians: 1 layer %.4f, 2 layers %.4f, 3 layers %.4f, 4 layers %.4f, all %.4f; %d presets > 3x the global median (report only)\n",
+                 cpuMed[1], cpuMed[2], cpuMed[3], cpuMed[4], cpuMedAll, cpuGlobalOutliers);
+    {
+        std::vector<float> s = nn; std::sort (s.begin(), s.end());
+        std::printf ("  nearest-neighbour distance: min %.2f, p1 %.2f, p5 %.2f, median %.2f (duplicate below %.1f)\n", s.front(), s[s.size() / 100], s[s.size() / 20],
+                     s[s.size() / 2], dupDistance);
+    }
+    std::printf ("  loudness: per-category medians (full note):");
+    for (int c = 0; c < vault::numCategories; ++c) std::printf (" %.1f", catMed[c]);
+    std::printf ("\n  fixed 1.5 s loudness outliers (report only, slow attacks): %d\n", specLoudOutliers);
+    std::printf ("\nfailures by check:");
+    for (auto& [k, v] : failCount) std::printf ("  %s %d", k.toRawUTF8(), v);
+    std::printf ("\nreport-only:");
+    for (auto& [k, v] : infoCount) std::printf ("  %s %d", k.toRawUTF8(), v);
+    std::printf ("\naudited %d presets: %d failed (%.0f s)\n", n, failed, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+
+    if (csv != juce::File())
+    {
+        juce::String s ("idx\tid\tname\tcat\tlayers\tpeak\tpeak127\tloud\tloudFull\tdcRel\tfirst\tonJump\tlaterJump\toffJump\tpreOffJump\tspike\tmonoLoss\t"
+                        "lowSideTot\tlowSideMid\tlowMidTot\ttail\tcpu\textLow\textHigh\textPeak\tnn\tnnId\tfails\tinfos\n");
+        for (int i = 0; i < n; ++i)
+        {
+            const auto& r = res[(size_t) i]; const auto& p = b[(size_t) i];
+            s << i << "\t" << p.id << "\t" << p.name << "\t" << p.category << "\t" << (int) p.parts.size();
+            for (float x : { r.peak, r.peak127, r.loud, r.loudFull, r.dcRel, r.firstSample, r.onJump, r.laterJump, r.offJump, r.preOffJump, r.spike,
+                             r.monoLossDb, r.lowSideTotDb, r.lowSideMidDb, r.lowMidTotDb, r.tail, r.cpu, r.extremeLowLoud, r.extremeHighLoud, r.extremePeak,
+                             nn[(size_t) i] })
+                s << "\t" << juce::String (x, 5);
+            s << "\t" << (nnIdx[(size_t) i] >= 0 ? b[(size_t) nnIdx[(size_t) i]].id : juce::String()) << "\t" << r.fails.joinIntoString ("; ") << "\t"
+              << r.infos.joinIntoString ("; ") << "\n";
+        }
+        csv.replaceWithText (s);
+        std::printf ("csv -> %s\n", csv.getFullPathName().toRawUTF8());
+    }
+    return failed == 0 ? 0 : 1;
+}
 } // namespace
 
 int main (int argc, char** argv)
@@ -1497,6 +1694,68 @@ int main (int argc, char** argv)
         return failed == 0 ? 0 : 1;
     }
 
+    if (argc > 3 && juce::String (argv[1]) == "-env")   // -env <bank.cvb> <id>: 100 ms level curve of the audit note (debugging tails)
+    {
+        std::vector<VaultPreset> b;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b)) return 1;
+        for (auto& p : b)
+            if (p.id == juce::String (argv[3]))
+            {
+                juce::AudioBuffer<float> buf;
+                vaultaudit::renderNote (p, vaultaudit::specNote (p.category), 0.8f, 10.0, buf, nullptr);
+                for (int s0 = 0; s0 + 4800 <= buf.getNumSamples(); s0 += 4800)
+                    std::printf ("%.1f s %6.1f dB\n", s0 / 48000.0, juce::Decibels::gainToDecibels (std::max (buf.getRMSLevel (0, s0, 4800), buf.getRMSLevel (1, s0, 4800)), -150.0f));
+                for (auto& part : p.parts) { std::printf ("part %s:", part.label.toRawUTF8()); for (auto& [k, v] : part.values) std::printf (" %s=%g", k.toRawUTF8(), v); std::printf ("\n"); }
+                return 0;
+            }
+        return 1;
+    }
+    if (argc > 3 && juce::String (argv[1]) == "-switch")   // -switch <bank.cvb> <first index> [count]: browse presets with a held chord (clicks)
+    {
+        std::vector<VaultPreset> b;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b)) return 1;
+        const int first = juce::String (argv[3]).getIntValue(), count = argc > 4 ? juce::String (argv[4]).getIntValue() : 24;
+        constexpr double sr = 48000.0; constexpr int block = 256;
+        VaultEngine eng;
+        eng.prepare (sr, block);
+        eng.setPreset (VaultEngine::compile (b[(size_t) first]), true);
+        const int every = (int) (0.25 * sr / block);
+        juce::AudioBuffer<float> all (2, block * every * (count + 1)), buf (2, block);
+        for (int k = 0; k < every * (count + 1); ++k)
+        {
+            juce::MidiBuffer m;
+            if (k == 0) for (int nn : { 60, 63, 67 }) m.addEvent (juce::MidiMessage::noteOn (1, nn, 0.8f), 0);
+            if (k > 0 && k % every == 0) eng.setPreset (VaultEngine::compile (b[(size_t) (first + k / every)]), false);
+            eng.process (buf, m);
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, k * block, buf, c, 0, block);
+        }
+        for (int sw = 1; sw <= count; ++sw)
+        {
+            const int s0 = sw * every * block;
+            float mj = 0, own = 0; int at = 0;
+            for (int i = s0 - 64; i < s0 + 1200; ++i) for (int c = 0; c < 2; ++c) { const float j = std::abs (all.getSample (c, i) - all.getSample (c, i - 1)); if (j > mj) { mj = j; at = i - s0; } }
+            for (int i = s0 + 2400; i < s0 + every * block - 64; ++i) for (int c = 0; c < 2; ++c) own = std::max (own, std::abs (all.getSample (c, i) - all.getSample (c, i - 1)));
+            juce::MidiBuffer chord;
+            for (int nn : { 60, 63, 67 }) chord.addEvent (juce::MidiMessage::noteOn (1, nn, 0.8f), 0);
+            const auto fresh = VaultEngine::renderMidi (b[(size_t) (first + sw)], chord, (int) (0.03 * sr), sr);
+            float fj = 0; int fat = 0;
+            for (int i = 1; i < fresh.getNumSamples(); ++i) for (int c = 0; c < 2; ++c) { const float j = std::abs (fresh.getSample (c, i) - fresh.getSample (c, i - 1)); if (j > fj) { fj = j; fat = i; } }
+            std::printf ("switch -> %d %-24s jump %.4f at %+d, own %.4f, fresh attack %.4f at %d  x%.2f\n", first + sw, b[(size_t) (first + sw)].name.toRawUTF8(),
+                         mj, at, own, fj, fat, mj / std::max (1e-4f, std::max (own, fj)));
+        }
+        return 0;
+    }
+    if (argc > 2 && juce::String (argv[1]) == "-audit")   // -audit <bank.cvb> [-csv file]: the independent audio audit (BankAudit.h)
+    {
+        juce::File csv; int every = 1;
+        for (int i = 3; i + 1 < argc; ++i)
+        {
+            if (juce::String (argv[i]) == "-csv") csv = cwd.getChildFile (argv[i + 1]);
+            if (juce::String (argv[i]) == "-every") every = juce::jmax (1, juce::String (argv[i + 1]).getIntValue());   // quick look: every N-th preset
+        }
+        return runAudit (cwd.getChildFile (argv[2]), csv, threads, every);
+    }
+
     std::printf ("CHROME VAULT bank generator: %d threads\n", threads);
     Library lib = buildLibrary (threads);
     {
@@ -1557,7 +1816,8 @@ int main (int argc, char** argv)
             ++s.attempt;
             if (! cd.ok) { ++stats.rejects[cd.reason]; continue; }
             bool dup = false;
-            for (auto* a : accepted) if (printDist (*a, cd) < thr) { dup = true; break; }
+            for (auto* a : accepted)
+                if (printDist (*a, cd) < thr || vaultaudit::distance (a->audit.print, cd.audit.print) < vaultaudit::dupDistance + 0.1f) { dup = true; break; }
             if (dup) { ++stats.duplicates; ++stats.rejects["duplicate"]; continue; }
             for (auto& n : cd.notes) if (n.startsWith ("repair ")) ++stats.repairsOk[n.fromFirstOccurrenceOf ("repair ", false, false)];
             s.result = std::move (cd);
@@ -1626,8 +1886,13 @@ int main (int argc, char** argv)
     md << "Quality gate (tools/vault/BankQC.h), every preset, two notes at 48 kHz (808 & Bass at C1 / C2 = MIDI 36 / 48, everything else C3 / C5 = MIDI 60 / 84),"
           " velocity 0.8, " << fmt ((float) vaultqc::baseSeconds) << " s render (longer for slow attacks), note off at 70 %: not silent, no NaN, peak < "
        << fmt (vaultqc::peakCeiling, 2) << " (the safety limiter never acts), no DC, no click at note start / end, mono-sum loss <= 3 dB, side under 90 Hz < -30 dB,"
-          " release tail to -60 dB <= 8 s (pads / atmospheres 16 s), loudness (K-weighted, loudest 400 ms, mean of both notes) within +-"
-       << fmt (vaultqc::loudnessTolerance) << " dB of the category target, no near-duplicate (fingerprint distance >= " << fmt (dupThreshold) << ").\n\n";
+          " loudness (K-weighted, loudest 400 ms, mean of both notes) within +-"
+       << fmt (vaultqc::loudnessTolerance) << " dB of the category target and the low note within 1.5 dB of it, no near-duplicate (fingerprint distance >= "
+       << fmt (dupThreshold) << "). Then the audit render at the final gain (tools/vault/BankAudit.h: C4, 808 & Bass C2, note off at 1.05 s, rendered"
+          " until the tail is 60 dB down): real release tail <= 7.6 s, side power under 120 Hz (FFT) < -33 dB of the signal and < -23 dB of the mid"
+          " under 120 Hz, mono-sum loss <= 2.7 dB, no DC, no click at note start / end / anywhere in the tail, and no near-duplicate by the audit's own"
+          " time-frequency fingerprint (distance >= " << fmt (vaultaudit::dupDistance + 0.1f) << "). `VaultBankGen -audit` re-checks the shipped bank"
+          " with the plain limits (tail 8 s, mono loss 3 dB, loudness 2 dB from the category median, CPU, names).\n\n";
     md << "## Counts\n\n| Category | Target | Presets | 1 layer | 2 layers | 3 layers | 4 layers | Loudness target | Loudness min / median / max | Max peak | Longest tail |\n";
     md << "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |\n";
     int layerTot[5] {};

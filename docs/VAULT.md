@@ -36,9 +36,15 @@ MIDI ─┬─> part 0: kk::SynthEngine (32 voices, 2 osc layers, filter, envs, 
       ├─> part 1  (transposed by octave*12+semi)                                             ├─> sum ─> kk::FxRack (FX values of PART 0)
       ├─> part 2                                                                              │        drive, chorus, phaser, delay, reverb,
       └─> part 3                                                                              ┘        EQ, width, MASTER glue + limiter
-   ─> side high-pass 150 Hz 6th order (everything under ~120 Hz is mono) ─> preset gain trim ─> master volume
+   ─> side high-pass 160 Hz 8th order (everything under ~120 Hz is mono: side -20 dB at 120 Hz) + 5 Hz DC blocker on the mid
+   ─> preset gain trim ─> master volume
    ─> 10 ms switch fade ─> safety limiter (-1 dBFS, instant attack, 120 ms release) + soft ceiling 0.98 ─> out
 ```
+
+Preset switch: 10 ms fade-out (output and FX input), then - with the output silent - voices off, the FX rack cleared
+(`kk::FxRack::clearState()`, no allocation) and the held keys re-struck with the new sound, 10 ms fade-in. Clearing matters:
+with the old reverb / delay content kept, the new sound's FX settings moved the read points of lines still full of the old
+sound, and that jump came back through the master stage's 9 ms width delay as a click inside the fade-in.
 
 * Each part is a complete EVOLVE synth patch (`VaultPart::values`, real parameter values with EVOLVE parameter IDs,
   anything missing = the EVOLVE default). The conversion values -> `VoiceParams` is the exact EVOLVE one
@@ -153,6 +159,7 @@ cmake --build build-vault --target VaultBankGen
 build-vault/VaultBankGen_artefacts/Release/VaultBankGen [-threads N] [-scale 0.1] [-out file.cvb] [-report file.md] [-dup 3.0]
 VaultBankGen -check resources/vault/factory.cvb      # re-render every preset at its final gain through the gate
 VaultBankGen -list  resources/vault/factory.cvb      # id, name, layers, tags
+VaultBankGen -audit resources/vault/factory.cvb [-csv out.tsv] [-every N]   # independent audio audit, exit code 0 = 0 failures
 ```
 
 Run it from the repo root (paths are relative). About 15-20 minutes on 4 cores. Deterministic: own RNG (splitmix64,
@@ -181,16 +188,26 @@ How it builds the bank:
 5. **Quality gate** (`tools/vault/BankQC.h`, shared with VaultTests), two notes at 48 kHz (808 & Bass MIDI 36 / 48, the rest
    60 / 84, C3 = 60), 1.5 s (longer for slow attacks), note off at 70 %: silence, NaN, peak >= 0.89 (the safety limiter
    must never act), DC, click at note start (first sample, sample jump in the first 2 ms against the next 200 ms) and note end,
-   mono-sum loss > 3 dB, side under 90 Hz > -30 dB, release tail to -60 dB > 8 s (pads / FX & Atmos 16 s). A failing
-   candidate is repaired once per reason (softer attack, longer release, shorter tails, narrower stereo, master glue) and
-   re-rendered, else replaced by a new candidate for its slot.
+   mono-sum loss > 3 dB, side under 90 Hz > -30 dB. Then the **audit render** at the final gain (`tools/vault/BankAudit.h`:
+   C4, 808 & Bass C2, note off at 1.05 s, rendered on until the tail is 60 dB down): real release tail > 7.6 s, side power
+   under 120 Hz (FFT) > -33 dB of the signal or > -23 dB of the mid under 120 Hz, mono-sum loss > 2.7 dB, DC, clicks at
+   note start / end / anywhere in the tail. A failing candidate is repaired (softer attack, longer release, progressively
+   shorter tails - cloud reverb size capped, then swapped for a hall - narrower stereo, master glue) and re-rendered, else
+   replaced by a new candidate for its slot.
 6. **Loudness**: K-weighted (BS.1770 filters) loudest 400 ms, mean of both notes, set by `VaultPreset::gain` to the category
    target (808 & Bass -12, Leads -13.5, Brass / Synth -14, Keys / Plucks / Guitars / Arps / Orchestral -14.5, Bells / Strings /
    Winds / World -15, Vocals -15.5, Pads -16, FX & Atmos -17) within +-1 dB. Presets whose peak would reach 0.89 at the target
-   are allowed down to -0.9 dB under it.
+   are allowed down to -0.9 dB under it. The gain is then nudged (mean of both notes stays within 0.85 dB) so the low test
+   note - the one most people hit - is within 1.5 dB of the target too.
 7. **Dedupe**: a fingerprint per note (20 log bands of the held spectrum, 6 bands of the attack, 10-step envelope, width);
    a candidate closer than 3.0 to any accepted preset (any category) is rejected (relaxed to 2.55 / 2.1 for slots that keep
-   failing).
+   failing), and also one closer than 2.1 by the audit's fingerprint (24 log bands x 5 time segments of the C4 / C2 note).
+
+**Audit** (`VaultBankGen -audit`, `tools/vault/BankAudit.h`): every preset re-rendered at C4 (808 & Bass C2), velocity 0.8
+and 1.0, plus MIDI 24 / 96; fails on NaN, silence, peak > -0.5 dBFS, the safety limiter reached at velocity 0.8, DC, clicks,
+mono-sum loss > 3 dB, wide lows under 120 Hz, real tail > 8 s, loudness > 2 dB from the category median, CPU > 3x the median
+of presets with the same layer count, near-duplicates (audit fingerprint < 2.0), names (unique, ASCII, brand words /
+phrases, offensive words). Must report 0 failures before a bank is committed.
 8. **Tags** from the measured sound: Bright / Dark = spectral-centroid percentile in the category, Warm = 150-900 Hz share,
    Wide = side / mid percentile, Hard / Soft = attack time, Dirty / Clean = drive + crush (+ 808 saturation); 1-3 each.
    Styles scored from category + character + space / lo-fi / glide (e.g. 808 with glide -> Drill, soft / warm plucks -> Pluggnb).
@@ -238,7 +255,7 @@ class VaultEngine {
     void setVolume (float linearGain);                                           // any thread, smoothed
     void process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi, const VaultTransport& t = VaultTransport());
     void allNotesOff (bool hard);
-    static constexpr int chunk = 128;  static constexpr float monoBelowHz = 120.0f, sideHighPassHz = 150.0f;
+    static constexpr int chunk = 128;  static constexpr float monoBelowHz = 120.0f, sideHighPassHz = 160.0f;
 };
 ```
 

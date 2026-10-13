@@ -70,8 +70,9 @@ public:
     static constexpr float targetLoudnessDb = -15.0f;
 
     static constexpr int chunk = 128;          // internal block (parameters / macros update at this rate)
-    static constexpr float monoBelowHz = 120.0f;     // everything below is mono: side high-pass corner at 150 Hz (6th order)
-    static constexpr float sideHighPassHz = 150.0f;
+    static constexpr float monoBelowHz = 120.0f;     // everything below is mono: side high-pass corner at 160 Hz (8th order)
+    static constexpr float sideHighPassHz = 160.0f;
+    static constexpr float dcBlockHz = 5.0f;         // 1-pole DC blocker on the mid signal
 
 private:
     struct Part;
@@ -115,10 +116,11 @@ private:
     bool sustain = false;
     double freeBeat = 0;
 
-    // mono below 120 Hz: 6th-order Butterworth high-pass (3 biquads) on the side signal
+    // mono below 120 Hz: 8th-order Butterworth high-pass (4 biquads) on the side signal
     struct Biquad2 { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
                      inline float tick (float x) { const float y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; } };
-    Biquad2 sideHp[3];
+    Biquad2 sideHp[4];
+    float dcX = 0, dcY = 0, dcA = 0.9993f;   // DC blocker (mid)
     // safety limiter
     float limEnv = 0, limRel = 0.999f;
 };
