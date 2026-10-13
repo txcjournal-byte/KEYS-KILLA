@@ -38,12 +38,15 @@ public:
     static VaultCompiledPreset compile (const VaultPreset& preset);
 
     // allocates (message thread / before playback). numParts < 4 saves memory for offline renders of small presets.
-    void prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare = vault::maxParts);
+    // crossfadeSlot = false skips the second (switch crossfade) sound slot: then every setPreset is instant.
+    void prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare = vault::maxParts, bool crossfadeSlot = true);
     void releaseResources();
     bool isPrepared() const { return preparedParts > 0; }
 
     // audio thread (or the single offline thread). Allocation-free: copies the values in; `p` can go away afterwards.
-    // instant = false: 10 ms fade out, switch (held notes are re-struck with the new sound), 10 ms fade in.
+    // instant = false: the new sound starts at once in the second slot (held notes are re-struck with it) and crossfades in
+    // over xfadeSeconds (equal power) while the old sound - its voices and its own FX tails - fades out. A switch that
+    // arrives during a crossfade waits for it to finish (only the latest one is kept).
     void setPreset (const VaultCompiledPreset& p, bool instant = false);
 
     // any thread. value 0..1; 0.5 = the sound exactly as designed (macroTone, macroSpace, macroDrive, macroMotion)
@@ -73,6 +76,7 @@ public:
     static constexpr float monoBelowHz = 120.0f;     // everything below is mono: side high-pass corner at 160 Hz (8th order)
     static constexpr float sideHighPassHz = 160.0f;
     static constexpr float dcBlockHz = 5.0f;         // 1-pole DC blocker on the mid signal
+    static constexpr float xfadeSeconds = 0.040f;    // preset switch crossfade
 
 private:
     struct Part;
@@ -84,31 +88,45 @@ private:
         int transpose[vault::maxParts] {};
         float gain = 1;
     };
+    // One complete sound: a program, its parts (voices + LFO state), its own FX rack (with its own reverb / delay tails)
+    // and scratch buffers. Two slots: the current sound and, during a preset switch, the outgoing one fading out.
+    struct Slot
+    {
+        std::unique_ptr<Program> prog;
+        std::array<std::unique_ptr<Part>, vault::maxParts> parts;
+        std::unique_ptr<kk::FxRack> fx;
+        kk::VoiceParams vp[vault::maxParts];
+        kk::FxParams fp;
+        std::vector<float> busL, busR, busG, partL, partR, lfo1, lfo2;
+        bool prepared = false;
+    };
     void loadProgram (Program& dst, const VaultCompiledPreset& p);
-    void switchToPending();
-    void updateParams (double beatPos, double bpm);
+    void resetSlot (Slot& s, bool clearFx);
+    void beginSwitch();
+    void switchInstant();
+    void updateParams (Slot& s, double beatPos, double bpm);
+    void renderLfos (Slot& s, int len, double beat0, double bps, int c0);
     void handleMidi (const juce::MidiMessage& m);
-    void noteOnAll (int note, float vel);
-    void noteOffAll (int note);
+    void noteOnAll (Slot& s, int note, float vel);
+    void noteOffAll (Slot& s, int note);
+    int numParts (const Slot& s) const { return std::min (s.prog->numParts, preparedParts); }
 
-    double sr = 44100.0;
+    double sr = 44100.0, lastBpm = 120.0;
     int preparedParts = 0, maxBlock = 0;
-    std::unique_ptr<Program> active, pending;
+    Slot slots[2];
+    int cur = 0;                             // the slot playing the current preset; 1 - cur fades out during a switch
+    bool haveXfadeSlot = false;              // false: switches are instant (offline renders prepare only one slot)
+    std::unique_ptr<Program> pending;
     bool hasPending = false;
-    std::array<std::unique_ptr<Part>, vault::maxParts> parts;
-    std::unique_ptr<kk::FxRack> fx;
-    std::vector<float> busL, busR, busG, partL, partR, lfo1, lfo2;
-    kk::VoiceParams vp[vault::maxParts];
-    kk::FxParams fp;
 
     std::atomic<float> macroTarget[vault::numMacros];
     float macroSm[vault::numMacros] { 0.5f, 0.5f, 0.5f, 0.5f };
     std::atomic<float> volumeTarget { 1.0f };
-    float volumeSm = 1.0f, gainSm = 1.0f;
+    float volumeSm = 1.0f;
 
-    // declick / switch
-    enum class Fade { none, out, in } fade = Fade::none;
-    float fadeGain = 1.0f, fadeStep = 0.0f;
+    // preset switch: equal-power crossfade, old slot cos, new slot sin over xfadeSeconds
+    bool xfading = false;
+    float xfPos = 0.0f, xfStep = 0.0f;
 
     // MIDI state
     std::array<float, 128> held {};          // velocity of keys held down (0 = up)

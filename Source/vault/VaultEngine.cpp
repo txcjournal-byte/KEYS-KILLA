@@ -4,7 +4,6 @@ namespace
 {
 inline float lowHalf (float m) { return std::min (1.0f, 2.0f * m); }          // 0 .. 0.5 -> 0 .. 1 (scales the designed amount)
 inline float upHalf (float m)  { return std::max (0.0f, 2.0f * m - 1.0f); }   // 0.5 .. 1 -> 0 .. 1 (adds on top)
-constexpr float fadeSeconds = 0.010f;
 constexpr float limThresh = 0.89f;   // about -1 dBFS
 }
 
@@ -18,10 +17,13 @@ struct VaultEngine::Part
 VaultEngine::VaultEngine()
 {
     for (auto& m : macroTarget) m.store (0.5f);
-    active = std::make_unique<Program>();
+    for (auto& sl : slots)
+    {
+        sl.prog = std::make_unique<Program>();
+        for (int k = 0; k < vault::maxParts; ++k) kk::vk::fillDefaults (sl.prog->values[k]);
+        sl.prog->numParts = 0;
+    }
     pending = std::make_unique<Program>();
-    for (int k = 0; k < vault::maxParts; ++k) kk::vk::fillDefaults (active->values[k]);
-    active->numParts = 0;
 }
 
 VaultEngine::~VaultEngine() = default;
@@ -49,27 +51,45 @@ VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset)
     return c;
 }
 
-void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare)
+void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare, bool crossfadeSlot)
 {
     sr = sampleRate > 0 ? sampleRate : 44100.0;
     maxBlock = std::max (1, maxBlockSize);
     preparedParts = juce::jlimit (1, (int) vault::maxParts, numPartsToPrepare);
+    haveXfadeSlot = crossfadeSlot;
     kk::WavetableBank::get();
-    for (int k = 0; k < vault::maxParts; ++k)
+    for (int si = 0; si < 2; ++si)
     {
-        if (k < preparedParts)
+        auto& sl = slots[si];
+        sl.prepared = si == 0 || crossfadeSlot;
+        for (int k = 0; k < vault::maxParts; ++k)
         {
-            if (! parts[(size_t) k]) parts[(size_t) k] = std::make_unique<Part>();
-            parts[(size_t) k]->synth.prepare ((float) sr);
-            parts[(size_t) k]->rng.seed (101u + (uint32_t) k * 7u);
+            auto& part = sl.parts[(size_t) k];
+            if (sl.prepared && k < preparedParts)
+            {
+                if (! part) part = std::make_unique<Part>();
+                part->synth.prepare ((float) sr);
+                part->rng.seed (101u + (uint32_t) k * 7u + (uint32_t) si * 1009u);
+            }
+            else part.reset();
         }
-        else parts[(size_t) k].reset();
+        if (sl.prepared)
+        {
+            sl.fx = std::make_unique<kk::FxRack>();
+            sl.fx->prepare (sr, chunk);
+            sl.busL.assign (chunk, 0.0f); sl.busR.assign (chunk, 0.0f); sl.busG.assign (chunk, 0.0f);
+            sl.partL.assign ((size_t) (vault::maxParts * chunk), 0.0f); sl.partR.assign ((size_t) (vault::maxParts * chunk), 0.0f);
+            sl.lfo1.assign ((size_t) (vault::maxParts * chunk), 0.0f); sl.lfo2.assign ((size_t) (vault::maxParts * chunk), 0.0f);
+        }
+        else
+        {
+            sl.fx.reset();
+            for (auto* v : { &sl.busL, &sl.busR, &sl.busG, &sl.partL, &sl.partR, &sl.lfo1, &sl.lfo2 }) { v->clear(); v->shrink_to_fit(); }
+        }
+        for (auto& v : sl.vp) v = {};
+        sl.fp = {};
     }
-    fx = std::make_unique<kk::FxRack>();
-    fx->prepare (sr, chunk);
-    busL.assign (chunk, 0.0f); busR.assign (chunk, 0.0f); busG.assign (chunk, 0.0f);
-    partL.assign ((size_t) (vault::maxParts * chunk), 0.0f); partR.assign ((size_t) (vault::maxParts * chunk), 0.0f);
-    lfo1.assign ((size_t) (vault::maxParts * chunk), 0.0f); lfo2.assign ((size_t) (vault::maxParts * chunk), 0.0f);
+    if (cur != 0) { std::swap (slots[0].prog, slots[1].prog); cur = 0; }   // the current program lives in the prepared slot 0
 
     {   // 8th-order Butterworth high-pass at 160 Hz on the side signal: -20 dB at 120 Hz, -33 dB at 100 Hz, -48 dB at 80 Hz
         static const double qs[4] { 0.50979558, 0.60134489, 0.89997622, 2.56291545 };
@@ -84,18 +104,22 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
     }
     dcX = dcY = 0; dcA = (float) std::exp (-juce::MathConstants<double>::twoPi * dcBlockHz / sr);
     limEnv = 0; limRel = (float) std::exp (-1.0 / (0.12 * sr));
-    fade = Fade::none; fadeGain = 1.0f; fadeStep = (float) (1.0 / (fadeSeconds * sr));
-    held.fill (0.0f); pitchWheel = modWheel = aftertouch = 0; sustain = false; freeBeat = 0;
+    xfading = false; xfPos = 0.0f; xfStep = (float) (1.0 / (xfadeSeconds * sr));
+    held.fill (0.0f); pitchWheel = modWheel = aftertouch = 0; sustain = false; freeBeat = 0; lastBpm = 120.0;
     for (int m = 0; m < vault::numMacros; ++m) macroSm[m] = macroTarget[m].load();
-    volumeSm = volumeTarget.load(); gainSm = active->gain;
-    for (int k = 0; k < vault::maxParts; ++k) { vp[k] = {}; }
+    volumeSm = volumeTarget.load();
 }
 
 void VaultEngine::releaseResources()
 {
-    for (auto& p : parts) p.reset();
-    fx.reset();
+    for (auto& sl : slots)
+    {
+        for (auto& p : sl.parts) p.reset();
+        sl.fx.reset();
+        sl.prepared = false;
+    }
     preparedParts = 0;
+    xfading = false;
 }
 
 void VaultEngine::loadProgram (Program& dst, const VaultCompiledPreset& p)
@@ -123,25 +147,49 @@ void VaultEngine::setPreset (const VaultCompiledPreset& p, bool instant)
 {
     loadProgram (*pending, p);
     hasPending = true;
-    if (instant || preparedParts == 0) { switchToPending(); fade = Fade::none; fadeGain = 1.0f; gainSm = active->gain; }
-    else if (fade != Fade::out) fade = Fade::out;
+    if (instant || preparedParts == 0 || ! haveXfadeSlot) switchInstant();
+    // otherwise process() starts the crossfade at its next chunk (or when the running crossfade has finished)
 }
 
-void VaultEngine::switchToPending()
+void VaultEngine::resetSlot (Slot& s, bool clearFx)
+{
+    // the slot is silent (unused, or its crossfade just ended): voices off, LFOs restarted, FX rack cleared (no allocation).
+    // Clearing the FX matters: the next sound must not start inside the old reverb / delay content.
+    for (auto& p : s.parts)
+        if (p) { p->synth.allOff (true); p->synth.setSustain (false); p->synth.setSustain (sustain); p->ph1 = p->ph2 = 0; }
+    if (clearFx && s.fx != nullptr) s.fx->clearState();
+}
+
+void VaultEngine::switchInstant()
 {
     if (! hasPending) return;
-    std::swap (active, pending);
+    auto& s = slots[cur];
+    std::swap (s.prog, pending);
     hasPending = false;
-    for (auto& p : parts) if (p) { p->synth.allOff (true); p->synth.setSustain (false); p->synth.setSustain (sustain); }
-    // the output is silent here (end of the switch fade-out): the new sound starts in a clean FX rack. The old reverb / delay
-    // content would otherwise jump when the FX settings change and come back as a click inside the fade-in.
-    if (fx != nullptr) fx->clearState();
+    xfading = false;
+    resetSlot (s, true);
+    resetSlot (slots[1 - cur], true);
     dcX = dcY = 0;
     for (auto& h : sideHp) h.z1 = h.z2 = 0;
-    gainSm = active->gain;
-    for (auto& p : parts) if (p) { p->ph1 = p->ph2 = 0; }
-    updateParams (freeBeat, 120.0);
-    for (int n = 0; n < 128; ++n) if (held[(size_t) n] > 0.0f) noteOnAll (n, held[(size_t) n]);   // keys still down play the new sound
+    if (preparedParts == 0 || ! s.prepared) return;
+    updateParams (s, freeBeat, lastBpm);
+    for (int n = 0; n < 128; ++n) if (held[(size_t) n] > 0.0f) noteOnAll (s, n, held[(size_t) n]);   // keys still down play the new sound
+}
+
+void VaultEngine::beginSwitch()
+{
+    // the free slot (silent, FX cleared when its last crossfade ended) takes the new sound; the current one becomes the
+    // outgoing sound and keeps playing - voices, LFOs and its own reverb / delay / chorus tails - while it fades out
+    const int next = 1 - cur;
+    auto& s = slots[next];
+    std::swap (s.prog, pending);
+    hasPending = false;
+    resetSlot (s, false);
+    cur = next;
+    xfading = true;
+    xfPos = 0.0f;
+    updateParams (s, freeBeat, lastBpm);
+    for (int n = 0; n < 128; ++n) if (held[(size_t) n] > 0.0f) noteOnAll (s, n, held[(size_t) n]);   // keys still down: new sound
 }
 
 void VaultEngine::setMacro (int index, float value01)
@@ -157,48 +205,60 @@ float VaultEngine::getMacro (int index) const
 
 void VaultEngine::setVolume (float g) { volumeTarget.store (std::isfinite (g) ? juce::jlimit (0.0f, 2.0f, g) : 1.0f); }
 
-void VaultEngine::noteOnAll (int note, float vel)
+void VaultEngine::noteOnAll (Slot& s, int note, float vel)
 {
-    for (int k = 0; k < std::min (active->numParts, preparedParts); ++k)
-        parts[(size_t) k]->synth.noteOn (juce::jlimit (0, 127, note + active->transpose[k]), vel, vp[k]);
+    for (int k = 0; k < numParts (s); ++k)
+        s.parts[(size_t) k]->synth.noteOn (juce::jlimit (0, 127, note + s.prog->transpose[k]), vel, s.vp[k]);
 }
 
-void VaultEngine::noteOffAll (int note)
+void VaultEngine::noteOffAll (Slot& s, int note)
 {
-    for (int k = 0; k < std::min (active->numParts, preparedParts); ++k)
-        parts[(size_t) k]->synth.noteOff (juce::jlimit (0, 127, note + active->transpose[k]), vp[k]);
+    for (int k = 0; k < numParts (s); ++k)
+        s.parts[(size_t) k]->synth.noteOff (juce::jlimit (0, 127, note + s.prog->transpose[k]), s.vp[k]);
 }
 
 void VaultEngine::allNotesOff (bool hard)
 {
     held.fill (0.0f);
-    for (auto& p : parts) if (p) { p->synth.setSustain (false); p->synth.allOff (hard); }
+    for (auto& sl : slots)
+        for (auto& p : sl.parts) if (p) { p->synth.setSustain (false); p->synth.allOff (hard); }
     sustain = false;
 }
 
 void VaultEngine::handleMidi (const juce::MidiMessage& m)
 {
+    auto& s = slots[cur];
+    auto& old = slots[1 - cur];
     if (m.isNoteOn())
     {
         const int n = m.getNoteNumber();
         held[(size_t) n] = std::max (0.01f, m.getFloatVelocity());
-        if (fade != Fade::out || fadeGain > 0.0f) noteOnAll (n, held[(size_t) n]);   // during a switch the new sound strikes it
+        noteOnAll (s, n, held[(size_t) n]);            // new notes only on the current sound
     }
-    else if (m.isNoteOff())       { held[(size_t) m.getNoteNumber()] = 0.0f; noteOffAll (m.getNoteNumber()); }
-    else if (m.isSustainPedalOn())  { sustain = true;  for (auto& p : parts) if (p) p->synth.setSustain (true); }
-    else if (m.isSustainPedalOff()) { sustain = false; for (auto& p : parts) if (p) p->synth.setSustain (false); }
+    else if (m.isNoteOff())
+    {
+        held[(size_t) m.getNoteNumber()] = 0.0f;
+        noteOffAll (s, m.getNoteNumber());
+        if (xfading) noteOffAll (old, m.getNoteNumber());
+    }
+    else if (m.isSustainPedalOn() || m.isSustainPedalOff())
+    {
+        sustain = m.isSustainPedalOn();
+        for (auto& sl : slots) for (auto& p : sl.parts) if (p) p->synth.setSustain (sustain);
+    }
     else if (m.isAllNotesOff() || m.isAllSoundOff()) allNotesOff (m.isAllSoundOff());
     else if (m.isPitchWheel())      pitchWheel = (float) (m.getPitchWheelValue() - 8192) / 8192.0f;
     else if (m.isChannelPressure()) aftertouch = (float) m.getChannelPressureValue() / 127.0f;
-    else if (m.isAftertouch())      { for (int k = 0; k < std::min (active->numParts, preparedParts); ++k)
-                                          parts[(size_t) k]->synth.polyAftertouch (juce::jlimit (0, 127, m.getNoteNumber() + active->transpose[k]),
-                                                                                   (float) m.getAfterTouchValue() / 127.0f); }
+    else if (m.isAftertouch())      { for (int k = 0; k < numParts (s); ++k)
+                                          s.parts[(size_t) k]->synth.polyAftertouch (juce::jlimit (0, 127, m.getNoteNumber() + s.prog->transpose[k]),
+                                                                                     (float) m.getAfterTouchValue() / 127.0f); }
     else if (m.isController() && m.getControllerNumber() == 1) modWheel = (float) m.getControllerValue() / 127.0f;
 }
 
-void VaultEngine::updateParams (double beatPos, double bpm)
+void VaultEngine::updateParams (Slot& s, double beatPos, double bpm)
 {
-    const auto& pr = *active;
+    const auto& pr = *s.prog;
+    auto& fp = s.fp;
     kk::VoiceBuildContext ctx;
     ctx.pitchWheel = juce::jlimit (-1.0f, 1.0f, pitchWheel);
     ctx.modWheel = modWheel; ctx.aftertouch = aftertouch;
@@ -210,9 +270,9 @@ void VaultEngine::updateParams (double beatPos, double bpm)
     {
         const float* vals = pr.values[k];
         kk::FxParams dummy;
-        kk::buildVoiceParamsFrom ([vals] (int key) { return vals[key]; }, ctx, vp[k], k == 0 ? fp : dummy);
+        kk::buildVoiceParamsFrom ([vals] (int key) { return vals[key]; }, ctx, s.vp[k], k == 0 ? fp : dummy);
         anyBass |= vals[kk::vk::bassMode] > 0.5f;
-        auto& v = vp[k];
+        auto& v = s.vp[k];
         // TONE: filter tilt (+-1.5 octaves of cutoff)
         v.cutoff = juce::jlimit (40.0f, 20000.0f, v.cutoff * std::exp2 (toneD * 1.5f));
         // MOTION: LFO depth (designed amount below 0.5, extra filter / pitch movement and drift above)
@@ -239,15 +299,43 @@ void VaultEngine::updateParams (double beatPos, double bpm)
     fp.bpm = bpm; fp.beatPos = beatPos;
 }
 
+void VaultEngine::renderLfos (Slot& s, int len, double beat0, double bps, int c0)
+{
+    for (int k = 0; k < numParts (s); ++k)
+    {
+        auto& p = *s.parts[(size_t) k];
+        const float* vals = s.prog->values[k];
+        auto gen = [&] (int syncK, int divK, int rateK, int shapeK, float& phase, float& last, float& sh, float* out)
+        {
+            const bool sync = vals[syncK] > 0.5f;
+            const double beats = Choices::lfoDivBeats ((int) vals[divK]);
+            const float inc = vals[rateK] / (float) sr;
+            const int shape = (int) vals[shapeK];
+            for (int i = 0; i < len; ++i)
+            {
+                float ph;
+                if (sync) { const double x = (beat0 + bps * (c0 + i)) / beats; ph = (float) (x - std::floor (x)); }
+                else { ph = phase; phase += inc; if (phase >= 1) phase -= 1; }
+                if (ph < last) sh = p.rng.bi();
+                last = ph;
+                out[i] = kk::lfoShape (shape, ph, sh);
+            }
+        };
+        gen (kk::vk::lfoSync, kk::vk::lfoDiv, kk::vk::lfoRate, kk::vk::lfoShape, p.ph1, p.last1, p.sh1, s.lfo1.data() + k * chunk);
+        gen (kk::vk::lfo2Sync, kk::vk::lfo2Div, kk::vk::lfo2Rate, kk::vk::lfo2Shape, p.ph2, p.last2, p.sh2, s.lfo2.data() + k * chunk);
+    }
+}
+
 void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi, const Transport& transport)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     const int nCh = buffer.getNumChannels();
     if (n <= 0 || nCh == 0) return;
-    if (preparedParts == 0 || fx == nullptr) { buffer.clear(); return; }
+    if (preparedParts == 0 || slots[0].fx == nullptr) { buffer.clear(); return; }
 
     const double bpm = juce::jlimit (20.0, 999.0, transport.bpm > 0 ? transport.bpm : 120.0);
+    lastBpm = bpm;
     const double bps = bpm / 60.0 / sr;
     const double beat0 = transport.playing ? transport.ppq : freeBeat;
     freeBeat = beat0 + bps * n;
@@ -256,43 +344,26 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
     auto midiIt = midi.cbegin();
     const float smMacro = 1.0f - std::exp (-(float) chunk / (0.03f * (float) sr));
     const float smVol = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
+    constexpr float halfPi = juce::MathConstants<float>::halfPi;
 
     for (int c0 = 0; c0 < n; c0 += chunk)
     {
         const int len = std::min (chunk, n - c0);
-        if (fade == Fade::out && fadeGain <= 0.0f) { switchToPending(); fade = Fade::in; }
-        if (hasPending && fade == Fade::none) fade = Fade::out;
+        if (hasPending && ! xfading) beginSwitch();
         for (int m = 0; m < vault::numMacros; ++m) macroSm[m] += (macroTarget[m].load (std::memory_order_relaxed) - macroSm[m]) * smMacro;
-        updateParams (beat0 + bps * c0, bpm);
 
-        const int np = std::min (active->numParts, preparedParts);
-        // LFOs per part
-        for (int k = 0; k < np; ++k)
+        // the slots that sound in this chunk: the current one, plus the outgoing one during a crossfade
+        Slot* live[2] { &slots[cur], xfading ? &slots[1 - cur] : nullptr };
+        const int numLive = xfading ? 2 : 1;
+        for (int li = 0; li < numLive; ++li)
         {
-            auto& p = *parts[(size_t) k];
-            const float* vals = active->values[k];
-            auto gen = [&] (int syncK, int divK, int rateK, int shapeK, float& phase, float& last, float& sh, float* out)
-            {
-                const bool sync = vals[syncK] > 0.5f;
-                const double beats = Choices::lfoDivBeats ((int) vals[divK]);
-                const float inc = vals[rateK] / (float) sr;
-                const int shape = (int) vals[shapeK];
-                for (int i = 0; i < len; ++i)
-                {
-                    float ph;
-                    if (sync) { const double x = (beat0 + bps * (c0 + i)) / beats; ph = (float) (x - std::floor (x)); }
-                    else { ph = phase; phase += inc; if (phase >= 1) phase -= 1; }
-                    if (ph < last) sh = p.rng.bi();
-                    last = ph;
-                    out[i] = kk::lfoShape (shape, ph, sh);
-                }
-            };
-            gen (kk::vk::lfoSync, kk::vk::lfoDiv, kk::vk::lfoRate, kk::vk::lfoShape, p.ph1, p.last1, p.sh1, lfo1.data() + k * chunk);
-            gen (kk::vk::lfo2Sync, kk::vk::lfo2Div, kk::vk::lfo2Rate, kk::vk::lfo2Shape, p.ph2, p.last2, p.sh2, lfo2.data() + k * chunk);
+            auto& s = *live[li];
+            updateParams (s, beat0 + bps * c0, bpm);
+            renderLfos (s, len, beat0, bps, c0);
+            std::fill_n (s.busL.data(), len, 0.0f); std::fill_n (s.busR.data(), len, 0.0f); std::fill_n (s.busG.data(), len, 0.0f);
+            std::fill (s.partL.begin(), s.partL.end(), 0.0f); std::fill (s.partR.begin(), s.partR.end(), 0.0f);
         }
 
-        std::fill_n (busL.data(), len, 0.0f); std::fill_n (busR.data(), len, 0.0f); std::fill_n (busG.data(), len, 0.0f);
-        std::fill (partL.begin(), partL.end(), 0.0f); std::fill (partR.begin(), partR.end(), 0.0f);
         int pos = 0;
         while (pos < len)
         {
@@ -304,37 +375,51 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             int next = len;
             if (midiIt != midi.cend()) next = std::min (len, (*midiIt).samplePosition - c0);
             if (next <= pos) next = pos + 1;
-            for (int k = 0; k < np; ++k)
-                parts[(size_t) k]->synth.render (partL.data() + k * chunk + pos, partR.data() + k * chunk + pos, busG.data() + pos, next - pos, vp[k],
-                                                 lfo1.data() + k * chunk + pos, lfo2.data() + k * chunk + pos);
+            for (int li = 0; li < numLive; ++li)
+            {
+                auto& s = *live[li];
+                for (int k = 0; k < numParts (s); ++k)
+                    s.parts[(size_t) k]->synth.render (s.partL.data() + k * chunk + pos, s.partR.data() + k * chunk + pos, s.busG.data() + pos, next - pos,
+                                                       s.vp[k], s.lfo1.data() + k * chunk + pos, s.lfo2.data() + k * chunk + pos);
+            }
             pos = next;
         }
-        for (int k = 0; k < np; ++k)
+        for (int li = 0; li < numLive; ++li)
         {
-            const float gl = active->level[k] * active->panL[k], gr = active->level[k] * active->panR[k];
-            const float* pl = partL.data() + k * chunk; const float* prr = partR.data() + k * chunk;
-            for (int i = 0; i < len; ++i) { busL[(size_t) i] += pl[i] * gl; busR[(size_t) i] += prr[i] * gr; }
+            auto& s = *live[li];
+            for (int k = 0; k < numParts (s); ++k)
+            {
+                const float gl = s.prog->level[k] * s.prog->panL[k], gr = s.prog->level[k] * s.prog->panR[k];
+                const float* pl = s.partL.data() + k * chunk; const float* prr = s.partR.data() + k * chunk;
+                for (int i = 0; i < len; ++i) { s.busL[(size_t) i] += pl[i] * gl; s.busR[(size_t) i] += prr[i] * gr; }
+            }
+            s.fx->process (s.busL.data(), s.busR.data(), s.busG.data(), len, s.fp);
         }
 
-        fx->process (busL.data(), busR.data(), busG.data(), len, fp);
-
-        const float gainTarget = active->gain;
+        const auto& sc = slots[cur];
+        const auto& so = slots[1 - cur];
+        const float gainCur = sc.prog->gain, gainOld = so.prog->gain;
         const float volTarget = volumeTarget.load (std::memory_order_relaxed);
         for (int i = 0; i < len; ++i)
         {
+            float inL, inR;
+            if (xfading)
+            {
+                // equal-power crossfade: the new sound in on sin, the old one (with its own FX tails) out on cos
+                xfPos = std::min (1.0f, xfPos + xfStep);
+                const float gn = std::sin (halfPi * xfPos) * gainCur, go = std::cos (halfPi * xfPos) * gainOld;
+                inL = sc.busL[(size_t) i] * gn + so.busL[(size_t) i] * go;
+                inR = sc.busR[(size_t) i] * gn + so.busR[(size_t) i] * go;
+            }
+            else { inL = sc.busL[(size_t) i] * gainCur; inR = sc.busR[(size_t) i] * gainCur; }
             // mono below 120 Hz: the side signal is high-passed (48 dB/oct); DC blocker on the mid
-            const float mIn = (busL[(size_t) i] + busR[(size_t) i]) * 0.5f;
+            const float mIn = (inL + inR) * 0.5f;
             const float m = mIn - dcX + dcA * dcY;
             dcX = mIn; dcY = m;
-            float s = (busL[(size_t) i] - busR[(size_t) i]) * 0.5f;
+            float s = (inL - inR) * 0.5f;
             s = sideHp[3].tick (sideHp[2].tick (sideHp[1].tick (sideHp[0].tick (s))));
-            // declick fades on preset switches
-            if (fade == Fade::out) fadeGain = std::max (0.0f, fadeGain - fadeStep);
-            else if (fade == Fade::in) { fadeGain = std::min (1.0f, fadeGain + fadeStep); if (fadeGain >= 1.0f) fade = Fade::none; }
-            gainSm += (gainTarget - gainSm) * smVol;
             volumeSm += (volTarget - volumeSm) * smVol;
-            const float g = gainSm * volumeSm * fadeGain;
-            float l = (m + s) * g, r = (m - s) * g;
+            float l = (m + s) * volumeSm, r = (m - s) * volumeSm;
             // safety limiter (instant attack, 120 ms release) + soft ceiling
             const float pk = std::max (std::abs (l), std::abs (r));
             limEnv = pk > limEnv ? pk : limEnv * limRel + pk * (1.0f - limRel);
@@ -344,6 +429,13 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             if (! std::isfinite (l) || ! std::isfinite (r)) { l = r = 0; limEnv = 0; dcX = dcY = 0; for (auto& h : sideHp) h.z1 = h.z2 = 0; }
             if (outR != nullptr) { outL[c0 + i] = l; outR[c0 + i] = r; }
             else outL[c0 + i] = 0.5f * (l + r);
+        }
+        if (xfading && xfPos >= 1.0f)
+        {
+            // crossfade done: the outgoing sound is at zero gain - silence it (voices off, FX tails cleared now, not in the
+            // switch block) so only one slot renders until the next switch
+            xfading = false;
+            resetSlot (slots[1 - cur], true);
         }
     }
     for (int c = 2; c < nCh; ++c) buffer.clear (c, 0, n);
@@ -374,7 +466,7 @@ juce::AudioBuffer<float> VaultEngine::renderMidi (const VaultPreset& preset, con
     auto eng = std::make_unique<VaultEngine>();
     for (int m = 0; m < vault::numMacros; ++m) eng->setMacro (m, macros != nullptr ? macros[m] : compiled.macroDefaults[m]);
     constexpr int block = 512;
-    eng->prepare (sampleRate, block, std::max (1, compiled.numParts));
+    eng->prepare (sampleRate, block, std::max (1, compiled.numParts), false);   // one sound, no switches: no crossfade slot
     eng->setPreset (compiled, true);
     juce::AudioBuffer<float> buf (2, block);
     for (int s0 = 0; s0 < numSamples; s0 += block)

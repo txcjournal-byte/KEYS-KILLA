@@ -37,14 +37,20 @@ MIDI ─┬─> part 0: kk::SynthEngine (32 voices, 2 osc layers, filter, envs, 
       ├─> part 2                                                                              │        drive, chorus, phaser, delay, reverb,
       └─> part 3                                                                              ┘        EQ, width, MASTER glue + limiter
    ─> side high-pass 160 Hz 8th order (everything under ~120 Hz is mono: side -20 dB at 120 Hz) + 5 Hz DC blocker on the mid
-   ─> preset gain trim ─> master volume
-   ─> 10 ms switch fade ─> safety limiter (-1 dBFS, instant attack, 120 ms release) + soft ceiling 0.98 ─> out
+   (preset gain trim per sound slot; during a preset switch two slots - each parts + own FxRack - crossfade, 40 ms equal power)
+   ─> master volume ─> safety limiter (-1 dBFS, instant attack, 120 ms release) + soft ceiling 0.98 ─> out
 ```
 
-Preset switch: 10 ms fade-out (output and FX input), then - with the output silent - voices off, the FX rack cleared
-(`kk::FxRack::clearState()`, no allocation) and the held keys re-struck with the new sound, 10 ms fade-in. Clearing matters:
-with the old reverb / delay content kept, the new sound's FX settings moved the read points of lines still full of the old
-sound, and that jump came back through the master stage's 9 ms width delay as a click inside the fade-in.
+Preset switch: a real crossfade. The engine has two pre-allocated sound slots (program + 4 parts with their voices and
+LFOs + its own `kk::FxRack`). On a switch the free slot takes the new sound, the keys still held are struck on it, and it
+fades in on sin(pi/2 t) while the old slot - its voices AND its own chorus / delay / reverb tails - keeps running and fades
+out on cos(pi/2 t), over 40 ms (`VaultEngine::xfadeSeconds`). Nothing is cut hard, so no cut can enter an FX line and come
+back later as a click (the cause of the old 10 ms fade-out / fade-in clicks: the voice cut went through the chorus / delay
+and returned ~9 ms later). When the fade ends the old slot's voices are killed and its FX rack cleared
+(`kk::FxRack::clearState()`, no allocation; done then rather than in the switch block), so the next sound in that slot
+starts in a clean rack. Only one slot renders outside a crossfade; during the 40 ms both do (about 2x CPU for 8 blocks of
+256). A switch that arrives during a crossfade waits for it to end (only the latest one is kept, at most 40 ms later).
+`setPreset (p, true)` is instant (both slots cleared). Offline renders (`render` / `renderMidi`) prepare one slot only.
 
 * Each part is a complete EVOLVE synth patch (`VaultPart::values`, real parameter values with EVOLVE parameter IDs,
   anything missing = the EVOLVE default). The conversion values -> `VoiceParams` is the exact EVOLVE one
@@ -59,9 +65,10 @@ sound, and that jump came back through the master stage's 9 ms width delay as a 
   * SPACE: reverb mix / delay mix (scaled, then +0.45 / +0.25), reverb size +0.3, width
   * DRIVE: FX drive (scaled, then +0.7)
   * MOTION: LFO1 -> filter / pitch / amp depth, chorus, phaser, flanger, + pitch drift above 0.5
-* Preset switch: `setPreset` is allocation-free (presets are pre-compiled to `VaultCompiledPreset`); the output fades out
-  over 10 ms, voices are cleared, the program swaps, keys still held are struck again with the new sound, fade in 10 ms.
-* CPU: about 3 % of one core for a held 4-layer note (10 s of a 4-layer preset renders in ~0.3 s). Memory: ~4 MB per prepared part.
+* Preset switch: `setPreset` is allocation-free (presets are pre-compiled to `VaultCompiledPreset`); the new sound starts
+  at once in the second slot (held keys re-struck) and crossfades with the old one over 40 ms, equal power (see above).
+* CPU: about 3 % of one core for a held 4-layer note (10 s of a 4-layer preset renders in ~0.3 s). Memory: ~4 MB per prepared part, x2 for the
+  crossfade slot (plus a second FxRack, ~7 MB) in the plugin.
 
 ## Data model (`Source/vault/VaultTypes.h`)
 
@@ -247,10 +254,11 @@ Engine (real-time) API, used by the processor:
 ```cpp
 struct VaultTransport { double bpm = 120.0; double ppq = 0.0; bool playing = false; };
 class VaultEngine {
-    void prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare = vault::maxParts);   // allocates
+    void prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare = vault::maxParts,
+                  bool crossfadeSlot = true);                            // allocates; false: one slot, switches are instant
     void releaseResources();
     bool isPrepared() const;
-    void setPreset (const VaultCompiledPreset& p, bool instant = false);   // audio thread, no allocation, 10 ms declick
+    void setPreset (const VaultCompiledPreset& p, bool instant = false);   // audio thread, no allocation, 40 ms crossfade
     void setMacro (int index, float value01);  float getMacro (int index) const;   // any thread
     void setVolume (float linearGain);                                           // any thread, smoothed
     void process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi, const VaultTransport& t = VaultTransport());
