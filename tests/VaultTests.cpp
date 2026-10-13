@@ -3,7 +3,14 @@
 //                           VaultTests -bankinfo                 bank summary (source, per-category / per-layer counts)
 //                           VaultTests -writestarter <out.cvb>   write the starter bank as a .cvb file
 //                           VaultTests -snapshot <out.png>       paint the editor into a PNG (Linux: under xvfb-run)
+//                           VaultTests -uitest                   editor behaviour (keys, filters, favorites, persistence, WAV drag)
+//                           VaultTests -shot <out.png> [state]   the browser UI with a 3-layer preset + a filter (xvfb-run)
+//                                      state: comma list of  scale:<pct> search:<text> cat:<n> style:<n> char:<n> layers:<n>
+//                                      favs recent empty keys   (default "main" = its category + a style chip + a held chord)
+//                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
 #include "../Source/vault/VaultProcessor.h"
+#include "../Source/vault/VaultEditor.h"
+#include "../Source/vault/ui/VaultMainView.h"
 #include "../Source/ParamKeys.h"
 #include "../tools/vault/BankQC.h"
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -416,6 +423,258 @@ int unitTests()
     }
     return fails;
 }
+// browser logic (search, filters, favorites, recent, stepping) on a small hand-made bank
+int browserTests()
+{
+    std::vector<VaultPreset> bank;
+    auto mk = [&] (const char* id, const char* name, int cat, uint32_t st, uint32_t ch, std::vector<const char*> labels)
+    {
+        VaultPreset p; p.id = id; p.name = name; p.category = cat; p.styles = st; p.chars = ch;
+        for (auto* l : labels) { VaultPart part; part.label = l; p.parts.push_back (part); }
+        bank.push_back (p);
+    };
+    using namespace vault;
+    mk ("t.0", "Frozen Ice", catBellsMallets, 1u << styleTrap, 1u << charDark, { "Ice Bell", "Dark Pad" });
+    mk ("t.1", "Velvet Keys", catPianoKeys, 1u << styleLoFi, 1u << charWarm, { "Felt Piano" });
+    mk ("t.2", "Glide Monster", cat808Bass, 1u << styleRage, 1u << charHard, { "Glide 808", "Grit", "Sub" });
+    mk ("t.3", "Holy Air", catPads, 1u << styleAmbient, 1u << charWide, { "Air", "Choir Pad", "Drone", "Vinyl" });
+    mk ("t.4", "Night Bell", catBellsMallets, 1u << styleDrill, 1u << charBright, { "Glock" });
+    VaultBrowserModel m (bank);
+    check (m.visible().size() == 5 && m.categoryCount (catBellsMallets) == 2 && m.categoryCount (-1) == 5, "browser: all sounds + category counts");
+    m.filter.query = "dark bell"; m.refilter();
+    check (m.visible() == std::vector<int> { 0 }, "browser: search 'dark bell' finds by tag + category");
+    m.filter.query = "glide 808"; m.refilter();
+    check (m.visible() == std::vector<int> { 2 }, "browser: search matches layer labels / category");
+    m.filter.query = "FELT"; m.refilter();
+    check (m.visible() == std::vector<int> { 1 }, "browser: search is case-insensitive");
+    m.filter.query = {}; m.filter.layers = 3; m.refilter();
+    check (m.visible() == std::vector<int> { 2 }, "browser: layers chip");
+    m.filter.layers = 0; m.filter.category = catBellsMallets; m.refilter();
+    check (m.visible() == (std::vector<int> { 0, 4 }), "browser: category");
+    m.filter.style = styleDrill; m.refilter();
+    check (m.visible() == std::vector<int> { 4 }, "browser: style chip");
+    m.filter = {}; m.filter.character = charWide; m.refilter();
+    check (m.visible() == std::vector<int> { 3 }, "browser: character chip");
+    m.filter = {}; m.refilter();
+    check (m.step (0, 1, false) == 1 && m.step (4, 1, false) == 4 && m.step (4, 1, true) == 0 && m.step (0, -1, true) == 4,
+           "browser: step clamps (up / down) and wraps (arrows)");
+    m.filter.category = catBellsMallets; m.refilter();
+    check (m.step (1, 1, true) == 0 && m.step (0, 1, true) == 4, "browser: step goes through the filtered list only");
+    m.setFavoriteIds ({ "t.3", "nope" });
+    m.filter = {}; m.filter.favoritesOnly = true; m.refilter();
+    check (m.visible() == std::vector<int> { 3 } && m.favoriteIds() == juce::StringArray { "t.3" }, "browser: favorites by id");
+    for (int i = 0; i < 40; ++i) m.pushRecent (i % 5);
+    m.pushRecent (2);
+    m.filter = {}; m.filter.recentOnly = true; m.refilter();
+    check (m.visible().front() == 2 && m.visible().size() == 5, "browser: recent newest first, no duplicates");
+    VaultBrowserModel m2 (bank);
+    m2.setRecentIds (m.recentIds());
+    check (m2.recentList() == m.recentList(), "browser: recent restores by id");
+    // 5,000 presets: filtering per keystroke stays fast
+    std::vector<VaultPreset> big;
+    for (int i = 0; i < 5000; ++i) { auto p = bank[(size_t) (i % 5)]; p.id = "b." + juce::String (i); big.push_back (p); }
+    VaultBrowserModel mb (big);
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    for (auto q : { "d", "da", "dar", "dark", "dark b", "dark be", "dark bel", "dark bell" }) { mb.filter.query = q; mb.refilter(); }
+    const double ms = (juce::Time::getMillisecondCounterHiRes() - t0) / 8.0;
+    check (mb.visible().size() == 1000 && ms < 15.0, "browser: 5,000-row search per keystroke " + juce::String (ms, 2) + " ms");
+    return fails;
+}
+
+// a 5,000-preset demo bank from the starter sounds (1-4 layers, invented names) - only for UI snapshots
+std::vector<VaultPreset> demoBank()
+{
+    const auto fb = VaultProcessor::buildFallbackBank();
+    std::vector<int> byCat[vault::numCategories];
+    for (int i = 0; i < (int) fb.size(); ++i) byCat[fb[(size_t) i].category].push_back (i);
+    static const char* labels[vault::numCategories][5] {
+        { "Glide 808", "Sub", "Grit", "Reese", "Punch" }, { "Ice Bell", "Music Box", "Glock", "Celesta", "Marimba" },
+        { "Felt Piano", "Grand", "E-Piano", "Dark Keys", "Upright" }, { "Glass Pluck", "Rage Pluck", "Harp", "Nylon Pick", "Zap" },
+        { "Saw Lead", "Whistle", "Rage Lead", "Square", "Porta" }, { "Dark Pad", "Warm Pad", "Air", "Choir Pad", "Drone" },
+        { "Ensemble", "Pizz", "Solo Violin", "Cello", "Tremolo" }, { "Horn Stab", "Brass Swell", "Trumpet", "Tuba", "Drill Horn" },
+        { "Flute", "Pan Flute", "Ocarina", "Clarinet", "Breath" }, { "Nylon", "Acoustic", "Ambient Gtr", "Clean Elec", "Harmonics" },
+        { "Ooh", "Aah", "Vox Chop", "Choir", "Whisper" }, { "Supersaw", "FM Keys", "Retro Poly", "Chip", "Wobble" },
+        { "Trap Arp", "Glitch Seq", "Gate", "Bounce", "Ripple" }, { "Orch Hit", "Timpani", "Full Orch", "Horns", "Strings Hi" },
+        { "Koto", "Sitar", "Kalimba", "Steel Drum", "Erhu" }, { "Riser", "Impact", "Texture", "Vinyl", "Wind" } };
+    static const char* adj[] { "Midnight", "Frozen", "Chrome", "Hollow", "Velvet", "Neon", "Ghost", "Silver", "Crystal", "Black",
+                               "Lunar", "Toxic", "Faded", "Cold", "Holy", "Static", "Glass", "Venom", "Silk", "Ashen" };
+    juce::Random r (7);
+    std::vector<VaultPreset> out;
+    for (int c = 0; c < vault::numCategories; ++c)
+        for (int k = 0; k < vault::categoryTarget (c); ++k)
+        {
+            const float u = r.nextFloat();
+            const int n = u < 0.32f ? 1 : u < 0.70f ? 2 : u < 0.92f ? 3 : 4;
+            VaultPreset p;
+            p.id = "cv.demo." + juce::String ((int) out.size());
+            p.category = c;
+            for (int i = 0; i < n; ++i)
+            {
+                const int cat = i == 0 ? c : r.nextInt (vault::numCategories);
+                const auto& pool = byCat[cat].empty() ? byCat[vault::catPads] : byCat[cat];
+                const auto& src = fb[(size_t) pool[(size_t) r.nextInt ((int) pool.size())]];
+                VaultPart part = src.parts.front();
+                part.label = labels[cat][r.nextInt (5)];
+                part.level = std::array<float, 4> { 1.0f, 0.72f, 0.55f, 0.4f }[(size_t) i];
+                if (i > 0 && r.nextInt (4) == 0) part.octave = r.nextBool() ? 1 : -1;
+                if (i == 0) { p.styles = src.styles; p.chars = src.chars; }
+                p.parts.push_back (part);
+            }
+            p.styles |= 1u << r.nextInt (vault::numStyles);
+            p.chars |= 1u << r.nextInt (vault::numCharacters);
+            p.name = juce::String (adj[r.nextInt (20)]) + " " + labels[c][k % 5] + (n > 1 ? " Stack" : "");
+            out.push_back (std::move (p));
+        }
+    return out;
+}
+
+// UI runs: a private settings file, and the 5,000 demo bank when no real bank is available
+juce::File uiSetup (const juce::String& name)
+{
+    const auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("cv-shot");
+    tmp.createDirectory();
+    VaultSettings::fileOverride() = tmp.getChildFile (name + ".settings");
+    VaultSettings::fileOverride().deleteFile();
+   #if ! CV_HAS_BANK
+    if (juce::SystemStats::getEnvironmentVariable ("CHROME_VAULT_BANK", {}).isEmpty())
+    {
+        const auto f = tmp.getChildFile ("demo.cvb");
+        if (! f.existsAsFile()) vault::saveBankFile (f, demoBank());
+       #if JUCE_WINDOWS
+        _putenv_s ("CHROME_VAULT_BANK", f.getFullPathName().toRawUTF8());
+       #else
+        setenv ("CHROME_VAULT_BANK", f.getFullPathName().toRawUTF8(), 1);
+       #endif
+    }
+   #endif
+    return tmp;
+}
+
+// editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
+// host automation is followed, DRAG WAV renders a valid file
+int uiTests()
+{
+    uiSetup ("uitest");
+    VaultProcessor p;
+    const auto& bank = p.bank();
+    int fav = -1, pads0 = -1;
+    {
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        check (ed.getWidth() >= 826 && ed.getWidth() <= 1180 && std::abs ((double) ed.getWidth() / ed.getHeight() - 1180.0 / 760.0) < 0.01,
+               "ui: first-open size " + juce::String (ed.getWidth()) + "x" + juce::String (ed.getHeight()));
+        v.setCategory (vault::catPads);
+        const auto rows = v.browser().visible();
+        check (! rows.empty() && v.visibleCount() == (int) std::count_if (bank.begin(), bank.end(), [] (const VaultPreset& x) { return x.category == vault::catPads; }),
+               "ui: category filter (" + juce::String (v.visibleCount()) + " pads)");
+        pads0 = rows.front();
+        v.loadPreset (pads0, true);
+        check (p.currentPreset() == pads0 && v.shownPreset() == pads0, "ui: click loads the sound");
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::downKey));
+        check (p.currentPreset() == rows[1], "ui: down key loads the next sound of the filtered list");
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+        check (p.currentPreset() == pads0, "ui: up key, clamped at the top");
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));
+        check (p.currentPreset() == rows.back(), "ui: left arrow wraps to the end");
+        v.setLayers (2);
+        v.setQuery ("stack");
+        bool allOk = v.visibleCount() > 0;
+        for (int i : v.browser().visible()) allOk &= bank[(size_t) i].parts.size() == 2 && bank[(size_t) i].category == vault::catPads;
+        check (allOk, "ui: search + layers chip + category combine (" + juce::String (v.visibleCount()) + ")");
+        v.setQuery ({}); v.setLayers (0); v.setCategory (-1);
+        fav = rows[2];
+        v.toggleFavorite (fav);
+        v.setFavoritesOnly (true);
+        check (v.visibleCount() == 1 && v.browser().visible().front() == fav, "ui: favorites filter");
+        v.setFavoritesOnly (false);
+        v.randomSound();
+        check (p.currentPreset() >= 0, "ui: random loads a sound");
+        v.loadPreset (pads0, false);
+        p.selectPreset (7);                           // host / automation side
+        v.syncFromProcessor();
+        check (v.shownPreset() == 7, "ui: follows a preset change from the host");
+        const auto wavFile = v.renderWavForDrag();
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (wavFile));
+        float pk = 0.0f;
+        if (rd != nullptr) { juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples); rd->read (&b, 0, b.getNumSamples(), 0, true, true); pk = b.getMagnitude (0, b.getNumSamples()); }
+        check (rd != nullptr && rd->numChannels == 2 && rd->lengthInSamples == 88200 && pk > 0.01f && pk < 1.0f,
+               "ui: DRAG WAV file " + wavFile.getFileName() + " (peak " + juce::String (pk, 3) + ")");
+        ed.setUiScale (1.25f);
+        check (ed.getWidth() == 1475 && ed.getHeight() == 950, "ui: scale 125 %");
+        ed.setUiScale (3.0f);
+        check (ed.getWidth() == 1770, "ui: scale clamps at 150 %");
+        ed.setUiScale (1.25f);
+    }
+    {
+        VaultEditor ed (p);   // reopened: favorites, recent and size are remembered
+        auto& v = ed.view();
+        check (v.browser().isFavorite (fav) && v.browser().numFavorites() == 1, "ui: favorites persist");
+        check (! v.browser().recentList().empty() && v.browser().recentList().front() == pads0, "ui: recent persists (newest first)");
+        check (ed.getWidth() == 1475, "ui: window size persists");
+        const auto f = VaultSettings::fileOverride();
+        check (f.existsAsFile() && f.loadFileAsString().contains (bank[(size_t) fav].id), "ui: settings file " + f.getFileName());
+    }
+    return fails;
+}
+
+int shot (const juce::String& outPath, const juce::String& stateArg)
+{
+    uiSetup ("shot");
+    VaultSettings::get()->setScale (1.0f);   // shots start at 100 % ("scale:<pct>" changes it)
+    VaultProcessor p;
+    auto ed = std::make_unique<VaultEditor> (p);
+    auto& v = ed->view();
+    const auto& bank = p.bank();
+    int pick = -1;
+    for (int i = 0; i < (int) bank.size() && pick < 0; ++i)
+        if (bank[(size_t) i].parts.size() == 3 && bank[(size_t) i].category == vault::catBellsMallets && bank[(size_t) i].styles != 0) pick = i;
+    for (int i = 0; i < (int) bank.size() && pick < 0; ++i) if (bank[(size_t) i].parts.size() == 3) pick = i;
+    if (pick < 0) pick = 0;
+    for (int i = 0; i < 6; ++i) v.loadPreset ((pick + 7 * i + 3) % (int) bank.size(), false);   // some history for RECENT
+    v.loadPreset (pick, false);
+    const auto& pr = bank[(size_t) pick];
+
+    auto tokens = juce::StringArray::fromTokens (stateArg.isEmpty() ? "main" : stateArg, ",", "");
+    for (auto t : tokens)
+    {
+        const auto key = t.upToFirstOccurrenceOf (":", false, false).trim(), val = t.fromFirstOccurrenceOf (":", false, false).trim();
+        if (key == "main")
+        {
+            v.setCategory (pr.category);
+            for (int s = 0; s < vault::numStyles; ++s) if (pr.styles & (1u << s)) { v.setStyle (s); break; }
+        }
+        if (key == "main" || key == "keys") for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOn (1, n, 0.8f);
+        else if (key == "scale")   ed->setUiScale (val.getFloatValue() / 100.0f);
+        else if (key == "search")  v.setQuery (val);
+        else if (key == "cat")     v.setCategory (val.getIntValue());
+        else if (key == "style")   v.setStyle (val.getIntValue());
+        else if (key == "char")    v.setCharacter (val.getIntValue());
+        else if (key == "layers")  v.setLayers (val.getIntValue());
+        else if (key == "empty")   v.setQuery ("zzqx nothing");
+        else if (key == "recent")  v.setRecentOnly (true);
+        else if (key == "favs")
+        {
+            for (int i = 0; i < 9; ++i) v.toggleFavorite ((pick + i * 13) % (int) bank.size());
+            v.setFavoritesOnly (true);
+        }
+    }
+    v.loadPreset (pick, false);
+    v.thumbnails().waitFor (pick, 10000);
+    const auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+    const juce::File f = juce::File::getCurrentWorkingDirectory().getChildFile (outPath);
+    f.deleteFile();
+    juce::FileOutputStream os (f);
+    juce::PNGImageFormat png;
+    const bool ok = os.openedOk() && png.writeImageToStream (img, os);
+    std::printf ("%s | preset %d \"%s\" (%d layers) | showing %d of %d | editor %dx%d -> %s %s\n", p.bankDescription().toRawUTF8(), pick,
+                 pr.name.toRawUTF8(), (int) pr.parts.size(), v.visibleCount(), (int) bank.size(), ed->getWidth(), ed->getHeight(),
+                 outPath.toRawUTF8(), ok ? "ok" : "FAILED");
+    for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOff (1, n, 0.0f);
+    ed.reset();
+    return ok ? 0 : 1;
+}
 } // namespace
 
 int main (int argc, char** argv)
@@ -448,6 +707,14 @@ int main (int argc, char** argv)
         ed.reset();
         return ok ? 0 : 1;
     }
+    if (mode == "-uitest")
+    {
+        const int f = uiTests();
+        std::printf ("vault ui failures: %d\n", f);
+        return f;
+    }
+    if (mode == "-shot" && argc > 2)
+        return shot (argv[2], argc > 3 ? juce::String (argv[3]) : juce::String());
     if (mode == "-writestarter" && argc > 2)   // -writestarter <out.cvb>: the starter bank as a bank file (format sample)
     {
         const auto f = juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]);
@@ -467,7 +734,8 @@ int main (int argc, char** argv)
         for (int l = 1; l <= vault::maxParts; ++l) std::printf ("  %d layer(s): %5d / %d\n", l, layers[l], vault::layerCountTarget (l));
         return 0;
     }
-    const int f = unitTests();
+    unitTests();
+    const int f = browserTests();
     std::printf ("vault failures: %d\n", f);
     return f;
 }
