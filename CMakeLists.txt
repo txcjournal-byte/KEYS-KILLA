@@ -232,7 +232,10 @@ endif()
 # The generated .cvb is committed, so normal builds / CI never need to run it.
 if(KK_BUILD_TESTS)
     juce_add_console_app(VaultBankGen PRODUCT_NAME "VaultBankGen")
-    target_sources(VaultBankGen PRIVATE tools/vault/BankGen.cpp ${CV_ENGINE_SOURCES} ${CV_MODEL_SOURCES} Source/Presets.cpp)
+    # v2 preset recipes: one file per sound designer (tools/vault/recipes/*.cpp, framework tools/vault/recipes/Recipe.h),
+    # run with VaultBankGen -recipe <name>|all (gate: tools/vault/recipes/RecipeGate.h)
+    file(GLOB CV_RECIPE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/vault/recipes/*.cpp)
+    target_sources(VaultBankGen PRIVATE tools/vault/BankGen.cpp ${CV_ENGINE_SOURCES} ${CV_MODEL_SOURCES} ${CV_RECIPE_SOURCES} Source/Presets.cpp)
     target_compile_definitions(VaultBankGen PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 CV_HAS_BANK=0)
     target_link_libraries(VaultBankGen PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()

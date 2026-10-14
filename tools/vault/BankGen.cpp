@@ -3,6 +3,7 @@
 //   VaultBankGen [-out resources/vault/factory.cvb] [-report docs/VAULT_BANK_REPORT.md] [-threads N] [-scale 0.1]
 //   VaultBankGen -audit <bank.cvb> [-csv out.tsv] [-every N]   independent audio audit of a bank (BankAudit.h), exit 0 = no failures
 //   VaultBankGen -check <bank.cvb> | -list <bank.cvb>           re-run the gate / list ids, names, layers, tags
+//   VaultBankGen -recipe <name>|all [-out b.cvb] [-report r.md] [-dist 3] [-demo dir ids]   v2 recipes (tools/vault/recipes)
 //   VaultBankGen -env <bank.cvb> <id> | -switch <bank.cvb> <first> [count]   debugging: level curve / preset-switch clicks
 //
 // Deterministic: the same source tree gives the same bank (own RNG, every candidate seeded by its slot; candidates are
@@ -18,6 +19,7 @@
 // from the measured sound. Writes the CVB1 bank and a markdown QC report.
 #include "BankQC.h"
 #include "BankAudit.h"
+#include "recipes/RecipeGate.h"
 #include "../../Source/Presets.h"
 #include "../../Source/Params.h"
 #include <atomic>
@@ -1676,6 +1678,8 @@ int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);
     juce::ScopedJuceInitialiser_GUI init;
+    if (argc > 2 && juce::String (argv[1]) == "-recipe")   // v2 recipes (tools/vault/recipes/*.cpp) through the v2 gate (RecipeGate.h)
+        return recipegate::runRecipes (argc, argv);
     juce::String outPath = "resources/vault/factory.cvb", reportPath = "docs/VAULT_BANK_REPORT.md";
     int threads = (int) std::max (1u, std::thread::hardware_concurrency());
     double scale = 1.0;
