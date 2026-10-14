@@ -92,6 +92,77 @@ juce::Rectangle<float> VaultInfoPanel::heartRect() const
     return juce::Rectangle<float> (26.0f, 26.0f).withCentre ({ (float) nameR.getRight() - 11.0f, (float) nameR.getCentreY() });
 }
 
+VaultInfoPanel::Notice VaultInfoPanel::notice() const
+{
+    if (preset < 0 || preset != proc.currentPreset()) return Notice::none;
+    if (proc.isMissingSamples()) return proc.libraryFound() ? Notice::instrumentMissing : Notice::libraryMissing;
+    if (proc.isLoading()) return Notice::loading;
+    return Notice::none;
+}
+
+VaultInfoPanel::PartState VaultInfoPanel::partState (const VaultPart& part) const
+{
+    if (part.kind != VaultPartKind::sample) return PartState::ready;
+    const auto* lib = proc.sampleLibrary();
+    const auto* h = lib != nullptr && lib->libraryFound() ? lib->find (part.source) : nullptr;
+    if (h == nullptr || h->hasFailed()) return PartState::missing;
+    // only the shown sound asks for its samples; another one loads when it is picked
+    return ! h->isLoaded() && preset == proc.currentPreset() ? PartState::loading : PartState::ready;
+}
+
+juce::String VaultInfoPanel::noticeTitle() const
+{
+    switch (notice())
+    {
+        case Notice::libraryMissing:    return juce::String (juce::CharPointer_UTF8 ("Sound library not found \xe2\x80\x94 run the CHROME VAULT installer"));
+        case Notice::instrumentMissing: return juce::String (juce::CharPointer_UTF8 ("This sound needs a newer sound library \xe2\x80\x94 run the latest CHROME VAULT installer"));
+        case Notice::none: case Notice::loading: default: return {};
+    }
+}
+
+void VaultInfoPanel::repaintStatus() { repaint (tagsR.getUnion (stackR).expanded (2)); }
+
+void VaultInfoPanel::paintNotice (juce::Graphics& g, juce::Rectangle<float> r, Notice) const
+{
+    using namespace juce;
+    g.setColour (col::field);
+    g.fillRoundedRectangle (r, 12.0f);
+    g.setColour (col::layerLine);
+    g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
+    // a slim accent on the left: noticeable, not alarming
+    g.setColour (col::ice2.withAlpha (0.7f));
+    g.fillRoundedRectangle (r.getX() + 7.0f, r.getY() + 12.0f, 2.5f, r.getHeight() - 24.0f, 1.25f);
+
+    auto t = r.reduced (16.0f, 8.0f).withTrimmedLeft (4.0f);
+    const float lineH = 18.0f, gap = 4.0f;
+    const auto fTitle = font (14.0f, true), fBody = font (14.0f);
+    bool anySynth = false;
+    if (isPositiveAndBelow (preset, (int) proc.bank().size()))
+        for (auto& part : proc.bank()[(size_t) preset].parts) anySynth |= part.kind != VaultPartKind::sample;
+    const auto title = wrapText (fTitle, noticeTitle(), t.getWidth());
+    const auto body = wrapText (fBody, anySynth ? "Its synth layers still play." : "Synth sounds keep playing.", t.getWidth());
+    const auto path = wrapText (fBody, proc.libraryPath().getFullPathName(), t.getWidth());
+    float total = (float) (title.size() + body.size() + path.size()) * lineH + gap;
+    const bool withBody = total <= t.getHeight();
+    if (! withBody) total -= (float) body.size() * lineH;
+    float y = t.getY() + std::max (0.0f, (t.getHeight() - total) * 0.5f);
+    auto put = [&] (const StringArray& lines, const Font& f, Colour c)
+    {
+        g.setFont (f);
+        g.setColour (c);
+        for (auto& l : lines)
+        {
+            if (y + lineH > t.getBottom() + 0.5f) return;
+            g.drawText (l, Rectangle<float> (t.getX(), y, t.getWidth() + 2.0f, lineH), Justification::centredLeft, false);
+            y += lineH;
+        }
+    };
+    put (title, fTitle, col::text);
+    if (withBody) put (body, fBody, col::muted);
+    y += gap;
+    put (path, fBody, col::dim);
+}
+
 void VaultInfoPanel::paint (juce::Graphics& g)
 {
     using namespace juce;
@@ -123,7 +194,15 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     g.drawText (vault::categoryNames()[jlimit (0, (int) vault::numCategories - 1, p->category)] + midDot() + String (n) + " " + layerWord (n),
                 catR, Justification::centredLeft, true);
 
-    // pills: what plays the layers (sampled / synth / modelled) and the loading state
+    const auto state = notice();
+    if (state == Notice::libraryMissing || state == Notice::instrumentMissing)
+    {
+        // a calm card instead of the pills and the (silent) waveform: what is missing, what to do, where it was looked for
+        paintNotice (g, tagsR.getUnion (waveR).toFloat(), state);
+    }
+    else
+    {
+    // pills: what plays the layers (sampled / modelled / synth), the loading state and the home note
     {
         StringArray tags;
         bool sampled = false, synth = false, modelled = false;
@@ -136,26 +215,31 @@ void VaultInfoPanel::paint (juce::Graphics& g)
         if (sampled) tags.add ("Sampled");
         if (modelled) tags.add ("Modelled");
         if (synth) tags.add ("Synth");
-        if (preset == proc.currentPreset())
-        {
-            if (proc.isLoading()) tags.add ("Loading...");
-            else if (proc.isMissingSamples()) tags.add ("Samples missing");
-        }
+        const String loadingText (CharPointer_UTF8 ("Loading\xe2\x80\xa6"));
+        if (state == Notice::loading) tags.add (loadingText);
         tags.add ("Plays at " + vault::noteName (vault::homeNote));
         const auto f = font (14.0f);
         float x = (float) tagsR.getX(), y = (float) tagsR.getY();
-        const float h = 24.0f;
+        const float h = 24.0f, spin = 14.0f;
         for (int i = 0; i < tags.size(); ++i)
         {
-            const float w = textWidth (f, tags[i]) + 18.0f;
+            const bool loading = tags[i] == loadingText;
+            const float w = textWidth (f, tags[i]) + 18.0f + (loading ? spin + 6.0f : 0.0f);
             if (x + w > (float) tagsR.getRight() && x > (float) tagsR.getX()) { x = (float) tagsR.getX(); y += h + 6.0f; }
             if (y + h > (float) tagsR.getBottom() + 0.5f) break;
-            const Rectangle<float> pill (x, y, w, h);
-            g.setColour (col::fieldLine);
+            Rectangle<float> pill (x, y, w, h);
+            g.setColour (loading ? col::ice2.withAlpha (0.6f) : col::fieldLine);
             g.drawRoundedRectangle (pill.reduced (0.5f), h * 0.5f, 1.0f);
+            auto t = pill;
+            if (loading)
+            {
+                t.removeFromLeft (9.0f);
+                drawSpinner (g, t.removeFromLeft (spin).withSizeKeepingCentre (spin, spin), col::ice2);
+                t.removeFromRight (3.0f);
+            }
             g.setColour (col::muted);
             g.setFont (f);
-            g.drawText (tags[i], pill, Justification::centred, false);
+            g.drawText (tags[i], t, Justification::centred, false);
             x += w + 6.0f;
         }
     }
@@ -187,8 +271,10 @@ void VaultInfoPanel::paint (juce::Graphics& g)
             g.fillRect (inner.getX(), inner.getCentreY() - 1.0f, inner.getWidth(), 2.0f);
         }
     }
+    }
 
-    // layers
+    // layers: letter, what plays it (icon + instrument / model / synth layer name, the label when it adds something),
+    // transpose and level - or the loading / missing state of a sampled layer
     g.setFont (font (14.0f, true, 0.08f));
     g.setColour (col::ice);
     g.drawText ("LAYERS" + midDot() + String (n), layersLabelR, Justification::centredLeft, false);
@@ -212,18 +298,37 @@ void VaultInfoPanel::paint (juce::Graphics& g)
             auto t = row.reduced (10.0f, 0.0f);
             g.setFont (font (14.0f, true));
             g.setColour (col::ice);
-            g.drawText (String::charToString ((juce_wchar) ('A' + i)), t.removeFromLeft (20.0f), Justification::centredLeft, false);
+            g.drawText (String::charToString ((juce_wchar) ('A' + i)), t.removeFromLeft (18.0f), Justification::centredLeft, false);
+            const auto st = partState (part);
+            auto icon = t.removeFromLeft (16.0f).withSizeKeepingCentre (16.0f, 12.0f);
+            if (st == PartState::loading) drawSpinner (g, icon.withSizeKeepingCentre (14.0f, 14.0f), col::ice2);
+            else drawKindIcon (g, icon, part.kind, st == PartState::missing ? col::heartOff : col::muted);
+            t.removeFromLeft (8.0f);
             String right = String (roundToInt (part.level * 100.0f)) + " %";
             const int tr = part.octave * 12 + part.semi;
             if (tr != 0) right = (tr % 12 == 0 ? (tr > 0 ? "+" : "") + String (tr / 12) + " oct" : (tr > 0 ? "+" : "") + String (tr) + " st") + "   " + right;
-            g.setFont (font (14.0f));
+            if (st == PartState::missing) right = "not installed";
+            const auto f = font (14.0f);
+            g.setFont (f);
             g.setColour (col::dim);
-            const float rw = textWidth (font (14.0f), right) + 2.0f;
-            g.drawText (right, t.removeFromRight (rw), Justification::centredRight, false);
-            g.setFont (font (14.0f));
-            g.setColour (col::text);
-            g.drawText (part.label.isNotEmpty() ? part.label : "Layer " + String::charToString ((juce_wchar) ('A' + i)),
-                        t.withTrimmedRight (8.0f), Justification::centredLeft, true);
+            const float rw = textWidth (f, right) + 2.0f;
+            g.drawText (right, t.removeFromRight (rw), Justification::centredLeft, false);
+            t.removeFromRight (8.0f);
+            // the instrument (always whole when it fits), then the layer's own label in the dim colour if it says more
+            const auto inst = VaultBrowserModel::instrumentName (part, proc.sampleLibrary());
+            const float iw = std::min (t.getWidth(), textWidth (f, inst) + 1.0f);
+            g.setColour (st == PartState::missing ? col::dim : col::text);
+            g.drawText (inst, t.removeFromLeft (iw), Justification::centredLeft, true);
+            const auto label = part.label.trim();
+            if (label.isNotEmpty() && ! inst.containsIgnoreCase (label) && ! label.containsIgnoreCase (inst))
+            {
+                const auto extra = midDot() + label;
+                if (textWidth (f, extra) <= t.getWidth())
+                {
+                    g.setColour (col::dim);
+                    g.drawText (extra, t, Justification::centredLeft, false);
+                }
+            }
         }
     }
 
@@ -253,7 +358,7 @@ void VaultInfoPanel::mouseDown (const juce::MouseEvent& e)
 // VaultMainView
 //==============================================================================
 VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> s)
-    : proc (p), settings (std::move (s)), model (p.bank()), thumbs (p.bank()),
+    : proc (p), settings (std::move (s)), model (p.bank(), p.sampleLibrary()), thumbs (p.bank(), p.sampleLibrary()),
       categories (model), chips (model.filter), list (p.bank(), model), info (p, model, thumbs), keyboard (p.getKeyboardState())
 {
     model.setFavoriteIds (settings->favorites());
@@ -300,6 +405,11 @@ VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> 
     info.onToggleFavorite = [this] (int idx) { toggleFavorite (idx); };
     info.dragPill.onDragOut = [this]
     {
+        if (proc.isLoading())   // rendering now would decode the samples on the UI thread
+        {
+            showStatus (juce::String (juce::CharPointer_UTF8 ("Samples are still loading\xe2\x80\xa6 drag again in a moment")));
+            return;
+        }
         const auto f = renderWavForDrag();
         if (f.existsAsFile())
         {
@@ -520,8 +630,9 @@ void VaultMainView::syncFromProcessor()
     const int cur = proc.currentPreset();
     if (cur != shown) { setShown (cur); list.showRow (model.rowOf (cur)); }
     if (statusUntil != 0 && juce::Time::getMillisecondCounter() >= statusUntil) { statusUntil = 0; repaint (statusRect()); }
-    const int st = proc.isLoading() ? 1 : proc.isMissingSamples() ? 2 : 0;
+    const int st = proc.isMissingSamples() ? 2 : proc.isLoading() ? 1 : 0;
     if (st != lastLoadState) { lastLoadState = st; repaint (statusRect()); info.repaint(); }
+    else if (st == 1) info.repaintStatus();   // the loading spinners turn (the UI never waits for the samples)
 }
 
 void VaultMainView::filterChanged (bool scrollToCurrent, bool keepScroll)
@@ -565,10 +676,10 @@ juce::String VaultMainView::statusHint() const
 {
     if (proc.currentPresetData() != nullptr)
     {
-        if (proc.isLoading()) return "Loading samples...";
         if (proc.isMissingSamples())
-            return proc.libraryFound() ? juce::String ("This sound needs an update of the sample library")
-                                       : juce::String ("Sample library not found - install the CHROME VAULT library");
+            return proc.libraryFound() ? juce::String (juce::CharPointer_UTF8 ("This sound needs a newer sound library \xe2\x80\x94 its synth layers play"))
+                                       : juce::String (juce::CharPointer_UTF8 ("Sound library not found \xe2\x80\x94 synth sounds play, sampled layers are silent"));
+        if (proc.isLoading()) return juce::String (juce::CharPointer_UTF8 ("Loading samples\xe2\x80\xa6 the sound plays as soon as they are in"));
     }
     return "Click a sound to hear it at C5" + midDot() + juce::String (juce::CharPointer_UTF8 ("\xe2\x97\x80 \xe2\x96\xb6 next sound")) + midDot() + "Instant load";
 }
@@ -638,7 +749,7 @@ void VaultMainView::showScaleMenu()
 juce::File VaultMainView::renderWavForDrag()
 {
     const auto* p = proc.currentPresetData();
-    if (p == nullptr) return {};
+    if (p == nullptr || proc.isLoading()) return {};   // never decode samples on the UI thread
     float macros[vault::numMacros];
     for (int i = 0; i < vault::numMacros; ++i) macros[i] = proc.getMacro (i);
     constexpr double sr = 44100.0;

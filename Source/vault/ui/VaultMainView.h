@@ -4,12 +4,22 @@
 #include "VaultSettings.h"
 #include "../VaultProcessor.h"
 
-// right column: preset name, category, tags, waveform thumbnail, layer stack, the 4 macro knobs and volume
+// right column: preset name, category, pills (what plays it, loading, C5), waveform thumbnail - or a calm notice when the
+// sound library is missing -, layer stack (each layer's instrument / model), the 4 macro knobs and volume
 class VaultInfoPanel : public juce::Component
 {
 public:
     VaultInfoPanel (VaultProcessor&, VaultBrowserModel&, VaultThumbs&);
     ~VaultInfoPanel() override;
+
+    // the state of the shown (= current) sound: its samples are loading (it plays as soon as they are in), the library is
+    // not installed, or the installed library lacks an instrument it needs (its synth / model layers play anyway)
+    enum class Notice { none, loading, libraryMissing, instrumentMissing };
+    Notice notice() const;
+    enum class PartState { ready, loading, missing };
+    PartState partState (const VaultPart&) const;   // sample layers of the shown sound: in RAM, loading, not installed
+    juce::String noticeTitle() const;               // the notice card's first line (empty without a card)
+    void repaintStatus();                           // the pills + layer rows (spinners while loading)
 
     void setPreset (int bankIndex);
     void paint (juce::Graphics&) override;
@@ -24,6 +34,7 @@ public:
 
 private:
     juce::Rectangle<float> heartRect() const;
+    void paintNotice (juce::Graphics&, juce::Rectangle<float>, Notice) const;
     VaultProcessor& proc;
     VaultBrowserModel& model;
     VaultThumbs& thumbs;
