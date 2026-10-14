@@ -223,7 +223,7 @@ private:
 
 //==============================================================================
 // the preset list: juce::ListBox (only the visible rows exist - smooth with 5,000 rows).
-// Columns: selected dot | name | category (All Sounds) or the first layer | layer badge | heart
+// Columns: selected dot | name | main instrument(s) | layer badge | heart
 class PresetList : public juce::Component, private juce::ListBoxModel, private juce::ComponentListener
 {
 public:
@@ -299,11 +299,18 @@ public:
     }
     static juce::Font nameFont() { return font (15.0f, true); }
     static juce::Font tagFont()  { return font (14.0f); }
-    // the info line: the category (All Sounds / search) or, inside one category, the first layer's name
-    static juce::String tagText (const VaultPreset& p, bool withCategory)
+    // the info line: the main instrument(s) of the preset ("Concert Grand · Violin Section"), as many as fit the column
+    // (the first one always; further ones only whole - never cut with "...")
+    static juce::String infoText (const juce::StringArray& instruments, float maxWidth)
     {
-        if (withCategory) return vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)];
-        return p.parts.empty() ? juce::String() : p.parts.front().label;
+        juce::String out;
+        for (auto& s : instruments)
+        {
+            const auto next = out.isEmpty() ? s : out + midDot() + s;
+            if (out.isNotEmpty() && textWidth (tagFont(), next) > maxWidth) break;
+            out = next;
+        }
+        return out;
     }
 
 private:
@@ -341,7 +348,7 @@ private:
         g.drawText (p.name, c.name, juce::Justification::centredLeft, true);
         g.setFont (tagFont());
         g.setColour (col::dim);
-        g.drawText (tagText (p, model.filter.category < 0), c.tags, juce::Justification::centredLeft, true);
+        g.drawText (infoText (model.instruments (idx), c.tags.getWidth()), c.tags, juce::Justification::centredLeft, true);
         // layer badge
         const int n = (int) p.parts.size();
         auto b = c.badge;
@@ -463,7 +470,82 @@ protected:
 };
 
 //==============================================================================
-// "DRAG WAV" pill: dragging it out renders the current sound to a WAV file and hands it to the DAW / desktop
+// what plays a layer, as a small vector icon: sample = waveform bars, model = a sine (a modelled, vibrating source),
+// synth = a saw wave
+inline void drawKindIcon (juce::Graphics& g, juce::Rectangle<float> r, VaultPartKind kind, juce::Colour c)
+{
+    g.setColour (c);
+    const float cy = r.getCentreY(), h = r.getHeight();
+    if (kind == VaultPartKind::sample)
+    {
+        static constexpr float hs[] { 0.36f, 0.78f, 1.0f, 0.56f, 0.3f };
+        const float w = r.getWidth() / 5.0f;
+        for (int i = 0; i < 5; ++i)
+        {
+            const float bh = h * hs[i];
+            g.fillRoundedRectangle (r.getX() + (float) i * w + w * 0.18f, cy - bh * 0.5f, w * 0.64f, bh, w * 0.3f);
+        }
+        return;
+    }
+    juce::Path p;
+    if (kind == VaultPartKind::model)
+    {
+        for (int i = 0; i <= 28; ++i)
+        {
+            const float t = (float) i / 28.0f, x = r.getX() + t * r.getWidth();
+            const float y = cy - std::sin (t * juce::MathConstants<float>::twoPi) * h * 0.36f;
+            if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+        }
+    }
+    else
+    {
+        const float x = r.getX(), w = r.getWidth(), a = h * 0.36f;
+        p.startNewSubPath (x, cy + a);
+        p.lineTo (x + w * 0.5f, cy - a);
+        p.lineTo (x + w * 0.5f, cy + a);
+        p.lineTo (x + w, cy - a);
+    }
+    g.strokePath (p, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+// a quiet "working" indicator: a faint ring with a turning arc (time-based; the caller repaints while it is shown)
+inline void drawSpinner (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c)
+{
+    const float d = std::min (r.getWidth(), r.getHeight()), rad = d * 0.5f - 1.0f;
+    const auto m = r.getCentre();
+    const float ph = (float) (juce::Time::getMillisecondCounter() % 1100u) / 1100.0f * juce::MathConstants<float>::twoPi;
+    g.setColour (c.withAlpha (0.22f));
+    g.drawEllipse (juce::Rectangle<float> (rad * 2.0f, rad * 2.0f).withCentre (m), 1.6f);
+    juce::Path p;
+    p.addCentredArc (m.x, m.y, rad, rad, 0.0f, ph, ph + 2.2f, true);
+    g.setColour (c);
+    g.strokePath (p, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+// greedy word wrap (no shrinking, no "..."): breaks at spaces and, for file paths, after '/' or '\'
+inline juce::StringArray wrapText (const juce::Font& f, const juce::String& text, float width)
+{
+    juce::StringArray tokens;   // each token keeps its trailing separator
+    juce::String cur;
+    for (auto ch : text)
+    {
+        cur << juce::String::charToString (ch);
+        if (ch == ' ' || ch == '/' || ch == '\\') { tokens.add (cur); cur.clear(); }
+    }
+    if (cur.isNotEmpty()) tokens.add (cur);
+    juce::StringArray lines;
+    juce::String line;
+    for (auto& t : tokens)
+    {
+        if (line.isNotEmpty() && textWidth (f, (line + t).trimEnd()) > width) { lines.add (line.trimEnd()); line.clear(); }
+        line << t;
+    }
+    if (line.trim().isNotEmpty()) lines.add (line.trimEnd());
+    return lines;
+}
+
+//==============================================================================
+// "DRAG WAV" pill:dragging it out renders the current sound to a WAV file and hands it to the DAW / desktop
 class DragPill : public juce::Component
 {
 public:

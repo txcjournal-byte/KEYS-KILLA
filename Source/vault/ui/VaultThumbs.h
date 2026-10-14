@@ -8,13 +8,16 @@
 // (one short note, preset defaults) and cached for the editor's lifetime. The UI never waits: get() returns false until
 // the thumbnail is ready, then `onReady` is called on the message thread.
 // getLive(): the same with the current macro settings (one "live" slot, the newest request wins - knob drags never queue up).
+// Sampled sounds: the thread never decodes samples itself (that could take seconds and hold up closing the editor) - a
+// preset waits until the library has its instruments in RAM (the processor loads the current sound's), then it is drawn.
 class VaultThumbs : private juce::Thread, private juce::AsyncUpdater
 {
 public:
     static constexpr int numBins = 56;
     struct Thumb { std::array<float, numBins> level {}; float peakDb = -100.0f; };   // level 0..1 per bin (envelope, 30 dB range under the peak)
 
-    explicit VaultThumbs (const std::vector<VaultPreset>& b) : juce::Thread ("CHROME VAULT thumbs"), bank (b)
+    explicit VaultThumbs (const std::vector<VaultPreset>& b, const vault::SampleLibrary* lib = nullptr)
+        : juce::Thread ("CHROME VAULT thumbs"), bank (b), library (lib)
     {
         startThread (juce::Thread::Priority::low);
     }
@@ -131,6 +134,16 @@ public:
         return t;
     }
 
+    // true when every sampled layer's instrument is in RAM, missing or failed (rendering then decodes nothing)
+    bool samplesReady (const VaultPreset& p) const
+    {
+        if (library == nullptr) return true;
+        for (auto& part : p.parts)
+            if (part.kind == VaultPartKind::sample)
+                if (const auto* h = library->find (part.source); h != nullptr && ! h->isLoaded() && ! h->hasFailed()) return false;
+        return true;
+    }
+
 private:
     void run() override
     {
@@ -138,12 +151,26 @@ private:
         {
             int idx = -1;
             LiveSlot req;
-            bool doLive = false;
+            bool doLive = false, pending = false;
             {
                 const juce::ScopedLock sl (lock);
-                if (liveWanted) { req = liveReq; liveWanted = false; doLive = true; }
+                // presets whose samples have arrived meanwhile go back to the front of the queue
+                for (auto it = waiting.begin(); it != waiting.end();)
+                {
+                    if (samplesReady (bank[(size_t) *it])) { queue.push_front (*it); it = waiting.erase (it); }
+                    else ++it;
+                }
+                if (liveWanted && samplesReady (bank[(size_t) liveReq.index])) { req = liveReq; liveWanted = false; doLive = true; }
                 else if (! queue.empty()) { idx = queue.front(); queue.pop_front(); }
+                if (idx >= 0 && ! samplesReady (bank[(size_t) idx]))
+                {
+                    if (std::find (waiting.begin(), waiting.end(), idx) == waiting.end()) waiting.push_back (idx);
+                    while (waiting.size() > 48) waiting.pop_front();
+                    continue;
+                }
+                pending = liveWanted || ! waiting.empty();
             }
+            if (! doLive && idx < 0 && pending) { wake.wait (100); continue; }   // samples are loading
             if (doLive)
             {
                 req.thumb = analyse (bank[(size_t) req.index], req.macros.data());
@@ -176,6 +203,8 @@ private:
     struct LiveSlot { int index = -1; std::array<float, vault::numMacros> macros {}; Thumb thumb; bool ready = false; };
 
     const std::vector<VaultPreset>& bank;
+    const vault::SampleLibrary* library = nullptr;
+    std::deque<int> waiting;   // queued presets whose samples are not in RAM yet
     LiveSlot live, liveReq;
     bool liveWanted = false;
     juce::CriticalSection lock;

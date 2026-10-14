@@ -10,7 +10,10 @@
 //                           VaultTests -shot <out.png> [state]   the browser UI with a 3-layer preset + a filter (xvfb-run)
 //                                      state: comma list of  scale:<pct> search:<text> cat:<n> layers:<n>
 //                                      favs recent empty keys knobs   (default "main" = its category + a held chord)
+//                                      pick:<preset name>  nowait (paint at once: a sampled sound still loading)
 //                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
+//                           VaultTests -writeuidemo <out.cvb>    the v2 UI demo bank (sampled / model / synth layers) for -shot
+//                           VaultTests -uitestv2                 v2 editor checks (child process of -uitest)
 #include "../Source/vault/VaultProcessor.h"
 #include "../Source/vault/VaultEditor.h"
 #include "../Source/vault/ui/VaultMainView.h"
@@ -915,20 +918,24 @@ void readabilityTests (VaultProcessor& p)
     {
         ed.setUiScale (1.0f);
         const auto cols = vui::PresetList::columns ((float) v.presetList().listBox().getVisibleRowWidth(), (float) vui::PresetList::rowH);
-        int namesCut = 0, tagsCut = 0;
+        int namesCut = 0, tagsCut = 0, noInstrument = 0, several = 0;
         juce::String worst;
-        for (const auto& x : bank)
+        for (int i = 0; i < (int) bank.size(); ++i)
         {
+            const auto& x = bank[(size_t) i];
             if (vui::textWidth (vui::PresetList::nameFont(), x.name) > cols.name.getWidth()) { ++namesCut; worst = x.name; }
-            for (bool withCat : { true, false })
-            {
-                const auto t = vui::PresetList::tagText (x, withCat);
-                if (vui::textWidth (vui::PresetList::tagFont(), t) > cols.tags.getWidth()) { ++tagsCut; worst = t; }
-            }
+            const auto& inst = v.browser().instruments (i);
+            const auto t = vui::PresetList::infoText (inst, cols.tags.getWidth());
+            if (vui::textWidth (vui::PresetList::tagFont(), t) > cols.tags.getWidth() || (! inst.isEmpty() && ! t.startsWith (inst[0])))
+            { ++tagsCut; worst = t; }
+            noInstrument += t.isEmpty() ? 1 : 0;
+            several += t.contains (vui::midDot()) ? 1 : 0;
         }
-        check (namesCut == 0 && tagsCut == 0, "ui: every name (" + juce::String (cols.name.getWidth(), 0) + " px) and tag line ("
-                                                  + juce::String (cols.tags.getWidth(), 0) + " px) of the bank fits its list column ("
-                                                  + juce::String (namesCut) + " / " + juce::String (tagsCut) + " cut" + (worst.isEmpty() ? "" : ": " + worst) + ")");
+        check (namesCut == 0 && tagsCut == 0 && noInstrument == 0,
+               "ui: every name (" + juce::String (cols.name.getWidth(), 0) + " px) and instrument line ("
+                   + juce::String (cols.tags.getWidth(), 0) + " px) of the bank fits its list column ("
+                   + juce::String (namesCut) + " / " + juce::String (tagsCut) + " cut, " + juce::String (noInstrument) + " empty, "
+                   + juce::String (several) + " with 2+ instruments" + (worst.isEmpty() ? "" : ": " + worst) + ")");
     }
     // text colours: nothing darker than the "dim" tertiary text on the dark panels, primary text #E3E8F0
     const auto lum = [] (juce::Colour c) { return 0.2126f * c.getFloatRed() + 0.7152f * c.getFloatGreen() + 0.0722f * c.getFloatBlue(); };
@@ -977,6 +984,291 @@ void focusTests (VaultProcessor& p)
     juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
     const bool afterEscape = v.focusReturns() == n0 + 2 && search.isEmpty();
     check (afterReturn && afterEscape && search.getWantsKeyboardFocus(), "focus: Return / Escape in the search box give the keyboard back to the DAW");
+}
+
+//==============================================================================
+// v2 editor: a demo bank of v2 presets (sampled layers on the library instruments, the "sine" model, synth layers) - only
+// for UI checks and snapshots (the levels / FX are not designed sounds). "keys.celesta" is deliberately not in the library.
+std::vector<VaultPreset> uiDemoV2Bank()
+{
+    const auto fb = VaultProcessor::buildFallbackBank();
+    std::vector<int> byCat[vault::numCategories];
+    for (int i = 0; i < (int) fb.size(); ++i) byCat[fb[(size_t) i].category].push_back (i);
+    struct L { char kind; const char* src; int cat; const char* label; float level; int oct; };
+    auto S = [] (const char* id, float level = 1.0f, int oct = 0, const char* label = "") { return L { 's', id, 0, label, level, oct }; };
+    auto Y = [] (int cat, const char* label, float level = 1.0f, int oct = 0) { return L { 'y', "", cat, label, level, oct }; };
+    auto M = [] (const char* label, float level = 0.3f, int oct = 0) { return L { 'm', "sine", 0, label, level, oct }; };
+    using namespace vault;
+    const std::vector<std::tuple<int, const char*, std::vector<L>>> recipes {
+        { catPiano, "Concert Grand", { S ("piano.grand.concert") } },
+        { catPiano, "Studio Grand", { S ("piano.grand.studio") } },
+        { catPiano, "Grand & Strings", { S ("piano.grand.concert"), S ("strings.violins.ensemble", 0.45f, 0, "Soft Violins") } },
+        { catPiano, "Felt Grand Pad", { S ("piano.grand.chamber", 1.0f, 0, "Felt"), Y (catPads, "Warm Pad", 0.4f) } },
+        { catPiano, "Upright Piano", { S ("piano.upright") } },
+        { catPiano, "Parlor Upright Air", { S ("piano.upright.parlor"), Y (catPads, "Air", 0.3f, 1), M ("Sub Sine", 0.25f, -1) } },
+        { catKeysOrgan, "FM Electric Piano", { S ("keys.fm.epiano") } },
+        { catKeysOrgan, "Pipe Organ Hall", { S ("organ.pipe") } },
+        { catKeysOrgan, "Chamber Organ", { S ("organ.chamber") } },
+        { catKeysOrgan, "Baroque Harpsichord", { S ("keys.harpsichord.baroque") } },
+        { catKeysOrgan, "Tine Keys Dream", { Y (catKeysOrgan, "Tine Keys"), Y (catPads, "Air", 0.35f) } },
+        { catKeysOrgan, "FM Clav Funk", { S ("keys.fm.clav") } },
+        { catGuitars, "Nylon Evening", { Y (catGuitars, "Nylon") } },
+        { catGuitars, "Folk Harp & Nylon", { S ("pluck.harp.folk"), Y (catGuitars, "Nylon", 0.6f) } },
+        { catGuitars, "Stick Dulcimer", { S ("pluck.dulcimer") } },
+        { catGuitars, "Clean Electric", { Y (catGuitars, "Clean Electric") } },
+        { catBass, "Contrabass Pizz", { S ("strings.contrabass") } },
+        { catBass, "Tuba Bass", { S ("brass.tuba") } },
+        { catBass, "Bassoon Bass", { S ("winds.bassoon") } },
+        { catBass, "Analog Mono Bass", { Y (catBass, "Analog Bass") } },
+        { catBass, "Sub & Contrabass", { S ("strings.contrabass"), M ("Sub Sine", 0.5f, -1) } },
+        { catBass, "Driven Bass", { Y (catBass, "Driven Bass") } },
+        { catStrings, "Violin Section", { S ("strings.violins.ensemble") } },
+        { catStrings, "Viola Section", { S ("strings.violas.ensemble") } },
+        { catStrings, "Cello Section", { S ("strings.cellos.ensemble") } },
+        { catStrings, "Solo Violin", { S ("strings.violin.solo") } },
+        { catStrings, "Full String Section", { S ("strings.violins.ensemble"), S ("strings.violas.ensemble", 0.7f), S ("strings.cellos.ensemble", 0.7f, -1) } },
+        { catStrings, "Cellos & Dark Pad", { S ("strings.cellos.ensemble"), Y (catPads, "Dark Pad", 0.4f) } },
+        { catBrass, "Trumpet", { S ("brass.trumpet") } },
+        { catBrass, "French Horn", { S ("brass.horn") } },
+        { catBrass, "Tenor Trombone", { S ("brass.trombone") } },
+        { catBrass, "Brass Section", { S ("brass.trumpet"), S ("brass.horn", 0.8f), S ("brass.trombone", 0.7f, -1) } },
+        { catBrass, "Vintage Trombone", { S ("brass.trombone.vintage") } },
+        { catBrass, "Horn Swell Pad", { S ("brass.horn"), Y (catPads, "Warm Pad", 0.4f) } },
+        { catFlutesWoodwinds, "Concert Flute", { S ("winds.flute.concert") } },
+        { catFlutesWoodwinds, "Piccolo", { S ("winds.piccolo") } },
+        { catFlutesWoodwinds, "Clarinet", { S ("winds.clarinet") } },
+        { catFlutesWoodwinds, "Oboe", { S ("winds.oboe") } },
+        { catFlutesWoodwinds, "Alto Recorder", { S ("winds.recorder.alto") } },
+        { catFlutesWoodwinds, "Tenor Sax", { S ("winds.sax.tenor") } },
+        { catFlutesWoodwinds, "Woodwind Choir", { S ("winds.flute.concert"), S ("winds.clarinet", 0.8f), S ("winds.oboe", 0.6f), S ("winds.bassoon", 0.6f, -1) } },
+        { catOrchestral, "Full Orchestra", { S ("strings.violins.ensemble"), S ("strings.cellos.ensemble", 0.8f, -1), S ("brass.horn", 0.6f), S ("perc.timpani", 0.5f, -1) } },
+        { catOrchestral, "Timpani Roll", { S ("perc.timpani") } },
+        { catOrchestral, "Strings & Brass", { S ("strings.violins.ensemble"), S ("brass.horn", 0.6f) } },
+        { catOrchestral, "Orchestral Hit", { Y (catOrchestral, "Orch Hit"), S ("perc.timpani", 0.6f, -1) } },
+        { catBellsMallets, "Marimba", { S ("mallets.marimba") } },
+        { catBellsMallets, "Vibraphone", { S ("mallets.vibraphone") } },
+        { catBellsMallets, "Glockenspiel", { S ("mallets.glockenspiel") } },
+        { catBellsMallets, "Mallet Stack", { S ("mallets.marimba"), S ("mallets.vibraphone", 0.6f), M ("Sine Shimmer", 0.25f, 1) } },
+        { catBellsMallets, "Tubular Bells", { S ("bells.tubular") } },
+        { catBellsMallets, "Celesta", { S ("keys.celesta") } },
+        { catBellsMallets, "Ice Bell Stack", { Y (catBellsMallets, "Ice Bell"), S ("mallets.glockenspiel", 0.5f, 1) } },
+        { catVocalsChoir, "Classic Choir", { S ("voice.choir.classic") } },
+        { catVocalsChoir, "Female Solo Ha", { S ("voice.female.solo") } },
+        { catVocalsChoir, "Male Low Voice", { S ("voice.male.low") } },
+        { catVocalsChoir, "Vowel Chops", { S ("voice.female.chops") } },
+        { catVocalsChoir, "Vocal Textures", { S ("voice.fx.textures") } },
+        { catVocalsChoir, "Choir & Air Pad", { S ("voice.choir.classic"), Y (catPads, "Air", 0.4f) } },
+        { catPlucks, "Concert Harp", { S ("pluck.harp.concert") } },
+        { catPlucks, "Psaltery", { S ("pluck.psaltery") } },
+        { catPlucks, "Harp & Kalimba", { S ("pluck.harp.concert"), S ("world.kalimba", 0.6f) } },
+        { catPlucks, "Glass Pluck", { Y (catPlucks, "Glass Pluck") } },
+        { catLeads, "Saw Lead", { Y (catLeads, "Saw Lead") } },
+        { catLeads, "Ocarina Lead", { S ("winds.ocarina"), Y (catLeads, "Sine Lead", 0.4f) } },
+        { catLeads, "Harmonica Lead", { S ("winds.harmonica.chromatic") } },
+        { catLeads, "Whistle Lead", { Y (catLeads, "Whistle") } },
+        { catPads, "Warm Analog Pad", { Y (catPads, "Warm Pad") } },
+        { catPads, "Glass Harp Pad", { S ("fx.glass"), Y (catPads, "Air", 0.5f) } },
+        { catPads, "Choir Air Pad", { Y (catPads, "Choir Pad"), S ("voice.choir.classic", 0.4f) } },
+        { catPads, "Deep Drone", { Y (catPads, "Drone"), M ("Sub Sine", 0.3f, -1) } },
+        { catSynth, "Supersaw Stack", { Y (catSynth, "Supersaw") } },
+        { catSynth, "FM Keys Poly", { Y (catSynth, "FM Keys"), S ("keys.fm.epiano", 0.5f) } },
+        { catSynth, "Retro Poly", { Y (catSynth, "Retro Poly") } },
+        { catWorld, "Kalimba", { S ("world.kalimba") } },
+        { catWorld, "Mbira", { S ("world.mbira") } },
+        { catWorld, "Balafon", { S ("world.balafon") } },
+        { catWorld, "Dan Tranh", { S ("world.dantranh") } },
+        { catWorld, "Didgeridoo", { S ("world.didgeridoo") } },
+        { catWorld, "Slit Drum", { S ("world.slitdrum") } },
+        { catFxAtmos, "Glass Harp", { S ("fx.glass") } },
+        { catFxAtmos, "Riser", { Y (catFxAtmos, "Riser") } },
+        { catFxAtmos, "Ghost Voices", { S ("voice.fx.textures"), Y (catFxAtmos, "Texture", 0.5f) } },
+    };
+    std::vector<VaultPreset> out;
+    int n = 0;
+    for (const auto& [cat, name, layers] : recipes)
+    {
+        VaultPreset p;
+        p.id = "cv.uidemo." + juce::String (n++).paddedLeft ('0', 3);
+        p.name = name;
+        p.category = cat;
+        for (const auto& l : layers)
+        {
+            VaultPart part;
+            if (l.kind == 'y')
+            {
+                const auto& pool = byCat[l.cat].empty() ? byCat[catPads] : byCat[l.cat];
+                part = fb[(size_t) pool[(size_t) (n % (int) pool.size())]].parts.front();
+            }
+            else
+            {
+                part.kind = l.kind == 's' ? VaultPartKind::sample : VaultPartKind::model;
+                part.source = l.src;
+            }
+            part.label = l.label;
+            part.level = l.level;
+            part.octave = l.oct;
+            p.parts.push_back (part);
+        }
+        out.push_back (std::move (p));
+    }
+    return out;
+}
+
+// the v2 editor in a child process with the v2 demo bank (CHROME_VAULT_BANK) and the library chosen by the parent
+// (CHROME_VAULT_LIBRARY: a missing folder, or the real library): instrument names in the list / layer rows, the calm
+// "library not found" card while synth sounds keep playing, the loading state, the UI never waiting for samples
+int uiV2Tests()
+{
+    uiSetup ("uitestv2");
+    VaultEditor::simulatedDisplay() = { 0, 0, 1920, 1040 };
+    VaultProcessor p;
+    const auto& bank = p.bank();
+    const bool lib = p.libraryFound();
+    std::printf ("   (bank: %s, library: %s)\n", p.bankDescription().toRawUTF8(), lib ? p.libraryPath().getFullPathName().toRawUTF8() : "not found");
+    auto find = [&] (const char* name) { for (int i = 0; i < (int) bank.size(); ++i) if (bank[(size_t) i].name == name) return i; return -1; };
+    const int grandStrings = find ("Grand & Strings"), synthOnly = find ("Saw Lead"), celesta = find ("Celesta"), mallets = find ("Mallet Stack");
+    check (p.bankSource() == VaultProcessor::BankSource::file && grandStrings >= 0 && synthOnly >= 0 && celesta >= 0 && mallets >= 0,
+           "ui v2: the v2 demo bank is loaded (" + juce::String ((int) bank.size()) + " presets)");
+    if (grandStrings < 0 || synthOnly < 0 || celesta < 0 || mallets < 0) return fails;
+
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    // ---- the list shows the main instrument(s); the layer rows each part's instrument / model
+    {
+        const auto& inst = v.browser().instruments (grandStrings);
+        const auto expectStrings = lib ? juce::String ("Violin Section") : juce::String ("Ensemble Violins");
+        const auto line = vui::PresetList::infoText (inst, 400.0f);
+        check (inst.size() == 2 && inst[0] == "Concert Grand" && inst[1] == expectStrings && line == "Concert Grand" + vui::midDot() + expectStrings,
+               "ui v2: list info line = the instruments (\"" + line + "\")");
+        const auto& mi = v.browser().instruments (mallets);
+        check (mi.size() == 3 && mi[2] == "Sine", "ui v2: a model layer is named by its model (" + mi.joinIntoString (", ") + ")");
+        check (v.browser().instruments (synthOnly).joinIntoString (",") == "Saw Lead", "ui v2: a synth layer is named by its label");
+        const auto narrow = vui::PresetList::infoText (inst, vui::textWidth (vui::PresetList::tagFont(), "Concert Grand") + 4.0f);
+        check (narrow == "Concert Grand", "ui v2: instruments that do not fit are left out whole (never cut with \"...\")");
+        v.setQuery (lib ? "violin section" : "ensemble violins");
+        bool hit = false;
+        for (int i : v.browser().visible()) hit |= i == grandStrings;
+        check (hit, "ui v2: search finds a preset by its instrument name");
+        v.setQuery ({});
+    }
+    // ---- the library is not installed: a calm card, synth presets still play
+    if (! lib)
+    {
+        v.loadPreset (grandStrings, false);
+        v.syncFromProcessor();
+        const auto& info = v.infoPanel();
+        check (info.notice() == VaultInfoPanel::Notice::libraryMissing && info.noticeTitle().startsWith ("Sound library not found")
+                   && info.noticeTitle().contains ("run the CHROME VAULT installer") && v.statusHint().startsWith ("Sound library not found"),
+               "ui v2: library missing -> \"" + info.noticeTitle() + "\" + " + p.libraryPath().getFullPathName());
+        check (info.partState (bank[(size_t) grandStrings].parts[0]) == VaultInfoPanel::PartState::missing,
+               "ui v2: its sampled layers are marked not installed");
+        juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
+        v.loadPreset (synthOnly, false);
+        v.syncFromProcessor();
+        check (info.notice() == VaultInfoPanel::Notice::none && ! v.statusHint().contains ("library"), "ui v2: a synth sound shows no library notice");
+        constexpr double sr = 48000.0;
+        constexpr int block = 512;
+        p.setPlayConfigDetails (0, 2, sr, block);
+        p.prepareToPlay (sr, block);
+        juce::AudioBuffer<float> buf (2, block);
+        float rms = 0;
+        for (int k = 0; k < 40; ++k)
+        {
+            juce::MidiBuffer m;
+            if (k == 0) m.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, 0.8f), 0);
+            p.processBlock (buf, m);
+            if (k > 4) rms = std::max (rms, buf.getRMSLevel (0, 0, block));
+        }
+        p.releaseResources();
+        check (rms > 1e-3f, "ui v2: synth presets play without the library (rms " + juce::String (rms, 4) + ")");
+    }
+    // ---- the library is installed: picking a sampled sound never waits; "Loading..." until its samples are in; an
+    //      instrument the installed library lacks gets the "newer sound library" card
+    else
+    {
+        // the biggest instrument of the bank that is not in RAM yet
+        int pick = -1;
+        int64_t biggest = -1;
+        for (int i = 0; i < (int) bank.size(); ++i)
+        {
+            const auto& pr = bank[(size_t) i];
+            if (pr.parts.size() != 1 || pr.parts[0].kind != VaultPartKind::sample) continue;
+            auto* h = p.sampleLibrary()->find (pr.parts[0].source);
+            if (h == nullptr || h->isLoaded()) continue;
+            int64_t frames = 0;
+            for (auto& a : h->desc.articulations) for (auto& z : a.zones) frames += z.frames;
+            if (frames > biggest) { biggest = frames; pick = i; }
+        }
+        if (pick >= 0)
+        {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            v.loadPreset (pick, true);
+            v.syncFromProcessor();
+            const double ms = msSince (t0);
+            const auto st = v.infoPanel().notice();
+            juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
+            check (ms < 20.0 && st == VaultInfoPanel::Notice::loading && v.statusHint().startsWith ("Loading samples"),
+                   "ui v2: picking \"" + bank[(size_t) pick].name + "\" takes " + juce::String (ms, 2) + " ms on the UI thread and shows Loading");
+            const auto until = juce::Time::getMillisecondCounter() + 30000;
+            while (p.isLoading() && juce::Time::getMillisecondCounter() < until) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            v.syncFromProcessor();
+            check (v.infoPanel().notice() == VaultInfoPanel::Notice::none
+                       && v.infoPanel().partState (bank[(size_t) pick].parts[0]) == VaultInfoPanel::PartState::ready,
+                   "ui v2: the loading state ends when the samples are in");
+        }
+        else check (true, "ui v2: (every demo instrument already in RAM - loading state not tested)");
+        v.loadPreset (celesta, false);
+        v.syncFromProcessor();
+        check (v.infoPanel().notice() == VaultInfoPanel::Notice::instrumentMissing && v.infoPanel().noticeTitle().contains ("newer sound library"),
+               "ui v2: an instrument the installed library lacks -> \"" + v.infoPanel().noticeTitle() + "\"");
+    }
+    // ---- readability of the v2 states at 80 / 100 %
+    for (float sc : { 0.8f, 1.0f })
+    {
+        ed.setUiScale (sc);
+        vui::smallestFontPx() = 1000.0f;
+        juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
+        check (vui::smallestFontPx() >= vui::minTextPx, "ui v2: smallest text " + juce::String (vui::smallestFontPx() * sc, 1) + " px at "
+                                                        + juce::String (juce::roundToInt (sc * 100)) + " %");
+    }
+    return fails;
+}
+
+// runs uiV2Tests in a child process (the bank / library are chosen per process): once without a library, once with the
+// real one when it is installed (or named by CHROME_VAULT_LIBRARY)
+void runUiV2Children()
+{
+    const auto tmp = uiSetup ("uitest-parent");
+    const auto bankFile = tmp.getChildFile ("uidemo_v2.cvb");
+    vault::saveBankFile (bankFile, uiDemoV2Bank());
+    const auto setEnv = [] (const char* k, const juce::String& val)
+    {
+       #if JUCE_WINDOWS
+        _putenv_s (k, val.toRawUTF8());
+       #else
+        if (val.isEmpty()) unsetenv (k); else setenv (k, val.toRawUTF8(), 1);
+       #endif
+    };
+    const auto oldBank = juce::SystemStats::getEnvironmentVariable ("CHROME_VAULT_BANK", {});
+    const auto oldLib = juce::SystemStats::getEnvironmentVariable ("CHROME_VAULT_LIBRARY", {});
+    juce::File realLib;
+    for (auto& f : vault::SampleLibrary::searchLocations()) if (f.getChildFile ("library.json").existsAsFile()) { realLib = f; break; }
+    setEnv ("CHROME_VAULT_BANK", bankFile.getFullPathName());
+    for (int run = 0; run < 2; ++run)
+    {
+        if (run == 1 && realLib == juce::File()) { std::printf ("   (no sound library installed: the loading checks are skipped)\n"); break; }
+        setEnv ("CHROME_VAULT_LIBRARY", run == 0 ? tmp.getChildFile ("no-library-here").getFullPathName() : realLib.getFullPathName());
+        juce::ChildProcess c;
+        const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName();
+        const bool started = c.start (juce::StringArray { exe, "-uitestv2" });
+        const auto out = started ? c.readAllProcessOutput() : juce::String();
+        c.waitForProcessToFinish (60000);
+        const int code = started ? (int) c.getExitCode() : -1;
+        std::printf ("%s", out.toRawUTF8());
+        check (started && code == 0, juce::String ("ui v2: child run ") + (run == 0 ? "without a library" : "with the library") + " (exit " + juce::String (code) + ")");
+    }
+    setEnv ("CHROME_VAULT_BANK", oldBank);
+    setEnv ("CHROME_VAULT_LIBRARY", oldLib);
 }
 
 // editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
@@ -1061,6 +1353,7 @@ int uiTests()
     VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
     VaultSettings::get()->setScale (1.0f);
     uiQaTests (p);
+    runUiV2Children();
     return fails;
 }
 
@@ -1540,7 +1833,20 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
         if (bank[(size_t) i].parts.size() == 3 && bank[(size_t) i].category == vault::catBellsMallets) pick = i;
     for (int i = 0; i < (int) bank.size() && pick < 0; ++i) if (bank[(size_t) i].parts.size() == 3) pick = i;
     if (pick < 0) pick = 0;
-    for (int i = 0; i < 6; ++i) v.loadPreset ((pick + 7 * i + 3) % (int) bank.size(), false);   // some history for RECENT
+    bool wait = true;   // "nowait": paint at once (a sampled sound is still loading)
+    for (auto t : juce::StringArray::fromTokens (stateArg, ",", ""))
+    {
+        if (t.trim() == "nowait") wait = false;
+        if (t.trim().startsWith ("pick:"))   // "pick:<preset name>"
+            for (int i = 0; i < (int) bank.size(); ++i)
+                if (bank[(size_t) i].name.equalsIgnoreCase (t.fromFirstOccurrenceOf (":", false, false).trim())) { pick = i; break; }
+    }
+    for (int i = 0; i < 6; ++i)   // some history for RECENT (synth-only sounds: a "nowait" shot must still catch its own loading)
+    {
+        int k = (pick + 7 * i + 3) % (int) bank.size();
+        for (int tries = 0; tries < (int) bank.size() && bank[(size_t) k].usesSamples(); ++tries) k = (k + 1) % (int) bank.size();
+        v.loadPreset (k, false);
+    }
     v.loadPreset (pick, false);
     const auto& pr = bank[(size_t) pick];
 
@@ -1565,7 +1871,13 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
         }
     }
     v.loadPreset (pick, false);
-    v.thumbnails().waitFor (pick, 10000);
+    if (wait)
+    {
+        v.thumbnails().waitFor (pick, 10000);
+        const auto until = juce::Time::getMillisecondCounter() + 30000;
+        while (p.isLoading() && juce::Time::getMillisecondCounter() < until) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    }
+    v.syncFromProcessor();
     if (macrosAfterLoad)
     {
         p.setMacro (1, 1.0f); p.setMacro (3, 0.95f); p.setMacro (0, 0.2f);
@@ -1625,6 +1937,20 @@ int main (int argc, char** argv)
         const int f = uiTests();
         std::printf ("vault ui failures: %d\n", f);
         return f;
+    }
+    if (mode == "-uitestv2")   // child of -uitest (CHROME_VAULT_BANK / CHROME_VAULT_LIBRARY set by the parent)
+    {
+        const int f = uiV2Tests();
+        std::printf ("vault ui v2 failures: %d\n", f);
+        return f;
+    }
+    if (mode == "-writeuidemo" && argc > 2)   // -writeuidemo <out.cvb>: the v2 UI demo bank (for -shot with CHROME_VAULT_BANK)
+    {
+        const auto f = juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]);
+        const auto b = uiDemoV2Bank();
+        const bool ok = vault::saveBankFile (f, b);
+        std::printf ("%d v2 UI demo presets -> %s %s\n", (int) b.size(), argv[2], ok ? "ok" : "FAILED");
+        return ok ? 0 : 1;
     }
     if (mode == "-shot" && argc > 2)
         return shot (argv[2], argc > 3 ? juce::String (argv[3]) : juce::String());

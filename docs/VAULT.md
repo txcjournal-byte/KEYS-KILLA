@@ -41,7 +41,7 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - 4 parts of any kind -> master FX -> macros -> mono lows -> trim -> volume -> limiter; offline `render()` |
 | `Source/vault/VaultProcessor.h/.cpp` | `VaultProcessor` - the `juce::AudioProcessor` (parameters, bank loading, library pins, state) |
 | `Source/vault/VaultEditor.h/.cpp` | the editor (browser UI); `VaultMainView` / `VaultInfoPanel` are implemented here too |
-| `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h`, `VaultBrowserModel.h` (search / filters / favorites / recent), `VaultSettings.h`, `VaultThumbs.h` (thumbnails at C5), `VaultWidgets.h` (pills, categories, LAYERS chips, preset list, keyboard, DRAG WAV), `VaultMainView.h` |
+| `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h`, `VaultBrowserModel.h` (search / filters / favorites / recent, instrument names), `VaultSettings.h`, `VaultThumbs.h` (thumbnails at C5), `VaultWidgets.h` (pills, categories, LAYERS chips, preset list, keyboard, kind icons, spinner, DRAG WAV), `VaultMainView.h` |
 | `tools/vault/LibBuild.cpp` | console target `VaultLibBuild`: builds the sample library from the CC0 sources |
 | `tools/vault/library_map.json` | the builder's map: instruments -> source folders, file-name patterns, articulations, options |
 | `tools/vault/BankGen.cpp` | console target `VaultBankGen`: the v1 synth-bank generator (legacy; ported to compile with v2 types) |
@@ -383,10 +383,29 @@ The bank keeps the shared library alive (`Bank::library`), presets are compiled 
 
 ## Editor UI (`VaultEditor`) - v2 changes
 
-* Categories: the 16 v2 categories. Filters: LAYERS (All 1 2 3 4) + Clear filters (STYLE / CHARACTER rows removed).
-  List info column: the category (All Sounds / search) or, inside a category, the first layer's name. Search matches
-  name, category, layer labels, "sampled" / "modelled", instrument ids and articulations.
-* Info panel pills: Sampled / Modelled / Synth, "Loading..." / "Samples missing" for the current sound, "Plays at C5".
+* Categories: the 16 v2 categories with the real counts. Filters: LAYERS (All 1 2 3 4) + Clear filters (STYLE / CHARACTER
+  rows and tag pills removed everywhere).
+* **Instrument names** (`VaultBrowserModel::instrumentName (part, library)`): a sample layer is named by its library
+  instrument ("Concert Grand", `InstrumentDesc::name`); without the library from its id (`nameFromId`:
+  "strings.violins.ensemble" -> "Ensemble Violins"); a model layer by its `ModelInfo::name`; a synth layer by its label.
+  `mainInstruments (preset)`: layer A first, then the others by level, no duplicates.
+* List info column: the main instrument(s) of the preset ("Concert Grand · Violin Section"), as many as fit the column -
+  further ones are left out whole, never cut with "..." (`PresetList::infoText`). Search matches name, category,
+  instrument names, layer labels, "sampled" / "modelled", instrument ids and articulations.
+* Layer rows (info panel): letter, a small kind icon (sample = waveform bars, model = sine, synth = saw), the instrument /
+  model / synth-layer name, the layer's label in the dim colour when it says more ("Felt"), transpose, level. A sample
+  layer of the shown sound that is still loading gets a turning spinner instead of the icon; one that is not installed
+  says "not installed".
+* Info panel pills: Sampled / Modelled / Synth, "Loading…" (with a spinner) while the current sound's samples load,
+  "Plays at C5". Loading never blocks the UI: picking a sound only pins its instruments (the library decodes them on its
+  thread), the sound's sampled layers start once they are in (`VaultInfoPanel::notice()`, `partState()`). The waveform
+  thumbnail of a sampled sound is drawn once its instruments are in RAM (the thumbnail thread never decodes samples), DRAG
+  WAV waits until loading is done ("Samples are still loading…").
+* **Library missing**: when the shown sound needs samples and no library is installed, a calm card replaces the pills and
+  the waveform: "Sound library not found — run the CHROME VAULT installer", "Its synth layers still play." / "Synth sounds
+  keep playing.", and the folder looked in (`libraryPath()`, the first search location). Synth-only sounds show nothing
+  and play normally. An installed library that lacks an instrument: "This sound needs a newer sound library — run the
+  latest CHROME VAULT installer".
 * Preview on click, DRAG WAV (file "<name> C5.wav") and thumbnails: MIDI 60 for every category.
 * Keyboard: `setOctaveForMiddleC (5)`, labels C3 C4 **C5** (bold, blue, dot) C6.
 * **Keyboard focus**: the editor never uses a key. Nothing takes the keyboard on click except the search box
@@ -396,8 +415,9 @@ The bank keeps the shared library alive (`Bank::library`), presets are compiled 
   and shortcuts always work. The PC-key note playing (A-L, Z / X) and arrow / Page / Home / End key browsing are removed;
   ◀ ▶ and Up / Down while typing in the search box still step. `EDITOR_WANTS_KEYBOARD_FOCUS` stays TRUE (macOS needs it
   for typing into the search box).
-* Status bar: "Click a sound to hear it at C5 · ◀ ▶ next sound · Instant load", or "Loading samples..." / "Sample library
-  not found ..." for the current sound.
+* Status bar: "Click a sound to hear it at C5 · ◀ ▶ next sound · Instant load", or for the current sound "Loading
+  samples… the sound plays as soon as they are in" / "Sound library not found — synth sounds play, sampled layers are
+  silent" / "This sound needs a newer sound library — its synth layers play".
 
 ### Layout, sizes, settings (unchanged from v1)
 
@@ -431,12 +451,14 @@ font, and that every bank name and info line fits its list column without "...".
   only for selection, focus and active chips. Fonts: JUCE default sans, bold weights.
 * Check it: `xvfb-run -a VaultTests -uitest` (behaviour) and `xvfb-run -a VaultTests -shot out.png [state]` (PNG of the
   real UI; states: `main` (default), `scale:70`, `search:dark bell`, `cat:<n>`, `layers:<n>`,
-  `favs`, `recent`, `empty`, `keys`, comma-separated). Without a real bank both use a generated 5,000-preset demo bank.
+  `favs`, `recent`, `empty`, `keys`, `pick:<preset name>`, `nowait` (paint at once, while samples load), comma-separated).
+  Without a real bank both use a generated 5,000-preset demo bank. v2 look: `VaultTests -writeuidemo /tmp/uidemo.cvb`
+  writes 82 v2 presets (sampled / model / synth layers on the library instruments, one instrument deliberately missing:
+  "Celesta"), then e.g. `CHROME_VAULT_BANK=/tmp/uidemo.cvb CHROME_VAULT_LIBRARY=/home/user/cv-library xvfb-run -a VaultTests
+  -shot out.png "main,pick:Full Orchestra,nowait"` (loading) or with `CHROME_VAULT_LIBRARY=/nonexistent` (library missing).
 
 State (`getStateInformation`): XML `CHROMEVAULT` with `presetId` (restored by id first, so bank re-ordering is safe),
 `presetIndex`, `macro1..4`, `volume`.
-
-State (`getStateInformation`): XML `CHROMEVAULT` with `presetId` (restored by id first), `presetIndex`, `macro1..4`, `volume`.
 
 ## Build and test
 
@@ -463,7 +485,13 @@ CVB v2 round trip with all kinds, unknown sample keys refused, v1 file read (tag
 removed), the embedded v1 bank read; with a library: every instrument / articulation at C5 clean, in tune within 5 cents,
 loops click-free (jump at each wrap < 1.3x the music around it, crossfade dip > -3 dB). UI: no component but the search
 box takes the keyboard (all components incl. list rows), Return / Escape hand it back, no key is used by the editor,
-keyboard labelled C5 at MIDI 60, DRAG WAV "<name> C5.wav", plus the v1 UI checks (speed, sizes, readability, state).
+keyboard labelled C5 at MIDI 60, DRAG WAV "<name> C5.wav", every list line = whole instrument names that fit, plus the
+v1 UI checks (speed, sizes, readability, state). `-uitest` then runs `VaultTests -uitestv2` as a child process with the v2
+UI demo bank, once with a missing library folder (the "Sound library not found" card + path, sampled layers "not
+installed", synth presets audible, model / synth / sample layer names, search by instrument) and once with the real
+library when one is installed or named by `CHROME_VAULT_LIBRARY` (picking the biggest unloaded instrument costs < 20 ms on
+the UI thread and shows Loading, the state ends when the samples are in, an instrument the library lacks gets the "newer
+sound library" card); both at 80 / 100 % with the 14 px minimum text.
 
 ## The v1 factory bank (legacy: `resources/vault/factory.cvb`, generator `VaultBankGen`)
 
