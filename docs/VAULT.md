@@ -26,8 +26,10 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
   fixes in the editor, tests.
 * Not done here (parallel / later work): the v2 factory bank (the embedded `resources/vault/factory.cvb` is still the v1
   synth bank, read through the v1 path: categories mapped, tags dropped, "808" replaced by "Sub" in names / labels), the
-  full instrument map (all VSCO / VCSL instruments in `tools/vault/library_map.json`), the physical models themselves,
-  installer packaging of the library.
+  full instrument map (all VSCO / VCSL instruments in `tools/vault/library_map.json`), the physical models themselves.
+* Library packaging + CI: the library lives on the orphan branch `vault-library` (`Library/library.json` +
+  `Library/audio/**`, made with `tools/vault/package_library.py branch`); CI tests with it and packs it into the
+  installers + `CHROME-VAULT-Library.zip` (details: `docs/CHROME_VAULT_INSTALL.md`, "For developers").
 
 ## Files
 
@@ -44,6 +46,7 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h`, `VaultBrowserModel.h` (search / filters / favorites / recent), `VaultSettings.h`, `VaultThumbs.h` (thumbnails at C5), `VaultWidgets.h` (pills, categories, LAYERS chips, preset list, keyboard, DRAG WAV), `VaultMainView.h` |
 | `tools/vault/LibBuild.cpp` | console target `VaultLibBuild`: builds the sample library from the CC0 sources |
 | `tools/vault/library_map.json` | the builder's map: instruments -> source folders, file-name patterns, articulations, options |
+| `tools/vault/package_library.py` | library packaging: `check` (files exist, each < 50 MB), `size`, `zip` (release zip / parts), `branch` (builds the orphan `vault-library` branch) |
 | `tools/vault/BankGen.cpp` | console target `VaultBankGen`: the v1 synth-bank generator (legacy; ported to compile with v2 types) |
 | `tools/vault/BankQC.h`, `BankAudit.h` | v1 quality gate / audit (shared with VaultTests) |
 | `tests/VaultTests.cpp` | console target `VaultTests` |

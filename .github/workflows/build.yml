@@ -26,7 +26,9 @@ jobs:
           restore-keys: win-quick-${{ hashFiles('CMakeLists.txt') }}-
 
       - name: Configure
-        run: cmake -B build -A x64 -DKK_BUILD_TESTS=OFF
+        # KK_BUILD_TESTS=ON only defines the test targets; only the targets named in the build steps are compiled
+        # (CHROME VAULT below builds VaultTests to test the sample library)
+        run: cmake -B build -A x64 -DKK_BUILD_TESTS=ON
 
       - name: Build plugin
         run: cmake --build build --config Release --parallel --target KeysKilla_VST3 KeysKilla_Standalone EvolveFX_VST3
@@ -57,31 +59,116 @@ jobs:
       # Built after EVOLVE is published, so a CHROME VAULT problem never holds back the EVOLVE test build.
       # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Setup-Windows.exe
       # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-VST3-Windows.zip
+      # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Library.zip
+      #   (or CHROME-VAULT-Library-part1-of-N.zip ... when the library is larger than 1.9 GB)
+      # The sample library lives on the orphan branch "vault-library" (Library/library.json + Library/audio/**.ogg,
+      # tools/vault/package_library.py). Without that branch everything below still runs: tests skip the real-library
+      # checks and the installer is plugin-only.
+      - name: CHROME VAULT library (look for the vault-library branch)
+        id: cv_lib
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --heads origin vault-library > /dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=CHROME VAULT::no vault-library branch yet - tests run without the sample library, the installer is plugin-only"
+          fi
+
+      - name: CHROME VAULT library checkout
+        if: steps.cv_lib.outputs.found == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: vault-library
+          path: vault-library
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: CHROME VAULT library tools (Python)
+        if: steps.cv_lib.outputs.found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: CHROME VAULT library check
+        if: steps.cv_lib.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $lib = & python tools\vault\package_library.py find vault-library
+          if ($LASTEXITCODE -ne 0 -or -not $lib) { Write-Host "::error::the vault-library branch holds no library.json"; exit 1 }
+          & python tools\vault\package_library.py check $lib
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # absolute path: VaultTests (CHROME_VAULT_LIBRARY) + the installer (CV_LIBRARY_DIR -> /DLibraryDir)
+          "CHROME_VAULT_LIBRARY=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CV_LIBRARY_DIR=$lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build CHROME VAULT
-        run: cmake --build build --config Release --parallel --target ChromeVault_VST3 ChromeVault_Standalone
+        run: cmake --build build --config Release --parallel --target ChromeVault_VST3 ChromeVault_Standalone VaultTests
+
+      - name: CHROME VAULT tests (with the sample library when present)
+        shell: pwsh
+        run: |
+          Write-Host ("CHROME_VAULT_LIBRARY = '{0}'" -f $env:CHROME_VAULT_LIBRARY)
+          & build\VaultTests_artefacts\Release\VaultTests.exe
+          $code = $LASTEXITCODE
+          Write-Host ("VaultTests exit code: {0} (0x{1:X8})" -f $code, $code)
+          exit $code
 
       - name: CHROME VAULT installer
         shell: pwsh
         run: |
           if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
           $version = (Select-String -Path CMakeLists.txt -Pattern 'set\(CV_VERSION "([0-9.]+)"\)').Matches[0].Groups[1].Value
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\win\chromevault.iss
+          $limit = 2000000000   # one GitHub release asset must stay below 2 GiB; keep a margin
+          Remove-Item -Recurse -Force build\installer-vault -ErrorAction SilentlyContinue
+          $iscc = @("/DAppVersion=$version")
+          if ($env:CV_LIBRARY_DIR) {
+            # OggVorbis hardly compresses: a library close to the limit cannot fit, fail before a long compression
+            $libBytes = [int64](& python tools\vault\package_library.py size $env:CV_LIBRARY_DIR)
+            Write-Host ("sample library: {0:N0} bytes" -f $libBytes)
+            if ($libBytes -ge $limit) { Write-Host "::error::the sample library ($libBytes bytes) does not fit a < 2 GB installer"; exit 1 }
+            $iscc += "/DLibraryDir=$env:CV_LIBRARY_DIR"
+          }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" @iscc installer\win\chromevault.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          $exe = Get-ChildItem build\installer-vault\CHROME-VAULT-*.exe | Select-Object -First 1
+          Write-Host ("installer: {0} ({1:N0} bytes)" -f $exe.Name, $exe.Length)
+          if ($exe.Length -ge $limit) { Write-Host "::error::the installer is $($exe.Length) bytes - it must stay below 2 GB (GitHub release asset)"; exit 1 }
 
       - name: Publish CHROME VAULT test build (fixed link)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          New-Item -ItemType Directory -Force out, out\cv-stage | Out-Null
-          Copy-Item (Get-ChildItem build\installer-vault\CHROME-VAULT-*.exe | Select-Object -First 1).FullName out\CHROME-VAULT-Setup-Windows.exe
+          New-Item -ItemType Directory -Force out, out\cv-stage, out\cv-lib | Out-Null
+          # moved, not copied: build\ is cached and must not carry a 2 GB installer
+          Move-Item (Get-ChildItem build\installer-vault\CHROME-VAULT-*.exe | Select-Object -First 1).FullName out\CHROME-VAULT-Setup-Windows.exe -Force
           # zip root = "CHROME VAULT.vst3" (debug symbols / linker files left out)
           Copy-Item -LiteralPath "build\ChromeVault_artefacts\Release\VST3\CHROME VAULT.vst3" -Destination out\cv-stage -Recurse -Force
           Get-ChildItem out\cv-stage -Recurse -File -Include *.pdb,*.ilk,*.exp,*.lib | Remove-Item -Force
           Compress-Archive -LiteralPath "out\cv-stage\CHROME VAULT.vst3" -DestinationPath out\CHROME-VAULT-VST3-Windows.zip -Force
+          # the library for manual installs: CHROME-VAULT-Library.zip, or self-contained parts when larger than 1.9 GB
+          $libZips = @()
+          if ($env:CV_LIBRARY_DIR) {
+            $libZips = @(& python tools\vault\package_library.py zip $env:CV_LIBRARY_DIR out\cv-lib --name CHROME-VAULT-Library --max-part-bytes 1900000000)
+            if ($LASTEXITCODE -ne 0 -or $libZips.Count -eq 0) { exit 1 }
+          }
           gh release view test *> $null
           if ($LASTEXITCODE -ne 0) { gh release create test --prerelease --title "EVOLVE - latest test build" --notes "Latest test build" --target ${{ github.sha }} }
           gh release upload test out\CHROME-VAULT-Setup-Windows.exe out\CHROME-VAULT-VST3-Windows.zip --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($libZips.Count -gt 0) {
+            gh release upload test ($libZips | ForEach-Object { "out\cv-lib\$_" }) --clobber
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            # drop library zips of an earlier layout (one zip <-> parts) so the release never mixes them
+            $old = @(gh release view test --json assets --jq '.assets[].name') | Where-Object { $_ -like 'CHROME-VAULT-Library*' -and $libZips -notcontains $_ }
+            foreach ($name in $old) { gh release delete-asset test $name --yes }
+          }
+
+      - name: CHROME VAULT cleanup (keep the build cache small)
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Recurse -Force build\installer-vault, out\cv-lib, out\CHROME-VAULT-Setup-Windows.exe -ErrorAction SilentlyContinue
       # --- end CHROME VAULT ---------------------------------------------------------------------------------------
 
   windows:
@@ -285,10 +372,43 @@ jobs:
       # These steps run even when an EVOLVE step failed, so both products always report their own result.
       # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Mac.zip
       # https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/test/CHROME-VAULT-Setup-Mac.pkg
+      # The sample library comes from the orphan branch "vault-library" (see windows-quick). Without that branch the
+      # tests skip the real-library checks and the pkg is plugin-only. The library zip is published by windows-quick.
+      - name: CHROME VAULT library (look for the vault-library branch)
+        id: cv_lib
+        if: ${{ !cancelled() }}
+        run: |
+          if git ls-remote --exit-code --heads origin vault-library > /dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=CHROME VAULT::no vault-library branch yet - tests run without the sample library, the pkg is plugin-only"
+          fi
+
+      - name: CHROME VAULT library checkout
+        if: ${{ !cancelled() && steps.cv_lib.outputs.found == 'true' }}
+        uses: actions/checkout@v5
+        with:
+          ref: vault-library
+          path: vault-library
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: CHROME VAULT library check
+        id: cv_libcheck
+        if: ${{ !cancelled() && steps.cv_lib.outputs.found == 'true' }}
+        run: |
+          LIB=$(python3 tools/vault/package_library.py find vault-library) || { echo "::error::the vault-library branch holds no library.json"; exit 1; }
+          python3 tools/vault/package_library.py check "$LIB"
+          # absolute path: VaultTests (CHROME_VAULT_LIBRARY) + build_vault_pkg.sh (CV_LIBRARY_DIR)
+          echo "CHROME_VAULT_LIBRARY=$LIB" >> "$GITHUB_ENV"
+          echo "CV_LIBRARY_DIR=$LIB" >> "$GITHUB_ENV"
+
       - name: CHROME VAULT tests
         id: cv_tests
         if: ${{ !cancelled() }}
         run: |
+          echo "CHROME_VAULT_LIBRARY = '${CHROME_VAULT_LIBRARY:-}'"
           ./build/VaultTests_artefacts/Release/VaultTests
           lipo -info "build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3/Contents/MacOS/CHROME VAULT"
           lipo -info "build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component/Contents/MacOS/CHROME VAULT"
@@ -362,9 +482,10 @@ jobs:
         with:
           name: CHROME-VAULT-macOS-Installer
           path: build/installer-vault/*.pkg
+          retention-days: 7   # up to ~2 GB with the sample library; the test release keeps the latest one anyway
 
       - name: Publish CHROME VAULT test build (fixed link)
-        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.cv_tests.outcome == 'success' && steps.cv_auval.outcome == 'success' && steps.cv_pluginval.outcome == 'success' && steps.cv_zip.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.cv_tests.outcome == 'success' && steps.cv_auval.outcome == 'success' && steps.cv_pluginval.outcome == 'success' && steps.cv_zip.outcome == 'success' && steps.cv_libcheck.outcome != 'failure' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
