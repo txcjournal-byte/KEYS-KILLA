@@ -44,6 +44,7 @@ struct Opts
     bool spectrumPitch = false; // "pitchMethod": "spectrum" - fine tune from the fundamental's spectral peak (mallets, tines)
     double pitchSpan = 0;      // s: length of the pitch analysis (0 = auto: 0.35 s one-shots, the whole sustain of loops)
     bool pitchFromSet = false; // an explicit "pitchFrom" also applies to loops (voices: tune the start the ear hears first)
+    bool densePitch = false;   // "pitchMedian": "dense" - YIN frames every half window, median of the clearly periodic ones (voices)
     void read (const juce::var& v)
     {
         if (v.hasProperty ("tune")) { keepTuning = v["tune"].toString() == "keep"; trustNames = v["tune"].toString() == "name"; }
@@ -51,6 +52,7 @@ struct Opts
         if (v.hasProperty ("pitchMethod")) spectrumPitch = v["pitchMethod"].toString() == "spectrum";
         if (v.hasProperty ("pitchFrom")) { pitchFrom = (double) v["pitchFrom"]; pitchFromSet = true; }
         if (v.hasProperty ("pitchSpan")) pitchSpan = (double) v["pitchSpan"];
+        if (v.hasProperty ("pitchMedian")) densePitch = v["pitchMedian"].toString() == "dense";
         auto num = [&] (const char* k, double& d) { if (v.hasProperty (k)) d = (double) v[k]; };
         if (v.hasProperty ("quality")) quality = (int) v["quality"];
         if (v.hasProperty ("extendKeys")) extendKeys = (int) v["extendKeys"];
@@ -195,7 +197,9 @@ float yinFrame (const float* x, int w, double sr, double fmin, double fmax, floa
 }
 
 // median f0 over several frames of the mid signal starting at `from`
-float detectF0 (const juce::AudioBuffer<float>& b, int from, int len, double fExpected, float& aperOut)
+// dense = frames every half window, median of the clearly periodic ones ("pitchMedian": "dense", voices); otherwise the
+// median of 7 evenly spread frames (instruments - vibrato strings tune best on the plain 7-frame median)
+float detectF0 (const juce::AudioBuffer<float>& b, int from, int len, double fExpected, float& aperOut, bool dense = false)
 {
     std::vector<float> mono ((size_t) b.getNumSamples());
     for (int i = 0; i < b.getNumSamples(); ++i)
@@ -207,7 +211,7 @@ float detectF0 (const juce::AudioBuffer<float>& b, int from, int len, double fEx
     const int w = juce::jlimit (1024, 8192, (int) (3.2 * outRate / fmin));
     std::vector<float> f0s, aps;
     // frames every half window over the span (at least 7, at most 64): a sung note drifts, a few frames can miss its centre
-    const int frames = juce::jlimit (7, 64, len / std::max (1, w / 2));
+    const int frames = dense ? juce::jlimit (7, 64, len / std::max (1, w / 2)) : 7;
     for (int k = 0; k < frames; ++k)
     {
         const int s0 = from + (int) ((double) k / (double) frames * std::max (0, len - w));
@@ -220,7 +224,7 @@ float detectF0 (const juce::AudioBuffer<float>& b, int from, int len, double fEx
     // clearly periodic frames only (YIN dip < 0.15) when there are enough: breathy / noisy frames bias the median
     std::vector<float> clear;
     for (size_t i = 0; i < f0s.size(); ++i) if (aps[i] < 0.15f) clear.push_back (f0s[i]);
-    if (clear.size() >= 3 && clear.size() < f0s.size()) f0s = clear;
+    if (dense && clear.size() >= 3 && clear.size() < f0s.size()) f0s = clear;
     std::sort (f0s.begin(), f0s.end()); std::sort (aps.begin(), aps.end());
     aperOut = aps[aps.size() / 2];
     return f0s[f0s.size() / 2];
@@ -538,7 +542,7 @@ void analyseItem (Item& it, const Opts& o)
     else
     {
         float ap = 1;
-        it.f0 = len > 1024 ? detectF0 (it.audio, from, len, fExp, ap) : 0.0f;
+        it.f0 = len > 1024 ? detectF0 (it.audio, from, len, fExp, ap, o.densePitch) : 0.0f;
         it.aperiodicity = ap;
         it.pitchOk = it.f0 > 0 && ap < 0.35f;
         if (! it.pitchOk && ! o.loop && from > (int) (0.1 * outRate))
@@ -546,15 +550,15 @@ void analyseItem (Item& it, const Opts& o)
             // short-lived notes (piano top octave, high plucks) have decayed by pitchFrom: measure right after the attack
             const int f2 = (int) (0.08 * outRate), l2 = std::min (n - f2, (int) (0.4 * outRate));
             float ap2 = 1;
-            const float f = l2 > 1024 ? detectF0 (it.audio, f2, l2, fExp, ap2) : 0.0f;
+            const float f = l2 > 1024 ? detectF0 (it.audio, f2, l2, fExp, ap2, o.densePitch) : 0.0f;
             if (f > 0 && ap2 < 0.35f) { it.f0 = f; it.aperiodicity = ap2; it.pitchOk = true; it.anaFrom = f2; it.anaLen = l2; }
         }
     }
     if (o.loop && ! findLoop (it, o)) it.msg << "NO LOOP FOUND (plays to the end); ";
-    else if (o.loop && ! it.detect && it.pitchOk && it.loopEnd - it.loopStart > 4096)
+    else if (o.loop && ! o.pitchFromSet && ! it.detect && it.pitchOk && it.loopEnd - it.loopStart > 4096)
     {
         // a held note plays the sustain up to the loop end, then the loop: tune to that stretch (what is heard), not to
-        // the tail after the loop end
+        // the tail after the loop end. Not when the map sets "pitchFrom" (voices: the start the ear hears first is tuned)
         const int a0 = std::min ((int) (0.35 * outRate), it.loopStart);
         float ap2 = 1;
         const float fl = detectF0 (it.audio, a0, it.loopEnd - a0, it.f0, ap2);

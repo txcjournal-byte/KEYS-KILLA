@@ -7,6 +7,7 @@
   "report": "build_report_vocals.txt",
   "credits": "Vocals: Fluid (R3) SoundFont (c) 2000-2002, 2008 Frank Wen, MIT; VocalSet (J. Wilkins, P. Seetharaman, A. Wahl, B. Pardo, ISMIR 2018) CC BY 4.0; MTG sms-tools-materials sounds (X. Serra, freesound pack 13038) CC BY 4.0; vocobox human-voice-dataset (c) 2014 vocobox, MIT.",
   "defaults": {
+    "pitchMedian": "dense",
     "quality": 6,
     "preRollMs": 4,
     "silenceDb": -60,

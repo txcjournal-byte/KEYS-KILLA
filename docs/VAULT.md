@@ -312,15 +312,16 @@ tuning, fix only > 30 cents / `"name"`: inharmonic bells - the names are the roo
 semitone, and a key between two semitones goes to the nearest one; YIN is pulled by their inharmonic partials), `pitchFrom`
 (s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp; set explicitly it also applies to
 loops, which otherwise are measured over the whole sustain), `pitchSpan` (s, length of the pitch analysis; 0 = 0.35 s for
-one-shots / the sustain for loops; voices use 0.15 + 0.8 s). Map-level keys: `report` (report file name, default
+one-shots / the sustain for loops; voices use 0.15 + 0.8 s), `pitchMedian` (`"dense"`: YIN frames every half window
+(7-64) and the median of the clearly periodic ones - voices; default: the median of 7 frames). Map-level keys: `report` (report file name, default
 `build_report.txt`) and `credits` (a line such as "Vocals: ..." merged into `library.json`'s `credits`; a later build of
 the same map replaces its line). A second map, `tools/vault/library_map_vocals.json`, adds the vocal instruments (prepared
 by `tools/vault/vocal_prep.py`; see `docs/VAULT_VOCAL_SOURCES.md`).
 
 Per file: read; resample to 44.1 kHz (windowed sinc) if needed; identical channels -> mono; mean + 5 Hz DC removal; trim to
 the first / last sample above `silenceDb` of the peak with a pre-roll before the onset (-40 dB) and a raised-cosine fade-in
-over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of the frames every half window
-(7-64; only the clearly periodic ones when there are at least 3), search 0.45-2.2 x the named pitch) -> the naming
+over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of 7 frames - `pitchMedian`
+"dense": of the frames every half window, the clearly periodic ones -, search 0.45-2.2 x the named pitch) -> the naming
 convention offset per articulation (VSCO / VCSL names are an octave off: corrected and reported; `octave` / `pitch: detect`
 sources skip this), a single file whose YIN pitch disagrees with its name gets a second opinion from a harmonic-sum
 spectrum (+-2.5 semitones, harmonics 1-5): the root moves only when both agree within 2 semitones, otherwise the name stays

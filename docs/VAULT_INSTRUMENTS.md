@@ -7,8 +7,9 @@ Note names follow FL Studio: **MIDI 60 = C5** (the plugin's home note).
 ## Totals
 
 * **64 instruments**, 146 articulations, 5274 zones (incl. release samples) in 10 families
-* **483 MB on disk** (479.4 MB audio, OggVorbis q0.6, 44.1 kHz) - target <= 1800 MB
+* **479 MB on disk** (audio, OggVorbis q0.6, 44.1 kHz) - target <= 1800 MB
 * 4325 MB if every instrument were decoded at once (16-bit RAM; the plugin loads only what presets use, 1.5 GB budget)
+* plus 4 instruments from other maps (voice.female.chops, voice.female.solo, voice.male.low, voice.choir.classic; vocals: `docs/VAULT_VOCAL_SOURCES.md`) - the whole library: 68 instruments, 486 MB on disk, 4342 MB decoded
 * builder corrections: 121 articulations with octave-off file names, 27 roots moved to the measured pitch, 131 YIN doubts overruled by the spectrum (name kept), 18 broken takes dropped, 7 files excluded by the map
 
 ## Instruments

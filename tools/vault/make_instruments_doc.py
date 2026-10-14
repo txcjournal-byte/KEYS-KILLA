@@ -165,8 +165,16 @@ def main():
     o.append('Note names follow FL Studio: **MIDI 60 = C5** (the plugin\'s home note).\n')
     o.append('## Totals\n')
     o.append(f'* **{len(order)} instruments**, {n_art} articulations, {n_zones} zones (incl. release samples) in {len(fams)} families')
-    o.append(f'* **{disk_total / 1048576:.0f} MB on disk** ({mb(Q["diskBytes"])} MB audio, OggVorbis q0.6, 44.1 kHz) - target <= 1800 MB')
-    o.append(f'* {Q["ramBytes"] / 1048576:.0f} MB if every instrument were decoded at once (16-bit RAM; the plugin loads only what presets use, 1.5 GB budget)')
+    # this map's instruments only; instruments from other maps (library_map_vocals.json) get one line of their own
+    disk_map = sum(qi[i]['diskBytes'] for i in order if i in qi)
+    ram_map = sum(qi[i]['ramBytes'] for i in order if i in qi)
+    others = [x for x in L['instruments'] if x['id'] not in mp]
+    o.append(f'* **{disk_map / 1048576:.0f} MB on disk** (audio, OggVorbis q0.6, 44.1 kHz) - target <= 1800 MB')
+    o.append(f'* {ram_map / 1048576:.0f} MB if every instrument were decoded at once (16-bit RAM; the plugin loads only what presets use, 1.5 GB budget)')
+    if others:
+        o.append(f'* plus {len(others)} instruments from other maps ({", ".join(x["id"] for x in others)}; vocals: '
+                 f'`docs/VAULT_VOCAL_SOURCES.md`) - the whole library: {len(L["instruments"])} instruments, '
+                 f'{disk_total / 1048576:.0f} MB on disk, {Q["ramBytes"] / 1048576:.0f} MB decoded')
     o.append(f'* builder corrections: {octaves} articulations with octave-off file names, {corrected} roots moved to the measured pitch, '
              f'{named_ok} YIN doubts overruled by the spectrum (name kept), {dropped} broken takes dropped, {excluded} files excluded by the map\n')
 
