@@ -10,14 +10,16 @@
 //             2-5 kHz <= 10 % of the power, > 6 kHz <= 3 %, octave-up parts >= 12 dB (K-weighted) under part 0,
 //             velocity 0.35 -> 1.0 opens >= 3 dB
 //   loudness  K-weighted loudest 400 ms at C5 set to the category target (BankQC.h) by VaultPreset::gain (quieter only
-//             when the velocity-1.0 peak would reach 0.84)
+//             when the velocity-1.0 peak would reach 0.84 - short / muted plucks - and by at most 10 dB)
 //   distinct  fingerprint = log-mel (24 bands) x 6 time segments at C5 + x 3 at C4 / C6 + 12 cepstral coefficients,
-//             normalised to the render's own maximum; distance = RMS dB. A preset closer than -dist (default 3.0) to an
+//             normalised to the render's own maximum, + the C5 harmonic profile (H1..H12) + amplitude-modulation depth
+//             and stereo width; distance = RMS over these groups (dB). A preset closer than -dist (default 3.5) to an
 //             already accepted one (recipe order) is rejected.
 #include "Recipe.h"
 #include "../BankQC.h"
 #include "../BankAudit.h"
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <array>
 #include <atomic>
 #include <map>
 #include <set>
@@ -125,6 +127,7 @@ struct Result
     float h1Db = 0, share25 = 0, share6k = 0, centroid = 0, tail = 0, velRange = 0, octUpDb = -99, monoLoss = 0, spike = 0;
     std::vector<float> print;
     float minDist = 1.0e9f; juce::String nearest;
+    std::array<float, 12> harm {};
 };
 
 inline void analyse (Result& r)
@@ -178,6 +181,8 @@ inline void analyse (Result& r)
         float strongest = h1;
         for (int k = 2; k <= 24 && k * f0 < 16000.0f; ++k) strongest = std::max (strongest, peakDb (sp, k * f0 * 0.985, k * f0 * 1.015));
         r.h1Db = h1 - strongest;
+        for (int k = 1; k <= 12; ++k)   // harmonic profile (fingerprint): saw vs square, pickup / pluck position, octave courses
+            r.harm[(size_t) (k - 1)] = k * f0 < 16000.0f ? std::max (-50.0f, peakDb (sp, k * f0 * (k == 1 ? 0.97 : 0.985), k * f0 * (k == 1 ? 1.03 : 1.015)) - strongest) : -50.0f;
     }
     // velocity
     const auto v1 = render (p, vault::homeNote, 1.0f, holdSeconds, 2.0);
@@ -220,6 +225,33 @@ inline void analyse (Result& r)
         }
         for (auto* b : { &c4, &c6 })
             for (auto v : melFrames (*b, { { 0.0, 0.1 }, { 0.1, 0.5 }, { 0.5, 1.4 } })) r.print.push_back (v);
+        for (auto h : r.harm) r.print.push_back (h);
+        // motion + width: amplitude-modulation depth (beating, chorus, tremolo, wobble) and side / mid of the held note
+        {
+            const int fr = (int) (0.01 * sr), f0i = 20, f1i = 140;
+            std::vector<float> e;
+            double side = 0, mid = 0;
+            for (int f = f0i; f < f1i; ++f)
+            {
+                double acc = 0;
+                for (int i = f * fr; i < (f + 1) * fr; ++i)
+                {
+                    const double l = c5.getSample (0, i), rr = c5.getSample (1, i);
+                    acc += l * l + rr * rr; side += (l - rr) * (l - rr); mid += (l + rr) * (l + rr);
+                }
+                e.push_back (vaultaudit::db (acc / fr + 1.0e-12));
+            }
+            double am = 0;
+            for (int f = 7; f + 7 < (int) e.size(); ++f)
+            {
+                double m = 0;
+                for (int g = f - 7; g <= f + 7; ++g) m += e[(size_t) g];
+                am += std::pow (e[(size_t) f] - m / 15.0, 2.0);
+            }
+            am = std::sqrt (am / std::max (1, (int) e.size() - 14));
+            r.print.push_back ((float) std::min (10.0, am) * 3.0f);
+            r.print.push_back (juce::jlimit (-40.0f, 0.0f, vaultaudit::db (side / std::max (1.0e-12, mid))) * 0.5f);
+        }
     }
 
     // the gate (levels at the final gain)
@@ -236,7 +268,7 @@ inline void analyse (Result& r)
     else if (r.share6k > 0.03f) r.fail = "piercing-highs";
     else if (r.octUpDb > -12.0f) r.fail = "octave-layer";
     else if (r.velRange < 3.0f) r.fail = "velocity";
-    else if (r.quietBy > 3.0f) r.fail = "too-peaky";
+    else if (r.quietBy > 10.0f) r.fail = "too-peaky";
     else if (auto np = vaultaudit::nameProblem (p.name); np.isNotEmpty()) r.fail = "name: " + np;
     else if (p.name.containsIgnoreCase ("808")) r.fail = "name: 808";
     else
@@ -244,12 +276,21 @@ inline void analyse (Result& r)
             if (part.label.containsIgnoreCase ("808") || ! vaultqc::isCleanName (part.label)) r.fail = "label";
 }
 
+// fingerprint layout: C5 log-mel 6 x 24 | 12 cepstral | C4 / C6 log-mel 2 x 3 x 24 | 12 harmonics | AM depth, width.
+// Distance = RMS over the five groups of each group's RMS dB difference (every group weighs the same, so a different
+// harmonic structure or motion counts as much as a different spectral envelope).
 inline float distance (const std::vector<float>& a, const std::vector<float>& b)
 {
-    double s = 0;
-    const size_t n = std::min (a.size(), b.size());
-    for (size_t i = 0; i < n; ++i) { const double d = a[i] - b[i]; s += d * d; }
-    return (float) std::sqrt (s / std::max ((size_t) 1, n));
+    static const int edges[] { 0, 144, 156, 300, 312, 314 };
+    if (a.size() != b.size() || a.size() < 314) return 0.0f;
+    double tot = 0;
+    for (int g = 0; g < 5; ++g)
+    {
+        double s = 0;
+        for (int i = edges[g]; i < edges[g + 1]; ++i) { const double d = a[(size_t) i] - b[(size_t) i]; s += d * d; }
+        tot += s / (edges[g + 1] - edges[g]);
+    }
+    return (float) std::sqrt (tot / 5.0);
 }
 
 inline void writeWav (const juce::File& f, const juce::AudioBuffer<float>& b)
@@ -264,14 +305,14 @@ inline void writeWav (const juce::File& f, const juce::AudioBuffer<float>& b)
         }
 }
 
-// VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-dist 3.0] [-demo <dir> <id,id,...>]
+// VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-dist 3.5] [-demo <dir> <id or name,...>] [-prints f.tsv]
 inline int runRecipes (int argc, char** argv)
 {
     const auto cwd = juce::File::getCurrentWorkingDirectory();
     const juce::String which = argv[2];
-    juce::String outPath, reportPath, demoDir, demoIds;
+    juce::String outPath, reportPath, demoDir, demoIds, printsPath;
     int threads = (int) std::max (1u, std::thread::hardware_concurrency());
-    float minDist = 3.0f;
+    float minDist = 3.5f;
     for (int i = 3; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -280,6 +321,7 @@ inline int runRecipes (int argc, char** argv)
         else if (a == "-threads" && i + 1 < argc) threads = juce::jmax (1, juce::String (argv[++i]).getIntValue());
         else if (a == "-dist" && i + 1 < argc) minDist = (float) juce::String (argv[++i]).getDoubleValue();
         else if (a == "-demo" && i + 2 < argc) { demoDir = argv[++i]; demoIds = argv[++i]; }
+        else if (a == "-prints" && i + 1 < argc) printsPath = argv[++i];   // TSV: id, name, result, fingerprint (threshold studies)
     }
     RecipeContext ctx;
     ctx.library = vault::SampleLibrary::getShared();
@@ -367,13 +409,24 @@ inline int runRecipes (int argc, char** argv)
         cwd.getChildFile (reportPath).replaceWithText (s);
         std::printf ("wrote %s\n", reportPath.toRawUTF8());
     }
+    if (printsPath.isNotEmpty())
+    {
+        juce::String t;
+        for (auto& r : all)
+        {
+            t << r.preset.id << "\t" << r.preset.name << "\t" << (r.fail.isEmpty() ? "ok" : r.fail);
+            for (auto v : r.print) t << "\t" << juce::String (v, 2);
+            t << "\n";
+        }
+        cwd.getChildFile (printsPath).replaceWithText (t);
+    }
     if (demoDir.isNotEmpty())
     {
         auto dir = cwd.getChildFile (demoDir);
         dir.createDirectory();
         for (auto& id : juce::StringArray::fromTokens (demoIds, ",", ""))
             for (auto& r : all)
-                if (r.preset.id == id)
+                if (r.preset.id == id || r.preset.name == id)
                 {
                     auto b = render (r.preset, vault::homeNote, 0.8f, 1.8, 3.0);
                     const int fade = (int) (0.05 * sr);

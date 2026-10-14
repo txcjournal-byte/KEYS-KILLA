@@ -7,7 +7,7 @@
 // CMake compiles every tools/vault/recipes/*.cpp into VaultBankGen (file GLOB), the static registrar adds the function to
 // recipeRegistry(), and VaultBankGen collects them:
 //
-//   VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-demo <dir> <id,id,...>]
+//   VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-dist 3.5] [-demo <dir> <id,id,...>] [-prints f.tsv]
 //
 // runs the recipe(s), renders every preset at C5 (MIDI 60, FL Studio naming) + C4 / C6 through the v2 quality gate
 // (RecipeGate.h: clicks, clipping, silence, DC, mono-safe lows, tails, C5 comfort, velocity response, octave-up layers),
@@ -15,6 +15,8 @@
 //
 // A recipe only builds presets (VaultPreset, Source/vault/VaultTypes.h). It must leave `gain` at 1 (the gate sets it)
 // and give every preset a unique id ("cv.<category slug>.<nnnn>"), an English name and instrument-name part labels.
+// Value keys: synth / FX keys are the EVOLVE parameter IDs of Source/Params.h (note: the macros are "macro1".."macro8",
+// the time macro "timeMacro"), sample keys "s.*" (VaultTypes.h table), model keys "m.*" (docs/VAULT_MODELS.md).
 #include "../../../Source/vault/VaultTypes.h"
 #include "../../../Source/vault/VaultLibrary.h"
 #include <functional>
