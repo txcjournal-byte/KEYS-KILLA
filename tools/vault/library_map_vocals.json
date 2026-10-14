@@ -1,0 +1,173 @@
+{
+  "comment": "CHROME VAULT vocal sample map for VaultLibBuild (docs/VAULT_VOCAL_SOURCES.md). Sources are cloned from GitHub into /home/user/vocal-src (never into the repo); run tools/vault/vocal_prep.py first (slices the VocalSet scales, renames the vocobox notes, extracts the Fluid SoundFont programs, names single recordings). Licences: VocalSet + MTG sms-tools sounds CC BY 4.0 (attribution required), Fluid (R3) SoundFont + vocobox human-voice-dataset MIT (notice required) - see docs/CHROME_VAULT_CREDITS.md. Build: VaultLibBuild -map tools/vault/library_map_vocals.json",
+  "roots": {
+    "prep": "/home/user/vocal-src/prep"
+  },
+  "output": "/home/user/cv-library",
+  "report": "build_report_vocals.txt",
+  "credits": "Vocals: Fluid (R3) SoundFont (c) 2000-2002, 2008 Frank Wen, MIT; VocalSet (J. Wilkins, P. Seetharaman, A. Wahl, B. Pardo, ISMIR 2018) CC BY 4.0; MTG sms-tools-materials sounds (X. Serra, freesound pack 13038) CC BY 4.0; vocobox human-voice-dataset (c) 2014 vocobox, MIT.",
+  "defaults": {
+    "quality": 6,
+    "preRollMs": 4,
+    "silenceDb": -60,
+    "maxSeconds": 16,
+    "tailFadeMs": 250,
+    "peakDb": -1.0,
+    "minLoopMs": 300,
+    "maxLoopMs": 2600,
+    "xfadeMs": 100,
+    "extendKeys": 5,
+    "release": 0.25
+  },
+  "instruments": [
+    {
+      "id": "voice.female.chops",
+      "name": "Female Vowel Chops",
+      "family": "Vocals & Choir",
+      "credit": "VocalSet (Wilkins, Seetharaman, Wahl, Pardo - ISMIR 2018), singer f2 demo scales, sliced into single notes - CC BY 4.0",
+      "articulations": [
+        {
+          "name": "eh",
+          "oneShot": true,
+          "release": 0.12,
+          "sources": [
+            {
+              "files": "prep:vocalset/F2_straight_e_*.wav",
+              "pattern": "F2_straight_e_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        },
+        {
+          "name": "eh_breathy",
+          "oneShot": true,
+          "release": 0.12,
+          "sources": [
+            {
+              "files": "prep:vocalset/F2_breathy_e_*.wav",
+              "pattern": "F2_breathy_e_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        }
+      ]
+    },
+    {
+      "id": "voice.female.solo",
+      "name": "Female Solo Voice",
+      "family": "Vocals & Choir",
+      "credit": "MTG sms-tools-materials sounds (Xavier Serra, freesound.org pack 13038: singing-female, soprano-E4) - CC BY 4.0",
+      "articulations": [
+        {
+          "name": "oo",
+          "loop": true,
+          "maxSeconds": 2.4,
+          "tailFadeMs": 120,
+          "extendKeys": 9,
+          "release": 0.35,
+          "sources": [
+            {
+              "files": "prep:mtg/Female_oo_*.wav",
+              "pattern": "Female_oo_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        },
+        {
+          "name": "ah",
+          "loop": true,
+          "minLoopMs": 250,
+          "xfadeMs": 60,
+          "extendKeys": 9,
+          "release": 0.35,
+          "sources": [
+            {
+              "files": "prep:mtg/Soprano_ah_*.wav",
+              "pattern": "Soprano_ah_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        }
+      ]
+    },
+    {
+      "id": "voice.male.low",
+      "name": "Male Low Voice",
+      "family": "Vocals & Choir",
+      "credit": "vocobox human-voice-dataset (singer 'martin', 2014) - MIT licence, (c) 2014 vocobox",
+      "articulations": [
+        {
+          "name": "ah",
+          "loop": true,
+          "minLoopMs": 250,
+          "xfadeMs": 60,
+          "release": 0.3,
+          "sources": [
+            {
+              "files": "prep:vocobox/Male_ah_*.wav",
+              "pattern": "Male_ah_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        }
+      ]
+    },
+    {
+      "id": "voice.choir.classic",
+      "name": "Classic Choir",
+      "family": "Vocals & Choir",
+      "credit": "Fluid (R3) GM SoundFont, (c) 2000-2002, 2008 Frank Wen - MIT licence (Ahh Choir, Ohh Voices, Solo Vox programs)",
+      "articulations": [
+        {
+          "name": "aahs",
+          "loop": true,
+          "release": 0.45,
+          "sources": [
+            {
+              "files": "prep:fluid/Choir_aahs_*.wav",
+              "pattern": "Choir_aahs_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        },
+        {
+          "name": "oohs",
+          "loop": true,
+          "release": 0.45,
+          "minLoopMs": 250,
+          "extendKeys": 6,
+          "sources": [
+            {
+              "files": "prep:fluid/Voice_oohs_*.wav",
+              "pattern": "Voice_oohs_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        },
+        {
+          "name": "solo_vox",
+          "loop": true,
+          "release": 0.35,
+          "minLoopMs": 250,
+          "xfadeMs": 60,
+          "extendKeys": 6,
+          "sources": [
+            {
+              "files": "prep:fluid/Solo_vox_*.wav",
+              "pattern": "Solo_vox_{note}_{rr}.wav"
+            }
+          ],
+          "pitchFrom": 0.15,
+          "pitchSpan": 0.8
+        }
+      ]
+    }
+  ]
+}

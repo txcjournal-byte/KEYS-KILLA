@@ -295,17 +295,24 @@ farthest a zone plays from its root while any velocity layer has a closer sample
 normalised per layer, e.g. `{ "2": -15, "3": -7.5, "4": 0 }`), `tune` (`"correct"` default / `"keep"`: keep the natural
 tuning, fix only > 30 cents / `"name"`: inharmonic bells - the names are the roots, no pitch correction),
 `pitchMethod` (`"spectrum"`: struck bars and tines - the fine tune comes from the fundamental's spectral peak, +-0.75
-semitone, and a key between two semitones goes to the nearest one; YIN is pulled by their inharmonic partials), `pitchFrom` (s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp).
+semitone, and a key between two semitones goes to the nearest one; YIN is pulled by their inharmonic partials), `pitchFrom`
+(s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp; set explicitly it also applies to
+loops, which otherwise are measured over the whole sustain), `pitchSpan` (s, length of the pitch analysis; 0 = 0.35 s for
+one-shots / the sustain for loops; voices use 0.15 + 0.8 s). Map-level keys: `report` (report file name, default
+`build_report.txt`) and `credits` (a line such as "Vocals: ..." merged into `library.json`'s `credits`; a later build of
+the same map replaces its line). A second map, `tools/vault/library_map_vocals.json`, adds the vocal instruments (prepared
+by `tools/vault/vocal_prep.py`; see `docs/VAULT_VOCAL_SOURCES.md`).
 
 Per file: read; resample to 44.1 kHz (windowed sinc) if needed; identical channels -> mono; mean + 5 Hz DC removal; trim to
 the first / last sample above `silenceDb` of the peak with a pre-roll before the onset (-40 dB) and a raised-cosine fade-in
-over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of 7 frames, search 0.45-2.2 x
-the named pitch) -> the naming convention offset per articulation (VSCO / VCSL names are an octave off: corrected and
-reported; `octave` / `pitch: detect` sources skip this), a single file whose YIN pitch disagrees with its name gets a
-second opinion from a harmonic-sum spectrum (+-2.5 semitones, harmonics 1-5): the root moves only when both agree within 2
-semitones, otherwise the name stays and the spectrum's detune is used (YIN alone mis-hears bright trebles and weak bass
-fundamentals), the residual detune written as `fine`; the noise floor (RMS of the lead-in before the onset vs the peak,
-`noise` in the zone, informative);
+over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of the frames every half window
+(7-64; only the clearly periodic ones when there are at least 3), search 0.45-2.2 x the named pitch) -> the naming
+convention offset per articulation (VSCO / VCSL names are an octave off: corrected and reported; `octave` / `pitch: detect`
+sources skip this), a single file whose YIN pitch disagrees with its name gets a second opinion from a harmonic-sum
+spectrum (+-2.5 semitones, harmonics 1-5): the root moves only when both agree within 2 semitones, otherwise the name stays
+and the spectrum's detune is used (YIN alone mis-hears bright trebles and weak bass fundamentals), the residual detune
+written as `fine` (round robins are renumbered 0..n-1 per key / layer cell, so a corrected root never overwrites another
+take's output file); the noise floor (RMS of the lead-in before the onset vs the peak, `noise` in the zone, informative);
 loudness (BS.1770 K-weighting, loudest 400 ms); loops for `loop` articulations (rising zero crossings of the mid in the
 stable sustain, normalized cross-correlation of [-xfade, +12 ms] around both points minus level mismatch, bonus for
 length; >= 300 ms). Per articulation: velocity layers matched to a smoothed per-register loudness curve of the top layer
