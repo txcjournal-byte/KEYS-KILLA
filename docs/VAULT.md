@@ -281,13 +281,20 @@ instrument's loudest peak), `minLoopMs` (300), `maxLoopMs` (2600), `xfadeMs` (10
 `extendKeys` (6: the outermost zones reach this many semitones beyond their root), `quality` (6 = Ogg q0.6),
 `velOrder` (layer names soft -> loud, else numeric order), `layerDb` (imposed layer levels for sources that were
 normalised per layer, e.g. `{ "2": -15, "3": -7.5, "4": 0 }`), `tune` (`"correct"` default / `"keep"`: keep the natural
-tuning, fix only > 30 cents), `pitchFrom` (s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp).
+tuning, fix only > 30 cents), `pitchFrom` (s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp;
+set explicitly it also applies to loops, which otherwise are measured over the whole sustain), `pitchSpan` (s, length of
+the pitch analysis; 0 = 0.35 s for one-shots / the sustain for loops; voices use 0.15 + 0.8 s). Map-level keys: `report`
+(report file name, default `build_report.txt`) and `credits` (a line such as "Vocals: ..." merged into `library.json`'s
+`credits`; a later build of the same map replaces its line). A second map, `tools/vault/library_map_vocals.json`, adds
+the vocal instruments (prepared by `tools/vault/vocal_prep.py`; see `docs/VAULT_VOCAL_SOURCES.md`).
 
 Per file: read; resample to 44.1 kHz (windowed sinc) if needed; identical channels -> mono; mean + 5 Hz DC removal; trim to
 the first / last sample above `silenceDb` of the peak with a pre-roll before the onset (-40 dB) and a raised-cosine fade-in
-over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of 7 frames, search 0.45-2.2 x
-the named pitch) -> the naming convention offset per articulation (VSCO / VCSL names are an octave off: corrected and
-reported), single mismatches within 2 semitones corrected, larger ones reported, the residual detune written as `fine`;
+over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of the frames every half window
+(7-64; only the clearly periodic ones when there are at least 3), search 0.45-2.2 x the named pitch) -> the naming
+convention offset per articulation (VSCO / VCSL names are an octave off: corrected and reported), single mismatches within
+2 semitones corrected, larger ones reported, the residual detune written as `fine` (a corrected root that collides with a
+take of the same note / layer / round robin gets the next free round robin - the output name would otherwise clash);
 loudness (BS.1770 K-weighting, loudest 400 ms); loops for `loop` articulations (rising zero crossings of the mid in the
 stable sustain, normalized cross-correlation of [-xfade, +12 ms] around both points minus level mismatch, bonus for
 length; >= 300 ms). Per articulation: velocity layers matched to a smoothed per-register loudness curve of the top layer

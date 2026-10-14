@@ -20,6 +20,7 @@
 #include <mutex>
 #include <regex>
 #include <thread>
+#include <tuple>
 
 namespace
 {
@@ -35,10 +36,13 @@ struct Opts
     bool loop = false, oneShot = false;
     bool keepTuning = false;   // "tune": "keep" = natural tuning (stretch tuning, bar tuning), only > 30 cents fixed
     double pitchFrom = 0.06;   // s: where the pitch analysis of a one-shot starts (later for pianos: the attack glides sharp)
+    double pitchSpan = 0;      // s: length of the pitch analysis (0 = auto: 0.35 s one-shots, the whole sustain of loops)
+    bool pitchFromSet = false; // an explicit "pitchFrom" also applies to loops (voices: tune the start the ear hears first)
     void read (const juce::var& v)
     {
         if (v.hasProperty ("tune")) keepTuning = v["tune"].toString() == "keep";
-        if (v.hasProperty ("pitchFrom")) pitchFrom = (double) v["pitchFrom"];
+        if (v.hasProperty ("pitchFrom")) { pitchFrom = (double) v["pitchFrom"]; pitchFromSet = true; }
+        if (v.hasProperty ("pitchSpan")) pitchSpan = (double) v["pitchSpan"];
         auto num = [&] (const char* k, double& d) { if (v.hasProperty (k)) d = (double) v[k]; };
         if (v.hasProperty ("quality")) quality = (int) v["quality"];
         if (v.hasProperty ("extendKeys")) extendKeys = (int) v["extendKeys"];
@@ -184,15 +188,21 @@ float detectF0 (const juce::AudioBuffer<float>& b, int from, int len, double fEx
     const double fmin = fExpected * 0.45, fmax = std::min (5000.0, fExpected * 2.2);
     const int w = juce::jlimit (1024, 8192, (int) (3.2 * outRate / fmin));
     std::vector<float> f0s, aps;
-    for (int k = 0; k < 7; ++k)
+    // frames every half window over the span (at least 7, at most 64): a sung note drifts, a few frames can miss its centre
+    const int frames = juce::jlimit (7, 64, len / std::max (1, w / 2));
+    for (int k = 0; k < frames; ++k)
     {
-        const int s0 = from + (int) ((double) k / 7.0 * std::max (0, len - w));
+        const int s0 = from + (int) ((double) k / (double) frames * std::max (0, len - w));
         if (s0 < 0 || s0 + w > (int) mono.size()) continue;
         float ap;
         const float f = yinFrame (mono.data() + s0, w, outRate, fmin, fmax, ap);
         if (f > 0) { f0s.push_back (f); aps.push_back (ap); }
     }
     if (f0s.empty()) { aperOut = 1; return 0; }
+    // clearly periodic frames only (YIN dip < 0.15) when there are enough: breathy / noisy frames bias the median
+    std::vector<float> clear;
+    for (size_t i = 0; i < f0s.size(); ++i) if (aps[i] < 0.15f) clear.push_back (f0s[i]);
+    if (clear.size() >= 3 && clear.size() < f0s.size()) f0s = clear;
     std::sort (f0s.begin(), f0s.end()); std::sort (aps.begin(), aps.end());
     aperOut = aps[aps.size() / 2];
     return f0s[f0s.size() / 2];
@@ -400,7 +410,8 @@ void analyseItem (Item& it, const Opts& o)
     const double fExp = 440.0 * std::pow (2.0, (it.namedNote - 69) / 12.0);
     const int n = it.audio.getNumSamples();
     int from = (int) (o.pitchFrom * outRate), len = (int) ((o.pitchFrom > 0.2 ? 1.0 : 0.35) * outRate);
-    if (o.loop) { from = (int) (0.35 * outRate); len = std::max ((int) (0.5 * outRate), n - from - (int) (0.4 * outRate)); }
+    if (o.loop && ! o.pitchFromSet) { from = (int) (0.35 * outRate); len = std::max ((int) (0.5 * outRate), n - from - (int) (0.4 * outRate)); }
+    if (o.pitchSpan > 0) len = (int) (o.pitchSpan * outRate);
     len = std::min (len, n - from);
     float ap = 1;
     it.f0 = len > 1024 ? detectF0 (it.audio, from, len, fExp, ap) : 0.0f;
@@ -439,11 +450,27 @@ int main (int argc, char** argv)
     defaults.read (map["defaults"]);
     const auto onlyIds = juce::StringArray::fromTokens (only, ",", "");
 
-    // previous library.json: instruments not rebuilt this run are kept
+    // previous library.json: instruments not rebuilt this run are kept, and so are the credit lines of other maps
+    // (a second map, e.g. library_map_vocals.json, adds its own "credits" line)
     juce::Array<juce::var> keep;
+    juce::StringArray credits { "Built from VSCO 2 Community Edition (Versilian Studios) and VCSL (Versilian Community Sample Library), both CC0 1.0." };
     if (const auto old = juce::JSON::parse (outDir.getChildFile ("library.json")); old.isObject())
+    {
         if (auto* arr = old["instruments"].getArray())
             for (auto& v : *arr) keep.add (v);
+        credits.addTokens (old["credits"].toString(), "\n", "");
+    }
+    // a map's own line ("Vocals: ...") replaces the line with the same "<label>:" from an earlier build
+    for (auto line : juce::StringArray::fromTokens (map["credits"].toString(), "\n", ""))
+    {
+        if ((line = line.trim()).isEmpty()) continue;
+        if (line.containsChar (':'))
+            for (int k = credits.size(); --k >= 1;)
+                if (credits[k].upToFirstOccurrenceOf (":", true, false) == line.upToFirstOccurrenceOf (":", true, false)) credits.remove (k);
+        credits.add (line);
+    }
+    credits.trim(); credits.removeEmptyStrings(); credits.removeDuplicates (false);
+    const auto reportName = map.hasProperty ("report") ? map["report"].toString() : juce::String ("build_report.txt");
 
     std::vector<Instrument> insts;
     for (auto& iv : *map["instruments"].getArray())
@@ -556,6 +583,18 @@ int main (int argc, char** argv)
                     if (art.o.keepTuning && std::abs (it.cents) <= 30.0f) { it.msg << "tuning kept (" << juce::String (it.cents, 1) << " c); "; it.cents = 0.0f; }
                 }
                 else it.msg << "pitch not verified (aperiodicity " << juce::String (it.aperiodicity, 2) << "); ";
+            }
+
+            // a corrected root can land on a note that already has a take with the same layer / round robin: give it the next
+            // free round robin (the output file name is built from root / layer / rr and would otherwise overwrite it)
+            {
+                std::map<std::tuple<int, juce::String, bool>, std::vector<int>> used;
+                for (auto& it : art.items)
+                {
+                    auto& rrs = used[{ it.root, it.velName, it.release }];
+                    while (std::find (rrs.begin(), rrs.end(), it.rr) != rrs.end()) ++it.rr;
+                    rrs.push_back (it.rr);
+                }
             }
 
             // velocity layers: global order
@@ -756,11 +795,11 @@ int main (int argc, char** argv)
     root->setProperty ("format", "CHROME VAULT library");
     root->setProperty ("version", 1);
     root->setProperty ("sampleRate", outRate);
-    root->setProperty ("credits", "Built from VSCO 2 Community Edition (Versilian Studios) and VCSL (Versilian Community Sample Library), both CC0 1.0.");
+    root->setProperty ("credits", credits.joinIntoString ("\n"));
     root->setProperty ("instruments", instJson);
     outDir.createDirectory();
     const bool ok = outDir.getChildFile ("library.json").replaceWithText (juce::JSON::toString (juce::var (root), false));
-    outDir.getChildFile ("build_report.txt").replaceWithText (report);
+    outDir.getChildFile (reportName).replaceWithText (report);
     // verify: the plugin's own loader reads it back
     vault::SampleLibrary lib (outDir);
     std::printf ("library.json %s: %d instruments, loader %s %s\n", ok ? "written" : "NOT written", lib.numInstruments(),
