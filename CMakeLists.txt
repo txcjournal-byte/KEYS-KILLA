@@ -174,7 +174,10 @@ juce_add_plugin(ChromeVault
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 # every .cpp in Source/vault (engine, processor, editor and its UI parts) + the shared EVOLVE factory sounds
-file(GLOB CV_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/*.cpp)
+file(GLOB CV_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/models/*.cpp)
+# the sound engine alone (no processor / editor): for console tools
+set(CV_ENGINE_SOURCES Source/vault/VaultTypes.cpp Source/vault/VaultEngine.cpp Source/vault/VaultLibrary.cpp Source/vault/VaultSampler.cpp)
+file(GLOB CV_MODEL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/models/*.cpp)
 set(CV_SHARED_SOURCES Source/Presets.cpp)
 
 # the preset bank: every resources/vault/*.cvb is embedded (loaded in file-name order). No files = the plugin
@@ -194,6 +197,7 @@ target_compile_definitions(ChromeVault PUBLIC
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_USE_OGGVORBIS=1
     ${CV_BANK_DEF}
     CV_VERSION_STRING="${CV_VERSION}")
 target_link_libraries(ChromeVault
@@ -211,7 +215,7 @@ if(KK_BUILD_TESTS)
     juce_add_console_app(VaultTests PRODUCT_NAME "VaultTests")
     target_sources(VaultTests PRIVATE tests/VaultTests.cpp ${CV_SOURCES} ${CV_SHARED_SOURCES})
     target_compile_definitions(VaultTests PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
         JucePlugin_Name="CHROME VAULT" JucePlugin_IsSynth=1 JucePlugin_VersionString="${CV_VERSION}")
     target_link_libraries(VaultTests PRIVATE
         ${CV_DATA_LIB}
@@ -225,8 +229,19 @@ endif()
 # The generated .cvb is committed, so normal builds / CI never need to run it.
 if(KK_BUILD_TESTS)
     juce_add_console_app(VaultBankGen PRODUCT_NAME "VaultBankGen")
-    target_sources(VaultBankGen PRIVATE tools/vault/BankGen.cpp Source/vault/VaultTypes.cpp Source/vault/VaultEngine.cpp Source/Presets.cpp)
+    target_sources(VaultBankGen PRIVATE tools/vault/BankGen.cpp ${CV_ENGINE_SOURCES} ${CV_MODEL_SOURCES} Source/Presets.cpp)
     target_compile_definitions(VaultBankGen PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 CV_HAS_BANK=0)
     target_link_libraries(VaultBankGen PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()
 # --- end vault bank -------------------------------------------------------------
+
+# --- vault library --------------------------------------------------------------
+# VaultLibBuild: builds the CHROME VAULT sample library (library.json + audio/*.ogg) from the CC0 source recordings, driven by
+# tools/vault/library_map.json (tools/vault/LibBuild.cpp, docs/VAULT.md "Sample library"). Never part of the plugin build.
+if(KK_BUILD_TESTS)
+    juce_add_console_app(VaultLibBuild PRODUCT_NAME "VaultLibBuild")
+    target_sources(VaultLibBuild PRIVATE tools/vault/LibBuild.cpp ${CV_ENGINE_SOURCES} ${CV_MODEL_SOURCES} Source/Presets.cpp)
+    target_compile_definitions(VaultLibBuild PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 JUCE_USE_FLAC=1 CV_HAS_BANK=0)
+    target_link_libraries(VaultLibBuild PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+endif()
+# --- end vault library ----------------------------------------------------------

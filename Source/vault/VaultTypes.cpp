@@ -7,9 +7,8 @@ namespace vault
 namespace
 {
 constexpr char magic[4] { 'C', 'V', 'B', '1' };
-constexpr int formatVersion = 1;
 constexpr int flagGzip = 1;
-constexpr int maxKeys = 255;
+constexpr int maxKeys = 65535;
 constexpr int maxStringBytes = 4096;
 
 bool readString (juce::MemoryInputStream& in, juce::String& s)
@@ -28,9 +27,10 @@ bool readString (juce::MemoryInputStream& in, juce::String& s)
 
 juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool compress)
 {
-    // key table: the canonical synth keys first (stable indices), then any other ID the bank uses
+    // key table: the canonical synth keys first (stable indices), then the sample keys, then any other ID the bank uses
     juce::StringArray keys;
     for (int k = 0; k < kk::vk::count; ++k) keys.add (kk::vk::info (k).id);
+    for (auto& sp : sampleParams()) keys.add (sp.id);
     std::map<juce::String, int> keyIndex;
     for (int i = 0; i < keys.size(); ++i) keyIndex[keys[i]] = i;
     for (auto& p : bank)
@@ -46,8 +46,6 @@ juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool comp
         payload.writeString (p.id);
         payload.writeString (p.name);
         payload.writeByte ((char) juce::jlimit (0, 255, p.category));
-        payload.writeInt ((int) p.styles);
-        payload.writeInt ((int) p.chars);
         payload.writeFloat (p.gain);
         for (float m : p.macroDefaults) payload.writeFloat (m);
         const int np = juce::jmin ((int) p.parts.size(), 255);
@@ -55,6 +53,9 @@ juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool comp
         for (int pi = 0; pi < np; ++pi)
         {
             const auto& part = p.parts[(size_t) pi];
+            payload.writeByte ((char) (uint8_t) part.kind);
+            payload.writeString (part.source);
+            payload.writeString (part.articulation);
             payload.writeString (part.label);
             payload.writeFloat (part.level);
             payload.writeFloat (part.pan);
@@ -62,12 +63,12 @@ juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool comp
             payload.writeByte ((char) juce::jlimit (-128, 127, part.semi));
             int nv = 0;
             for (auto& [id, v] : part.values) if (keyIndex.count (id)) ++nv;
-            jassert (nv == (int) part.values.size());   // more than 255 distinct parameter IDs in one bank
+            jassert (nv == (int) part.values.size());   // more than maxKeys distinct parameter IDs in one bank
             payload.writeShort ((short) juce::jmin (nv, 65535));
             for (auto& [id, v] : part.values)
                 if (const auto it = keyIndex.find (id); it != keyIndex.end())
                 {
-                    payload.writeByte ((char) (uint8_t) it->second);
+                    payload.writeShort ((short) (uint16_t) it->second);
                     payload.writeFloat (v);
                 }
         }
@@ -75,7 +76,7 @@ juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool comp
 
     juce::MemoryOutputStream out;
     out.write (magic, 4);
-    out.writeShort ((short) formatVersion);
+    out.writeShort ((short) bankFormatVersion);
     out.writeShort ((short) (compress ? flagGzip : 0));
     out.writeInt ((int) bank.size());
     out.writeInt ((int) payload.getDataSize());
@@ -89,7 +90,7 @@ juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool comp
     return out.getMemoryBlock();
 }
 
-bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& out, juce::String* error)
+bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& out, juce::String* error, int* versionOut)
 {
     out.clear();
     auto fail = [&] (const char* why) { if (error) *error = why; out.clear(); return false; };
@@ -100,7 +101,8 @@ bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& o
     const int flags = (uint16_t) head.readShort();
     const int count = head.readInt();
     const int rawSize = head.readInt();
-    if (version != formatVersion) return fail ("unsupported bank version");
+    if (version < 1 || version > bankFormatVersion) return fail ("unsupported bank version");
+    if (versionOut) *versionOut = version;
     if (count < 0 || count > 1000000 || rawSize < 2 || rawSize > 512 * 1024 * 1024) return fail ("bad bank header");
 
     juce::MemoryBlock payload;
@@ -119,7 +121,6 @@ bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& o
 
     juce::MemoryInputStream in (payload, false);
     const int nKeys = (uint16_t) in.readShort();
-    if (nKeys > 65535) return fail ("bad key table");
     juce::StringArray keys;
     for (int i = 0; i < nKeys; ++i) { juce::String k; if (! readString (in, k)) return fail ("bad key table"); keys.add (k); }
 
@@ -130,14 +131,20 @@ bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& o
         VaultPreset p;
         if (! readString (in, p.id) || ! readString (in, p.name)) return fail ("bad preset text");
         p.category = (uint8_t) in.readByte();
-        p.styles = (uint32_t) in.readInt();
-        p.chars = (uint32_t) in.readInt();
+        if (version == 1) { in.readInt(); in.readInt(); }   // v1 style / character tags: dropped
         p.gain = in.readFloat();
         for (float& m : p.macroDefaults) m = in.readFloat();
         const int np = (uint8_t) in.readByte();
         p.parts.resize ((size_t) np);
         for (auto& part : p.parts)
         {
+            if (version >= 2)
+            {
+                const int kind = (uint8_t) in.readByte();
+                if (kind > (int) VaultPartKind::model) return fail ("unknown part kind");
+                part.kind = (VaultPartKind) kind;
+                if (! readString (in, part.source) || ! readString (in, part.articulation)) return fail ("bad part source");
+            }
             if (! readString (in, part.label)) return fail ("bad part label");
             part.level = in.readFloat();
             part.pan = in.readFloat();
@@ -147,17 +154,64 @@ bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& o
             part.values.reserve ((size_t) nv);
             for (int v = 0; v < nv; ++v)
             {
-                const int k = (uint8_t) in.readByte();
+                const int k = version >= 2 ? (int) (uint16_t) in.readShort() : (int) (uint8_t) in.readByte();
                 const float x = in.readFloat();
                 if (k >= keys.size()) return fail ("bad parameter key");
                 part.values.push_back ({ keys[k], x });
             }
+        }
+        if (version == 1)
+        {
+            p.category = v1::toV2Category (p.category, p);
+            p.name = v1::cleanText (p.name);
+            for (auto& part : p.parts) part.label = v1::cleanText (part.label);
         }
         out.push_back (std::move (p));
     }
     if (error) error->clear();
     return true;
 }
+
+namespace v1
+{
+juce::String cleanText (const juce::String& s)
+{
+    if (! s.contains ("808")) return s;
+    auto t = s.replace ("808s", "Subs").replace ("808", "Sub");
+    while (t.contains ("Sub Sub")) t = t.replace ("Sub Sub", "Sub");
+    return t.trim();
+}
+
+int toV2Category (int c, const VaultPreset& p)
+{
+    switch (c)
+    {
+        case v1::cat808Bass:       return vault::catBass;
+        case catBellsMallets:  return vault::catBellsMallets;
+        case catPianoKeys:
+        {
+            juce::String words = p.name;
+            for (auto& part : p.parts) words << " " << part.label;
+            words = words.toLowerCase();
+            return words.contains ("piano") || words.contains ("grand") || words.contains ("upright") || words.contains ("felt")
+                       ? vault::catPiano : vault::catKeysOrgan;
+        }
+        case catPlucks:        return vault::catPlucks;
+        case catLeads:         return vault::catLeads;
+        case catPads:          return vault::catPads;
+        case catStrings:       return vault::catStrings;
+        case catBrassHorns:    return vault::catBrass;
+        case catFlutesWinds:   return vault::catFlutesWoodwinds;
+        case catGuitars:       return vault::catGuitars;
+        case catVocalsChoir:   return vault::catVocalsChoir;
+        case catSynth:         return vault::catSynth;
+        case catArpsSequences: return vault::catSynth;
+        case catOrchestral:    return vault::catOrchestral;
+        case catWorld:         return vault::catWorld;
+        default:               return vault::catFxAtmos;
+    }
+}
+} // namespace v1
 
 bool saveBankFile (const juce::File& file, const std::vector<VaultPreset>& bank)
 {
@@ -187,10 +241,23 @@ bool validatePreset (const VaultPreset& p, juce::String* why)
         if (! std::isfinite (part.level) || part.level < 0.0f || part.level > 2.0f) return no ("part level out of 0..2");
         if (! std::isfinite (part.pan) || std::abs (part.pan) > 1.0f) return no ("part pan out of -1..1");
         if (std::abs (part.octave) > 3 || std::abs (part.semi) > 12) return no ("part transpose out of range");
+        if (part.kind == VaultPartKind::sample && part.source.isEmpty()) return no ("sample part without instrument id");
+        if (part.kind == VaultPartKind::model && part.source.isEmpty()) return no ("model part without model id");
+        if (part.kind == VaultPartKind::synth && (part.source.isNotEmpty() || part.articulation.isNotEmpty())) return no ("synth part with a source");
         for (auto& [id, v] : part.values)
         {
             if (! std::isfinite (v)) return no ("non-finite value for " + id);
-            if (kk::vk::keyOf (id) < 0) return no ("unknown parameter " + id);
+            if (kk::vk::keyOf (id) >= 0) continue;   // EVOLVE synth / FX keys: valid in every kind (FX read from part 0)
+            if (part.kind == VaultPartKind::sample)
+            {
+                const int si = sampleParamIndex (id);
+                if (si < 0) return no ("unknown sample parameter " + id);
+                const auto& in = sampleParams()[(size_t) si];
+                if (v < in.lo || v > in.hi) return no ("sample parameter out of range: " + id);
+                continue;
+            }
+            if (part.kind == VaultPartKind::model && id.startsWith ("m.")) continue;
+            return no ("unknown parameter " + id);
         }
     }
     return true;

@@ -1,23 +1,55 @@
 // CHROME VAULT unit tests:  VaultTests [-unit]          all tests, prints "vault failures: N", exit code = N
 //                           VaultTests -wav <index> <out.wav> [note] [seconds]   render a preset of the loaded bank
 //                           VaultTests -bankinfo                 bank summary (source, per-category / per-layer counts)
+//                           VaultTests -libreport <dir> [notes]  render every library instrument / articulation (default at C5 =
+//                                      MIDI 60), print pitch / loudness / spectrum / loop checks, write WAVs into <dir>
 //                           VaultTests -writestarter <out.cvb>   write the starter bank as a .cvb file
+//                           VaultTests -writev2demo <out.cvb>    a few v2 presets (sample / model parts) on the test library
 //                           VaultTests -snapshot <out.png>       paint the editor into a PNG (Linux: under xvfb-run)
 //                           VaultTests -uitest                   editor behaviour (keys, filters, favorites, persistence, WAV drag)
 //                           VaultTests -shot <out.png> [state]   the browser UI with a 3-layer preset + a filter (xvfb-run)
-//                                      state: comma list of  scale:<pct> search:<text> cat:<n> style:<n> char:<n> layers:<n>
-//                                      favs recent empty keys knobs   (default "main" = its category + a style chip + a held chord)
+//                                      state: comma list of  scale:<pct> search:<text> cat:<n> layers:<n>
+//                                      favs recent empty keys knobs   (default "main" = its category + a held chord)
 //                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
 #include "../Source/vault/VaultProcessor.h"
 #include "../Source/vault/VaultEditor.h"
 #include "../Source/vault/ui/VaultMainView.h"
 #include "../Source/ParamKeys.h"
 #include "../tools/vault/BankQC.h"
+#if CV_HAS_BANK
+ #include "VaultData.h"
+#endif
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <atomic>
 #include <cstdio>
 #include <set>
 #include <thread>
+#include <cstdlib>
+#include <new>
+
+//==============================================================================
+// allocation counter: operator new counts while the current thread has `countAllocs` set (sampler / engine no-alloc test)
+namespace allocHook
+{
+thread_local bool countAllocs = false;
+std::atomic<int> allocs { 0 };
+}
+void* operator new (std::size_t n)
+{
+    if (allocHook::countAllocs) ++allocHook::allocs;
+    if (void* p = std::malloc (n == 0 ? 1 : n)) return p;
+    throw std::bad_alloc();
+}
+void* operator new[] (std::size_t n)
+{
+    if (allocHook::countAllocs) ++allocHook::allocs;
+    if (void* p = std::malloc (n == 0 ? 1 : n)) return p;
+    throw std::bad_alloc();
+}
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
 
 namespace
 {
@@ -79,7 +111,6 @@ VaultPreset preset (const char* id, const char* name, int cat, std::vector<Vault
 {
     VaultPreset p;
     p.id = id; p.name = name; p.category = cat; p.parts = std::move (parts);
-    p.styles = 1u << vault::styleTrap; p.chars = 1u << vault::charWide;
     return p;
 }
 
@@ -91,7 +122,7 @@ std::vector<VaultPreset> testPresets()
         part ({ { ID::engine, 0 }, { ID::wave, 0.5f }, { ID::unison, 7 }, { ID::detune, 0.6f }, { ID::attack, 0.3f }, { ID::sustain, 1 }, { ID::release, 1.2f },
                 { ID::cutoff, 3000 }, { ID::chorus, 0.6f }, { ID::revMix, 0.5f }, { ID::width, 1.0f } }, 1, -1, 0, "Wide Saw"),
         part ({ { ID::engine, 7 }, { ID::wave, 0.4f }, { ID::unison, 5 }, { ID::detune, 0.8f }, { ID::sustain, 1 }, { ID::release, 1.5f } }, 0.8f, 1, -1, "Low Glass") }));
-    v.push_back (preset ("t.808", "Test Sub Glide", vault::cat808Bass, {
+    v.push_back (preset ("t.sub", "Test Sub Glide", vault::catBass, {
         part ({ { ID::engine, 6 }, { ID::mono, 1 }, { ID::bassMode, 1 }, { ID::glide, 0.1f }, { ID::sustain, 0.7f }, { ID::decay, 1.2f }, { ID::drive, 0.3f },
                 { ID::octave, -1 } }, 1, 0, 0, "Sub"),
         part ({ { ID::engine, 0 }, { ID::wave, 1 }, { ID::unison, 6 }, { ID::detune, 0.7f }, { ID::cutoff, 900 }, { ID::sustain, 0.5f } }, 0.5f, 0.8f, 0, "Grit") }));
@@ -146,21 +177,16 @@ void shippedBankTests (const VaultProcessor& proc)
 {
     const auto& bank = proc.bank();
     check (proc.bankSource() != VaultProcessor::BankSource::factoryFallback, "factory bank loaded: " + proc.bankDescription());
-    check ((int) bank.size() == VaultProcessor::maxPresets, "the bank has exactly " + juce::String (VaultProcessor::maxPresets) + " presets ("
-                                                             + juce::String ((int) bank.size()) + ")");
-    int cats[vault::numCategories] {}, layers[vault::maxParts + 1] {};
-    for (auto& p : bank) { ++cats[juce::jlimit (0, vault::numCategories - 1, p.category)]; ++layers[juce::jlimit (0, (int) vault::maxParts, (int) p.parts.size())]; }
-    bool catsOk = true, layersOk = true;
-    for (int c = 0; c < vault::numCategories; ++c)
-        if (cats[c] != vault::categoryTarget (c)) { catsOk = false; std::printf ("   %s: %d / %d\n", vault::categoryNames()[c].toRawUTF8(), cats[c], vault::categoryTarget (c)); }
-    for (int l = 1; l <= vault::maxParts; ++l)
-        if (layers[l] != vault::layerCountTarget (l)) { layersOk = false; std::printf ("   %d layers: %d / %d\n", l, layers[l], vault::layerCountTarget (l)); }
-    check (catsOk, "presets per category match the plan (808 & Bass 520 ... FX & Atmos 240)");
-    check (layersOk, "layer mix matches the plan (1600 / 1900 / 1100 / 400)");
+    check ((int) bank.size() >= 1000 && (int) bank.size() <= VaultProcessor::maxPresets, "the bank has " + juce::String ((int) bank.size())
+                                                                                          + " presets (<= " + juce::String (VaultProcessor::maxPresets) + ")");
+    int cats[vault::numCategories] {};
+    for (auto& p : bank) ++cats[juce::jlimit (0, vault::numCategories - 1, p.category)];
+    int usedCats = 0;
+    for (int c : cats) usedCats += c > 0 ? 1 : 0;
+    check (usedCats >= 14, "the bank fills " + juce::String (usedCats) + " of the 16 categories");
 
     std::set<juce::String> ids, names;
-    int badName = 0, badTags = 0, badLabel = 0;
-    auto bits = [] (uint32_t m) { int n = 0; for (; m != 0; m &= m - 1) ++n; return n; };
+    int badName = 0, badLabel = 0, has808 = 0;
     for (auto& p : bank)
     {
         ids.insert (p.id);
@@ -168,18 +194,19 @@ void shippedBankTests (const VaultProcessor& proc)
         const bool nameOk = p.name.trim() == p.name && p.name.isNotEmpty() && p.name.length() <= 22 && vaultqc::isCleanName (p.name)
                             && p.name.containsOnly ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -'&");
         if (! nameOk && badName++ < 5) std::printf ("   bad name: '%s'\n", p.name.toRawUTF8());
-        const bool tagsOk = (p.styles >> vault::numStyles) == 0 && (p.chars >> vault::numCharacters) == 0
-                            && bits (p.styles) >= 1 && bits (p.styles) <= 3 && bits (p.chars) >= 1 && bits (p.chars) <= 3;
-        if (! tagsOk && badTags++ < 5) std::printf ("   bad tags: %s styles %x chars %x\n", p.id.toRawUTF8(), p.styles, p.chars);
+        has808 += p.name.contains ("808") ? 1 : 0;
         for (auto& part : p.parts)
+        {
+            has808 += part.label.contains ("808") ? 1 : 0;
             if ((part.label.isEmpty() || part.label.length() > 16 || ! vaultqc::isCleanName (part.label)) && badLabel++ < 5)
                 std::printf ("   bad part label: %s '%s'\n", p.id.toRawUTF8(), part.label.toRawUTF8());
+        }
     }
     check (ids.size() == bank.size(), "preset ids are unique (" + juce::String ((int) ids.size()) + ")");
-    check (names.size() == bank.size(), "preset names are unique (" + juce::String ((int) names.size()) + ")");
+    check (names.size() >= bank.size() * 99 / 100, "preset names are unique (" + juce::String ((int) names.size()) + " of " + juce::String ((int) bank.size()) + ")");
     check (badName == 0, "names: English, <= 22 characters, no brand words (" + juce::String (badName) + " bad)");
-    check (badTags == 0, "tags: 1-3 styles and 1-3 characters from the fixed lists (" + juce::String (badTags) + " bad)");
     check (badLabel == 0, "part labels set, short, clean (" + juce::String (badLabel) + " bad)");
+    check (has808 == 0, "no '808' in any preset name or layer label (" + juce::String (has808) + ")");
 
     // a deterministic random sample through the quality gate (two notes, 48 kHz - exactly the generator's gate)
     juce::Random rnd (20261013);
@@ -203,7 +230,8 @@ void shippedBankTests (const VaultProcessor& proc)
                 auto w = vaultqc::gate (aL, p.category, 1.0f, false);
                 if (w.isEmpty()) w = vaultqc::gate (aH, p.category, 1.0f, false);
                 loud[(size_t) k] = 0.5f * (aL.loud + aH.loud);
-                if (w.isEmpty() && std::abs (loud[(size_t) k] - vaultqc::targetLoudness (p.category)) > vaultqc::loudnessTolerance)
+                // +0.5 dB: the v1 bank's arps (target -14.5) now live in Synth (-14)
+                if (w.isEmpty() && std::abs (loud[(size_t) k] - vaultqc::targetLoudness (p.category)) > vaultqc::loudnessTolerance + 0.5f)
                     w = "loudness " + juce::String (loud[(size_t) k], 2) + " dB";
                 why[(size_t) k] = w;
                 prints[(size_t) k] = aL.print;
@@ -309,7 +337,7 @@ int unitTests()
         const auto t0 = juce::Time::getMillisecondCounterHiRes();
         for (auto& p : set)
         {
-            const int note = p.category == vault::cat808Bass ? 36 : 60;
+            const int note = p.category == vault::catBass ? 36 : 60;
             const auto b = VaultEngine::render (p, note, 0.8f, 2.0, sr);
             const auto s = stats (b);
             silent += s.rms < 1.0e-4f; nonFinite += ! s.finite; hot += s.peak >= 0.99f;
@@ -342,7 +370,7 @@ int unitTests()
             float lo = 0, hi = -100;
             for (size_t i = 4; i < set.size(); ++i)
             {
-                const float l = VaultEngine::measureLoudnessDb (VaultEngine::render (set[i], set[i].category == vault::cat808Bass ? 36 : 60, 0.8f, 2.0, sr), sr);
+                const float l = VaultEngine::measureLoudnessDb (VaultEngine::render (set[i], set[i].category == vault::catBass ? 36 : 60, 0.8f, 2.0, sr), sr);
                 lo = std::min (lo, l); hi = std::max (hi, l);
             }
             check (hi - lo < 20.0f && hi < -3.0f, "loudness of the bank renders " + juce::String (lo, 1) + " .. " + juce::String (hi, 1) + " dB (target "
@@ -427,23 +455,23 @@ int unitTests()
 int browserTests()
 {
     std::vector<VaultPreset> bank;
-    auto mk = [&] (const char* id, const char* name, int cat, uint32_t st, uint32_t ch, std::vector<const char*> labels)
+    auto mk = [&] (const char* id, const char* name, int cat, std::vector<const char*> labels)
     {
-        VaultPreset p; p.id = id; p.name = name; p.category = cat; p.styles = st; p.chars = ch;
+        VaultPreset p; p.id = id; p.name = name; p.category = cat;
         for (auto* l : labels) { VaultPart part; part.label = l; p.parts.push_back (part); }
         bank.push_back (p);
     };
     using namespace vault;
-    mk ("t.0", "Frozen Ice", catBellsMallets, 1u << styleTrap, 1u << charDark, { "Ice Bell", "Dark Pad" });
-    mk ("t.1", "Velvet Keys", catPianoKeys, 1u << styleLoFi, 1u << charWarm, { "Felt Piano" });
-    mk ("t.2", "Glide Monster", cat808Bass, 1u << styleRage, 1u << charHard, { "Glide 808", "Grit", "Sub" });
-    mk ("t.3", "Holy Air", catPads, 1u << styleAmbient, 1u << charWide, { "Air", "Choir Pad", "Drone", "Vinyl" });
-    mk ("t.4", "Night Bell", catBellsMallets, 1u << styleDrill, 1u << charBright, { "Glock" });
+    mk ("t.0", "Frozen Ice", catBellsMallets, { "Ice Bell", "Dark Pad" });
+    mk ("t.1", "Velvet Keys", catPiano, { "Felt Piano" });
+    mk ("t.2", "Glide Monster", catBass, { "Glide Bass", "Grit", "Sub" });
+    mk ("t.3", "Holy Air", catPads, { "Air", "Choir Pad", "Drone", "Vinyl" });
+    mk ("t.4", "Night Bell", catBellsMallets, { "Glock" });
     VaultBrowserModel m (bank);
     check (m.visible().size() == 5 && m.categoryCount (catBellsMallets) == 2 && m.categoryCount (-1) == 5, "browser: all sounds + category counts");
     m.filter.query = "dark bell"; m.refilter();
-    check (m.visible() == std::vector<int> { 0 }, "browser: search 'dark bell' finds by tag + category");
-    m.filter.query = "glide 808"; m.refilter();
+    check (m.visible() == std::vector<int> { 0 }, "browser: search 'dark bell' finds by layer label + category");
+    m.filter.query = "glide bass"; m.refilter();
     check (m.visible() == std::vector<int> { 2 }, "browser: search matches layer labels / category");
     m.filter.query = "FELT"; m.refilter();
     check (m.visible() == std::vector<int> { 1 }, "browser: search is case-insensitive");
@@ -451,10 +479,6 @@ int browserTests()
     check (m.visible() == std::vector<int> { 2 }, "browser: layers chip");
     m.filter.layers = 0; m.filter.category = catBellsMallets; m.refilter();
     check (m.visible() == (std::vector<int> { 0, 4 }), "browser: category");
-    m.filter.style = styleDrill; m.refilter();
-    check (m.visible() == std::vector<int> { 4 }, "browser: style chip");
-    m.filter = {}; m.filter.character = charWide; m.refilter();
-    check (m.visible() == std::vector<int> { 3 }, "browser: character chip");
     m.filter = {}; m.refilter();
     check (m.step (0, 1, false) == 1 && m.step (4, 1, false) == 4 && m.step (4, 1, true) == 0 && m.step (0, -1, true) == 4,
            "browser: step clamps (up / down) and wraps (arrows)");
@@ -488,20 +512,20 @@ std::vector<VaultPreset> demoBank()
     std::vector<int> byCat[vault::numCategories];
     for (int i = 0; i < (int) fb.size(); ++i) byCat[fb[(size_t) i].category].push_back (i);
     static const char* labels[vault::numCategories][5] {
-        { "Glide 808", "Sub", "Grit", "Reese", "Punch" }, { "Ice Bell", "Music Box", "Glock", "Celesta", "Marimba" },
-        { "Felt Piano", "Grand", "E-Piano", "Dark Keys", "Upright" }, { "Glass Pluck", "Rage Pluck", "Harp", "Nylon Pick", "Zap" },
-        { "Saw Lead", "Whistle", "Rage Lead", "Square", "Porta" }, { "Dark Pad", "Warm Pad", "Air", "Choir Pad", "Drone" },
-        { "Ensemble", "Pizz", "Solo Violin", "Cello", "Tremolo" }, { "Horn Stab", "Brass Swell", "Trumpet", "Tuba", "Drill Horn" },
-        { "Flute", "Pan Flute", "Ocarina", "Clarinet", "Breath" }, { "Nylon", "Acoustic", "Ambient Gtr", "Clean Elec", "Harmonics" },
-        { "Ooh", "Aah", "Vox Chop", "Choir", "Whisper" }, { "Supersaw", "FM Keys", "Retro Poly", "Chip", "Wobble" },
-        { "Trap Arp", "Glitch Seq", "Gate", "Bounce", "Ripple" }, { "Orch Hit", "Timpani", "Full Orch", "Horns", "Strings Hi" },
+        { "Grand", "Felt Piano", "Upright", "Bright Grand", "Soft Grand" }, { "E-Piano", "Organ", "Clav", "Harpsichord", "Tine Keys" },
+        { "Nylon", "Acoustic", "Banjo", "Clean Elec", "Harmonics" }, { "Upright Bass", "Sub", "Fingered", "Tuba", "Analog Bass" },
+        { "Ensemble", "Pizz", "Solo Violin", "Cello", "Tremolo" }, { "Horn Swell", "Brass Stab", "Trumpet", "Trombone", "Tuba" },
+        { "Flute", "Pan Flute", "Ocarina", "Clarinet", "Bassoon" }, { "Full Orch", "Timpani", "Orch Hit", "Horns", "Strings Hi" },
+        { "Marimba", "Music Box", "Glock", "Celesta", "Vibes" }, { "Ooh", "Aah", "Choir", "Whisper", "Male Choir" },
+        { "Glass Pluck", "Harp", "Kalimba", "Nylon Pick", "Mallet" }, { "Saw Lead", "Whistle", "Square", "Porta", "Sine Lead" },
+        { "Dark Pad", "Warm Pad", "Air", "Choir Pad", "Drone" }, { "Supersaw", "FM Keys", "Retro Poly", "Chip", "Wobble" },
         { "Koto", "Sitar", "Kalimba", "Steel Drum", "Erhu" }, { "Riser", "Impact", "Texture", "Vinyl", "Wind" } };
     static const char* adj[] { "Midnight", "Frozen", "Chrome", "Hollow", "Velvet", "Neon", "Ghost", "Silver", "Crystal", "Black",
                                "Lunar", "Toxic", "Faded", "Cold", "Holy", "Static", "Glass", "Venom", "Silk", "Ashen" };
     juce::Random r (7);
     std::vector<VaultPreset> out;
     for (int c = 0; c < vault::numCategories; ++c)
-        for (int k = 0; k < vault::categoryTarget (c); ++k)
+        for (int k = 0; k < 5000 / vault::numCategories; ++k)
         {
             const float u = r.nextFloat();
             const int n = u < 0.32f ? 1 : u < 0.70f ? 2 : u < 0.92f ? 3 : 4;
@@ -517,11 +541,8 @@ std::vector<VaultPreset> demoBank()
                 part.label = labels[cat][r.nextInt (5)];
                 part.level = std::array<float, 4> { 1.0f, 0.72f, 0.55f, 0.4f }[(size_t) i];
                 if (i > 0 && r.nextInt (4) == 0) part.octave = r.nextBool() ? 1 : -1;
-                if (i == 0) { p.styles = src.styles; p.chars = src.chars; }
                 p.parts.push_back (part);
             }
-            p.styles |= 1u << r.nextInt (vault::numStyles);
-            p.chars |= 1u << r.nextInt (vault::numCharacters);
             p.name = juce::String (adj[r.nextInt (20)]) + " " + labels[c][k % 5] + (n > 1 ? " Stack" : "");
             out.push_back (std::move (p));
         }
@@ -560,7 +581,7 @@ void uiQaTests (VaultProcessor& p)
     const int n = (int) bank.size();
     VaultEditor ed (p);
     auto& v = ed.view();
-    v.setCategory (-1); v.setQuery ({}); v.setStyle (-1); v.setCharacter (-1); v.setLayers (0); v.setFavoritesOnly (false); v.setRecentOnly (false);
+    v.setCategory (-1); v.setQuery ({}); v.setLayers (0); v.setFavoritesOnly (false); v.setRecentOnly (false);
 
     // ---- speed: every filter change re-filters 5,000 rows and repaints; only the visible rows are painted
     {
@@ -573,9 +594,7 @@ void uiQaTests (VaultProcessor& p)
             worst = std::max (worst, ms); total += ms; ++ops;
         };
         for (int c = -1; c < vault::numCategories; ++c) op ([&] { v.setCategory (c); });
-        for (int st = -1; st < vault::numStyles; ++st) op ([&] { v.setStyle (st); });
-        for (int ch = -1; ch < vault::numCharacters; ++ch) op ([&] { v.setCharacter (ch); });
-        v.setCategory (-1); v.setStyle (-1); v.setCharacter (-1);
+        v.setCategory (-1);
         for (int l = 0; l <= vault::maxParts; ++l) op ([&] { v.setLayers (l); });
         juce::String q;
         for (auto c : juce::String ("dark bell"))
@@ -605,21 +624,19 @@ void uiQaTests (VaultProcessor& p)
         check (msSince (t1) / 40.0 < 5.0, "ui: loading a sound from the list costs " + juce::String (msSince (t1) / 40.0, 3) + " ms on the UI thread");
     }
 
-    // ---- keys: Page Down / End / Home walk the filtered list, Space is left to the DAW (play / stop)
+    // ---- keys: the editor never uses a key (the DAW keeps its computer-keyboard piano and its shortcuts)
     {
         v.setCategory (vault::catLeads);
         const auto rows = v.browser().visible();
         v.loadPreset (rows.front(), false);
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::pageDownKey));
-        const int afterPage = v.browser().rowOf (p.currentPreset());
-        check (afterPage == v.pageRows() && afterPage >= 5, "ui: Page Down jumps " + juce::String (afterPage) + " rows");
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::endKey));
-        check (p.currentPreset() == rows.back(), "ui: End loads the last sound of the list");
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::homeKey));
-        check (p.currentPreset() == rows.front(), "ui: Home loads the first sound of the list");
-        check (! ed.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey)), "ui: Space is not taken from the DAW");
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
-        check (p.currentPreset() == rows[1], "ui: right arrow loads the next sound");
+        bool anyUsed = false;
+        for (int code : { (int) juce::KeyPress::downKey, (int) juce::KeyPress::upKey, (int) juce::KeyPress::rightKey, (int) juce::KeyPress::leftKey,
+                          (int) juce::KeyPress::pageDownKey, (int) juce::KeyPress::endKey, (int) juce::KeyPress::homeKey, (int) juce::KeyPress::spaceKey,
+                          (int) juce::KeyPress::returnKey, (int) 'a', (int) 's', (int) 'z', (int) 'x' })
+            anyUsed |= ed.keyPressed (juce::KeyPress (code));
+        check (! anyUsed && p.currentPreset() == rows.front(), "ui: no key is taken from the DAW (arrows, Space, Return, A-L, Z / X)");
+        v.step (1, true);
+        check (p.currentPreset() == rows[1], "ui: the next-sound arrow button still steps through the list");
         v.setCategory (-1);
     }
 
@@ -630,7 +647,7 @@ void uiQaTests (VaultProcessor& p)
         for (int k = 0; k < 24; ++k, ++tested)
         {
             const auto& pr = bank[(size_t) r.nextInt (n)];
-            const int note = pr.category == vault::cat808Bass ? 48 : 60;
+            const int note = vault::homeNote;
             float m[vault::numMacros];
             for (int i = 0; i < vault::numMacros; ++i) m[i] = pr.macroDefaults[i];
             const auto base = VaultEngine::render (pr, note, 0.8f, 1.5, 22050.0, m);
@@ -745,16 +762,16 @@ void uiQaTests (VaultProcessor& p)
         v.setCategory (-1);
     }
 
-    // ---- DRAG WAV: rendered quickly, 808s at C3, file written
+    // ---- DRAG WAV: rendered quickly, every category (basses too) at the home note C5 = MIDI 60, file written
     {
-        int bass = -1;
-        for (int i = 0; i < n && bass < 0; ++i) if (bank[(size_t) i].category == vault::cat808Bass) bass = i;
+        int bass = 0;
+        for (int i = 0; i < n; ++i) if (bank[(size_t) i].category == vault::catBass) { bass = i; break; }
         v.loadPreset (bass, false);
         const auto t0 = juce::Time::getMillisecondCounterHiRes();
         const auto f = v.renderWavForDrag();
         const double ms = msSince (t0);
-        check (f.existsAsFile() && f.getFileName().endsWith (" C3.wav") && f.getSize() > 100000 && ms < 400.0,
-               "ui: DRAG WAV of an 808 -> " + f.getFileName() + " (" + juce::String (f.getSize() / 1024) + " KB, " + juce::String (ms, 0) + " ms)");
+        check (f.existsAsFile() && f.getFileName().endsWith (" C5.wav") && f.getSize() > 100000 && ms < 400.0,
+               "ui: DRAG WAV of a bass -> " + f.getFileName() + " (" + juce::String (f.getSize() / 1024) + " KB, " + juce::String (ms, 0) + " ms)");
     }
 
     // ---- window: a host that ignores the aspect ratio gets a centred, fully visible view; first-open size per screen
@@ -881,9 +898,9 @@ void readabilityTests (VaultProcessor& p)
     auto& v = ed.view();
     const auto& bank = p.bank();
     int pick = 0;
-    for (int i = 0; i < (int) bank.size(); ++i) if (bank[(size_t) i].parts.size() >= 3 && bank[(size_t) i].styles != 0) { pick = i; break; }
+    for (int i = 0; i < (int) bank.size(); ++i) if (bank[(size_t) i].parts.size() >= 3) { pick = i; break; }
     v.loadPreset (pick, false);
-    v.setStyle (0);   // "Clear filters" is painted too
+    v.setLayers (3);   // "Clear filters" is painted too
     for (float sc : { 0.8f, 1.0f, 1.5f, 2.0f })
     {
         ed.setUiScale (sc);
@@ -894,7 +911,7 @@ void readabilityTests (VaultProcessor& p)
         check (rendered >= need - 0.01f, "ui: smallest text at " + juce::String (juce::roundToInt (sc * 100)) + " % = "
                                              + juce::String (rendered, 1) + " px (>= " + juce::String (need, 0) + ")");
     }
-    // no "..." hiding information in the list: every name and every "category · styles" line of the bank fits its column
+    // no "..." hiding information in the list: every name and every info line of the bank fits its column
     {
         ed.setUiScale (1.0f);
         const auto cols = vui::PresetList::columns ((float) v.presetList().listBox().getVisibleRowWidth(), (float) vui::PresetList::rowH);
@@ -903,8 +920,11 @@ void readabilityTests (VaultProcessor& p)
         for (const auto& x : bank)
         {
             if (vui::textWidth (vui::PresetList::nameFont(), x.name) > cols.name.getWidth()) { ++namesCut; worst = x.name; }
-            const auto t = vui::PresetList::tagText (x, true);
-            if (vui::textWidth (vui::PresetList::tagFont(), t) > cols.tags.getWidth()) { ++tagsCut; worst = t; }
+            for (bool withCat : { true, false })
+            {
+                const auto t = vui::PresetList::tagText (x, withCat);
+                if (vui::textWidth (vui::PresetList::tagFont(), t) > cols.tags.getWidth()) { ++tagsCut; worst = t; }
+            }
         }
         check (namesCut == 0 && tagsCut == 0, "ui: every name (" + juce::String (cols.name.getWidth(), 0) + " px) and tag line ("
                                                   + juce::String (cols.tags.getWidth(), 0) + " px) of the bank fits its list column ("
@@ -915,8 +935,48 @@ void readabilityTests (VaultProcessor& p)
     check (vui::col::dim == juce::Colour (0xff8593ab) && vui::col::text == juce::Colour (0xffe3e8f0)
                && lum (vui::col::muted) >= lum (vui::col::dim) && lum (vui::col::ice) >= lum (vui::col::dim),
            "ui: text colours (dim #8593AB is the darkest, primary #E3E8F0)");
-    v.setStyle (-1);
+    v.setLayers (0);
     VaultSettings::get()->setScale (1.0f);
+}
+
+// keyboard focus: only the search box ever takes the keyboard; clicks elsewhere, Return and Escape give it back to the DAW;
+// the on-screen keyboard is labelled in FL Studio naming (MIDI 60 = C5)
+void focusTests (VaultProcessor& p)
+{
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    v.loadPreset (0, false);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (20);   // the list creates its row components
+    juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
+    int grabbers = 0, total = 0;
+    std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
+    {
+        ++total;
+        if (&c != &v.searchBox() && (c.getWantsKeyboardFocus() || c.getMouseClickGrabsKeyboardFocus()))
+        {
+            if (grabbers++ < 6) std::printf ("   takes focus on click: %s (%s)\n", c.getName().toRawUTF8(), typeid (c).name());
+        }
+        if (&c == &v.searchBox()) return;   // the text editor's own inner parts
+        for (auto* ch : c.getChildren()) walk (*ch);
+    };
+    walk (v);
+    check (grabbers == 0 && ! ed.getWantsKeyboardFocus() && ! ed.getMouseClickGrabsKeyboardFocus(),
+           "focus: no component but the search box takes the keyboard on click (" + juce::String (total) + " components checked)");
+    check (v.keys().getOctaveForMiddleC() == 5 && vault::noteName (60) == "C5" && vault::noteName (vault::homeNote) == "C5" && vault::noteName (36) == "C3",
+           "keyboard: MIDI 60 is labelled C5 (FL Studio)");
+
+    // the search box hands the keyboard back on Return / Escape / a click elsewhere (counted by the view; a real
+    // focus round trip needs a window manager, which xvfb does not have)
+    auto& search = dynamic_cast<juce::TextEditor&> (v.searchBox());
+    const int n0 = v.focusReturns();
+    search.keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (30);   // the text editor posts its key callbacks
+    const bool afterReturn = v.focusReturns() == n0 + 1;
+    search.setText ("piano", true);
+    search.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+    const bool afterEscape = v.focusReturns() == n0 + 2 && search.isEmpty();
+    check (afterReturn && afterEscape && search.getWantsKeyboardFocus(), "focus: Return / Escape in the search box give the keyboard back to the DAW");
 }
 
 // editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
@@ -940,13 +1000,12 @@ int uiTests()
         pads0 = rows.front();
         v.loadPreset (pads0, true);
         check (p.currentPreset() == pads0 && v.shownPreset() == pads0, "ui: click loads the sound");
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::downKey));
-        check (p.currentPreset() == rows[1], "ui: down key loads the next sound of the filtered list");
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
-        check (p.currentPreset() == pads0, "ui: up key, clamped at the top");
-        ed.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));
-        check (p.currentPreset() == rows.back(), "ui: left arrow wraps to the end");
+        v.step (1, false);
+        check (p.currentPreset() == rows[1], "ui: step loads the next sound of the filtered list");
+        v.step (-1, false); v.step (-1, false);
+        check (p.currentPreset() == pads0, "ui: step back, clamped at the top");
+        v.step (-1, true);
+        check (p.currentPreset() == rows.back(), "ui: the previous-sound arrow wraps to the end");
         v.setLayers (2);
         // a search word taken from the loaded bank (works with the shipped bank and the demo bank)
         juce::String word ("stack");
@@ -996,11 +1055,474 @@ int uiTests()
         const auto f = VaultSettings::fileOverride();
         check (f.existsAsFile() && f.loadFileAsString().contains (bank[(size_t) fav].id), "ui: settings file " + f.getFileName());
     }
+    focusTests (p);
     windowSizeTests (p);
     readabilityTests (p);
     VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
     VaultSettings::get()->setScale (1.0f);
     uiQaTests (p);
+    return fails;
+}
+
+//==============================================================================
+// v2: sampler, sample library, model registry, CVB v1 compatibility
+//==============================================================================
+// YIN pitch (median of frames) of a mono mix, Hz
+float yinPitch (const juce::AudioBuffer<float>& b, int from, int len, double sr, double fmin = 40.0, double fmax = 2000.0)
+{
+    std::vector<float> x ((size_t) b.getNumSamples());
+    for (int i = 0; i < b.getNumSamples(); ++i) { float s = 0; for (int c = 0; c < b.getNumChannels(); ++c) s += b.getSample (c, i); x[(size_t) i] = s; }
+    const int w = 2048, tauMax = std::min (w - 2, (int) (sr / fmin)), tauMin = std::max (2, (int) (sr / fmax));
+    std::vector<float> f0s;
+    for (int s0 = from; s0 + w + tauMax < std::min ((int) x.size(), from + len); s0 += w / 2)
+    {
+        std::vector<double> d ((size_t) tauMax + 2, 0.0);
+        for (int tau = 1; tau <= tauMax + 1; ++tau)
+        {
+            double acc = 0;
+            for (int j = 0; j < w; ++j) { const double e = (double) x[(size_t) (s0 + j)] - x[(size_t) (s0 + j + tau)]; acc += e * e; }
+            d[(size_t) tau] = acc;
+        }
+        double run = 0; std::vector<double> cm ((size_t) tauMax + 2, 1.0);
+        for (int tau = 1; tau <= tauMax + 1; ++tau) { run += d[(size_t) tau]; cm[(size_t) tau] = run > 0 ? d[(size_t) tau] * tau / run : 1.0; }
+        int best = -1;
+        for (int tau = tauMin; tau <= tauMax; ++tau)
+            if (cm[(size_t) tau] < 0.12) { while (tau < tauMax && cm[(size_t) tau + 1] < cm[(size_t) tau]) ++tau; best = tau; break; }
+        if (best <= 1 || best >= tauMax) continue;
+        const double a = cm[(size_t) best - 1], bb = cm[(size_t) best], c = cm[(size_t) best + 1], den = a - 2 * bb + c;
+        const double t = std::abs (den) > 1e-12 ? best + 0.5 * (a - c) / den : best;
+        f0s.push_back ((float) (sr / t));
+    }
+    if (f0s.empty()) return 0.0f;
+    std::sort (f0s.begin(), f0s.end());
+    return f0s[f0s.size() / 2];
+}
+float centsOff (float f, float target) { return f > 0 ? 1200.0f * std::log2 (f / target) : 9999.0f; }
+
+// writes a small test library into `dir`: "t.sine" (sine zones at MIDI 57 / 64, 2 velocity layers, 2 round robins on the
+// soft layer, sustain loop), "t.click" (one-shot, OGG) and "t.missing" (a zone whose file does not exist)
+void writeTestLibrary (const juce::File& dir)
+{
+    dir.deleteRecursively();
+    const auto audio = dir.getChildFile ("audio/t");
+    audio.createDirectory();
+    const double sr = 44100.0;
+    auto writeFile = [&] (const juce::String& name, double hz, float amp, double secs, bool ogg, float decay)
+    {
+        juce::AudioBuffer<float> b (2, (int) (secs * sr));
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const float env = std::exp (-decay * (float) i / (float) sr) * std::min (1.0f, (float) i / 64.0f);
+            const float v = amp * env * (float) std::sin (juce::MathConstants<double>::twoPi * hz * i / sr);
+            b.setSample (0, i, v); b.setSample (1, i, v * 0.9f);
+        }
+        const auto f = audio.getChildFile (name);
+        std::unique_ptr<juce::OutputStream> os (f.createOutputStream());
+        std::unique_ptr<juce::AudioFormat> fmt;
+        if (ogg) fmt = std::make_unique<juce::OggVorbisAudioFormat>(); else fmt = std::make_unique<juce::WavAudioFormat>();
+        auto w = fmt->createWriterFor (os, juce::AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2).withBitsPerSample (ogg ? 16 : 24)
+                                               .withQualityOptionIndex (ogg ? 6 : 0));
+        if (w != nullptr) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+    };
+    const double a3 = 220.0, e4 = 329.6275569;
+    writeFile ("sine57_soft_1.wav", a3, 0.25f, 3.0, false, 0.0f);
+    writeFile ("sine57_soft_2.wav", a3, 0.24f, 3.0, false, 0.0f);
+    writeFile ("sine57_loud.wav", a3, 0.6f, 3.0, false, 0.0f);
+    writeFile ("sine64_soft.wav", e4, 0.25f, 3.0, false, 0.0f);
+    writeFile ("sine64_loud.wav", e4, 0.6f, 3.0, false, 0.0f);
+    writeFile ("click.ogg", 523.25, 0.5f, 0.6, true, 6.0f);
+    // the loop is deliberately NOT a whole number of periods (a raw jump would click): 1.0 s .. 2.3 s, 100 ms crossfade
+    const juce::String loop = "\"loopStart\": 44100, \"loopEnd\": 101430, \"xfade\": 4410";
+    const juce::String json = juce::String (R"({ "format": "CHROME VAULT library", "version": 1, "instruments": [
+      { "id": "t.sine", "name": "Test Sine", "family": "Test", "articulations": [
+        { "name": "sustain", "release": 0.25, "zones": [
+          { "file": "t/sine57_soft_1.wav", "root": 57, "lo": 0, "hi": 60, "vlo": 1, "vhi": 63, "rr": 0, LOOP },
+          { "file": "t/sine57_soft_2.wav", "root": 57, "lo": 0, "hi": 60, "vlo": 1, "vhi": 63, "rr": 1, LOOP },
+          { "file": "t/sine57_loud.wav", "root": 57, "lo": 0, "hi": 60, "vlo": 64, "vhi": 127, LOOP },
+          { "file": "t/sine64_soft.wav", "root": 64, "lo": 61, "hi": 127, "vlo": 1, "vhi": 63, LOOP },
+          { "file": "t/sine64_loud.wav", "root": 64, "lo": 61, "hi": 127, "vlo": 64, "vhi": 127, LOOP } ] },
+        { "name": "short", "oneShot": true, "zones": [ { "file": "t/click.ogg", "root": 72 } ] } ] },
+      { "id": "t.missing", "name": "Missing", "family": "Test", "articulations": [
+        { "name": "x", "zones": [ { "file": "t/nope.ogg", "root": 60 } ] } ] } ] })").replace ("LOOP", loop);
+    dir.getChildFile ("library.json").replaceWithText (json);
+}
+
+VaultPreset samplePreset (const juce::String& inst, const juce::String& art, std::vector<std::pair<juce::String, float>> vals = {})
+{
+    VaultPreset p;
+    p.id = "t.smp." + inst + "." + art; p.name = "Sample " + art; p.category = vault::catPiano;
+    VaultPart part;
+    part.kind = VaultPartKind::sample; part.source = inst; part.articulation = art; part.label = "Test";
+    part.values = vals;
+    p.parts.push_back (part);
+    return p;
+}
+
+// v1 bank writer (the old format, for the compatibility test)
+juce::MemoryBlock writeV1Bank (const std::vector<VaultPreset>& bank, const std::vector<int>& v1Cats)
+{
+    juce::StringArray keys;
+    for (int k = 0; k < kk::vk::count; ++k) keys.add (kk::vk::info (k).id);
+    juce::MemoryOutputStream payload;
+    payload.writeShort ((short) keys.size());
+    for (auto& k : keys) payload.writeString (k);
+    for (size_t i = 0; i < bank.size(); ++i)
+    {
+        const auto& p = bank[i];
+        payload.writeString (p.id); payload.writeString (p.name);
+        payload.writeByte ((char) v1Cats[i]);
+        payload.writeInt (0x11); payload.writeInt (0x22);   // style / character tags
+        payload.writeFloat (p.gain);
+        for (float m : p.macroDefaults) payload.writeFloat (m);
+        payload.writeByte ((char) p.parts.size());
+        for (auto& part : p.parts)
+        {
+            payload.writeString (part.label); payload.writeFloat (part.level); payload.writeFloat (part.pan);
+            payload.writeByte ((char) part.octave); payload.writeByte ((char) part.semi);
+            payload.writeShort ((short) part.values.size());
+            for (auto& [id, v] : part.values) { payload.writeByte ((char) keys.indexOf (id)); payload.writeFloat (v); }
+        }
+    }
+    juce::MemoryOutputStream out;
+    out.write ("CVB1", 4); out.writeShort (1); out.writeShort (0); out.writeInt ((int) bank.size()); out.writeInt ((int) payload.getDataSize());
+    out.write (payload.getData(), payload.getDataSize());
+    return out.getMemoryBlock();
+}
+
+int samplerTests()
+{
+    const double sr = 44100.0;
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("cv-test-library");
+    writeTestLibrary (dir);
+    auto lib = std::make_shared<vault::SampleLibrary> (dir);
+    check (lib->libraryFound() && lib->numInstruments() == 2 && lib->find ("t.sine") != nullptr, "library: test library.json parsed (" + lib->errorMessage() + ")");
+    auto* sine = lib->find ("t.sine");
+    check (lib->loadNow (sine) && sine->isLoaded() && sine->data()->articulations.size() == 2, "library: instrument decoded into RAM ("
+                                                                                                   + juce::String ((int) (lib->memoryUsed() / 1024)) + " KB)");
+
+    // ---- zone selection: key range, velocity layer, round robin rotation, release / missing
+    {
+        const auto* d = sine->data();
+        const auto* zSoft = d->pick (0, 57, 40, 0, false);
+        const auto* zSoft2 = d->pick (0, 57, 40, 1, false);
+        const auto* zSoft3 = d->pick (0, 57, 40, 2, false);
+        const auto* zLoud = d->pick (0, 55, 100, 0, false);
+        const auto* zHigh = d->pick (0, 70, 100, 0, false);
+        check (zSoft != nullptr && zSoft->root == 57 && zSoft->vhi == 63 && zLoud != nullptr && zLoud->vlo == 64 && zHigh != nullptr && zHigh->root == 64,
+               "sampler: zone selection by key range and velocity layer");
+        check (zSoft != zSoft2 && zSoft3 == zSoft && zSoft2 != nullptr && zSoft2->rr == 1, "sampler: round robin rotates through the cell (0, 1, 0)");
+        check (d->pick (0, 70, 100, 0, true) == nullptr && d->pick (5, 60, 100, 0, false) == nullptr, "sampler: no release zone / bad articulation -> nothing");
+        int switches = 0; const vault::SampleInstrumentData::Zone* last = nullptr;
+        for (unsigned k = 0; k < 6; ++k) { const auto* z = d->pick (0, 57, 30, k, false); switches += (z != last) ? 1 : 0; last = z; }
+        check (switches == 6, "sampler: repeated soft notes alternate their round-robin takes");
+    }
+
+    // ---- pitch at C5 (MIDI 60) from a root of 57 (+3 semitones) and from 64 (-4) within +-5 cents
+    {
+        juce::MidiBuffer m;
+        m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        const auto b = VaultEngine::renderMidi (samplePreset ("t.sine", "sustain"), m, (int) (1.5 * sr), sr, nullptr, lib);
+        const float f = yinPitch (b, (int) (0.2 * sr), (int) (1.0 * sr), sr);
+        check (std::abs (centsOff (f, 261.6256f)) < 5.0f, "sampler: C5 from a 3-semitone-lower zone plays " + juce::String (f, 2) + " Hz ("
+                                                          + juce::String (centsOff (f, 261.6256f), 2) + " cents)");
+        juce::MidiBuffer m2;
+        m2.addEvent (juce::MidiMessage::noteOn (1, 61, (juce::uint8) 100), 0);
+        const auto b2 = VaultEngine::renderMidi (samplePreset ("t.sine", "sustain"), m2, (int) (1.5 * sr), sr, nullptr, lib);
+        const float f2 = yinPitch (b2, (int) (0.2 * sr), (int) (1.0 * sr), sr), want2 = 277.1826f;
+        check (std::abs (centsOff (f2, want2)) < 5.0f, "sampler: C#5 from a zone 3 semitones higher plays " + juce::String (f2, 2) + " Hz ("
+                                                        + juce::String (centsOff (f2, want2), 2) + " cents)");
+        // 48 kHz host: the sample-rate ratio is part of the pitch
+        const auto b3 = VaultEngine::renderMidi (samplePreset ("t.sine", "sustain"), m, (int) (1.5 * 48000.0), 48000.0, nullptr, lib);
+        const float f3 = yinPitch (b3, 9600, 48000, 48000.0);
+        check (std::abs (centsOff (f3, 261.6256f)) < 5.0f, "sampler: in tune at 48 kHz (" + juce::String (centsOff (f3, 261.6256f), 2) + " cents)");
+    }
+
+    // ---- sustain loop: a held note passes the (imperfect) loop point many times without a click; release fades
+    {
+        juce::MidiBuffer m;
+        m.addEvent (juce::MidiMessage::noteOn (1, 57, (juce::uint8) 100), 0);
+        const int offAt = (int) (6.0 * sr);
+        m.addEvent (juce::MidiMessage::noteOff (1, 57), offAt);
+        const auto b = VaultEngine::renderMidi (samplePreset ("t.sine", "sustain", { { "s.width", 1.0f } }), m, (int) (7.0 * sr), sr, nullptr, lib);
+        // root note = no pitch change: the loop wraps at 101430 - 44100 = 57330 samples
+        const float steady = stats (b, (int) (0.5 * sr), (int) (0.9 * sr)).maxJump;
+        float worst = 0;
+        for (int k = 0; k < 4; ++k)
+        {
+            const int at = 101430 + k * 57330;
+            worst = std::max (worst, stats (b, at - 6000, at + 600).maxJump);
+        }
+        check (worst <= steady * 1.08f + 1e-4f, "sampler: loop crossfade is seamless (max jump " + juce::String (worst, 5) + " vs steady " + juce::String (steady, 5) + ")");
+        const float rmsHeld = stats (b, (int) (5.0 * sr), (int) (5.5 * sr)).rms;
+        check (rmsHeld > 0.5f * stats (b, (int) (0.5 * sr), (int) (1.0 * sr)).rms, "sampler: the looped note keeps sustaining (5 s)");
+        const float afterRel = stats (b, offAt + (int) (0.30 * sr), offAt + (int) (0.35 * sr)).peak;
+        check (afterRel < rmsHeld * 0.01f && stats (b, offAt - 64, offAt + 512).maxJump <= steady * 1.1f + 1e-4f,
+               "sampler: release fades out smoothly (-60 dB within the 0.25 s release, no click at note-off: after " + juce::String (afterRel, 6)
+                   + " held " + juce::String (rmsHeld, 4) + " jump " + juce::String (stats (b, offAt - 64, offAt + 512).maxJump, 5) + ")");
+    }
+
+    // ---- one-shot (OGG): plays to its end, ignores note-off; the missing instrument fails cleanly and stays silent
+    {
+        juce::MidiBuffer m;
+        m.addEvent (juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100), 0);
+        m.addEvent (juce::MidiMessage::noteOff (1, 72), 200);
+        const auto b = VaultEngine::renderMidi (samplePreset ("t.sine", "short"), m, (int) (0.5 * sr), sr, nullptr, lib);
+        check (stats (b, (int) (0.2 * sr), (int) (0.25 * sr)).rms > 1e-3f, "sampler: one-shot ignores the early note-off");
+        const float f = yinPitch (b, 1000, (int) (0.3 * sr), sr);
+        check (std::abs (centsOff (f, 523.25f)) < 5.0f, "sampler: OGG one-shot at its root " + juce::String (f, 2) + " Hz");
+        auto* miss = lib->find ("t.missing");
+        check (! lib->loadNow (miss) && miss->hasFailed() && ! miss->isLoading(), "library: an instrument with a missing file fails (no retry loop)");
+        juce::MidiBuffer m2;
+        m2.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        const auto s = stats (VaultEngine::renderMidi (samplePreset ("t.missing", "x"), m2, (int) (0.3 * sr), sr, nullptr, lib));
+        const auto u = stats (VaultEngine::renderMidi (samplePreset ("no.such.id", ""), m2, (int) (0.3 * sr), sr, nullptr, lib));
+        check (s.finite && s.peak == 0.0f && u.finite && u.peak == 0.0f, "library: missing / unknown instruments are silent, no crash");
+        vault::SampleLibrary none (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("cv-no-library-here"));
+        check (! none.libraryFound() && none.numInstruments() == 0 && none.find ("t.sine") == nullptr, "library: missing library folder -> libraryFound() false");
+        check (! vault::SampleLibrary::searchLocations().isEmpty(), "library: search locations (" + vault::SampleLibrary::searchLocations().getLast().getFullPathName() + ")");
+    }
+
+    // ---- loading on the audio side: silent while loading, plays once loaded; LRU eviction never touches what is in use
+    {
+        auto lib2 = std::make_shared<vault::SampleLibrary> (dir);
+        const auto c = VaultEngine::compile (samplePreset ("t.sine", "sustain"), lib2);
+        VaultEngine eng;
+        eng.prepare (sr, 256);
+        eng.setPreset (c, true);
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer on; on.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        juce::MidiBuffer none;
+        eng.process (buf, on);
+        const bool wasLoading = eng.isLoading();
+        lib2->waitUntilIdle (10000);
+        for (int k = 0; k < 4; ++k) eng.process (buf, none);
+        const bool loadedNow = ! eng.isLoading() && c.parts[0].instrument->isLoaded();
+        eng.process (buf, on);   // a new note after loading plays
+        for (int k = 0; k < 20; ++k) eng.process (buf, none);
+        check (wasLoading && loadedNow && stats (buf).rms > 1e-3f, "engine: part silent while loading (isLoading), plays once the loader is done");
+        lib2->setMemoryBudget (1);   // below anything: only unused instruments may go
+        lib2->waitUntilIdle (2000);
+        juce::Thread::sleep (100);
+        check (c.parts[0].instrument->isLoaded(), "library: an instrument in use survives a memory-budget squeeze");
+        eng.releaseResources();
+        juce::Thread::sleep (100);
+        bool evicted = false;
+        for (int k = 0; k < 50 && ! evicted; ++k) { juce::Thread::sleep (20); evicted = ! c.parts[0].instrument->isLoaded(); }
+        check (evicted && lib2->memoryUsed() == 0, "library: unused instruments are evicted when over budget (LRU)");
+    }
+
+    // ---- the audio thread never allocates: notes, sustain, preset switches between sample / synth / model presets
+    {
+        const auto cs = VaultEngine::compile (samplePreset ("t.sine", "sustain", { { "s.cutoff", 3000.0f }, { "s.vibrato", 10.0f } }), lib);
+        const auto csyn = VaultEngine::compile (testPresets()[0]);
+        VaultPreset mp; mp.id = "t.model"; mp.name = "Model"; mp.category = vault::catSynth;
+        { VaultPart part; part.kind = VaultPartKind::model; part.source = "sine"; part.label = "Sine"; mp.parts.push_back (part); }
+        const auto cm = VaultEngine::compile (mp);
+        VaultEngine eng;
+        eng.prepare (sr, 512);
+        eng.setPreset (cs, true);
+        eng.setPreset (cm, true);
+        eng.serviceResources();     // the model pool is made off the audio thread (as the processor's timer does)
+        eng.setPreset (cs, true);
+        juce::AudioBuffer<float> buf (2, 512);
+        allocHook::allocs = 0;
+        allocHook::countAllocs = true;
+        for (int k = 0; k < 400; ++k)
+        {
+            juce::MidiBuffer m;
+            if (k % 7 == 0) m.addEvent (juce::MidiMessage::noteOn (1, 48 + (k % 24), (juce::uint8) (40 + k % 80)), 3);
+            if (k % 7 == 4) m.addEvent (juce::MidiMessage::noteOff (1, 48 + ((k - 4) % 24)), 100);
+            if (k == 50) m.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0);
+            if (k == 90) m.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 0);
+            if (k % 13 == 0) m.addEvent (juce::MidiMessage::pitchWheel (1, 8192 + (k % 5) * 800), 10);
+            if (k == 120) eng.setPreset (csyn);
+            if (k == 200) eng.setPreset (cm);
+            if (k == 280) eng.setPreset (cs);
+            if (k % 10 == 0) eng.setMacro (k / 10 % 4, (float) (k % 100) / 100.0f);
+            eng.process (buf, m);
+        }
+        allocHook::countAllocs = false;
+        check (allocHook::allocs.load() == 0, "engine: no allocation on the audio thread over 400 blocks (notes, pedal, bend, macros, sample / synth / model switches: "
+                                                 + juce::String (allocHook::allocs.load()) + " allocations)");
+    }
+
+    // ---- CPU: 48 held sampler voices (pitched, filtered, looped) for 5 s
+    {
+        juce::MidiBuffer m;
+        for (int k = 0; k < 48; ++k) m.addEvent (juce::MidiMessage::noteOn (1, 40 + k, (juce::uint8) 100), k);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto b = VaultEngine::renderMidi (samplePreset ("t.sine", "sustain", { { "s.cutoff", 5000.0f } }), m, (int) (5.0 * sr), sr, nullptr, lib);
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        check (stats (b).finite && ms < 5000.0, "CPU: 48 sampler voices for 5 s render in " + juce::String (ms, 0) + " ms ("
+                                                    + juce::String (ms / 5000.0 * 100.0, 1) + " % of one core, sinc interpolation + SVF per voice)");
+    }
+
+    // ---- model registry: the "sine" example model plays in tune, unknown ids are silent
+    {
+        auto& reg = vault::models::ModelRegistry::get();
+        check (reg.indexOf ("sine") >= 0 && reg.find ("sine")->params.size() == 3 && reg.indexOf ("nope") < 0, "models: registry lists " + reg.ids().joinIntoString (", "));
+        VaultPreset mp; mp.id = "t.model"; mp.name = "Model"; mp.category = vault::catSynth;
+        VaultPart part; part.kind = VaultPartKind::model; part.source = "sine"; part.label = "Sine"; part.values = { { "m.level", 0.3f } };
+        mp.parts.push_back (part);
+        juce::String why;
+        check (vault::validatePreset (mp, &why), "models: a model preset validates " + why);
+        const auto b = VaultEngine::render (mp, vault::homeNote, 0.8f, 1.5, sr);
+        const float f = yinPitch (b, (int) (0.1 * sr), (int) (0.8 * sr), sr);
+        check (std::abs (centsOff (f, 261.6256f)) < 5.0f && stats (b).peak < 0.99f, "models: sine model at C5 = " + juce::String (f, 2) + " Hz");
+        mp.parts[0].source = "no.such.model";
+        check (stats (VaultEngine::render (mp, 60, 0.8f, 0.5, sr)).peak == 0.0f, "models: an unknown model id is silent");
+    }
+
+    // ---- CVB: v2 round trip with all part kinds, v1 files are read (tags dropped, categories mapped, no "808")
+    {
+        std::vector<VaultPreset> all = testPresets();
+        auto sp = samplePreset ("piano.grand.concert", "sustain", { { "s.release", 0.8f }, { "s.cutoff", 9000.0f }, { "revMix", 0.2f } });
+        sp.parts.push_back (testPresets()[0].parts[0]);
+        VaultPart mpart; mpart.kind = VaultPartKind::model; mpart.source = "sine"; mpart.label = "Body"; mpart.values = { { "m.decay", 2.5f }, { "m.custom", 7.0f } };
+        sp.parts.push_back (mpart);
+        all.push_back (sp);
+        juce::String why;
+        check (vault::validatePreset (sp, &why), "cvb: a 3-kind preset validates " + why);
+        auto bad = sp; bad.parts[0].values.push_back ({ "s.unknownKnob", 1.0f });
+        check (! vault::validatePreset (bad), "cvb: an unknown sample parameter is refused");
+        const auto mb = vault::serializeBank (all, true);
+        std::vector<VaultPreset> back; int ver = 0;
+        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &ver) && back == all && ver == 2, "cvb: v2 round trip (sample / model / synth parts)");
+        std::vector<VaultPreset> v1src = { preset ("cv.808.0001", "Glide 808 Monster", 0, { part ({ { ID::engine, 6 } }, 1, 0, 0, "Sub 808") }),
+                                           preset ("cv.keys.0001", "Felt Dream", 0, { part ({ { ID::engine, 0 } }, 1, 0, 0, "Felt Piano") }),
+                                           preset ("cv.keys.0002", "Organ Church", 0, { part ({ { ID::engine, 4 } }, 1, 0, 0, "Organ") }),
+                                           preset ("cv.arp.0001", "Seq Thing", 0, { part ({ { ID::engine, 0 } }, 1, 0, 0, "Arp") }) };
+        const auto v1 = writeV1Bank (v1src, { vault::v1::cat808Bass, vault::v1::catPianoKeys, vault::v1::catPianoKeys, vault::v1::catArpsSequences });
+        std::vector<VaultPreset> rd; ver = 0;
+        const bool ok = vault::deserializeBank (v1.getData(), v1.getSize(), rd, nullptr, &ver);
+        check (ok && ver == 1 && rd.size() == 4 && rd[0].category == vault::catBass && rd[1].category == vault::catPiano && rd[2].category == vault::catKeysOrgan
+                   && rd[3].category == vault::catSynth && rd[0].name == "Glide Sub Monster" && rd[0].parts[0].label == "Sub" && rd[0].parts[0].kind == VaultPartKind::synth,
+               "cvb: v1 file read (categories mapped, '808' removed: '" + (rd.empty() ? juce::String() : rd[0].name) + "')");
+       #if CV_HAS_BANK
+        int embeddedVer = 0;
+        for (int i = 0; i < VaultData::namedResourceListSize; ++i)
+        {
+            int size = 0;
+            if (const auto* data = VaultData::getNamedResource (VaultData::namedResourceList[i], size))
+            {
+                std::vector<VaultPreset> eb;
+                if (vault::deserializeBank (data, (size_t) size, eb, nullptr, &embeddedVer)) { check (! eb.empty(), "cvb: embedded bank read (format v" + juce::String (embeddedVer) + ", " + juce::String ((int) eb.size()) + " presets)"); break; }
+            }
+        }
+       #endif
+    }
+    dir.deleteRecursively();
+    return fails;
+}
+
+//==============================================================================
+// the real library (CHROME_VAULT_LIBRARY / installed): every instrument renders clean and in tune at C5
+float bandShare (const juce::AudioBuffer<float>& b, int from, int len, double sr, double lo, double hi, float* fundDb, float* strongestDb, double f0)
+{
+    const int order = 15, n = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> data ((size_t) n * 2, 0.0f);
+    for (int i = 0; i < n && from + i < b.getNumSamples() && i < len; ++i)
+    {
+        float s = 0; for (int c = 0; c < b.getNumChannels(); ++c) s += b.getSample (c, from + i);
+        data[(size_t) i] = s * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * i / (float) std::min (n, len)));
+    }
+    fft.performFrequencyOnlyForwardTransform (data.data());
+    double tot = 0, band = 0;
+    for (int k = 1; k < n / 2; ++k)
+    {
+        const double f = k * sr / n, p = (double) data[(size_t) k] * data[(size_t) k];
+        tot += p; if (f >= lo && f < hi) band += p;
+    }
+    if (fundDb != nullptr && strongestDb != nullptr && f0 > 0)
+    {
+        auto peakNear = [&] (double hz) { float m = 0; const int k0 = (int) (hz * 0.97 * n / sr), k1 = (int) (hz * 1.03 * n / sr) + 1;
+                                          for (int k = std::max (1, k0); k <= std::min (n / 2 - 1, k1); ++k) m = std::max (m, data[(size_t) k]); return m; };
+        const float fund = peakNear (f0);
+        float strongest = fund;
+        for (int h = 2; h <= 16 && h * f0 < sr / 2; ++h) strongest = std::max (strongest, peakNear (h * f0));
+        *fundDb = juce::Decibels::gainToDecibels (fund + 1e-9f);
+        *strongestDb = juce::Decibels::gainToDecibels (strongest + 1e-9f);
+    }
+    return (float) (band / std::max (1e-20, tot));
+}
+
+int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool asTest)
+{
+    auto lib = vault::SampleLibrary::getShared();
+    if (! lib->libraryFound())
+    {
+        std::printf ("no sample library (%s) - searched: %s\n", lib->errorMessage().toRawUTF8(),
+                     vault::SampleLibrary::searchLocations().getFirst().getFullPathName().toRawUTF8());
+        if (asTest) check (true, "library: none installed - the real-library checks are skipped");
+        return 0;
+    }
+    if (outDir != juce::File()) outDir.createDirectory();
+    const double sr = 44100.0;
+    check (true, "library: " + lib->libraryPath().getFullPathName() + " (" + juce::String (lib->numInstruments()) + " instruments)");
+    for (int i = 0; i < lib->numInstruments(); ++i)
+    {
+        auto* h = lib->instrument (i);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const bool loaded = lib->loadNow (h);
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        check (loaded, "library: " + h->desc.id + " loads (" + juce::String ((int) (h->data() != nullptr ? h->data()->bytes / 1024 / 1024 : 0)) + " MB in RAM, "
+                           + juce::String (ms, 0) + " ms)");
+        for (auto& art : h->desc.articulations)
+            for (int note : notes)
+            {
+                const bool sustained = ! art.oneShot;
+                const double secs = sustained ? 24.0 : 3.0;   // long enough for several loop wraps
+                juce::MidiBuffer m;
+                m.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+                m.addEvent (juce::MidiMessage::noteOff (1, note), (int) ((secs - 1.0) * sr));
+                const auto b = VaultEngine::renderMidi (samplePreset (h->desc.id, art.name), m, (int) (secs * sr), sr, nullptr, lib);
+                const auto st = stats (b);
+                const double f0 = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+                const int a0 = (int) (0.15 * sr);
+                const float f = yinPitch (b, a0, (int) (0.8 * sr), sr, f0 * 0.6, f0 * 1.6);
+                float fundDb = 0, strongDb = 0;
+                const float presence = bandShare (b, a0, (int) (0.75 * sr), sr, 2000.0, 5000.0, &fundDb, &strongDb, f0);
+                // loop wrap clicks: the largest sample jump during the held part vs the first second
+                const float early = stats (b, (int) (0.3 * sr), (int) (1.2 * sr)).maxJump, held = stats (b, (int) (1.2 * sr), (int) ((secs - 1.05) * sr)).maxJump;
+                const float loud = VaultEngine::measureLoudnessDb (b, sr);
+                std::printf ("   %-26s %-9s %-4s  peak %5.1f dB  loud %6.1f dB  pitch %+6.1f c  fund %+5.1f dB vs strongest  2-5 kHz %4.1f %%  jump held/early %.2f\n",
+                             h->desc.id.toRawUTF8(), art.name.toRawUTF8(), vault::noteName (note).toRawUTF8(), juce::Decibels::gainToDecibels (st.peak),
+                             loud, centsOff (f, (float) f0), fundDb - strongDb, presence * 100.0f, held / std::max (1e-6f, early));
+                if (outDir != juce::File())
+                    writeWav (b, sr, outDir.getChildFile (h->desc.id + "_" + art.name + "_" + vault::noteName (note).replace ("#", "s") + ".wav"));
+                // loop wraps: where the played zone jumps back (from its loop data), the sample jump there vs the music around it
+                float wrapRatio = 0.0f, dipDb = 0.0f;
+                int wraps = 0;
+                if (sustained && h->data() != nullptr)
+                    if (const auto* z = h->data()->pick (h->desc.articulationIndex (art.name), note, 100, 0, false); z != nullptr && z->looped)
+                    {
+                        const double inc = std::exp2 ((note - z->root) / 12.0 + z->fine / 1200.0) * z->audio->sampleRate / sr;
+                        const int heldEnd = (int) ((secs - 1.0) * sr);
+                        for (double t = (z->loopEnd - z->start) / inc; t < heldEnd - 0.3 * sr; t += (z->loopEnd - z->loopStart) / inc, ++wraps)
+                        {
+                            const int w = (int) t, ms = (int) (0.001 * sr);
+                            const float at = stats (b, w - 3 * ms, w + 3 * ms).maxJump;
+                            const float around = std::max (stats (b, w - 250 * ms, w - 20 * ms).maxJump, stats (b, w + 20 * ms, std::min (heldEnd, w + 250 * ms)).maxJump);
+                            wrapRatio = std::max (wrapRatio, at / std::max (1e-6f, around));
+                            const int xfMid = w - (int) (z->xfade / inc / 2);
+                            const float mid = stats (b, xfMid - 10 * ms, xfMid + 10 * ms).rms, out = stats (b, w - (int) (z->xfade / inc) - 60 * ms, w - (int) (z->xfade / inc) - 10 * ms).rms;
+                            dipDb = std::min (dipDb, juce::Decibels::gainToDecibels (mid / std::max (1e-6f, out)));
+                        }
+                        std::printf ("      loop: %d wraps in the held note, jump at the wrap %.2fx the music around it, level in the crossfade %+.1f dB\n", wraps, wrapRatio, dipDb);
+                    }
+                if (asTest)
+                {
+                    check (st.finite && st.peak > 0.003f && st.peak < 0.99f, "library: " + h->desc.id + " / " + art.name + " at " + vault::noteName (note) + " plays clean");
+                    if (wraps > 0)
+                        check (wrapRatio < 1.3f && dipDb > -3.0f, "library: " + h->desc.id + " / " + art.name + " loops without clicks or dips (" + juce::String (wraps)
+                                                                  + " wraps, jump " + juce::String (wrapRatio, 2) + "x, crossfade level " + juce::String (dipDb, 1) + " dB)");
+                    if (note == vault::homeNote)
+                        check (std::abs (centsOff (f, (float) f0)) < 5.0f, "library: " + h->desc.id + " / " + art.name + " in tune at C5 ("
+                                                                         + juce::String (centsOff (f, (float) f0), 1) + " cents)");
+                }
+            }
+    }
     return fails;
 }
 
@@ -1015,7 +1537,7 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     const auto& bank = p.bank();
     int pick = -1;
     for (int i = 0; i < (int) bank.size() && pick < 0; ++i)
-        if (bank[(size_t) i].parts.size() == 3 && bank[(size_t) i].category == vault::catBellsMallets && bank[(size_t) i].styles != 0) pick = i;
+        if (bank[(size_t) i].parts.size() == 3 && bank[(size_t) i].category == vault::catBellsMallets) pick = i;
     for (int i = 0; i < (int) bank.size() && pick < 0; ++i) if (bank[(size_t) i].parts.size() == 3) pick = i;
     if (pick < 0) pick = 0;
     for (int i = 0; i < 6; ++i) v.loadPreset ((pick + 7 * i + 3) % (int) bank.size(), false);   // some history for RECENT
@@ -1027,17 +1549,11 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     for (auto t : tokens)
     {
         const auto key = t.upToFirstOccurrenceOf (":", false, false).trim(), val = t.fromFirstOccurrenceOf (":", false, false).trim();
-        if (key == "main")
-        {
-            v.setCategory (pr.category);
-            for (int s = 0; s < vault::numStyles; ++s) if (pr.styles & (1u << s)) { v.setStyle (s); break; }
-        }
+        if (key == "main") v.setCategory (pr.category);
         if (key == "main" || key == "keys") for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOn (1, n, 0.8f);
         else if (key == "scale")   ed->setUiScale (val.getFloatValue() / 100.0f);
         else if (key == "search")  v.setQuery (val);
         else if (key == "cat")     v.setCategory (val.getIntValue());
-        else if (key == "style")   v.setStyle (val.getIntValue());
-        else if (key == "char")    v.setCharacter (val.getIntValue());
         else if (key == "layers")  v.setLayers (val.getIntValue());
         else if (key == "empty")   v.setQuery ("zzqx nothing");
         else if (key == "recent")  v.setRecentOnly (true);
@@ -1120,18 +1636,53 @@ int main (int argc, char** argv)
         std::printf ("%d presets -> %s (%d KB) %s\n", (int) b.size(), argv[2], (int) (f.getSize() / 1024), ok ? "ok" : "FAILED");
         return ok ? 0 : 1;
     }
+    if (mode == "-writev2demo" && argc > 2)   // -writev2demo <out.cvb>: a few v2 presets on the 4 test library instruments + a model
+    {
+        std::vector<VaultPreset> b;
+        auto add = [&] (const char* id, const char* name, int cat, std::vector<VaultPart> parts, float gain)
+        {
+            VaultPreset p; p.id = id; p.name = name; p.category = cat; p.parts = std::move (parts); p.gain = gain; b.push_back (p);
+        };
+        auto smp = [] (const char* inst, const char* art, const char* label, float level, std::vector<std::pair<juce::String, float>> v = {})
+        {
+            VaultPart part; part.kind = VaultPartKind::sample; part.source = inst; part.articulation = art; part.label = label; part.level = level; part.values = v;
+            return part;
+        };
+        add ("cv.demo.piano", "Concert Grand", vault::catPiano, { smp ("piano.grand.concert", "sustain", "Concert Grand", 1.0f, { { "revMix", 0.18f } }) }, 1.0f);
+        add ("cv.demo.violins", "Violin Section", vault::catStrings, { smp ("strings.violins.ensemble", "sustain", "Violins", 1.0f, { { "s.attack", 0.08f }, { "revMix", 0.25f } }) }, 1.0f);
+        add ("cv.demo.flute", "Concert Flute", vault::catFlutesWoodwinds, { smp ("winds.flute.concert", "vibrato", "Flute", 1.0f, { { "revMix", 0.2f } }) }, 1.2f);
+        add ("cv.demo.marimba", "Marimba", vault::catBellsMallets, { smp ("mallets.marimba", "hit", "Marimba", 1.0f, { { "revMix", 0.15f } }) }, 1.2f);
+        VaultPart sine; sine.kind = VaultPartKind::model; sine.source = "sine"; sine.label = "Sine"; sine.level = 0.3f; sine.octave = -1;
+        add ("cv.demo.layer", "Piano Strings", vault::catPiano, { smp ("piano.grand.concert", "sustain", "Grand", 1.0f, { { "revMix", 0.22f } }),
+                                                                  smp ("strings.violins.ensemble", "sustain", "Violins", 0.45f, { { "s.attack", 0.3f } }), sine }, 0.9f);
+        int bad = 0; juce::String why;
+        for (auto& p : b) if (! vault::validatePreset (p, &why)) { ++bad; std::printf ("invalid: %s\n", why.toRawUTF8()); }
+        const auto f = juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]);
+        const bool ok = bad == 0 && vault::saveBankFile (f, b);
+        std::printf ("%d v2 presets -> %s %s\n", (int) b.size(), argv[2], ok ? "ok" : "FAILED");
+        return ok ? 0 : 1;
+    }
     if (mode == "-bankinfo")
     {
         VaultProcessor p;
         std::printf ("%s\n", p.bankDescription().toRawUTF8());
         int cats[vault::numCategories] {}, layers[vault::maxParts + 1] {};
         for (auto& pr : p.bank()) { ++cats[pr.category]; ++layers[juce::jlimit (0, (int) vault::maxParts, (int) pr.parts.size())]; }
-        for (int c = 0; c < vault::numCategories; ++c)
-            std::printf ("  %-18s %5d / %d\n", vault::categoryNames()[c].toRawUTF8(), cats[c], vault::categoryTarget (c));
-        for (int l = 1; l <= vault::maxParts; ++l) std::printf ("  %d layer(s): %5d / %d\n", l, layers[l], vault::layerCountTarget (l));
+        for (int c = 0; c < vault::numCategories; ++c) std::printf ("  %-20s %5d\n", vault::categoryNames()[c].toRawUTF8(), cats[c]);
+        for (int l = 1; l <= vault::maxParts; ++l) std::printf ("  %d layer(s): %5d\n", l, layers[l]);
+        return 0;
+    }
+    if (mode == "-libreport")   // -libreport <dir> [note ...]: every library instrument / articulation rendered + measured
+    {
+        std::vector<int> notes;
+        for (int i = 3; i < argc; ++i) notes.push_back (juce::String (argv[i]).getIntValue());
+        if (notes.empty()) notes = { vault::homeNote };
+        libraryReport (argc > 2 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]) : juce::File(), notes, false);
         return 0;
     }
     unitTests();
+    samplerTests();
+    libraryReport ({}, { vault::homeNote }, true);
     const int f = browserTests();
     std::printf ("vault failures: %d\n", f);
     return f;

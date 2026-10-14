@@ -110,7 +110,7 @@ public:
     static Thumb analyse (const VaultPreset& p, const float* macros = nullptr)
     {
         constexpr double sr = 22050.0, secs = 2.0;
-        const int note = p.category == vault::cat808Bass ? 48 : 60;
+        const int note = vault::homeNote;   // C5 (MIDI 60) for every sound, like the preview
         const auto buf = macros != nullptr ? VaultEngine::render (p, note, 0.8f, secs, sr, macros) : VaultEngine::render (p, note, 0.8f, secs, sr);
         Thumb t;
         const int n = buf.getNumSamples(), per = std::max (1, n / numBins);

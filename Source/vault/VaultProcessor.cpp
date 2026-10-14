@@ -34,19 +34,20 @@ int VaultProcessor::vaultCategoryOfFactory (int c)
     using namespace vault;
     switch (c)
     {
-        case cPiano: case cKeys: case cOrgan:   return catPianoKeys;
+        case cPiano:                            return catPiano;
+        case cKeys: case cOrgan:                return catKeysOrgan;
         case cBells: case cMallets:             return catBellsMallets;
         case cPlucks:                           return catPlucks;
         case cGuitar:                           return catGuitars;
         case cStrings:                          return catStrings;
-        case cBrass:                            return catBrassHorns;
+        case cBrass:                            return catBrass;
         case cChoir:                            return catVocalsChoir;
-        case cWoodwind:                         return catFlutesWinds;
+        case cWoodwind:                         return catFlutesWoodwinds;
         case cLead:                             return catLeads;
         case cPads:                             return catPads;
         case cSynth: case cChip:                return catSynth;
-        case cBass: case c808:                  return cat808Bass;
-        case cArp:                              return catArpsSequences;
+        case cBass: case c808:                  return catBass;
+        case cArp:                              return catSynth;
         case cWorld:                            return catWorld;
         case cCinematic:                        return catOrchestral;
         case cTexture: case cFX: case cDrums: case cGameFx: default: return catFxAtmos;
@@ -71,23 +72,7 @@ std::vector<VaultPreset> VaultProcessor::buildFallbackBank()
         part.label = juce::String (categoryNames()[pr.cat]).toLowerCase();
         part.label = part.label.substring (0, 1).toUpperCase() + part.label.substring (1);
         p.parts.push_back (std::move (part));
-
-        using namespace vault;
-        uint32_t st = 1u << styleTrap, ch = 0;
-        if (pr.mood == "Dark")       st |= 1u << styleDark;
-        if (pr.mood == "Sad")        st |= 1u << styleEmo;
-        if (pr.mood == "Dreamy")     st |= 1u << styleAmbient;
-        if (pr.mood == "Aggressive") st |= 1u << styleRage;
-        if (pr.mood == "Bouncy")     st |= 1u << stylePluggnb;
-        if (pr.era == 3)             st |= 1u << styleLoFi;
-        if (pr.brightness >= 4) ch |= 1u << charBright;
-        if (pr.brightness <= 2 || pr.mood == "Dark") ch |= 1u << charDark;
-        if (pr.mood == "Warm" || pr.character.contains ("Warm")) ch |= 1u << charWarm;
-        if (pr.character.contains ("Dirty")) ch |= 1u << charDirty; else ch |= 1u << charClean;
-        if (pr.articulation == "Short" || pr.articulation == "Pluck") ch |= 1u << charHard;
-        if (pr.articulation == "Swell") ch |= 1u << charSoft;
-        for (auto& [id, v] : pr.values) if (id == ID::width && v > 0.7f) ch |= 1u << charWide;
-        p.styles = st; p.chars = ch;
+        p.name = vault::v1::cleanText (p.name);
         out.push_back (std::move (p));
     }
     std::stable_sort (out.begin(), out.end(), [] (const VaultPreset& a, const VaultPreset& b) { return a.category < b.category; });
@@ -130,8 +115,9 @@ std::shared_ptr<const VaultProcessor::Bank> VaultProcessor::sharedBank()
     // 3. fallback: the EVOLVE factory sounds, one layer each
     if (b->presets.empty()) { b->presets = buildFallbackBank(); b->source = BankSource::factoryFallback; }
     if ((int) b->presets.size() > maxPresets) b->presets.resize ((size_t) maxPresets);
+    b->library = vault::SampleLibrary::getShared();
     b->compiled.reserve (b->presets.size());
-    for (auto& p : b->presets) b->compiled.push_back (VaultEngine::compile (p));
+    for (auto& p : b->presets) b->compiled.push_back (VaultEngine::compile (p, b->library));
     cache = b;
     return b;
 }
@@ -142,9 +128,11 @@ VaultProcessor::VaultProcessor()
       apvts (*this, nullptr, "CHROMEVAULT", createVaultLayout())
 {
     bankData = sharedBank();
+    library = bankData->library;
     presetParam = apvts.getRawParameterValue (idPreset);
     for (int m = 0; m < vault::numMacros; ++m) macroParam[m] = apvts.getRawParameterValue (idMacro[m]);
     volumeParam = apvts.getRawParameterValue (idVolume);
+    startTimerHz (20);
     if (! bank().empty())
     {
         const auto& d = bank().front().macroDefaults;
@@ -153,7 +141,57 @@ VaultProcessor::VaultProcessor()
     }
 }
 
-VaultProcessor::~VaultProcessor() = default;
+VaultProcessor::~VaultProcessor()
+{
+    stopTimer();
+    updatePins (-1);
+}
+
+void VaultProcessor::updatePins (int index)
+{
+    // keep the current preset's instruments in RAM (and start loading them now, before the audio thread switches)
+    if (index == pinnedFor || library == nullptr) return;
+    std::vector<vault::InstrumentHandle*> want;
+    if (juce::isPositiveAndBelow (index, (int) bankData->compiled.size()))
+    {
+        const auto& c = bankData->compiled[(size_t) index];
+        for (int k = 0; k < c.numParts; ++k)
+            if (auto* h = c.parts[(size_t) k].instrument) want.push_back (h);
+    }
+    for (auto* h : want) library->pin (h);
+    for (auto* h : pinned) library->unpin (h);
+    pinned = std::move (want);
+    pinnedFor = index;
+}
+
+void VaultProcessor::timerCallback()
+{
+    updatePins (currentPreset());
+    engine.serviceResources();
+}
+
+bool VaultProcessor::isLoading() const
+{
+    const int i = currentPreset();
+    if (i < 0) return false;
+    const auto& c = bankData->compiled[(size_t) i];
+    for (int k = 0; k < c.numParts; ++k)
+        if (auto* h = c.parts[(size_t) k].instrument; h != nullptr && ! h->isLoaded() && ! h->hasFailed()) return true;
+    return engine.isLoading();
+}
+
+bool VaultProcessor::isMissingSamples() const
+{
+    const int i = currentPreset();
+    if (i < 0) return false;
+    const auto& c = bankData->compiled[(size_t) i];
+    for (int k = 0; k < c.numParts; ++k)
+    {
+        const auto& part = c.parts[(size_t) k];
+        if (part.kind == VaultPartKind::sample && (part.instrument == nullptr || part.instrument->hasFailed())) return true;
+    }
+    return false;
+}
 
 juce::String VaultProcessor::bankDescription() const
 {
@@ -190,6 +228,7 @@ void VaultProcessor::selectPreset (int index)
         p->setValueNotifyingHost (p->convertTo0to1 ((float) index));
         p->endChangeGesture();
     }
+    updatePins (index);
     const auto& d = bank()[(size_t) index].macroDefaults;
     for (int m = 0; m < vault::numMacros; ++m) setMacro (m, d[m]);
     updateHostDisplay (ChangeDetails().withProgramChanged (true));
@@ -229,6 +268,7 @@ void VaultProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
     engine.prepare (sampleRate, std::max (16, samplesPerBlock));
+    engine.serviceResources();
     loadedIndex = -1;
     previewActive = -1; previewOffIn = -1;
     keyboardState.reset();

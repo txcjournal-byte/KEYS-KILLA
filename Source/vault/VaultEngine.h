@@ -1,11 +1,16 @@
 #pragma once
 #include "VaultTypes.h"
+#include "VaultLibrary.h"
+#include "VaultSampler.h"
+#include "models/ModelVoice.h"
 #include "../VoiceBuild.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
 #include <memory>
+#include <mutex>
 
-// CHROME VAULT sound engine: up to 4 kk::SynthEngine parts (layers) -> one shared master FX chain (kk::FxRack, built from
+// CHROME VAULT sound engine: up to 4 parts (layers) of any kind - synth (kk::SynthEngine), sample (vault::SamplerPart playing a
+// library instrument) or model (a vault::models::ModelVoice pool) - -> one shared master FX chain (kk::FxRack, built from
 // part 0's FX values) -> 4 macros -> mono below 120 Hz -> preset gain trim -> master volume -> safety limiter.
 // No APVTS: the engine plays VaultPresets directly. Usable offline (render()) without any GUI or plugin wrapper.
 
@@ -13,9 +18,18 @@
 // presets on the audio thread is allocation-free.
 struct VaultCompiledPart
 {
-    std::vector<std::pair<int, float>> kv;   // (kk::vk key, sanitized real value); keys not listed = default
+    VaultPartKind kind = VaultPartKind::synth;
+    std::vector<std::pair<int, float>> kv;   // (kk::vk key, sanitized real value); keys not listed = default (synth + FX keys)
     float level = 1, pan = 0;
     int transpose = 0;                       // octave * 12 + semi
+    // sample parts
+    vault::InstrumentHandle* instrument = nullptr;   // nullptr: unknown id / no library -> the part is silent
+    int articulation = 0;
+    std::array<float, vault::numSampleParams> sp {}; // sanitized sample parameters (defaults filled in)
+    // model parts
+    int model = -1;                                  // index in vault::models::ModelRegistry, -1 = unknown -> silent
+    int numModelParams = 0;
+    std::array<float, vault::models::maxModelParams> mp {};
 };
 struct VaultCompiledPreset
 {
@@ -23,6 +37,7 @@ struct VaultCompiledPreset
     std::array<VaultCompiledPart, vault::maxParts> parts;
     float gain = 1;
     float macroDefaults[vault::numMacros] { 0.5f, 0.5f, 0.5f, 0.5f };
+    std::shared_ptr<vault::SampleLibrary> library;   // keeps the instrument handles alive
 };
 
 struct VaultTransport { double bpm = 120.0; double ppq = 0.0; bool playing = false; };   // host tempo / position
@@ -35,7 +50,9 @@ public:
     VaultEngine();
     ~VaultEngine();
 
-    static VaultCompiledPreset compile (const VaultPreset& preset);
+    // resolves sample instrument ids against `library` (nullptr = vault::SampleLibrary::getShared()) and model ids
+    // against the model registry. Message thread / load time.
+    static VaultCompiledPreset compile (const VaultPreset& preset, std::shared_ptr<vault::SampleLibrary> library = nullptr);
 
     // allocates (message thread / before playback). numParts < 4 saves memory for offline renders of small presets.
     // crossfadeSlot = false skips the second (switch crossfade) sound slot: then every setPreset is instant.
@@ -58,6 +75,12 @@ public:
     void process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi, const Transport& transport = Transport());
     void allNotesOff (bool hard);            // audio thread
 
+    // NON-audio thread (the processor's timer, offline renders): creates the model voice pools that the current presets
+    // asked for (a model part is silent until its pool exists). Sample instruments are loaded by vault::SampleLibrary.
+    void serviceResources();
+    // any thread: true while a part of the current preset waits for its instrument / model voices
+    bool isLoading() const { return loading.load (std::memory_order_relaxed); }
+
     // OFFLINE: one note (note on at 0, note off at 70 % of `seconds`, then the release tail until `seconds`), stereo.
     // Uses the preset's macro defaults (or `macros`, 4 values) and volume 1. Thread-safe (own engine per call).
     static juce::AudioBuffer<float> render (const VaultPreset& preset, int midiNote, float velocity, double seconds, double sampleRate);
@@ -66,6 +89,9 @@ public:
     // OFFLINE, general: render a MIDI sequence (sample positions) of `numSamples` samples
     static juce::AudioBuffer<float> renderMidi (const VaultPreset& preset, const juce::MidiBuffer& midi, int numSamples, double sampleRate,
                                                 const float* macros = nullptr);
+    // the same with an explicit library (tests / tools); the instruments are loaded synchronously first
+    static juce::AudioBuffer<float> renderMidi (const VaultPreset& preset, const juce::MidiBuffer& midi, int numSamples, double sampleRate,
+                                                const float* macros, std::shared_ptr<vault::SampleLibrary> library);
 
     // loudness of a render for the bank generator: the loudest 400 ms window RMS (both channels), dBFS.
     // The factory sounds are matched to targetLoudnessDb: preset.gain = dB->gain (target - measured at gain 1).
@@ -80,12 +106,20 @@ public:
 
 private:
     struct Part;
+    struct ModelPool;
     struct Program
     {
         int numParts = 0;
         float values[vault::maxParts][kk::vk::count];
         float level[vault::maxParts] {}, panL[vault::maxParts] {}, panR[vault::maxParts] {};
         int transpose[vault::maxParts] {};
+        VaultPartKind kind[vault::maxParts] {};
+        vault::InstrumentHandle* instrument[vault::maxParts] {};
+        int articulation[vault::maxParts] {};
+        float sp[vault::maxParts][vault::numSampleParams] {};
+        int model[vault::maxParts] {};
+        int numModelParams[vault::maxParts] {};
+        float mp[vault::maxParts][vault::models::maxModelParams] {};
         float gain = 1;
     };
     // One complete sound: a program, its parts (voices + LFO state), its own FX rack (with its own reverb / delay tails)
@@ -99,7 +133,11 @@ private:
         kk::FxParams fp;
         std::vector<float> busL, busR, busG, partL, partR, lfo1, lfo2;
         bool prepared = false;
+        vault::InstrumentHandle* held[vault::maxParts] {};   // instruments acquired by this slot's program
     };
+    void slotAcquire (Slot& s);
+    void slotRelease (Slot& s);
+    ModelPool* poolFor (Slot& s, int part) const;
     void loadProgram (Program& dst, const VaultCompiledPreset& p);
     void resetSlot (Slot& s, bool clearFx);
     void beginSwitch();
@@ -141,4 +179,6 @@ private:
     float dcX = 0, dcY = 0, dcA = 0.9993f;   // DC blocker (mid)
     // safety limiter
     float limEnv = 0, limRel = 0.999f;
+    std::atomic<bool> loading { false };
+    std::mutex resourceLock;                 // serviceResources / prepare / releaseResources (never the audio thread)
 };

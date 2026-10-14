@@ -7,11 +7,68 @@ inline float upHalf (float m)  { return std::max (0.0f, 2.0f * m - 1.0f); }   //
 constexpr float limThresh = 0.89f;   // about -1 dBFS
 }
 
+// the voices of one model for one part (created off the audio thread by serviceResources, then reused)
+struct VaultEngine::ModelPool
+{
+    const vault::models::ModelInfo* info = nullptr;
+    std::vector<std::unique_ptr<vault::models::ModelVoice>> voices;
+    std::vector<int> note;
+    std::vector<uint32_t> age;
+    std::vector<uint8_t> held, sustained;
+    uint32_t ageCounter = 0;
+
+    void prepare (const vault::models::ModelInfo& mi, double sr, int maxBlock)
+    {
+        info = &mi;
+        const auto n = (size_t) mi.maxVoices;
+        voices.clear();
+        for (size_t i = 0; i < n; ++i) { voices.push_back (mi.create()); voices.back()->prepare (sr, maxBlock); }
+        note.assign (n, -1); age.assign (n, 0); held.assign (n, 0); sustained.assign (n, 0);
+    }
+    void noteOn (int n, float vel, float freq, const float* params, int numParams)
+    {
+        size_t pick = 0; bool found = false;
+        for (size_t i = 0; i < voices.size() && ! found; ++i) if (! voices[i]->isActive()) { pick = i; found = true; }
+        if (! found) for (size_t i = 1; i < voices.size(); ++i) if (age[i] < age[pick]) pick = i;   // steal the oldest
+        auto& v = *voices[pick];
+        if (v.isActive()) v.kill();
+        v.setParams (params, numParams);
+        v.noteOn (n, vel, freq);
+        note[pick] = n; age[pick] = ++ageCounter; held[pick] = 1; sustained[pick] = 0;
+    }
+    void noteOff (int n, bool pedal)
+    {
+        for (size_t i = 0; i < voices.size(); ++i)
+            if (held[i] && note[i] == n)
+            {
+                held[i] = 0;
+                if (pedal) sustained[i] = 1; else voices[i]->noteOff (0.5f);
+            }
+    }
+    void pedalUp() { for (size_t i = 0; i < voices.size(); ++i) if (sustained[i]) { sustained[i] = 0; voices[i]->noteOff (0.5f); } }
+    void allOff (bool hard)
+    {
+        for (size_t i = 0; i < voices.size(); ++i)
+        {
+            if (hard) voices[i]->kill(); else if (held[i] || sustained[i]) voices[i]->noteOff (0.5f);
+            held[i] = sustained[i] = 0;
+        }
+    }
+};
+
 struct VaultEngine::Part
 {
     kk::SynthEngine synth;
+    vault::SamplerPart sampler;
     float ph1 = 0, ph2 = 0, last1 = 0, last2 = 0, sh1 = 0, sh2 = 0;
     kk::Rng rng;
+    // model voices: one pool per registered model, created on demand off the audio thread (serviceResources)
+    std::unique_ptr<std::atomic<ModelPool*>[]> pools;
+    std::vector<std::unique_ptr<ModelPool>> ownedPools;
+    int numPools = 0;
+    std::atomic<int> modelWanted { -1 };
+    float vibPhase = 0;
+    kk::SvfCoef toneC; kk::SvfState toneS[2]; bool toneOn = false;   // TONE low-pass for model parts
 };
 
 VaultEngine::VaultEngine()
@@ -26,16 +83,23 @@ VaultEngine::VaultEngine()
     pending = std::make_unique<Program>();
 }
 
-VaultEngine::~VaultEngine() = default;
+VaultEngine::~VaultEngine()
+{
+    for (auto& sl : slots) slotRelease (sl);
+}
 
-VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset)
+VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset, std::shared_ptr<vault::SampleLibrary> library)
 {
     VaultCompiledPreset c;
     c.numParts = juce::jlimit (0, (int) vault::maxParts, (int) preset.parts.size());
+    if (library == nullptr && preset.usesSamples()) library = vault::SampleLibrary::getShared();
+    c.library = library;
+    const auto& reg = vault::models::ModelRegistry::get();
     for (int k = 0; k < c.numParts; ++k)
     {
         const auto& src = preset.parts[(size_t) k];
         auto& dst = c.parts[(size_t) k];
+        dst.kind = src.kind;
         dst.kv.clear();
         dst.kv.reserve (src.values.size());
         for (auto& [id, v] : src.values)
@@ -44,6 +108,28 @@ VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset)
         dst.level = std::isfinite (src.level) ? juce::jlimit (0.0f, 2.0f, src.level) : 1.0f;
         dst.pan = std::isfinite (src.pan) ? juce::jlimit (-1.0f, 1.0f, src.pan) : 0.0f;
         dst.transpose = juce::jlimit (-3, 3, src.octave) * 12 + juce::jlimit (-12, 12, src.semi);
+        // sample parameters (defaults, then the part's own "s.*" values, clamped)
+        for (int i = 0; i < vault::numSampleParams; ++i)
+        {
+            const auto& in = vault::sampleParams()[(size_t) i];
+            const float v = src.get (in.id, in.def);
+            dst.sp[(size_t) i] = std::isfinite (v) ? juce::jlimit (in.lo, in.hi, v) : in.def;
+        }
+        if (src.kind == VaultPartKind::sample && library != nullptr)
+            if ((dst.instrument = library->find (src.source)) != nullptr)
+                dst.articulation = dst.instrument->desc.articulationIndex (src.articulation);
+        if (src.kind == VaultPartKind::model)
+            if ((dst.model = reg.indexOf (src.source)) >= 0)
+            {
+                const auto& mi = reg.at (dst.model);
+                dst.numModelParams = (int) mi.params.size();
+                for (int i = 0; i < dst.numModelParams; ++i)
+                {
+                    const auto& in = mi.params[(size_t) i];
+                    const float v = src.get (in.id, in.def);
+                    dst.mp[(size_t) i] = std::isfinite (v) ? juce::jlimit (in.lo, in.hi, v) : in.def;
+                }
+            }
     }
     c.gain = std::isfinite (preset.gain) ? juce::jlimit (0.0f, 16.0f, preset.gain) : 1.0f;
     for (int m = 0; m < vault::numMacros; ++m)
@@ -53,6 +139,8 @@ VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset)
 
 void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPrepare, bool crossfadeSlot)
 {
+    const std::lock_guard<std::mutex> g (resourceLock);
+    const int numModels = vault::models::ModelRegistry::get().size();
     sr = sampleRate > 0 ? sampleRate : 44100.0;
     maxBlock = std::max (1, maxBlockSize);
     preparedParts = juce::jlimit (1, (int) vault::maxParts, numPartsToPrepare);
@@ -69,7 +157,14 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
             {
                 if (! part) part = std::make_unique<Part>();
                 part->synth.prepare ((float) sr);
+                part->sampler.prepare (sr);
                 part->rng.seed (101u + (uint32_t) k * 7u + (uint32_t) si * 1009u);
+                // model pools are rebuilt on demand for this sample rate
+                part->ownedPools.clear();
+                part->numPools = numModels;
+                part->pools = std::make_unique<std::atomic<ModelPool*>[]> ((size_t) std::max (1, numModels));
+                for (int m = 0; m < std::max (1, numModels); ++m) part->pools[(size_t) m].store (nullptr);
+                part->modelWanted = -1;
             }
             else part.reset();
         }
@@ -89,7 +184,10 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
         for (auto& v : sl.vp) v = {};
         sl.fp = {};
     }
-    if (cur != 0) { std::swap (slots[0].prog, slots[1].prog); cur = 0; }   // the current program lives in the prepared slot 0
+    if (cur != 0) { std::swap (slots[0].prog, slots[1].prog); std::swap (slots[0].held, slots[1].held); cur = 0; }   // the current program lives in the prepared slot 0
+    slotRelease (slots[1]);                   // no crossfade running: only slot 0 holds instruments
+    slotRelease (slots[0]);
+    slotAcquire (slots[0]);
 
     {   // 8th-order Butterworth high-pass at 160 Hz on the side signal: -20 dB at 120 Hz, -33 dB at 100 Hz, -48 dB at 80 Hz
         static const double qs[4] { 0.50979558, 0.60134489, 0.89997622, 2.56291545 };
@@ -112,8 +210,10 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
 
 void VaultEngine::releaseResources()
 {
+    const std::lock_guard<std::mutex> g (resourceLock);
     for (auto& sl : slots)
     {
+        slotRelease (sl);
         for (auto& p : sl.parts) p.reset();
         sl.fx.reset();
         sl.prepared = false;
@@ -128,9 +228,30 @@ void VaultEngine::loadProgram (Program& dst, const VaultCompiledPreset& p)
     for (int k = 0; k < vault::maxParts; ++k)
     {
         kk::vk::fillDefaults (dst.values[k]);
-        if (k >= dst.numParts) { dst.level[k] = 0; dst.panL[k] = dst.panR[k] = 0; dst.transpose[k] = 0; continue; }
+        if (k >= dst.numParts)
+        {
+            dst.level[k] = 0; dst.panL[k] = dst.panR[k] = 0; dst.transpose[k] = 0;
+            dst.kind[k] = VaultPartKind::synth; dst.instrument[k] = nullptr; dst.model[k] = -1; dst.numModelParams[k] = 0;
+            continue;
+        }
         const auto& part = p.parts[(size_t) k];
+        dst.kind[k] = part.kind;
+        if (part.kind != VaultPartKind::synth)
+        {
+            // FX defaults for a sample / model part 0: neutral (no reverb, no MASTER colour) unless the preset sets them
+            // (the EVOLVE macros m2 / m5 default to a little reverb, delay and chorus: off as well)
+            dst.values[k][kk::vk::revMix] = 0.0f;
+            dst.values[k][kk::vk::master] = 0.0f;
+            dst.values[k][kk::vk::m2] = 0.0f;
+            dst.values[k][kk::vk::m5] = 0.0f;
+        }
         for (auto& [key, v] : part.kv) dst.values[k][key] = v;
+        dst.instrument[k] = part.kind == VaultPartKind::sample ? part.instrument : nullptr;
+        dst.articulation[k] = part.articulation;
+        std::copy (part.sp.begin(), part.sp.end(), dst.sp[k]);
+        dst.model[k] = part.kind == VaultPartKind::model ? part.model : -1;
+        dst.numModelParams[k] = part.numModelParams;
+        std::copy (part.mp.begin(), part.mp.end(), dst.mp[k]);
         const float a = (part.pan + 1.0f) * 0.25f * juce::MathConstants<float>::pi;   // equal power, unity at centre
         dst.panL[k] = std::cos (a) * juce::MathConstants<float>::sqrt2;
         dst.panR[k] = std::sin (a) * juce::MathConstants<float>::sqrt2;
@@ -155,8 +276,14 @@ void VaultEngine::resetSlot (Slot& s, bool clearFx)
 {
     // the slot is silent (unused, or its crossfade just ended): voices off, LFOs restarted, FX rack cleared (no allocation).
     // Clearing the FX matters: the next sound must not start inside the old reverb / delay content.
-    for (auto& p : s.parts)
-        if (p) { p->synth.allOff (true); p->synth.setSustain (false); p->synth.setSustain (sustain); p->ph1 = p->ph2 = 0; }
+    for (int k = 0; k < vault::maxParts; ++k)
+        if (auto& p = s.parts[(size_t) k])
+        {
+            p->synth.allOff (true); p->synth.setSustain (false); p->synth.setSustain (sustain); p->ph1 = p->ph2 = 0;
+            p->sampler.allOff (true); p->sampler.setSustain (sustain);
+            for (int m = 0; m < p->numPools; ++m) if (auto* mp = p->pools[(size_t) m].load()) mp->allOff (true);
+            for (auto& t : p->toneS) t.reset();
+        }
     if (clearFx && s.fx != nullptr) s.fx->clearState();
 }
 
@@ -164,11 +291,14 @@ void VaultEngine::switchInstant()
 {
     if (! hasPending) return;
     auto& s = slots[cur];
+    resetSlot (s, true);
+    resetSlot (slots[1 - cur], true);
+    slotRelease (s);
+    slotRelease (slots[1 - cur]);
     std::swap (s.prog, pending);
     hasPending = false;
     xfading = false;
-    resetSlot (s, true);
-    resetSlot (slots[1 - cur], true);
+    slotAcquire (s);
     dcX = dcY = 0;
     for (auto& h : sideHp) h.z1 = h.z2 = 0;
     if (preparedParts == 0 || ! s.prepared) return;
@@ -182,9 +312,11 @@ void VaultEngine::beginSwitch()
     // outgoing sound and keeps playing - voices, LFOs and its own reverb / delay / chorus tails - while it fades out
     const int next = 1 - cur;
     auto& s = slots[next];
+    resetSlot (s, false);
+    slotRelease (s);
     std::swap (s.prog, pending);
     hasPending = false;
-    resetSlot (s, false);
+    slotAcquire (s);
     cur = next;
     xfading = true;
     xfPos = 0.0f;
@@ -207,21 +339,94 @@ void VaultEngine::setVolume (float g) { volumeTarget.store (std::isfinite (g) ? 
 
 void VaultEngine::noteOnAll (Slot& s, int note, float vel)
 {
+    const auto& pr = *s.prog;
     for (int k = 0; k < numParts (s); ++k)
-        s.parts[(size_t) k]->synth.noteOn (juce::jlimit (0, 127, note + s.prog->transpose[k]), vel, s.vp[k]);
+    {
+        auto& part = *s.parts[(size_t) k];
+        const int n = juce::jlimit (0, 127, note + pr.transpose[k]);
+        switch (pr.kind[k])
+        {
+            case VaultPartKind::synth:  part.synth.noteOn (n, vel, s.vp[k]); break;
+            case VaultPartKind::sample: part.sampler.noteOn (n, vel); break;
+            case VaultPartKind::model:
+                if (auto* mp = poolFor (s, k))
+                    mp->noteOn (n, vel, kk::semisToHz ((float) n + pitchWheel * pr.values[k][kk::vk::bendRange]), pr.mp[k], pr.numModelParams[k]);
+                break;
+        }
+    }
 }
 
 void VaultEngine::noteOffAll (Slot& s, int note)
 {
+    const auto& pr = *s.prog;
     for (int k = 0; k < numParts (s); ++k)
-        s.parts[(size_t) k]->synth.noteOff (juce::jlimit (0, 127, note + s.prog->transpose[k]), s.vp[k]);
+    {
+        auto& part = *s.parts[(size_t) k];
+        const int n = juce::jlimit (0, 127, note + pr.transpose[k]);
+        switch (pr.kind[k])
+        {
+            case VaultPartKind::synth:  part.synth.noteOff (n, s.vp[k]); break;
+            case VaultPartKind::sample: part.sampler.noteOff (n); break;
+            case VaultPartKind::model:  if (auto* mp = poolFor (s, k)) mp->noteOff (n, sustain); break;
+        }
+    }
+}
+
+VaultEngine::ModelPool* VaultEngine::poolFor (Slot& s, int k) const
+{
+    const int m = s.prog->model[k];
+    auto& part = s.parts[(size_t) k];
+    if (m < 0 || part == nullptr || m >= part->numPools) return nullptr;
+    return part->pools[(size_t) m].load (std::memory_order_acquire);
+}
+
+void VaultEngine::slotAcquire (Slot& s)
+{
+    // the slot's program becomes audible: hold its instruments (no eviction while it plays), ask for missing ones
+    for (int k = 0; k < vault::maxParts; ++k)
+    {
+        auto* h = k < s.prog->numParts ? s.prog->instrument[k] : nullptr;
+        if (h != nullptr) { h->acquire(); if (! h->isLoaded()) h->request(); }
+        s.held[k] = h;
+        if (k < s.prog->numParts && s.prog->kind[k] == VaultPartKind::model && s.parts[(size_t) k] != nullptr && poolFor (s, k) == nullptr)
+            s.parts[(size_t) k]->modelWanted.store (s.prog->model[k]);
+    }
+}
+
+void VaultEngine::slotRelease (Slot& s)
+{
+    for (auto& h : s.held) if (h != nullptr) { h->release(); h = nullptr; }
+}
+
+void VaultEngine::serviceResources()
+{
+    const std::lock_guard<std::mutex> g (resourceLock);
+    if (preparedParts == 0) return;
+    const auto& reg = vault::models::ModelRegistry::get();
+    for (auto& sl : slots)
+        for (auto& part : sl.parts)
+        {
+            if (part == nullptr) continue;
+            const int m = part->modelWanted.exchange (-1);
+            if (m < 0 || m >= part->numPools || part->pools[(size_t) m].load() != nullptr) continue;
+            auto pool = std::make_unique<ModelPool>();
+            pool->prepare (reg.at (m), sr, chunk);
+            part->pools[(size_t) m].store (pool.get(), std::memory_order_release);
+            part->ownedPools.push_back (std::move (pool));
+        }
 }
 
 void VaultEngine::allNotesOff (bool hard)
 {
     held.fill (0.0f);
     for (auto& sl : slots)
-        for (auto& p : sl.parts) if (p) { p->synth.setSustain (false); p->synth.allOff (hard); }
+        for (auto& p : sl.parts)
+            if (p)
+            {
+                p->synth.setSustain (false); p->synth.allOff (hard);
+                p->sampler.setSustain (false); p->sampler.allOff (hard);
+                for (int mi = 0; mi < p->numPools; ++mi) if (auto* mp = p->pools[(size_t) mi].load()) mp->allOff (hard);
+            }
     sustain = false;
 }
 
@@ -244,7 +449,14 @@ void VaultEngine::handleMidi (const juce::MidiMessage& m)
     else if (m.isSustainPedalOn() || m.isSustainPedalOff())
     {
         sustain = m.isSustainPedalOn();
-        for (auto& sl : slots) for (auto& p : sl.parts) if (p) p->synth.setSustain (sustain);
+        for (auto& sl : slots)
+            for (auto& p : sl.parts)
+                if (p)
+                {
+                    p->synth.setSustain (sustain);
+                    p->sampler.setSustain (sustain);
+                    if (! sustain) for (int mi = 0; mi < p->numPools; ++mi) if (auto* mp = p->pools[(size_t) mi].load()) mp->pedalUp();
+                }
     }
     else if (m.isAllNotesOff() || m.isAllSoundOff()) allNotesOff (m.isAllSoundOff());
     else if (m.isPitchWheel())      pitchWheel = (float) (m.getPitchWheelValue() - 8192) / 8192.0f;
@@ -281,6 +493,41 @@ void VaultEngine::updateParams (Slot& s, double beatPos, double bpm)
         v.lfoAmp *= lowHalf (mot);
         v.drift = kk::clamp01 (v.drift + upHalf (mot) * 0.3f);
     }
+    // sample / model parts: TONE = cutoff tilt, MOTION = vibrato (+ the FX chorus below), the pitch wheel
+    bool waiting = false;
+    for (int k = 0; k < numParts (s); ++k)
+    {
+        auto& part = *s.parts[(size_t) k];
+        if (pr.kind[k] == VaultPartKind::sample)
+        {
+            const auto* h = pr.instrument[k];
+            const auto* d = h != nullptr ? h->data() : nullptr;
+            waiting |= h != nullptr && d == nullptr && ! h->hasFailed();
+            part.sampler.setSource (d, pr.articulation[k]);
+            part.sampler.setParams (pr.sp[k]);
+            const float vib = pr.sp[k][vault::spVibrato] * lowHalf (mot) + upHalf (mot) * 14.0f;
+            part.sampler.setControl (std::exp2 (toneD * 1.5f), vib, ctx.pitchWheel);
+        }
+        else if (pr.kind[k] == VaultPartKind::model)
+        {
+            auto* mp = poolFor (s, k);
+            if (mp == nullptr && pr.model[k] >= 0) { waiting = true; part.modelWanted.store (pr.model[k]); }
+            const float cut = juce::jlimit (40.0f, 20000.0f, 20000.0f * std::exp2 (toneD * 1.5f));
+            part.toneOn = cut < 19000.0f;
+            if (part.toneOn) part.toneC.set (cut, 1.414f, (float) sr);
+            if (mp != nullptr)
+            {
+                const float vibC = upHalf (mot) * 14.0f;
+                const float vib = vibC * std::sin (part.vibPhase) * 0.01f;
+                part.vibPhase += juce::MathConstants<float>::twoPi * 5.2f * (float) chunk / (float) sr;
+                if (part.vibPhase > juce::MathConstants<float>::twoPi) part.vibPhase -= juce::MathConstants<float>::twoPi;
+                const float bend = ctx.pitchWheel * pr.values[k][kk::vk::bendRange] + vib;
+                for (size_t i = 0; i < mp->voices.size(); ++i)
+                    if (mp->voices[i]->isActive() && mp->note[i] >= 0) mp->voices[i]->setPitch (kk::semisToHz ((float) mp->note[i] + bend));
+            }
+        }
+    }
+    if (&s == &slots[cur]) loading.store (waiting, std::memory_order_relaxed);
     if (pr.numParts == 0) fp = {};
     fp.cleanLow = fp.cleanLow || anyBass;
     // TONE on the master: high / low shelf tilt
@@ -379,8 +626,22 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             {
                 auto& s = *live[li];
                 for (int k = 0; k < numParts (s); ++k)
-                    s.parts[(size_t) k]->synth.render (s.partL.data() + k * chunk + pos, s.partR.data() + k * chunk + pos, s.busG.data() + pos, next - pos,
-                                                       s.vp[k], s.lfo1.data() + k * chunk + pos, s.lfo2.data() + k * chunk + pos);
+                {
+                    auto& part = *s.parts[(size_t) k];
+                    float* pl = s.partL.data() + k * chunk + pos;
+                    float* prr = s.partR.data() + k * chunk + pos;
+                    switch (s.prog->kind[k])
+                    {
+                        case VaultPartKind::synth:
+                            part.synth.render (pl, prr, s.busG.data() + pos, next - pos, s.vp[k], s.lfo1.data() + k * chunk + pos, s.lfo2.data() + k * chunk + pos);
+                            break;
+                        case VaultPartKind::sample: part.sampler.render (pl, prr, next - pos); break;
+                        case VaultPartKind::model:
+                            if (auto* mp = poolFor (s, k))
+                                for (auto& v : mp->voices) if (v->isActive()) v->render (pl, prr, next - pos);
+                            break;
+                    }
+                }
             }
             pos = next;
         }
@@ -390,7 +651,16 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             for (int k = 0; k < numParts (s); ++k)
             {
                 const float gl = s.prog->level[k] * s.prog->panL[k], gr = s.prog->level[k] * s.prog->panR[k];
-                const float* pl = s.partL.data() + k * chunk; const float* prr = s.partR.data() + k * chunk;
+                float* pl = s.partL.data() + k * chunk; float* prr = s.partR.data() + k * chunk;
+                if (s.prog->kind[k] == VaultPartKind::model && s.parts[(size_t) k]->toneOn)
+                {
+                    auto& part = *s.parts[(size_t) k];
+                    for (int i = 0; i < len; ++i)
+                    {
+                        part.toneS[0].tick (part.toneC, pl[i]); part.toneS[1].tick (part.toneC, prr[i]);
+                        pl[i] = part.toneS[0].lp; prr[i] = part.toneS[1].lp;
+                    }
+                }
                 for (int i = 0; i < len; ++i) { s.busL[(size_t) i] += pl[i] * gl; s.busR[(size_t) i] += prr[i] * gr; }
             }
             s.fx->process (s.busL.data(), s.busR.data(), s.busG.data(), len, s.fp);
@@ -436,6 +706,7 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             // switch block) so only one slot renders until the next switch
             xfading = false;
             resetSlot (slots[1 - cur], true);
+            slotRelease (slots[1 - cur]);
         }
     }
     for (int c = 2; c < nCh; ++c) buffer.clear (c, 0, n);
@@ -460,14 +731,25 @@ juce::AudioBuffer<float> VaultEngine::render (const VaultPreset& preset, int mid
 juce::AudioBuffer<float> VaultEngine::renderMidi (const VaultPreset& preset, const juce::MidiBuffer& midi, int numSamples, double sampleRate,
                                                   const float* macros)
 {
+    return renderMidi (preset, midi, numSamples, sampleRate, macros, nullptr);
+}
+
+juce::AudioBuffer<float> VaultEngine::renderMidi (const VaultPreset& preset, const juce::MidiBuffer& midi, int numSamples, double sampleRate,
+                                                  const float* macros, std::shared_ptr<vault::SampleLibrary> library)
+{
     juce::AudioBuffer<float> out (2, std::max (1, numSamples));
     out.clear();
-    const auto compiled = compile (preset);
+    const auto compiled = compile (preset, std::move (library));
     auto eng = std::make_unique<VaultEngine>();
     for (int m = 0; m < vault::numMacros; ++m) eng->setMacro (m, macros != nullptr ? macros[m] : compiled.macroDefaults[m]);
     constexpr int block = 512;
     eng->prepare (sampleRate, block, std::max (1, compiled.numParts), false);   // one sound, no switches: no crossfade slot
     eng->setPreset (compiled, true);
+    // offline: everything the preset needs is ready before the first sample (instruments decoded, model voices made)
+    for (int k = 0; k < compiled.numParts; ++k)
+        if (auto* h = compiled.parts[(size_t) k].instrument; h != nullptr && compiled.library != nullptr)
+            compiled.library->loadNow (h);
+    eng->serviceResources();
     juce::AudioBuffer<float> buf (2, block);
     for (int s0 = 0; s0 < numSamples; s0 += block)
     {

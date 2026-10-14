@@ -19,9 +19,10 @@
 
 namespace vaultqc
 {
-// test notes (MIDI, C3 = 60 as in most DAWs): 808 & Bass at C1 / C2, everything else at C3 / C5
-inline int noteLow (int category)  { return category == vault::cat808Bass ? 36 : 60; }
-inline int noteHigh (int category) { return category == vault::cat808Bass ? 48 : 84; }
+// gate notes of the v1 synth bank (MIDI): Bass at 36 / 48, everything else at 60 / 84. (The v2 home note - what the
+// editor previews and renders - is vault::homeNote = MIDI 60 = C5 for every category.)
+inline int noteLow (int category)  { return category == vault::catBass ? 36 : 60; }
+inline int noteHigh (int category) { return category == vault::catBass ? 48 : 84; }
 constexpr double sampleRate = 48000.0;
 constexpr float velocity = 0.8f;
 constexpr double baseSeconds = 1.5;
@@ -30,20 +31,20 @@ constexpr double baseSeconds = 1.5;
 inline float targetLoudness (int category)
 {
     static const float t[vault::numCategories] {
-        -12.0f,   // 808 & Bass
+        -14.5f,   // Piano
+        -14.5f,   // Keys & Organ
+        -14.5f,   // Guitars
+        -12.0f,   // Bass
+        -15.0f,   // Strings
+        -14.0f,   // Brass
+        -15.0f,   // Flutes & Woodwinds
+        -14.5f,   // Orchestral
         -15.0f,   // Bells & Mallets
-        -14.5f,   // Piano & Keys
+        -15.5f,   // Vocals & Choir
         -14.5f,   // Plucks
         -13.5f,   // Leads
         -16.0f,   // Pads
-        -15.0f,   // Strings
-        -14.0f,   // Brass & Horns
-        -15.0f,   // Flutes & Winds
-        -14.5f,   // Guitars
-        -15.5f,   // Vocals & Choir
         -14.0f,   // Synth
-        -14.5f,   // Arps & Sequences
-        -14.5f,   // Orchestral
         -15.0f,   // World
         -17.0f }; // FX & Atmos
     return t[juce::jlimit (0, (int) vault::numCategories - 1, category)];

@@ -7,15 +7,13 @@
 struct VaultBrowserFilter
 {
     int category = -1;        // -1 = All Sounds
-    int style = -1;           // -1 = any, else vault::StyleIndex
-    int character = -1;       // -1 = any, else vault::CharIndex
     int layers = 0;           // 0 = all, else 1..4
-    juce::String query;       // search text: every word must match name / category / layer labels / tags
+    juce::String query;       // search text: every word must match name / category / layer labels / instrument ids
     bool favoritesOnly = false;
     bool recentOnly = false;  // list = the recently played sounds, newest first
 
-    bool anyNarrowing() const { return category >= 0 || style >= 0 || character >= 0 || layers > 0 || query.trim().isNotEmpty() || favoritesOnly || recentOnly; }
-    bool anyChip() const      { return style >= 0 || character >= 0 || layers > 0; }
+    bool anyNarrowing() const { return category >= 0 || layers > 0 || query.trim().isNotEmpty() || favoritesOnly || recentOnly; }
+    bool anyChip() const      { return layers > 0; }
 };
 
 class VaultBrowserModel
@@ -33,9 +31,12 @@ public:
             const auto& p = bank[(size_t) i];
             juce::String h;
             h << p.name << " | " << vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)];
-            for (auto& part : p.parts) h << " | " << part.label;
-            for (auto& t : vault::namesOfMask (p.styles, vault::styleNames())) h << " | " << t;
-            for (auto& t : vault::namesOfMask (p.chars, vault::characterNames())) h << " | " << t;
+            for (auto& part : p.parts)
+            {
+                h << " | " << part.label;
+                if (part.kind == VaultPartKind::sample) h << " | sampled | " << part.source.replaceCharacter ('.', ' ') << " " << part.articulation;
+                if (part.kind == VaultPartKind::model) h << " | modelled";
+            }
             h << " | " << (int) p.parts.size() << (p.parts.size() == 1 ? " layer" : " layers");
             haystack.push_back (h.toLowerCase());
             idToIndex.set (p.id, i);
@@ -61,8 +62,6 @@ public:
         {
             const auto& p = bank[(size_t) i];
             if (filter.category >= 0 && p.category != filter.category) return false;
-            if (filter.style >= 0 && (p.styles & (1u << filter.style)) == 0) return false;
-            if (filter.character >= 0 && (p.chars & (1u << filter.character)) == 0) return false;
             if (filter.layers > 0 && (int) p.parts.size() != filter.layers) return false;
             if (filter.favoritesOnly && ! favorite[(size_t) i]) return false;
             for (auto& w : words) if (! haystack[(size_t) i].contains (w)) return false;

@@ -6,8 +6,8 @@
 //   VaultBankGen -env <bank.cvb> <id> | -switch <bank.cvb> <first> [count]   debugging: level curve / preset-switch clicks
 //
 // Deterministic: the same source tree gives the same bank (own RNG, every candidate seeded by its slot; candidates are
-// rendered in parallel but accepted in slot order). Builds exactly vault::categoryTarget(c) presets per category and the
-// layer mix vault::layerCountTarget(n), from
+// rendered in parallel but accepted in slot order). Builds exactly v1c::target(c) presets per category and the
+// layer mix v1c::layerTarget(n), from
 //   * the EVOLVE factory sounds (Source/Presets.cpp, loudness-calibrated by PresetGains.h) and
 //   * procedural recipes (808s, basses, bells, pads, ...) written below,
 // turned into musically sensible variants (octave, brightness, envelope, era, space, detune, glide, drive, lo-fi, motion)
@@ -31,6 +31,49 @@
 namespace
 {
 namespace K = kk::vk;
+
+// The v1 generator plans, tags and names in the OLD (v1) category list; presets are written with the v2 categories
+// (vault::v1::toV2Category). Styles / characters are internal now (they only steer the names), never stored.
+namespace v1c
+{
+using namespace vault::v1;   // the old CategoryIndex enum
+enum StyleIndex { styleTrap, styleRage, styleDrill, stylePluggnb, styleDark, styleEmo, styleLoFi, styleAmbient };
+enum CharIndex  { charBright, charDark, charWarm, charWide, charHard, charSoft, charDirty, charClean };
+enum { numCategories = 16, numStyles = 8, numCharacters = 8, maxParts = 4 };
+inline const juce::StringArray& names()
+{
+    static const juce::StringArray n { "Bass", "Bells & Mallets", "Piano & Keys", "Plucks", "Leads", "Pads", "Strings", "Brass & Horns",
+                                       "Flutes & Winds", "Guitars", "Vocals & Choir", "Synth", "Arps & Sequences", "Orchestral", "World", "FX & Atmos" };
+    return n;
+}
+inline int target (int c)
+{
+    static const int t[numCategories] { 520, 480, 420, 420, 420, 400, 300, 240, 220, 240, 280, 300, 200, 160, 160, 240 };
+    return t[juce::jlimit (0, (int) numCategories - 1, c)];
+}
+inline int layerTarget (int numParts)
+{
+    static const int t[maxParts] { 1600, 1900, 1100, 400 };
+    return t[juce::jlimit (1, (int) maxParts, numParts) - 1];
+}
+inline const juce::StringArray& styleNames()
+{
+    static const juce::StringArray n { "Trap", "Rage", "Drill", "Pluggnb", "Dark", "Emo", "Lo-Fi", "Ambient" };
+    return n;
+}
+inline const juce::StringArray& characterNames()
+{
+    static const juce::StringArray n { "Bright", "Dark", "Warm", "Wide", "Hard", "Soft", "Dirty", "Clean" };
+    return n;
+}
+inline juce::StringArray namesOfMask (uint32_t mask, const juce::StringArray& n)
+{
+    juce::StringArray out;
+    for (int i = 0; i < n.size(); ++i) if (mask & (1u << i)) out.add (n[i]);
+    return out;
+}
+inline int toV2 (int c) { return vault::v1::toV2Category (c, VaultPreset()); }
+} // namespace v1c
 
 //==============================================================================
 // deterministic RNG (splitmix64) - no std distributions (they differ between standard libraries)
@@ -686,7 +729,7 @@ constexpr int numTreatments = 12;
 // categories
 const char* catSlug (int c)
 {
-    static const char* s[vault::numCategories] { "808", "bell", "keys", "pluck", "lead", "pad", "str", "brass", "wind", "gtr", "vox", "synth",
+    static const char* s[vault::numCategories] { "bass", "bell", "keys", "pluck", "lead", "pad", "str", "brass", "wind", "gtr", "vox", "synth",
                                                  "arp", "orch", "world", "fx" };
     return s[c];
 }
@@ -761,18 +804,18 @@ std::array<std::array<int, 4>, vault::numCategories> layerPlan()
         for (int c = 0; c < vault::numCategories; ++c)
         {
             double s = 0; for (int l = 0; l < 4; ++l) s += m[c][l];
-            for (int l = 0; l < 4; ++l) m[c][l] *= vault::categoryTarget (c) / s;
+            for (int l = 0; l < 4; ++l) m[c][l] *= v1c::target (c) / s;
         }
         for (int l = 0; l < 4; ++l)
         {
             double s = 0; for (int c = 0; c < vault::numCategories; ++c) s += m[c][l];
-            for (int c = 0; c < vault::numCategories; ++c) m[c][l] *= vault::layerCountTarget (l + 1) / s;
+            for (int c = 0; c < vault::numCategories; ++c) m[c][l] *= v1c::layerTarget (l + 1) / s;
         }
     }
     std::array<std::array<int, 4>, vault::numCategories> out {};
     int rowNeed[vault::numCategories], colNeed[4];
-    for (int c = 0; c < vault::numCategories; ++c) rowNeed[c] = vault::categoryTarget (c);
-    for (int l = 0; l < 4; ++l) colNeed[l] = vault::layerCountTarget (l + 1);
+    for (int c = 0; c < vault::numCategories; ++c) rowNeed[c] = v1c::target (c);
+    for (int l = 0; l < 4; ++l) colNeed[l] = v1c::layerTarget (l + 1);
     std::vector<std::tuple<double, int, int>> fr;
     for (int c = 0; c < vault::numCategories; ++c)
         for (int l = 0; l < 4; ++l)
@@ -797,28 +840,28 @@ int factoryRole (const Preset& p, int& home)
     const auto n = p.name.toLowerCase();
     switch (p.cat)
     {
-        case cPiano: case cKeys: case cOrgan: home = vault::catPianoKeys;   return rKeys;
-        case cBells:                          home = vault::catBellsMallets; return rBell;
-        case cMallets:                        home = vault::catBellsMallets; return rMallet;
-        case cPlucks:                         home = vault::catPlucks;       return rPluck;
-        case cGuitar:                         home = vault::catGuitars;      return rGuitar;
-        case cStrings:                        home = vault::catStrings;      return rStrings;
-        case cBrass:                          home = vault::catBrassHorns;   return rBrass;
-        case cChoir:                          home = vault::catVocalsChoir;  return rChoir;
-        case cWoodwind:                       home = vault::catFlutesWinds;  return rWind;
-        case cLead:                           home = vault::catLeads;        return rLead;
-        case cPads:                           home = vault::catPads;         return rPad;
-        case cSynth:                          home = vault::catSynth;        return rSynth;
-        case cChip:   if (p.sub == "Bass") { home = vault::cat808Bass; return rBass; }
-                      home = vault::catSynth; return rSynth;
-        case cBass: case c808:                home = vault::cat808Bass;      return rBass;
-        case cArp:                            home = vault::catArpsSequences; return rArp;
-        case cWorld:                          home = vault::catWorld;        return rWorld;
+        case cPiano: case cKeys: case cOrgan: home = v1c::catPianoKeys;   return rKeys;
+        case cBells:                          home = v1c::catBellsMallets; return rBell;
+        case cMallets:                        home = v1c::catBellsMallets; return rMallet;
+        case cPlucks:                         home = v1c::catPlucks;       return rPluck;
+        case cGuitar:                         home = v1c::catGuitars;      return rGuitar;
+        case cStrings:                        home = v1c::catStrings;      return rStrings;
+        case cBrass:                          home = v1c::catBrassHorns;   return rBrass;
+        case cChoir:                          home = v1c::catVocalsChoir;  return rChoir;
+        case cWoodwind:                       home = v1c::catFlutesWinds;  return rWind;
+        case cLead:                           home = v1c::catLeads;        return rLead;
+        case cPads:                           home = v1c::catPads;         return rPad;
+        case cSynth:                          home = v1c::catSynth;        return rSynth;
+        case cChip:   if (p.sub == "Bass") { home = v1c::cat808Bass; return rBass; }
+                      home = v1c::catSynth; return rSynth;
+        case cBass: case c808:                home = v1c::cat808Bass;      return rBass;
+        case cArp:                            home = v1c::catArpsSequences; return rArp;
+        case cWorld:                          home = v1c::catWorld;        return rWorld;
         case cCinematic:
-            if (p.sub == "Braam" || p.sub == "Impact") { home = vault::catOrchestral; return rCine; }
-            home = vault::catFxAtmos; return n.contains ("drone") ? rTexture : rFx;
-        case cTexture:                        home = vault::catFxAtmos;      return rTexture;
-        case cFX: case cGameFx:               home = vault::catFxAtmos;      return rFx;
+            if (p.sub == "Braam" || p.sub == "Impact") { home = v1c::catOrchestral; return rCine; }
+            home = v1c::catFxAtmos; return n.contains ("drone") ? rTexture : rFx;
+        case cTexture:                        home = v1c::catFxAtmos;      return rTexture;
+        case cFX: case cGameFx:               home = v1c::catFxAtmos;      return rFx;
         default:                              home = -1;                     return -1;
     }
 }
@@ -914,10 +957,10 @@ Library buildLibrary (int threads)
             else s.patch = recipeFor (role) (r, s.kind);
             if (role == rArp) makeSequence (s.patch, r);
             s.name = juce::String ("recipe.") + roleName (role) + "." + juce::String (i);
-            static const int homes[numRoles] { vault::cat808Bass, vault::catBellsMallets, vault::catBellsMallets, vault::catPianoKeys, vault::catPlucks,
-                                               vault::catLeads, vault::catPads, vault::catStrings, vault::catBrassHorns, vault::catFlutesWinds,
-                                               vault::catGuitars, vault::catVocalsChoir, vault::catSynth, vault::catArpsSequences, vault::catFxAtmos,
-                                               vault::catFxAtmos, vault::catWorld, vault::catOrchestral, -1, -1 };
+            static const int homes[numRoles] { v1c::cat808Bass, v1c::catBellsMallets, v1c::catBellsMallets, v1c::catPianoKeys, v1c::catPlucks,
+                                               v1c::catLeads, v1c::catPads, v1c::catStrings, v1c::catBrassHorns, v1c::catFlutesWinds,
+                                               v1c::catGuitars, v1c::catVocalsChoir, v1c::catSynth, v1c::catArpsSequences, v1c::catFxAtmos,
+                                               v1c::catFxAtmos, v1c::catWorld, v1c::catOrchestral, -1, -1 };
             s.home = homes[role];
             s.weight = role == rBass && i < 110 ? 3 : 1;   // 808 & Bass is mostly 808s
             lib.all.push_back (std::move (s));
@@ -931,7 +974,7 @@ Library buildLibrary (int threads)
         lib.byRole[s.role].push_back (i);
         if (s.home >= 0) for (int w = 0; w < s.weight; ++w) lib.mainOf[s.home].push_back (i);
         // orchestral ensembles also lead with strings / brass / choir sections
-        if (s.role == rStrings || s.role == rBrass) lib.mainOf[vault::catOrchestral].push_back (i);
+        if (s.role == rStrings || s.role == rBrass) lib.mainOf[v1c::catOrchestral].push_back (i);
     }
     for (int c = 0; c < vault::numCategories; ++c)
     {
@@ -948,7 +991,8 @@ Library buildLibrary (int threads)
 struct Candidate
 {
     VaultPreset preset;
-    int category = 0, layers = 1, slot = 0, attempt = 0;
+    int category = 0, layers = 1, slot = 0, attempt = 0;   // category: OLD (v1) index; preset.category is the v2 one
+    uint32_t styles = 0, chars = 0;                         // internal tags (names only)
     std::vector<int> roles, srcs;
     juce::StringArray notes;          // treatments (report)
     // results
@@ -983,7 +1027,7 @@ Candidate buildCandidate (const Library& lib, int cat, int layers, int slot, int
         int w = r.below (numTreatments);
         for (int k = 0; k < 4 && used.count (w); ++k) w = r.below (numTreatments);
         used.insert (w);
-        if (cat == vault::cat808Bass && w == 10 && mainRole != rBass) continue;
+        if (cat == v1c::cat808Bass && w == 10 && mainRole != rBass) continue;
         cd.notes.add (applyTreatment (p0, r, w, mainRole));
     }
     // main octave limits
@@ -1045,7 +1089,7 @@ Candidate buildCandidate (const Library& lib, int cat, int layers, int slot, int
 
     // assemble
     VaultPreset& vp = cd.preset;
-    vp.category = cat;
+    vp.category = v1c::toV2 (cat);
     vp.id = juce::String ("cand.") + catSlug (cat) + "." + juce::String (slot) + "." + juce::String (attempt);
     vp.name = vp.id;
     for (size_t k = 0; k < patches.size(); ++k)
@@ -1085,7 +1129,7 @@ bool repair (Candidate& cd, const juce::String& why)
         // (cloud reverb RT60 = 5 + 15 x size s, hall 1 + 5 x size s), 3rd time swaps a cloud reverb for a hall
         int level = 0;
         for (auto& n : cd.notes) level += n == "repair long-tail";
-        const bool padLike = cd.category == vault::catPads || cd.category == vault::catFxAtmos;
+        const bool padLike = cd.category == v1c::catPads || cd.category == v1c::catFxAtmos;
         forAllParts (p, [&] (Patch& pt, int k)
         {
             pt.set (K::release, std::min (pt[K::release], (padLike ? 3.0f : 1.6f) * (level >= 1 ? 0.7f : 1.0f)));
@@ -1120,19 +1164,19 @@ void evaluate (Candidate& cd)
         auto& p = cd.preset;
         p.gain = 0.25f;
         double offL = 0, offH = 0;
-        auto bL = vaultqc::renderNote (p, vaultqc::noteLow (cd.category), offL);
+        auto bL = vaultqc::renderNote (p, vaultqc::noteLow (v1c::toV2 (cd.category)), offL);
         auto aL = vaultqc::analyse (bL, vaultqc::sampleRate, offL);
         if (aL.finite && aL.peak > 0.8f)   // very hot FX output: measure at a lower trim so the safety limiter stays out of it
         {
             p.gain = 0.25f * 0.6f / aL.peak;
-            bL = vaultqc::renderNote (p, vaultqc::noteLow (cd.category), offL);
+            bL = vaultqc::renderNote (p, vaultqc::noteLow (v1c::toV2 (cd.category)), offL);
             aL = vaultqc::analyse (bL, vaultqc::sampleRate, offL);
         }
-        const auto bH = vaultqc::renderNote (p, vaultqc::noteHigh (cd.category), offH);
+        const auto bH = vaultqc::renderNote (p, vaultqc::noteHigh (v1c::toV2 (cd.category)), offH);
         const auto aH = vaultqc::analyse (bH, vaultqc::sampleRate, offH);
         const float g0 = p.gain;
         if (! aL.finite || ! aH.finite) { cd.reason = "nan"; return; }
-        const float target = vaultqc::targetLoudness (cd.category);
+        const float target = vaultqc::targetLoudness (v1c::toV2 (cd.category));
         const float loud0 = 0.5f * (aL.loud + aH.loud);
         float g = g0 * juce::Decibels::decibelsToGain (target - loud0);
         juce::String why;
@@ -1151,8 +1195,8 @@ void evaluate (Candidate& cd)
                 g = std::min (16.0f, g * juce::Decibels::decibelsToGain (d));
             }
             const float scale = g / g0;
-            why = vaultqc::gate (aL, cd.category, scale, false);
-            if (why.isEmpty()) why = vaultqc::gate (aH, cd.category, scale, false);
+            why = vaultqc::gate (aL, v1c::toV2 (cd.category), scale, false);
+            if (why.isEmpty()) why = vaultqc::gate (aH, v1c::toV2 (cd.category), scale, false);
             const float loud = loud0 + juce::Decibels::gainToDecibels (scale);
             if (why.isEmpty() && std::abs (loud - target) > vaultqc::loudnessTolerance - 0.1f)   // 0.1 dB margin for the shipped-bank test
                 why = g >= 16.0f ? "loudness" : "clip";
@@ -1232,7 +1276,7 @@ float percentile (std::vector<float> v, float x)
 
 void assignTags (std::vector<Candidate>& bank, const Library& lib)
 {
-    using namespace vault;
+    using namespace v1c;
     std::vector<TagInput> in;
     for (auto& c : bank) in.push_back (tagInput (c, lib));
     std::array<std::vector<float>, vault::numCategories> cen, war, wid;
@@ -1270,7 +1314,7 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
             chars |= 1u << k; ++n;
         }
         if (chars == 0) chars = 1u << (t.dirty > 0.2f ? charDirty : charWarm);
-        c.preset.chars = chars;
+        c.chars = chars;
         // how "trap" a sound is (hard / dirty / dark up, soft / roomy down), small deterministic jitter breaks ties
         Rng tr (seedOf (778, (uint64_t) i));
         trapScore[i] = ((chars & (1u << charHard)) ? 0.18f : 0.0f) + ((chars & (1u << charDirty)) ? 0.05f : 0.0f)
@@ -1285,13 +1329,13 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
         auto& c = bank[i];
         const auto& t = in[i];
         const int cat = c.category;
-        const uint32_t chars = c.preset.chars;
+        const uint32_t chars = c.chars;
         // styles: scored from the category and the measured character
         const bool dark = chars & (1u << charDark), bright = chars & (1u << charBright), dirty = chars & (1u << charDirty),
                    wide = chars & (1u << charWide), soft = chars & (1u << charSoft), warm = chars & (1u << charWarm);
         auto catIs = [&] (std::initializer_list<int> cs) { for (int x : cs) if (x == cat) return true; return false; };
         // Trap is the house style but must stay a real filter: in the trap categories only the most trap-like share keeps it
-        float st[vault::numStyles] {};
+        float st[v1c::numStyles] {};
         const float trapRaw = trapScore[i];
         if (catIs ({ cat808Bass, catBellsMallets, catBrassHorns, catFlutesWinds, catStrings, catPlucks, catOrchestral }))
             st[styleTrap] = percentile (trapSorted[(size_t) cat], trapRaw) >= (cat == cat808Bass ? 0.1f : 0.3f) ? 0.9f : 0.3f;
@@ -1312,11 +1356,11 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
         Rng jr (seedOf (777, (uint64_t) i));
         for (auto& x : st) x += jr.range (0.0f, 0.06f);
         std::vector<std::pair<float, int>> sv;
-        for (int s = 0; s < vault::numStyles; ++s) sv.push_back ({ st[s], s });
+        for (int s = 0; s < v1c::numStyles; ++s) sv.push_back ({ st[s], s });
         std::sort (sv.begin(), sv.end(), [] (auto& a, auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
         uint32_t styles = 1u << sv[0].second;
         for (int k = 1; k < 3; ++k) if (sv[(size_t) k].first >= 0.55f) styles |= 1u << sv[(size_t) k].second;
-        c.preset.styles = styles;
+        c.styles = styles;
     }
 }
 
@@ -1324,7 +1368,7 @@ void assignTags (std::vector<Candidate>& bank, const Library& lib)
 // names: invented, English, <= 22 characters, unique across the bank
 const juce::StringArray& adjFor (int charIdx)
 {
-    using namespace vault;
+    using namespace v1c;
     static const std::array<juce::StringArray, numCharacters + 1> a { {
         { "Crystal", "Glassy", "Golden", "Solar", "Shiny", "Radiant", "Gleaming", "Brilliant", "Polished", "Sunlit", "Prism", "Silver", "Halo", "Lucid", "Dazzling", "Diamond" },
         { "Midnight", "Obsidian", "Shadow", "Grim", "Hollow", "Ashen", "Sunken", "Cursed", "Haunted", "Raven", "Onyx", "Moonless", "Somber", "Phantom", "Murky", "Eerie", "Gothic" },
@@ -1360,41 +1404,41 @@ juce::StringArray typeWords (const Candidate& c, const Library& lib)
     const auto& k = lib.all[(size_t) c.srcs[0]].kind;
     switch (c.category)
     {
-        case vault::cat808Bass:
+        case v1c::cat808Bass:
             if (k == "808" || k == "hard808" || k == "slide") return k == "slide" ? juce::StringArray { "Slide", "Glide 808", "808", "Slide 808" }
                                                                                 : juce::StringArray { "808", "Boom", "808", "Sub", "Low End", "Knock" };
             return k == "reese" ? juce::StringArray { "Reese", "Bass", "Growl" } : juce::StringArray { "Bass", "Sub", "Low", "Bassline", "Growl" };
-        case vault::catBellsMallets:
+        case v1c::catBellsMallets:
             if (k == "marimba") return { "Marimba", "Mallet", "Wood" };
             if (k == "musicbox") return { "Music Box", "Lullaby", "Box" };
             if (k == "thumb") return { "Thumb Keys", "Tines", "Mallet" };
             if (k == "mallet") return { "Mallet", "Vibes", "Celesta", "Chime" };
             return { "Bell", "Bells", "Chime", "Chimes", "Glockenspiel", "Toll" };
-        case vault::catPianoKeys:
+        case v1c::catPianoKeys:
             if (k == "organ") return { "Organ", "Chapel Keys", "Drawbar" };
             if (k == "ep") return { "EP", "Keys", "Tines", "E-Piano" };
             return { "Piano", "Keys", "Grand", "Upright", "Ivory" };
-        case vault::catPlucks: return { "Pluck", "Plucks", "Pick", "Ping", "Snap", "Flick" };
-        case vault::catLeads: return k == "whistle" ? juce::StringArray { "Whistle", "Lead", "Siren" } : juce::StringArray { "Lead", "Hook", "Line", "Solo", "Saw", "Topline" };
-        case vault::catPads: return { "Pad", "Haze", "Cloud", "Swell", "Wash", "Bed", "Drift" };
-        case vault::catStrings:
+        case v1c::catPlucks: return { "Pluck", "Plucks", "Pick", "Ping", "Snap", "Flick" };
+        case v1c::catLeads: return k == "whistle" ? juce::StringArray { "Whistle", "Lead", "Siren" } : juce::StringArray { "Lead", "Hook", "Line", "Solo", "Saw", "Topline" };
+        case v1c::catPads: return { "Pad", "Haze", "Cloud", "Swell", "Wash", "Bed", "Drift" };
+        case v1c::catStrings:
             if (k == "pizz") return { "Pizz", "Pizzicato", "Plucked Strings" };
             if (k == "staccato") return { "Staccato", "Spiccato", "Short Strings" };
             return { "Strings", "Violins", "Cellos", "Ensemble", "Bows", "Quartet" };
-        case vault::catBrassHorns: return k == "stab" ? juce::StringArray { "Stab", "Horn Stab", "Brass Hit" } : juce::StringArray { "Horn", "Horns", "Brass", "Trumpet", "Fanfare" };
-        case vault::catFlutesWinds:
+        case v1c::catBrassHorns: return k == "stab" ? juce::StringArray { "Stab", "Horn Stab", "Brass Hit" } : juce::StringArray { "Horn", "Horns", "Brass", "Trumpet", "Fanfare" };
+        case v1c::catFlutesWinds:
             if (k == "reed") return { "Reed", "Clarinet", "Oboe" };
             if (k == "whistle") return { "Whistle", "Pipe" };
             return { "Flute", "Flutes", "Pipe", "Breath", "Piccolo" };
-        case vault::catGuitars:
+        case v1c::catGuitars:
             if (k == "nylon") return { "Nylon", "Guitar", "Strum" };
             if (k == "electric") return { "Guitar", "Riff", "Twang", "Crunch" };
             return { "Guitar", "Strum", "Pick", "Steel", "Acoustic" };
-        case vault::catVocalsChoir: return { "Choir", "Voices", "Aah", "Ooh", "Chant", "Hymn", "Vocal" };
-        case vault::catSynth: return { "Synth", "Poly", "Stack", "Wave", "Chord" };
-        case vault::catArpsSequences: return { "Arp", "Sequence", "Pattern", "Pulse", "Cycle", "Run" };
-        case vault::catOrchestral: return { "Ensemble", "Tutti", "Orchestra", "Score", "Overture", "Anthem" };
-        case vault::catWorld:
+        case v1c::catVocalsChoir: return { "Choir", "Voices", "Aah", "Ooh", "Chant", "Hymn", "Vocal" };
+        case v1c::catSynth: return { "Synth", "Poly", "Stack", "Wave", "Chord" };
+        case v1c::catArpsSequences: return { "Arp", "Sequence", "Pattern", "Pulse", "Cycle", "Run" };
+        case v1c::catOrchestral: return { "Ensemble", "Tutti", "Orchestra", "Score", "Overture", "Anthem" };
+        case v1c::catWorld:
             if (k == "thumb") return { "Thumb Keys", "Tines" };
             if (k == "zither" || k == "lute") return { "Zither", "Lute", "Dulcimer", "Lyre" };
             if (k == "pipe") return { "Pipes", "Pan Flute", "Reed Pipe" };
@@ -1411,10 +1455,10 @@ juce::String makeName (const Candidate& c, const Library& lib, std::set<juce::St
     const auto types = typeWords (c, lib);
     // characters of the sound pick the adjective family
     std::vector<int> fams;
-    for (int k = 0; k < vault::numCharacters; ++k) if (c.preset.chars & (1u << k)) fams.push_back (k);
+    for (int k = 0; k < v1c::numCharacters; ++k) if (c.chars & (1u << k)) fams.push_back (k);
     for (int attempt = 0; attempt < 400; ++attempt)
     {
-        const int fam = fams.empty() || r.chance (0.35f) ? vault::numCharacters : fams[(size_t) r.below ((int) fams.size())];
+        const int fam = fams.empty() || r.chance (0.35f) ? v1c::numCharacters : fams[(size_t) r.below ((int) fams.size())];
         const auto& adjs = adjFor (fam);
         const juce::String adj = adjs[r.below (adjs.size())], noun = nouns()[r.below (nouns().size())], type = types[r.below (types.size())];
         const float form = r.uni();
@@ -1656,9 +1700,8 @@ int main (int argc, char** argv)
         {
             juce::StringArray lab;
             for (auto& pt : p.parts) lab.add (pt.label + (pt.octave != 0 ? juce::String::formatted (" (%+d)", pt.octave) : juce::String()));
-            std::printf ("%s\t%s\t%s\t%s\t%s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), lab.joinIntoString (" + ").toRawUTF8(),
-                         vault::namesOfMask (p.styles, vault::styleNames()).joinIntoString (",").toRawUTF8(),
-                         vault::namesOfMask (p.chars, vault::characterNames()).joinIntoString (",").toRawUTF8());
+            std::printf ("%s\t%s\t%s\t%s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), lab.joinIntoString (" + ").toRawUTF8(),
+                         vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)].toRawUTF8());
         }
         return 0;
     }
@@ -1761,7 +1804,7 @@ int main (int argc, char** argv)
     {
         int ok = 0; for (auto& s : lib.all) ok += s.ok;
         std::printf ("library: %d sources (%d usable) calibrated in %.1f s\n", (int) lib.all.size(), ok, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
-        for (int c = 0; c < vault::numCategories; ++c) std::printf ("   main pool %-18s %4d\n", vault::categoryNames()[c].toRawUTF8(), (int) lib.mainOf[c].size());
+        for (int c = 0; c < vault::numCategories; ++c) std::printf ("   main pool %-18s %4d\n", v1c::names()[c].toRawUTF8(), (int) lib.mainOf[c].size());
     }
 
     // slots: per category the planned layer counts, interleaved
@@ -1861,6 +1904,10 @@ int main (int argc, char** argv)
             labels.insert (label);
             p.parts[k].label = label;
         }
+        // v2: no "808" anywhere in what the user sees; the category follows the final layer labels (Piano vs Keys & Organ)
+        p.name = vault::v1::cleanText (p.name);
+        for (auto& part : p.parts) part.label = vault::v1::cleanText (part.label);
+        p.category = vault::v1::toV2Category (c.category, p);
     }
 
     // final validation
@@ -1904,14 +1951,14 @@ int main (int argc, char** argv)
         std::sort (l.begin(), l.end());
         catTot[(size_t) c] = (int) l.size();
         for (int k = 1; k <= 4; ++k) layerTot[k] += lay[k];
-        md << "| " << vault::categoryNames()[c] << " | " << vault::categoryTarget (c) << " | " << (int) l.size() << " | " << lay[1] << " | " << lay[2] << " | "
+        md << "| " << v1c::names()[c] << " | " << v1c::target (c) << " | " << (int) l.size() << " | " << lay[1] << " | " << lay[2] << " | "
            << lay[3] << " | " << lay[4] << " | " << fmt (vaultqc::targetLoudness (c)) << " | "
            << (l.empty() ? juce::String ("-") : fmt (l.front()) + " / " + fmt (l[l.size() / 2]) + " / " + fmt (l.back())) << " | " << fmt (pk, 3) << " | "
            << fmt (tl) << " s |\n";
     }
     md << "| **Total** | 5000 | " << (int) bank.size() << " | " << layerTot[1] << " | " << layerTot[2] << " | " << layerTot[3] << " | " << layerTot[4] << " | | | | |\n";
-    md << "| Layer target | | | " << vault::layerCountTarget (1) << " | " << vault::layerCountTarget (2) << " | " << vault::layerCountTarget (3) << " | "
-       << vault::layerCountTarget (4) << " | | | | |\n\n";
+    md << "| Layer target | | | " << v1c::layerTarget (1) << " | " << v1c::layerTarget (2) << " | " << v1c::layerTarget (3) << " | "
+       << v1c::layerTarget (4) << " | | | | |\n\n";
 
     md << "## Candidates and rejects\n\n" << stats.evaluated << " candidates rendered for " << (int) bank.size() << " presets.\n\n| Reason | Rejected |\n| --- | ---: |\n";
     for (auto& [k, v] : stats.rejects) md << "| " << k << " | " << v << " |\n";
@@ -1920,7 +1967,7 @@ int main (int argc, char** argv)
 
     {   // loudness spread
         std::vector<float> dev; float worst = 0;
-        for (auto& b : bank) { const float d = b.loud - vaultqc::targetLoudness (b.category); dev.push_back (d); worst = std::max (worst, std::abs (d)); }
+        for (auto& b : bank) { const float d = b.loud - vaultqc::targetLoudness (v1c::toV2 (b.category)); dev.push_back (d); worst = std::max (worst, std::abs (d)); }
         std::sort (dev.begin(), dev.end());
         int within05 = 0; for (float d : dev) within05 += std::abs (d) <= 0.5f;
         std::vector<float> spread; for (auto& b : bank) spread.push_back (std::abs (b.loudLow - b.loudHigh));
@@ -1932,10 +1979,10 @@ int main (int argc, char** argv)
     }
     {   // tags
         int st[8] {}, ch[8] {};
-        for (auto& b : bank) for (int k = 0; k < 8; ++k) { st[k] += (b.preset.styles >> k) & 1; ch[k] += (b.preset.chars >> k) & 1; }
+        for (auto& b : bank) for (int k = 0; k < 8; ++k) { st[k] += (b.styles >> k) & 1; ch[k] += (b.chars >> k) & 1; }
         md << "\n## Tags\n\n| Style | Presets | | Character | Presets |\n| --- | ---: | --- | --- | ---: |\n";
         for (int k = 0; k < 8; ++k)
-            md << "| " << vault::styleNames()[k] << " | " << st[k] << " | | " << vault::characterNames()[k] << " | " << ch[k] << " |\n";
+            md << "| " << v1c::styleNames()[k] << " | " << st[k] << " | | " << v1c::characterNames()[k] << " | " << ch[k] << " |\n";
     }
     {   // sources
         std::map<int, int> roleUse; int factoryMain = 0;
@@ -1975,7 +2022,7 @@ int main (int argc, char** argv)
         auto& p = bank[i].preset;
         juce::StringArray lab; for (auto& pt : p.parts) lab.add (pt.label);
         md << "| " << p.id << " | " << p.name << " | " << vault::categoryNames()[p.category] << " | " << lab.joinIntoString (" + ") << " | "
-           << vault::namesOfMask (p.styles, vault::styleNames()).joinIntoString (", ") << " | " << vault::namesOfMask (p.chars, vault::characterNames()).joinIntoString (", ") << " |\n";
+           << v1c::namesOfMask (bank[i].styles, v1c::styleNames()).joinIntoString (", ") << " | " << v1c::namesOfMask (bank[i].chars, v1c::characterNames()).joinIntoString (", ") << " |\n";
     }
     const auto rep = cwd.getChildFile (reportPath);
     rep.getParentDirectory().createDirectory();

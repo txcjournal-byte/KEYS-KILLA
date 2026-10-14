@@ -3,7 +3,7 @@
 #include "VaultEngine.h"
 
 // CHROME VAULT by TrapWin - the plugin. A preset-bank instrument: pick a sound, play.
-class VaultProcessor : public juce::AudioProcessor
+class VaultProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     // parameter IDs (stable - saved in host projects)
@@ -30,7 +30,16 @@ public:
     void setMacro (int index, float value01);      // notifies the host
     float getVolumeDb() const;
     void setVolumeDb (float dB);
-    void previewNote (int midiNote, float velocity = 0.8f, double seconds = 0.9);   // audition from the UI (any thread)
+    void previewNote (int midiNote = vault::homeNote, float velocity = 0.8f, double seconds = 0.9);   // audition from the UI (any thread)
+
+    // sample library (shared by all instances; see vault::SampleLibrary)
+    bool libraryFound() const { return library != nullptr && library->libraryFound(); }
+    juce::File libraryPath() const { return library != nullptr ? library->libraryPath() : juce::File(); }
+    vault::SampleLibrary* sampleLibrary() const { return library.get(); }
+    // true while the current preset waits for sample instruments / model voices (its parts are silent meanwhile)
+    bool isLoading() const;
+    // true if the current preset needs the library but an instrument is missing (no library installed / unknown id)
+    bool isMissingSamples() const;
     float getOutputPeak() const { return outPeak.load(); }   // last block peak (for a meter)
     juce::MidiKeyboardState& getKeyboardState() { return keyboardState; }   // on-screen keyboard
     juce::AudioProcessorValueTreeState apvts;
@@ -70,10 +79,17 @@ private:
         std::vector<VaultPreset> presets;
         std::vector<VaultCompiledPreset> compiled;
         BankSource source = BankSource::factoryFallback;
+        std::shared_ptr<vault::SampleLibrary> library;
     };
     static std::shared_ptr<const Bank> sharedBank();   // loaded once per process, shared by all instances
 
+    void timerCallback() override;
+    void updatePins (int presetIndex);
+
     std::shared_ptr<const Bank> bankData;
+    std::shared_ptr<vault::SampleLibrary> library;
+    std::vector<vault::InstrumentHandle*> pinned;   // instruments of the current preset kept in RAM (message thread)
+    int pinnedFor = -2;
     VaultEngine engine;
     juce::MidiKeyboardState keyboardState;
     std::atomic<float>* presetParam = nullptr;

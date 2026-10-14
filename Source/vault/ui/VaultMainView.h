@@ -57,8 +57,6 @@ public:
     void syncFromProcessor();                           // follows host automation / state restore (timer)
     void setCategory (int c);                           // -1 = All Sounds
     void setQuery (const juce::String& q);              // also updates the search box
-    void setStyle (int s);
-    void setCharacter (int c);
     void setLayers (int n);
     void setFavoritesOnly (bool);
     void setRecentOnly (bool);
@@ -73,10 +71,12 @@ public:
     VaultBrowserModel& browser() { return model; }
     vui::PresetList& presetList() { return list; }
     VaultInfoPanel& infoPanel() { return info; }
-    juce::File renderWavForDrag();                      // the current sound (C4; 808 & Bass C3), 2 s, with the macros, as a WAV in the temp folder
+    juce::File renderWavForDrag();                      // the current sound at C5 (MIDI 60), 2 s, with the macros, as a WAV in the temp folder
+    juce::String statusHint() const;                    // the status-bar hint (loading / library missing / how to browse)
 
     void updateToggles();                               // RECENT / FAVORITES / preview / scale pills follow the state
-    void giveFocusBack();                               // keyboard focus back to the editor (arrows, PC keys)
+    void giveFocusBack();                               // nobody keeps the keyboard: the DAW gets its keys back
+    int focusReturns() const { return focusReturnCount; }   // tests: how often the keyboard was handed back
 
     std::function<void (float)> onScaleChosen;
     std::function<float()> currentScale;
@@ -117,7 +117,7 @@ private:
     vui::PillButton previewBtn { "Preview on click", vui::PillButton::Icon::none, 14.0f }, scaleBtn { "100 %", vui::PillButton::Icon::none, 14.0f };
     vui::VaultKeyboard keyboard;
 
-    int shown = -2;
+    int shown = -2, lastLoadState = -1, focusReturnCount = 0;
     juce::String statusMsg;
     juce::uint32 statusUntil = 0;
     juce::Random rng;

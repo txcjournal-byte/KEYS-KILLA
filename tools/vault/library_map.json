@@ -1,0 +1,104 @@
+{
+  "comment": "CHROME VAULT sample-library map for VaultLibBuild (docs/VAULT.md, 'Sample library'). Sources are CC0 (VSCO 2 CE, VCSL). Ids / names here are what the plugin shows: instrument nouns only, never maker names.",
+  "roots": {
+    "vsco": "/home/user/sgossner/vsco",
+    "vcsl": "/home/user/sgossner/vcsl2"
+  },
+  "output": "/home/user/cv-library",
+  "defaults": {
+    "quality": 6,
+    "preRollMs": 4,
+    "silenceDb": -62,
+    "maxSeconds": 16,
+    "tailFadeMs": 250,
+    "peakDb": -1.0,
+    "minLoopMs": 300,
+    "maxLoopMs": 2600,
+    "xfadeMs": 100,
+    "extendKeys": 6,
+    "release": 0.3
+  },
+  "instruments": [
+    {
+      "id": "piano.grand.concert",
+      "name": "Concert Grand",
+      "family": "Piano",
+      "credit": "VCSL (Versilian Community Sample Library), concert grand piano, close mics - CC0",
+      "articulations": [
+        {
+          "name": "sustain",
+          "oneShot": false,
+          "tune": "correct",
+          "pitchFrom": 0.5,
+          "release": 0.32,
+          "releaseDecayDb": 4.0,
+          "maxSeconds": 14,
+          "layerDb": { "2": -15, "3": -7.5, "4": 0 },
+          "sources": [
+            { "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/NoSus/*.wav", "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav" },
+            { "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/Rel/*.wav", "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav", "trigger": "release", "levelDb": -22 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "strings.violins.ensemble",
+      "name": "Violin Section",
+      "family": "Strings",
+      "credit": "VSCO 2 Community Edition (Versilian Studios), violin section sustain with vibrato - CC0",
+      "articulations": [
+        {
+          "name": "sustain",
+          "loop": true,
+          "release": 0.45,
+          "sources": [
+            { "files": "vsco:Strings/Violin Section/susVib/*.wav", "pattern": "VlnEns_susVib_{note}_v{vel}.wav" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "winds.flute.concert",
+      "name": "Concert Flute",
+      "family": "Flutes & Woodwinds",
+      "credit": "VSCO 2 Community Edition (Versilian Studios), concert flute sustain (straight and vibrato) - CC0",
+      "articulations": [
+        {
+          "name": "sustain",
+          "loop": true,
+          "release": 0.3,
+          "sources": [
+            { "files": "vsco:Woodwinds/Flute/susNV/*.wav", "pattern": "LDFlute_susNV_{note}_v{vel}_{rr}.wav" }
+          ]
+        },
+        {
+          "name": "vibrato",
+          "loop": true,
+          "release": 0.3,
+          "sources": [
+            { "files": "vsco:Woodwinds/Flute/susvib/*.wav", "pattern": "LDFlute_susvib_{note}_v{vel}_{rr}.wav" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mallets.marimba",
+      "name": "Marimba",
+      "family": "Bells & Mallets",
+      "credit": "VCSL (Versilian Community Sample Library), marimba, outrigger mallets - CC0",
+      "articulations": [
+        {
+          "name": "hit",
+          "oneShot": true,
+          "tune": "keep",
+          "release": 0.5,
+          "maxSeconds": 6,
+          "velOrder": [ "soft", "med", "loud" ],
+          "sources": [
+            { "files": "vcsl:Idiophones/Struck Idiophones/Marimba/*.wav", "pattern": "Marimba_hit_Outrigger_{note}_{vel}_{rr}.wav" }
+          ]
+        }
+      ]
+    }
+  ]
+}

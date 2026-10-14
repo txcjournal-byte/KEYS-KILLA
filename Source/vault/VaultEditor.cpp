@@ -123,10 +123,25 @@ void VaultInfoPanel::paint (juce::Graphics& g)
     g.drawText (vault::categoryNames()[jlimit (0, (int) vault::numCategories - 1, p->category)] + midDot() + String (n) + " " + layerWord (n),
                 catR, Justification::centredLeft, true);
 
-    // tag pills (styles then characters), wrapping onto at most 2 rows
+    // pills: what plays the layers (sampled / synth / modelled) and the loading state
     {
-        auto tags = vault::namesOfMask (p->styles, vault::styleNames());
-        tags.addArray (vault::namesOfMask (p->chars, vault::characterNames()));
+        StringArray tags;
+        bool sampled = false, synth = false, modelled = false;
+        for (auto& part : p->parts)
+        {
+            sampled |= part.kind == VaultPartKind::sample;
+            synth |= part.kind == VaultPartKind::synth;
+            modelled |= part.kind == VaultPartKind::model;
+        }
+        if (sampled) tags.add ("Sampled");
+        if (modelled) tags.add ("Modelled");
+        if (synth) tags.add ("Synth");
+        if (preset == proc.currentPreset())
+        {
+            if (proc.isLoading()) tags.add ("Loading...");
+            else if (proc.isMissingSamples()) tags.add ("Samples missing");
+        }
+        tags.add ("Plays at " + vault::noteName (vault::homeNote));
         const auto f = font (14.0f);
         float x = (float) tagsR.getX(), y = (float) tagsR.getY();
         const float h = 24.0f;
@@ -246,7 +261,7 @@ VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> 
     model.refilter();
 
     search.setFont (font (15.0f));
-    search.setTextToShowWhenEmpty ("Search: dark bell, glide 808", col::dim);
+    search.setTextToShowWhenEmpty ("Search: piano, cello, choir", col::dim);
     search.setIndents (0, 0);
     search.setJustification (juce::Justification::centredLeft);
     search.setSelectAllWhenFocused (false);
@@ -255,10 +270,13 @@ VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> 
     search.onTextChange = [this] { model.filter.query = search.getText(); filterChanged(); };
     search.onEscapeKey = [this]
     {
-        if (search.isEmpty()) { giveFocusBack(); return; }
-        search.clear();
-        model.filter.query.clear();
-        filterChanged();
+        if (! search.isEmpty())
+        {
+            search.clear();
+            model.filter.query.clear();
+            filterChanged();
+        }
+        giveFocusBack();
     };
     search.onReturnKey = [this] { if (model.rowOf (shown) < 0 && visibleCount() > 0) loadPreset (model.visible().front(), true); giveFocusBack(); };
     search.addKeyListener (&searchKeys);
@@ -428,8 +446,7 @@ void VaultMainView::paint (juce::Graphics& g)
         if (statusMsg.isNotEmpty() && Time::getMillisecondCounter() < statusUntil)
             put (midDot() + statusMsg, false);
         else
-            put (midDot() + String (CharPointer_UTF8 ("\xe2\x86\x91 \xe2\x86\x93 or \xe2\x97\x80 \xe2\x96\xb6 next sound")) + midDot() + "Instant load"
-                     + midDot() + "Keys A-L play, Z / X octave", false);
+            put (midDot() + statusHint(), false);
     }
 
     // keyboard bed
@@ -467,7 +484,7 @@ void VaultMainView::loadPreset (int idx, bool audition)
 void VaultMainView::auditionCurrent()
 {
     if (const auto* p = proc.currentPresetData())
-        proc.previewNote (p->category == vault::cat808Bass ? 48 : 60, 0.8f, p->category == vault::catPads || p->category == vault::catFxAtmos ? 1.4 : 0.9);
+        proc.previewNote (vault::homeNote, 0.8f, p->category == vault::catPads || p->category == vault::catFxAtmos ? 1.4 : 0.9);   // C5 for every sound
 }
 
 void VaultMainView::step (int delta, bool wrap)
@@ -503,6 +520,8 @@ void VaultMainView::syncFromProcessor()
     const int cur = proc.currentPreset();
     if (cur != shown) { setShown (cur); list.showRow (model.rowOf (cur)); }
     if (statusUntil != 0 && juce::Time::getMillisecondCounter() >= statusUntil) { statusUntil = 0; repaint (statusRect()); }
+    const int st = proc.isLoading() ? 1 : proc.isMissingSamples() ? 2 : 0;
+    if (st != lastLoadState) { lastLoadState = st; repaint (statusRect()); info.repaint(); }
 }
 
 void VaultMainView::filterChanged (bool scrollToCurrent, bool keepScroll)
@@ -520,8 +539,6 @@ void VaultMainView::filterChanged (bool scrollToCurrent, bool keepScroll)
 
 void VaultMainView::setCategory (int c) { model.filter.category = juce::jlimit (-1, (int) vault::numCategories - 1, c); filterChanged(); }
 void VaultMainView::setQuery (const juce::String& q) { search.setText (q, false); model.filter.query = q; filterChanged(); }
-void VaultMainView::setStyle (int s) { model.filter.style = juce::jlimit (-1, (int) vault::numStyles - 1, s); filterChanged(); }
-void VaultMainView::setCharacter (int c) { model.filter.character = juce::jlimit (-1, (int) vault::numCharacters - 1, c); filterChanged(); }
 void VaultMainView::setLayers (int n) { model.filter.layers = juce::jlimit (0, (int) vault::maxParts, n); filterChanged(); }
 void VaultMainView::setFavoritesOnly (bool on) { model.filter.favoritesOnly = on; filterChanged(); }
 void VaultMainView::setRecentOnly (bool on) { model.filter.recentOnly = on; filterChanged (! on); }
@@ -537,8 +554,23 @@ void VaultMainView::toggleFavorite (int idx)
 
 void VaultMainView::giveFocusBack()
 {
-    if (auto* ed = findParentComponentOfClass<juce::AudioProcessorEditor>(); ed != nullptr && ed->isShowing()) ed->grabKeyboardFocus();
-    else unfocusAllComponents();
+    // nobody in the plugin keeps the keyboard: the host gets the keys again (its computer-keyboard piano, shortcuts)
+    ++focusReturnCount;
+    search.giveAwayKeyboardFocus();
+    unfocusAllComponents();
+    repaint (searchRect().expanded (2));
+}
+
+juce::String VaultMainView::statusHint() const
+{
+    if (proc.currentPresetData() != nullptr)
+    {
+        if (proc.isLoading()) return "Loading samples...";
+        if (proc.isMissingSamples())
+            return proc.libraryFound() ? juce::String ("This sound needs an update of the sample library")
+                                       : juce::String ("Sample library not found - install the CHROME VAULT library");
+    }
+    return "Click a sound to hear it at C5" + midDot() + juce::String (juce::CharPointer_UTF8 ("\xe2\x97\x80 \xe2\x96\xb6 next sound")) + midDot() + "Instant load";
 }
 
 void VaultMainView::updateToggles()
@@ -610,11 +642,10 @@ juce::File VaultMainView::renderWavForDrag()
     float macros[vault::numMacros];
     for (int i = 0; i < vault::numMacros; ++i) macros[i] = proc.getMacro (i);
     constexpr double sr = 44100.0;
-    const bool low = p->category == vault::cat808Bass;   // same note as the preview: 808s / basses at C3, the rest at C4
-    const auto buf = VaultEngine::render (*p, low ? 48 : 60, 0.8f, 2.0, sr, macros);
+    const auto buf = VaultEngine::render (*p, vault::homeNote, 0.8f, 2.0, sr, macros);   // the preview note: C5 (MIDI 60) for every sound
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("CHROME VAULT");
     dir.createDirectory();
-    const auto f = dir.getChildFile (juce::File::createLegalFileName (p->name + (low ? " C3" : " C4")) + ".wav");
+    const auto f = dir.getChildFile (juce::File::createLegalFileName (p->name + " " + vault::noteName (vault::homeNote)) + ".wav");
     f.deleteFile();
     juce::WavAudioFormat wav;
     std::unique_ptr<juce::OutputStream> os (f.createOutputStream());
@@ -669,14 +700,8 @@ juce::Rectangle<int> VaultEditor::displayArea() const
     return d != nullptr ? d->userBounds.getSmallestIntegerContainer() : juce::Rectangle<int>();
 }
 
-namespace
-{
-const char pcKeys[] = "awsedftgyhujkolp;";
-}
-
 VaultEditor::VaultEditor (VaultProcessor& p) : AudioProcessorEditor (p), proc (p), settings (VaultSettings::get())
 {
-    pcNoteDown.fill (-1);
     setLookAndFeel (&lnf);
     main = std::make_unique<VaultMainView> (proc, settings);
     main->currentScale = [this] { return uiScale; };
@@ -689,7 +714,9 @@ VaultEditor::VaultEditor (VaultProcessor& p) : AudioProcessorEditor (p), proc (p
     const auto area = displayArea();
     const float s = saved <= 0.0f ? firstOpenScale (area) : restoredScale (saved, area);
 
-    setWantsKeyboardFocus (true);
+    // never take the keyboard: the DAW's computer-keyboard piano must keep working (only the search box takes it while typing)
+    setWantsKeyboardFocus (false);
+    setMouseClickGrabsKeyboardFocus (false);
     addMouseListener (this, true);
     settingSize = true;   // the limits below resize the window once - don't remember that size
     setResizable (true, true);
@@ -705,7 +732,6 @@ VaultEditor::~VaultEditor()
 {
     stopTimer();
     removeMouseListener (this);
-    releasePcNotes();
     main.reset();
     settings->flush();
     setLookAndFeel (nullptr);
@@ -753,11 +779,6 @@ void VaultEditor::resized()
     main->repaint();
 }
 
-void VaultEditor::visibilityChanged()
-{
-    focusGrabbed = false;
-}
-
 void VaultEditor::timerCallback()
 {
     if (main == nullptr) return;
@@ -767,79 +788,12 @@ void VaultEditor::timerCallback()
         displayChecked = true;
         fitToDisplay();
     }
-    if (! focusGrabbed && isShowing())
-    {
-        focusGrabbed = true;
-        if (! main->searchHasFocus()) grabKeyboardFocus();
-    }
 }
 
 void VaultEditor::mouseDown (const juce::MouseEvent& e)
 {
-    // a click anywhere but in the search box gives the keyboard back to the sounds (arrows, PC keys)
-    if (main != nullptr && e.eventComponent != nullptr && ! main->searchBox().isParentOf (e.eventComponent) && e.eventComponent != &main->searchBox())
-        if (! hasKeyboardFocus (false)) grabKeyboardFocus();
-}
-
-bool VaultEditor::keyPressed (const juce::KeyPress& k)
-{
-    if (main == nullptr || main->searchHasFocus()) return false;
-    const auto mods = k.getModifiers();
-    if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
-    const int code = k.getKeyCode();
-    if (code == juce::KeyPress::downKey)  { main->step (1, false); return true; }
-    if (code == juce::KeyPress::upKey)    { main->step (-1, false); return true; }
-    if (code == juce::KeyPress::rightKey) { main->step (1, true); return true; }
-    if (code == juce::KeyPress::leftKey)  { main->step (-1, true); return true; }
-    if (code == juce::KeyPress::pageDownKey) { main->step (main->pageRows(), false); return true; }
-    if (code == juce::KeyPress::pageUpKey)   { main->step (-main->pageRows(), false); return true; }
-    if (code == juce::KeyPress::homeKey)     { main->stepToEnd (false); return true; }
-    if (code == juce::KeyPress::endKey)      { main->stepToEnd (true); return true; }
-    if (code == juce::KeyPress::returnKey) { main->auditionCurrent(); return true; }
-    // Space is NOT used: it stays with the DAW (play / stop)
-    const auto ch = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
-    if (ch == 'z' || ch == 'x')
-    {
-        releasePcNotes();
-        pcOctaveBase = juce::jlimit (24, 96, pcOctaveBase + (ch == 'x' ? 12 : -12));
-        main->keys().pcBase = pcOctaveBase;
-        main->keys().repaint();
-        main->showStatus ("PC keys: A plays C" + juce::String (pcOctaveBase / 12 - 1));
-        return true;
-    }
-    for (const char* c = pcKeys; *c != 0; ++c) if (ch == (juce::juce_wchar) *c) return true;   // played in keyStateChanged
-    return false;
-}
-
-bool VaultEditor::keyStateChanged (bool)
-{
-    if (main == nullptr || main->searchHasFocus()) return false;
-    bool used = false;
-    auto& ks = proc.getKeyboardState();
-    for (int i = 0; pcKeys[i] != 0; ++i)
-    {
-        const bool down = juce::KeyPress::isKeyCurrentlyDown ((int) pcKeys[i]);
-        if (down && pcNoteDown[(size_t) i] < 0)
-        {
-            const int note = juce::jlimit (0, 127, pcOctaveBase + i);
-            pcNoteDown[(size_t) i] = note;
-            ks.noteOn (1, note, 0.8f);
-            used = true;
-        }
-        else if (! down && pcNoteDown[(size_t) i] >= 0)
-        {
-            ks.noteOff (1, pcNoteDown[(size_t) i], 0.0f);
-            pcNoteDown[(size_t) i] = -1;
-            used = true;
-        }
-    }
-    return used;
-}
-
-void VaultEditor::focusLost (FocusChangeType) { releasePcNotes(); }
-
-void VaultEditor::releasePcNotes()
-{
-    for (auto& n : pcNoteDown)
-        if (n >= 0) { proc.getKeyboardState().noteOff (1, n, 0.0f); n = -1; }
+    // a click anywhere but in the search box ends typing: the keyboard goes back to the DAW
+    if (main != nullptr && main->searchHasFocus() && e.eventComponent != nullptr
+        && ! main->searchBox().isParentOf (e.eventComponent) && e.eventComponent != &main->searchBox())
+        main->giveFocusBack();
 }

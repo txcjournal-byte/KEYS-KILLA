@@ -138,7 +138,7 @@ private:
 };
 
 //==============================================================================
-// filter chips: STYLE (8) / CHARACTER (8) / LAYERS (All 1 2 3 4), one choice per row (click again = off), + "Clear"
+// filter chips: LAYERS (All 1 2 3 4) + "Clear filters"
 class ChipBar : public juce::Component
 {
 public:
@@ -146,7 +146,7 @@ public:
     explicit ChipBar (VaultBrowserFilter& f) : filter (f) { setMouseCursor (juce::MouseCursor::PointingHandCursor); }
 
     static constexpr int labelW = 106, chipH = 26, rowPitch = 31, padTop = 10;
-    int idealHeight() const { return padTop + 2 * rowPitch + chipH + 10; }
+    int idealHeight() const { return padTop + chipH + 10; }
 
     void resized() override
     {
@@ -158,23 +158,18 @@ public:
             x += w + 5;
         };
         int x = 14 + labelW;
-        for (int i = 0; i < vault::numStyles; ++i) add (0, i, vault::styleNames()[i], 0, x);
-        x = 14 + labelW;
-        for (int i = 0; i < vault::numCharacters; ++i) add (1, i, vault::characterNames()[i], 1, x);
-        x = 14 + labelW;
-        add (2, 0, "All", 2, x);
-        for (int i = 1; i <= vault::maxParts; ++i) add (2, i, juce::String (i), 2, x);
+        add (2, 0, "All", 0, x);
+        for (int i = 1; i <= vault::maxParts; ++i) add (2, i, juce::String (i), 0, x);
         const auto ct = juce::String ("Clear filters");
         const int cw = (int) std::ceil (textWidth (font (14.0f), ct)) + 18;
-        clearRect = { getWidth() - 14 - cw, padTop + 2 * rowPitch, cw, chipH };
+        clearRect = { getWidth() - 14 - cw, padTop, cw, chipH };
     }
 
     void paint (juce::Graphics& g) override
     {
         g.setFont (font (14.0f, true, 0.04f));
         g.setColour (col::dim);
-        const char* labels[] { "STYLE", "CHARACTER", "LAYERS" };
-        for (int r = 0; r < 3; ++r) g.drawText (labels[r], 14, padTop + r * rowPitch, labelW, chipH, juce::Justification::centredLeft, false);
+        g.drawText ("LAYERS", 14, padTop, labelW, chipH, juce::Justification::centredLeft, false);
         for (int i = 0; i < (int) chips.size(); ++i)
         {
             const auto& c = chips[(size_t) i];
@@ -198,14 +193,8 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         const int h = hit (e.getPosition());
-        if (h == clearIndex) { filter.style = filter.character = -1; filter.layers = 0; }
-        else if (h >= 0)
-        {
-            const auto& c = chips[(size_t) h];
-            if (c.group == 0) filter.style = filter.style == c.value ? -1 : c.value;
-            if (c.group == 1) filter.character = filter.character == c.value ? -1 : c.value;
-            if (c.group == 2) filter.layers = c.value;
-        }
+        if (h == clearIndex) filter.layers = 0;
+        else if (h >= 0) filter.layers = chips[(size_t) h].value;
         else return;
         repaint();
         if (onChange) onChange();
@@ -216,7 +205,7 @@ private:
     static constexpr int clearIndex = 1000;
     bool isOn (const Chip& c) const
     {
-        return c.group == 0 ? filter.style == c.value : c.group == 1 ? filter.character == c.value : filter.layers == c.value;
+        return filter.layers == c.value;
     }
     int hit (juce::Point<int> p) const
     {
@@ -234,8 +223,8 @@ private:
 
 //==============================================================================
 // the preset list: juce::ListBox (only the visible rows exist - smooth with 5,000 rows).
-// Columns: selected dot | name | category · styles | layer badge | heart
-class PresetList : public juce::Component, private juce::ListBoxModel
+// Columns: selected dot | name | category (All Sounds) or the first layer | layer badge | heart
+class PresetList : public juce::Component, private juce::ListBoxModel, private juce::ComponentListener
 {
 public:
     std::function<void (int bankIndex)> onClick;           // load + play
@@ -254,16 +243,33 @@ public:
         list.setMouseMoveSelectsRows (false);
         addAndMakeVisible (list);
         list.addMouseListener (this, true);
+        if (auto* content = list.getViewport()->getViewedComponent()) content->addComponentListener (this);
+        muteRowFocus();
     }
-    ~PresetList() override { list.removeMouseListener (this); }
+    ~PresetList() override
+    {
+        if (auto* content = list.getViewport()->getViewedComponent()) content->removeComponentListener (this);
+        list.removeMouseListener (this);
+    }
 
     void setCurrent (int bankIndex) { if (bankIndex != current) { current = bankIndex; list.repaint(); } }
-    void refresh() { list.updateContent(); list.repaint(); }
+    // the list's row components (made by juce::ListBox as it scrolls) never take the keyboard on a click
+    void muteRowFocus()
+    {
+        std::function<void (juce::Component&)> mute = [&] (juce::Component& c)
+        {
+            c.setWantsKeyboardFocus (false);
+            c.setMouseClickGrabsKeyboardFocus (false);
+            for (auto* ch : c.getChildren()) mute (*ch);
+        };
+        mute (list);
+    }
+    void refresh() { list.updateContent(); muteRowFocus(); list.repaint(); }
     void showRow (int row) { if (row >= 0) list.scrollToEnsureRowIsOnscreen (row); }
     void scrollToTop() { list.getViewport()->setViewPosition (0, 0); }
     juce::ListBox& listBox() { return list; }
 
-    void resized() override { list.setBounds (getLocalBounds()); }
+    void resized() override { list.setBounds (getLocalBounds()); muteRowFocus(); }
     void paint (juce::Graphics& g) override
     {
         if (! model.visible().empty()) return;
@@ -281,8 +287,7 @@ public:
     struct Cols { juce::Rectangle<float> dot, name, tags, badge, heart; };
     static Cols columns (float w, float h)
     {
-        // name: the longest factory names are ~188 px at 15 px bold; the tag line gets the rest (up to ~264 px:
-        // "Arps & Sequences · Rage, Lo-Fi, Ambient" is 260 px at 14 px)
+        // name: the longest factory names are ~188 px at 15 px bold; the info line gets the rest (up to ~264 px)
         juce::Rectangle<float> r (12.0f, 0.0f, w - 24.0f, h);
         Cols c;
         c.dot = r.removeFromLeft (20.0f); r.removeFromLeft (8.0f);
@@ -294,17 +299,15 @@ public:
     }
     static juce::Font nameFont() { return font (15.0f, true); }
     static juce::Font tagFont()  { return font (14.0f); }
-    // "category · styles" (inside one category the category name is left out - more room for the styles)
+    // the info line: the category (All Sounds / search) or, inside one category, the first layer's name
     static juce::String tagText (const VaultPreset& p, bool withCategory)
     {
-        juce::String tags;
-        if (withCategory) tags = vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)];
-        if (const auto st = vault::namesOfMask (p.styles, vault::styleNames()); ! st.isEmpty())
-            tags << (tags.isEmpty() ? juce::String() : midDot()) << st.joinIntoString (", ");
-        return tags;
+        if (withCategory) return vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)];
+        return p.parts.empty() ? juce::String() : p.parts.front().label;
     }
 
 private:
+    void componentChildrenChanged (juce::Component&) override { muteRowFocus(); }
     int getNumRows() override { return (int) model.visible().size(); }
 
     void paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool) override
@@ -398,20 +401,21 @@ private:
 };
 
 //==============================================================================
-// on-screen keyboard in the palette: silver keys, ice when pressed, C labels
+// on-screen keyboard in the palette: silver keys, ice when pressed, C labels in FL Studio naming (MIDI 60 = C5, the home
+// note every sound is designed and previewed at - drawn in ice with a marker)
 class VaultKeyboard : public juce::MidiKeyboardComponent
 {
 public:
     explicit VaultKeyboard (juce::MidiKeyboardState& s) : juce::MidiKeyboardComponent (s, horizontalKeyboard)
     {
-        setOctaveForMiddleC (4);
+        setOctaveForMiddleC (vault::octaveForMiddleC);   // MIDI 60 = C5 (FL Studio)
         setScrollButtonsVisible (false);
-        setAvailableRange (36, 83);   // C2..B5, 4 octaves
+        setAvailableRange (36, 83);   // C3..B6 (FL naming), 4 octaves, C5 = MIDI 60 in the third octave
         setLowestVisibleKey (36);
         setBlackNoteLengthProportion (0.6f);
         setBlackNoteWidthProportion (0.62f);
         setVelocity (0.8f, true);
-        setWantsKeyboardFocus (false);
+        setWantsKeyboardFocus (false);               // the DAW keeps the computer keyboard
         setMouseClickGrabsKeyboardFocus (false);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
         setColour (whiteNoteColourId, col::field);              // background between the keys
@@ -423,7 +427,6 @@ public:
         setKeyWidth ((float) getWidth() / 28.0f);
         juce::MidiKeyboardComponent::resized();
     }
-    int pcBase = 60;   // the note the PC key "A" plays (shown as a thin ice line under that octave)
 
 protected:
     void drawWhiteNote (int note, juce::Graphics& g, juce::Rectangle<float> a, bool isDown, bool isOver, juce::Colour, juce::Colour) override
@@ -436,14 +439,16 @@ protected:
         g.fillPath (p);
         if (note % 12 == 0)
         {
-            g.setColour (juce::Colour (isDown ? 0xff1d3561 : 0xff5a6478));
-            g.setFont (font (14.0f, true));
-            g.drawText ("C" + juce::String (note / 12 - 1), k.removeFromBottom (22.0f), juce::Justification::centred, false);
-        }
-        if (note >= pcBase && note < pcBase + 17)
-        {
-            g.setColour (col::ice2.withAlpha (0.55f));
-            g.fillRect (a.getX(), a.getY(), a.getWidth(), 2.0f);
+            const bool home = note == vault::homeNote;
+            g.setColour (juce::Colour (isDown ? 0xff1d3561 : home ? 0xff2f5fae : 0xff5a6478));
+            g.setFont (font (home ? 15.0f : 14.0f, true));
+            g.drawText (vault::noteName (note), k.removeFromBottom (22.0f), juce::Justification::centred, false);
+            if (home)
+            {
+                // the home note: an ice dot above the label
+                g.setColour (isDown ? juce::Colour (0xff1d3561) : col::deep);
+                g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ k.getCentreX(), k.getBottom() - 6.0f }));
+            }
         }
     }
     void drawBlackNote (int, juce::Graphics& g, juce::Rectangle<float> a, bool isDown, bool isOver, juce::Colour) override

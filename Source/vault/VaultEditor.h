@@ -29,11 +29,10 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    bool keyPressed (const juce::KeyPress&) override;
-    bool keyStateChanged (bool isKeyDown) override;
-    void focusLost (FocusChangeType) override;
-    void mouseDown (const juce::MouseEvent&) override;   // (also from all children) - clicks outside the search box return focus here
-    void visibilityChanged() override;
+    // Keyboard: nothing in the editor takes the keyboard except the search box (only while typing in it). Keys are never
+    // used by the editor itself, so the DAW keeps its computer-keyboard piano / shortcuts whenever the search box is not
+    // being typed in. A click anywhere else, Return or Escape hands the keyboard back.
+    void mouseDown (const juce::MouseEvent&) override;   // (also from all children)
 
     void setUiScale (float scale);                       // clamps to 80 % .. 200 %, resizes the window and remembers it
     float getUiScale() const { return uiScale; }
@@ -44,7 +43,6 @@ public:
 
 private:
     void timerCallback() override;
-    void releasePcNotes();
     void fitToDisplay();                                 // once shown: re-check the size against the display it is really on
     void applyScale (float scale);                       // resize without remembering (first-open / display fit)
 
@@ -55,10 +53,6 @@ private:
     float uiScale = 1.0f;
     bool settingSize = false;
     bool displayChecked = false;
-    // PC keyboard -> notes ("A W S E D F T G Y H U J K O L P ;" from C, Z / X = octave down / up)
-    int pcOctaveBase = 60;
-    std::array<int, 17> pcNoteDown;   // note playing per key (-1 = up)
-    bool focusGrabbed = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VaultEditor)
 };

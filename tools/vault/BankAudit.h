@@ -20,7 +20,7 @@ namespace vaultaudit
 {
 constexpr double sr = 48000.0;
 constexpr double specSeconds = 1.5, noteOffSeconds = 1.05, maxTailSeconds = 8.0;
-inline int specNote (int category) { return category == vault::cat808Bass ? 36 : 60; }
+inline int specNote (int category) { return category == vault::catBass ? 36 : vault::homeNote; }
 
 // thresholds
 constexpr float peakMaxDb = -0.5f;           // hard: never above -0.5 dBFS
