@@ -23,9 +23,12 @@ cp -R "$ROOT/build/EvolveFX_artefacts/Release/AU/EVOLVE FX PRO.component" "$STAG
 cp -R "$ART/Standalone/EVOLVE.app" "$STAGE/Applications/"
 
 if [ -n "${MAC_APP_SIGN_ID:-}" ]; then
-    for b in "$STAGE/Library/Audio/Plug-Ins/VST3/EVOLVE.vst3" "$STAGE/Library/Audio/Plug-Ins/Components/EVOLVE.component" "$STAGE/Applications/EVOLVE.app"; do
-        codesign --force --deep --options runtime --timestamp --sign "$MAC_APP_SIGN_ID" "$b"
-    done
+    # every bundle in the pkg must be signed (with a secure timestamp) or notarization rejects the whole pkg
+    find "$STAGE" -maxdepth 6 \( -name "*.vst3" -o -name "*.component" -o -name "*.app" \) -type d -prune -print0 \
+        | while IFS= read -r -d '' b; do
+            codesign --force --deep --options runtime --timestamp --sign "$MAC_APP_SIGN_ID" "$b"
+            codesign --verify --strict --verbose=2 "$b"
+        done
 fi
 
 pkgbuild --root "$STAGE" --identifier com.808killa.keyskilla --version "$VERSION" --install-location / "$OUT/keyskilla-component.pkg"
