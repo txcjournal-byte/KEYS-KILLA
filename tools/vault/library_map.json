@@ -1,104 +1,2685 @@
 {
-  "comment": "CHROME VAULT sample-library map for VaultLibBuild (docs/VAULT.md, 'Sample library'). Sources are CC0 (VSCO 2 CE, VCSL). Ids / names here are what the plugin shows: instrument nouns only, never maker names.",
-  "roots": {
-    "vsco": "/home/user/sgossner/vsco",
-    "vcsl": "/home/user/sgossner/vcsl2"
-  },
-  "output": "/home/user/cv-library",
-  "defaults": {
-    "quality": 6,
-    "preRollMs": 4,
-    "silenceDb": -62,
-    "maxSeconds": 16,
-    "tailFadeMs": 250,
-    "peakDb": -1.0,
-    "minLoopMs": 300,
-    "maxLoopMs": 2600,
-    "xfadeMs": 100,
-    "extendKeys": 6,
-    "release": 0.3
-  },
-  "instruments": [
+ "comment": "CHROME VAULT sample-library map for VaultLibBuild (docs/VAULT.md 'Sample library', docs/VAULT_INSTRUMENTS.md). Sources are CC0 (VSCO 2 CE, VCSL). Ids / names here are what the plugin shows: instrument nouns only, never maker names.",
+ "roots": {
+  "vsco": "/home/user/sgossner/vsco",
+  "vcsl": "/home/user/sgossner/vcsl2"
+ },
+ "output": "/home/user/cv-library",
+ "defaults": {
+  "quality": 6,
+  "preRollMs": 4,
+  "silenceDb": -62,
+  "maxSeconds": 16,
+  "tailFadeMs": 250,
+  "peakDb": -1.0,
+  "minLoopMs": 300,
+  "maxLoopMs": 2600,
+  "xfadeMs": 100,
+  "extendKeys": 4,
+  "maxStretch": 4,
+  "release": 0.3
+ },
+ "instruments": [
+  {
+   "id": "piano.grand.concert",
+   "name": "Concert Grand",
+   "family": "Piano",
+   "credit": "VCSL (Versilian Community Sample Library), concert grand piano, close mics - CC0",
+   "articulations": [
     {
-      "id": "piano.grand.concert",
-      "name": "Concert Grand",
-      "family": "Piano",
-      "credit": "VCSL (Versilian Community Sample Library), concert grand piano, close mics - CC0",
-      "articulations": [
-        {
-          "name": "sustain",
-          "oneShot": false,
-          "tune": "correct",
-          "pitchFrom": 0.5,
-          "release": 0.32,
-          "releaseDecayDb": 4.0,
-          "maxSeconds": 14,
-          "layerDb": { "2": -15, "3": -7.5, "4": 0 },
-          "sources": [
-            { "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/NoSus/*.wav", "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav" },
-            { "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/Rel/*.wav", "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav", "trigger": "release", "levelDb": -22 }
-          ]
-        }
-      ]
+     "name": "sustain",
+     "oneShot": false,
+     "tune": "correct",
+     "pitchFrom": 0.5,
+     "release": 0.32,
+     "releaseDecayDb": 4.0,
+     "maxSeconds": 20,
+     "layerDb": {
+      "2": -15,
+      "3": -7.5,
+      "4": 0
+     },
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/NoSus/*.wav",
+       "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/Rel/*.wav",
+       "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -22
+      }
+     ]
     },
     {
-      "id": "strings.violins.ensemble",
-      "name": "Violin Section",
-      "family": "Strings",
-      "credit": "VSCO 2 Community Edition (Versilian Studios), violin section sustain with vibrato - CC0",
-      "articulations": [
-        {
-          "name": "sustain",
-          "loop": true,
-          "release": 0.45,
-          "sources": [
-            { "files": "vsco:Strings/Violin Section/susVib/*.wav", "pattern": "VlnEns_susVib_{note}_v{vel}.wav" }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "winds.flute.concert",
-      "name": "Concert Flute",
-      "family": "Flutes & Woodwinds",
-      "credit": "VSCO 2 Community Edition (Versilian Studios), concert flute sustain (straight and vibrato) - CC0",
-      "articulations": [
-        {
-          "name": "sustain",
-          "loop": true,
-          "release": 0.3,
-          "sources": [
-            { "files": "vsco:Woodwinds/Flute/susNV/*.wav", "pattern": "LDFlute_susNV_{note}_v{vel}_{rr}.wav" }
-          ]
-        },
-        {
-          "name": "vibrato",
-          "loop": true,
-          "release": 0.3,
-          "sources": [
-            { "files": "vsco:Woodwinds/Flute/susvib/*.wav", "pattern": "LDFlute_susvib_{note}_v{vel}_{rr}.wav" }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "mallets.marimba",
-      "name": "Marimba",
-      "family": "Bells & Mallets",
-      "credit": "VCSL (Versilian Community Sample Library), marimba, outrigger mallets - CC0",
-      "articulations": [
-        {
-          "name": "hit",
-          "oneShot": true,
-          "tune": "keep",
-          "release": 0.5,
-          "maxSeconds": 6,
-          "velOrder": [ "soft", "med", "loud" ],
-          "sources": [
-            { "files": "vcsl:Idiophones/Struck Idiophones/Marimba/*.wav", "pattern": "Marimba_hit_Outrigger_{note}_{vel}_{rr}.wav" }
-          ]
-        }
-      ]
+     "name": "pedal",
+     "oneShot": false,
+     "tune": "correct",
+     "pitchFrom": 0.5,
+     "release": 0.6,
+     "maxSeconds": 20,
+     "layerDb": {
+      "2": -15,
+      "3": -7.5,
+      "4": 0
+     },
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Steinway B/Sus/*.wav",
+       "pattern": "*_Close_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "id": "piano.grand.studio",
+   "name": "Studio Grand",
+   "family": "Piano",
+   "credit": "VCSL (Versilian Community Sample Library), grand piano, player position - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.5,
+     "release": 0.32,
+     "releaseDecayDb": 4.0,
+     "maxSeconds": 18,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Kawai/Sustains/*.wav",
+       "pattern": "GPiano_sus_{note}_v{vel}_rr{rr}_Player.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Kawai/Releases/*.wav",
+       "pattern": "GPiano_rel_{note}_v{vel}_rr{rr}_Player.wav",
+       "trigger": "release",
+       "levelDb": -22
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "piano.grand.chamber",
+   "name": "Chamber Grand",
+   "family": "Piano",
+   "credit": "VCSL (Versilian Community Sample Library), grand piano (legacy set, main mics) - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.5,
+     "release": 0.32,
+     "releaseDecayDb": 4.0,
+     "maxSeconds": 16,
+     "layerDb": {
+      "1": -18,
+      "2": -12,
+      "3": -6,
+      "4": 0
+     },
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Kawai - Legacy/Sustains/*.wav",
+       "pattern": "GrandPno_Main_Sus_{note}_v{vel}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Grand Piano, Kawai - Legacy/Releases/*.wav",
+       "pattern": "GrandPno_Main_Rel_{note}_v{vel}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -22
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "piano.upright",
+   "name": "Upright Piano",
+   "family": "Piano",
+   "credit": "VCSL (Versilian Community Sample Library), upright piano (remastered) - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.5,
+     "release": 0.3,
+     "releaseDecayDb": 4.0,
+     "maxSeconds": 16,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Upright Piano, Yamaha/Sustains/*.wav",
+       "pattern": "Upright1_Sus_{note}_vl{vel}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Upright Piano, Yamaha/Releases/*.wav",
+       "pattern": "Upright1_Rel_{note}_vl{vel}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -22
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "piano.upright.parlor",
+   "name": "Parlor Upright",
+   "family": "Piano",
+   "credit": "VCSL (Versilian Community Sample Library), upright piano sampled by Simon Dalzell (Ivy Audio) for Versilian Studios - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.5,
+     "release": 0.3,
+     "releaseDecayDb": 4.0,
+     "maxSeconds": 16,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Upright Piano, Knight/Sustains/*.wav",
+       "pattern": "Player_vl{vel}_rr{rr}_{note}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Upright Piano, Knight/Releases/*.wav",
+       "pattern": "Player_rel_rr{rr}_{note}.wav",
+       "trigger": "release",
+       "levelDb": -24
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.fm.epiano",
+   "name": "FM Electric Piano",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), FM synthesizer electric piano patch - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.3,
+     "release": 0.35,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Electrophones/TX81Z/FM Piano/*.wav",
+       "pattern": "FMPiano_{note}_vl{vel}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.fm.piano",
+   "name": "FM Digital Piano",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), FM synthesizer piano patch - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.3,
+     "release": 0.3,
+     "maxSeconds": 8,
+     "sources": [
+      {
+       "files": "vcsl:Electrophones/TX81Z/Piano 1/*.wav",
+       "pattern": "Piano 1_{note}_vl{vel}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.fm.clav",
+   "name": "FM Clav",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), FM synthesizer clavinet patch - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "tune": "correct",
+     "pitchFrom": 0.1,
+     "release": 0.08,
+     "maxSeconds": 8,
+     "sources": [
+      {
+       "files": "vcsl:Electrophones/TX81Z/Clavisynth/*.wav",
+       "pattern": "Clavisynth_{note}_vl{vel}.wav",
+       "octave": 2
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.harpsichord.english",
+   "name": "English Harpsichord",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), English-style kit harpsichord - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, English/Sustains/Normal/*.wav",
+       "pattern": "ZuckermannKitHarpsi_Normal_Sus_{note}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, English/Releases/Normal/*.wav",
+       "pattern": "ZuckermannKitHarpsi_Normal_Rel_{note}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    },
+    {
+     "name": "lute",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, English/Sustains/Lute/*.wav",
+       "pattern": "ZuckermannKitHarpsi_Lute_Sus_{note}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, English/Releases/Lute/*.wav",
+       "pattern": "ZuckermannKitHarpsi_Lute_Rel_{note}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.harpsichord.flemish",
+   "name": "Flemish Harpsichord",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), Flemish-style harpsichord, far mics - CC0",
+   "articulations": [
+    {
+     "name": "lower 8'",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Flemish/Sustains/Low/*.wav",
+       "pattern": "HarpsiRH_Low_Far_{note}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Flemish/Releases/Low/*.wav",
+       "pattern": "HarpsiRH_LowRel_Far_{note}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    },
+    {
+     "name": "upper 8'",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Flemish/Sustains/High/*.wav",
+       "pattern": "HarpsiRH_High_Far_{note}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Flemish/Releases/High/*.wav",
+       "pattern": "HarpsiRH_HighRel_Far_{note}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.harpsichord.french",
+   "name": "French Harpsichord",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), French-style harpsichord - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, French/Sustains/*.wav",
+       "pattern": "Harpsi2_Normal_{note}_rr{rr}_Main.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, French/Releases/*.wav",
+       "pattern": "Harpsi2_Rel_{note}_rr{rr}_Main.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.harpsichord.italian",
+   "name": "Italian Harpsichord",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), Italian-style harpsichord, one stop - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Italian/Sustains/stop1/*.wav",
+       "pattern": "Harpsichord_stop1_{note}_{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Italian/Releases/stop1/*.wav",
+       "pattern": "Harpsichord_stop1-rel_{note}_{rr}.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "keys.harpsichord.baroque",
+   "name": "Baroque Harpsichord",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), harpsichord, every key sampled - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "tune": "correct",
+     "pitchFrom": 0.15,
+     "release": 0.12,
+     "releaseDecayDb": 2.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Unk/Sustains/*.wav",
+       "pattern": "Harpsi4_Sus_Main_{note}_rr{rr}.wav"
+      },
+      {
+       "files": "vcsl:Chordophones/Zithers/Harpsichord, Unk/Releases/*.wav",
+       "pattern": "Harpsi4_Rel_Main_{note}_rr{rr}.wav",
+       "trigger": "release",
+       "levelDb": -16
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "organ.pipe",
+   "name": "Pipe Organ",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), pipe organ sampled by Simon Dalzell (Ivy Audio) for Versilian Studios - CC0",
+   "articulations": [
+    {
+     "name": "principal",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Pipe Organ/Loud/*.wav",
+       "pattern": "Rode_Man3Open_{note}.wav",
+       "octave": 1
+      }
+     ]
+    },
+    {
+     "name": "soft",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Pipe Organ/Quiet/*.wav",
+       "pattern": "NT5_Man3Quiet_{note}_rr{rr}.wav",
+       "octave": 1
+      }
+     ]
+    },
+    {
+     "name": "pedal",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Pipe Organ/Loud Pedal/*.wav",
+       "pattern": "Rode_Pedal_{note}.wav",
+       "octave": 1
+      }
+     ]
+    },
+    {
+     "name": "pedal soft",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Pipe Organ/Quiet Pedal/*.wav",
+       "pattern": "NT5_PedalQuiet_{note}_rr{rr}.wav",
+       "octave": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "organ.chamber",
+   "name": "Chamber Organ",
+   "family": "Keys & Organ",
+   "credit": "VCSL (Versilian Community Sample Library), renaissance chamber organ, room mics - CC0",
+   "articulations": [
+    {
+     "name": "8 foot",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Renaissance Organ/8'/*.wav",
+       "pattern": "RenOrgan_8foot_Room_{note}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "4 foot",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Renaissance Organ/4'/*.wav",
+       "pattern": "RenOrgan_4foot_Room_{note}_rr{rr}.wav",
+       "octave": 2
+      }
+     ]
+    },
+    {
+     "name": "full",
+     "loop": true,
+     "release": 0.25,
+     "maxSeconds": 12,
+     "minLoopMs": 600,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Renaissance Organ/Full/*.wav",
+       "pattern": "RenOrgan_Full_Room_{note}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "strings.violins.ensemble",
+   "name": "Violin Section",
+   "family": "Strings",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), violin section - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.45,
+     "sources": [
+      {
+       "files": "vsco:Strings/Violin Section/susVib/*.wav",
+       "pattern": "VlnEns_susVib_{note}_v{vel}.wav"
+      }
+     ]
+    },
+    {
+     "name": "tremolo",
+     "loop": true,
+     "release": 0.35,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vsco:Strings/Violin Section/Trem/*.wav",
+       "pattern": "VlnEns_Trem_{note}_v{vel}.wav"
+      }
+     ]
+    },
+    {
+     "name": "pizzicato",
+     "oneShot": true,
+     "pitchFrom": 0.12,
+     "sources": [
+      {
+       "files": "vsco:Strings/Violin Section/Pizz/*.wav",
+       "pattern": "VlnEns_Pizz_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "spiccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Strings/Violin Section/Spic/*.wav",
+       "pattern": "VlnEns_Spic_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "strings.violas.ensemble",
+   "name": "Viola Section",
+   "family": "Strings",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), viola section - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.45,
+     "sources": [
+      {
+       "files": "vsco:Strings/Viola Section/susvib/*.wav",
+       "pattern": "ViolaEns_susvib_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "tremolo",
+     "loop": true,
+     "release": 0.35,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vsco:Strings/Viola Section/trem/*.wav",
+       "pattern": "Violas_trem_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "pizzicato",
+     "oneShot": true,
+     "pitchFrom": 0.12,
+     "sources": [
+      {
+       "files": "vsco:Strings/Viola Section/pizz/*.wav",
+       "pattern": "ViolaEns_pizz_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "spiccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Strings/Viola Section/spic/*.wav",
+       "pattern": "Violas_spic_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "strings.cellos.ensemble",
+   "name": "Cello Section",
+   "family": "Strings",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), cello section - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.45,
+     "sources": [
+      {
+       "files": "vsco:Strings/Cello Section/susvib/*.wav",
+       "pattern": "susvib_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "tremolo",
+     "loop": true,
+     "release": 0.35,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vsco:Strings/Cello Section/trem/*.wav",
+       "pattern": "trem_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "pizzicato",
+     "oneShot": true,
+     "pitchFrom": 0.12,
+     "sources": [
+      {
+       "files": "vsco:Strings/Cello Section/pizzT/*.wav",
+       "pattern": "pizzT_{note}_v{vel}_RR{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "spiccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Strings/Cello Section/spic/*.wav",
+       "pattern": "spic_{note}_v{vel}_RR{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "strings.violin.solo",
+   "name": "Solo Violin",
+   "family": "Strings",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), solo violin - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "velOrder": [
+      "p",
+      "f"
+     ],
+     "loop": true,
+     "release": 0.45,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Violin/Arco Vib/*.wav",
+       "pattern": "LLVln_ArcoVib_{note}_{vel}.wav"
+      }
+     ]
+    },
+    {
+     "name": "tremolo",
+     "loop": true,
+     "release": 0.35,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Violin/Trem/*.wav",
+       "pattern": "LLVln_trem_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "pizzicato",
+     "velOrder": [
+      "p",
+      "f"
+     ],
+     "oneShot": true,
+     "pitchFrom": 0.12,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Violin/Pizz/*.wav",
+       "pattern": "LLVln_Pizz_{note}_{vel}_RR{rr}.wav"
+      },
+      {
+       "files": "vsco:Strings/Solo Violin/Pizz/*.wav",
+       "pattern": "LLVln_Pizz_{note}_{vel}.wav"
+      }
+     ]
+    },
+    {
+     "name": "spiccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Violin/spic/*.wav",
+       "pattern": "LLVln_spic_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "strings.contrabass",
+   "name": "Contrabass",
+   "family": "Strings",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), solo contrabass - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.45,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Contrabass/SusNV/*.wav",
+       "pattern": "BKCtbss_SusNV_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.45,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Contrabass/SusVib/*.wav",
+       "pattern": "BKCtbss_SusVib_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "tremolo",
+     "loop": true,
+     "release": 0.35,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Contrabass/Trem/*.wav",
+       "pattern": "BKCtbss_Trem_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "pizzicato",
+     "oneShot": true,
+     "pitchFrom": 0.12,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Contrabass/Pizz/*.wav",
+       "pattern": "BKCtbss_Pizz_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "spiccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Strings/Solo Contrabass/Spic/*.wav",
+       "pattern": "BKCtbss_Spic_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "brass.trumpet",
+   "name": "Trumpet",
+   "family": "Brass",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), trumpet - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Trumpet/sus/*.wav",
+       "pattern": "Sum_SHTrumpet_sus_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Trumpet/susvib/*.wav",
+       "pattern": "Sum_SHTrumpet_susvib_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Brass/Trumpet/stac/*.wav",
+       "pattern": "Sum_SHTrumpet_stac_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "straight mute",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Trumpet/straightM-sus/*.wav",
+       "pattern": "Sum_SHTrumpet_straightM-sus_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "harmon mute",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Trumpet/harmonM-sus/*.wav",
+       "pattern": "Sum_SHTrumpet_harmonM-sus_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "brass.horn",
+   "name": "French Horn",
+   "family": "Brass",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), horn in F - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/F Horn/sus/*.wav",
+       "pattern": "MOHorn_sus_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Brass/F Horn/stac/*.wav",
+       "pattern": "MOHorn_stac_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "muted",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/F Horn/mute/*.wav",
+       "pattern": "MOHorn_mute_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "brass.trombone",
+   "name": "Tenor Trombone",
+   "family": "Brass",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), tenor trombone - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Tenor Trombone/sus/*.wav",
+       "pattern": "tenortbn_sus_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Tenor Trombone/vib/*.wav",
+       "pattern": "tenortbn_vib_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Brass/Tenor Trombone/stac/*.wav",
+       "pattern": "tenortbn_stac_{note}_v{vel}_r*{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "brass.trombone.vintage",
+   "name": "Vintage Trombone",
+   "family": "Brass",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), 1950s tenor trombone (unreleased test set) - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/OldTrombone/Sustain/*.wav",
+       "pattern": "Trombone_Sustain_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/OldTrombone/Vibrato/*.wav",
+       "pattern": "Trombone_Vibrato_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "short",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Brass/OldTrombone/Short/*.wav",
+       "pattern": "Trombone_Short_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "buzz",
+     "oneShot": true,
+     "maxSeconds": 5,
+     "tune": "name",
+     "sources": [
+      {
+       "files": "vsco:Brass/OldTrombone/Buzz/*.wav",
+       "pattern": "Trombone_Buzz_{note}_v{vel}_{rr}.wav",
+       "octave": 1
+      }
+     ]
+    },
+    {
+     "name": "fall",
+     "oneShot": true,
+     "maxSeconds": 3,
+     "tune": "name",
+     "sources": [
+      {
+       "files": "vsco:Brass/OldTrombone/Fall/*.wav",
+       "pattern": "Trombone_Fall_{note}_{rr}.wav",
+       "octave": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "brass.tuba",
+   "name": "Tuba",
+   "family": "Brass",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), tuba - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Brass/Tuba/sus/*.wav",
+       "pattern": "Tuba3_sus_{note}_v{vel}_rr{rr}_Mid.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Brass/Tuba/stac/*.wav",
+       "pattern": "Tuba3_stac_{note}_v{vel}_rr{rr}_Sum.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.flute.concert",
+   "name": "Concert Flute",
+   "family": "Flutes & Woodwinds",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), concert flute - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Flute/susNV/*.wav",
+       "pattern": "LDFlute_susNV_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Flute/susvib/*.wav",
+       "pattern": "LDFlute_susvib_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "expressive",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Flute/expvib/*.wav",
+       "pattern": "LDFlute_expvib_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Flute/stac/*.wav",
+       "pattern": "LDFlute_stac_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.piccolo",
+   "name": "Piccolo",
+   "family": "Flutes & Woodwinds",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), piccolo - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Piccolo/Sus/*.wav",
+       "pattern": "piccolo_{note}_sustain{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Piccolo/Stac/*.wav",
+       "pattern": "piccolo_{note}_staccato{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.clarinet",
+   "name": "Clarinet",
+   "family": "Flutes & Woodwinds",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), clarinet in B flat - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Clarinet/susLong/*.wav",
+       "pattern": "DCClar_susLong_{note}_v{vel}_rr{rr}_sum.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Clarinet/stac/*.wav",
+       "pattern": "DCClar_stac_{note}_v{vel}_rr{rr}_sum.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.oboe",
+   "name": "Oboe",
+   "family": "Flutes & Woodwinds",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), oboe - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Oboe/Sus/*.wav",
+       "pattern": "Oboe_Sus_{note}_v{vel}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Oboe/Vib/*.wav",
+       "pattern": "Oboe_Vib_{note}_v{vel}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Oboe/Stacc/*.wav",
+       "pattern": "Oboe_Stacc_{note}_v{vel}_rr{rr}_Main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.bassoon",
+   "name": "Bassoon",
+   "family": "Flutes & Woodwinds",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), bassoon - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Bassoon/sus/*.wav",
+       "pattern": "PSBassoon_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Bassoon/vib/*.wav",
+       "pattern": "PSBassoon_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vsco:Woodwinds/Bassoon/stac/*.wav",
+       "pattern": "PSBassoon_{note}_v{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.recorder.soprano",
+   "name": "Soprano Recorder",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), baroque soprano recorder - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Soprano Recorder/Sustain/*.wav",
+       "pattern": "SopRecorder_Sus_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Soprano Recorder/Staccato/*.wav",
+       "pattern": "SopRecorder_Stac_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.recorder.alto",
+   "name": "Alto Recorder",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), baroque alto recorder - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Alto Recorder/Sustain/*.wav",
+       "pattern": "AltRecorder_Sus_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Alto Recorder/SusVib/*.wav",
+       "pattern": "AltRecorder_SusVib_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Alto Recorder/Staccato/*.wav",
+       "pattern": "AltRecorder_Stac_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.recorder.tenor",
+   "name": "Tenor Recorder",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), baroque tenor recorder - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Tenor Recorder/Sustain/*.wav",
+       "pattern": "TenRecorder_Sus_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Tenor Recorder/SusVib/*.wav",
+       "pattern": "TenRecorder_SusVib_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Tenor Recorder/Staccato/*.wav",
+       "pattern": "TenRecorder_Stac_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.recorder.bass",
+   "name": "Bass Recorder",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), baroque bass recorder - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Bass Recorder/Sustain/*.wav",
+       "pattern": "BassRecorder_Sus_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Bass Recorder/SusVib/*.wav",
+       "pattern": "BassRecorder_SusVib_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Baroque Bass Recorder/Staccato/*.wav",
+       "pattern": "BassRecorder_Stac_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.ocarina.small",
+   "name": "Small Ocarina",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), small ocarina - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Ocarina, Small/Sustain/*.wav",
+       "pattern": "ocarina_{note}_sustain{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Ocarina, Small/Staccato/*.wav",
+       "pattern": "ocarina_{note}_staccato{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.ocarina",
+   "name": "Ocarina",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), alto ocarina - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Ocarina, Typical/Sustains/Sus/*.wav",
+       "pattern": "StdOcarina_Sus_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Ocarina, Typical/Releases/Sus/*.wav",
+       "pattern": "StdOcarina_Sus_{note}_rel.wav",
+       "trigger": "release",
+       "levelDb": -14
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Ocarina, Typical/Sustains/SusVib/*.wav",
+       "pattern": "StdOcarina_SusVib_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Edge-blown Aerophones/Ocarina, Typical/Releases/SusVib/*.wav",
+       "pattern": "StdOcarina_SusVib_{note}_rel.wav",
+       "trigger": "release",
+       "levelDb": -14
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.sax.tenor",
+   "name": "Tenor Sax",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), tenor saxophone - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Reed Aerophones/Tenor Saxophone/Non-Vibrato/*.wav",
+       "pattern": "BrettTenor_NV_Main_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Reed Aerophones/Tenor Saxophone/Vibrato/*.wav",
+       "pattern": "BrettTenor_Vib_Main_{note}_var{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Reed Aerophones/Tenor Saxophone/Staccato/*.wav",
+       "pattern": "BrettTenor_Staccato_Main_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.sax.soprano",
+   "name": "Curved Soprano Sax",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), curved soprano saxophone - CC0",
+   "articulations": [
+    {
+     "name": "sustain",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Reed Aerophones/Saxello/Non-Vibrato/*.wav",
+       "pattern": "BrettSaxello_SusNV_MainSpirit_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Reed Aerophones/Saxello/Vibrato/*.wav",
+       "pattern": "BrettSaxello_SusVB_MainSpirit_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Reed Aerophones/Saxello/Staccato/*.wav",
+       "pattern": "BrettSaxello_Stcts_MainSpirit_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.harmonica.chromatic",
+   "name": "Chromatic Harmonica",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), chromatic harmonica - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Super64/Sustains/Normal/*.wav",
+       "pattern": "Hohner-Super64_Normal _{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Super64/Releases/Normal/*.wav",
+       "pattern": "Hohner-Super64_Normal _rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "accented",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Super64/Sustains/Accented/*.wav",
+       "pattern": "Hohner-Super64_Accented_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Super64/Releases/Accented/*.wav",
+       "pattern": "Hohner-Super64_Accented_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Super64/Sustains/Vib/*.wav",
+       "pattern": "Hohner-Super64_Vib_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Super64/Releases/Vib/*.wav",
+       "pattern": "Hohner-Super64_Vib_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.harmonica.c",
+   "name": "Blues Harmonica C",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), diatonic harmonica in C - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-C/Sustains/Normal/*.wav",
+       "pattern": "Hohner-Special20_Normal_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-C/Releases/Normal/*.wav",
+       "pattern": "Hohner-Special20_Normal_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "soft",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-C/Sustains/Soft/*.wav",
+       "pattern": "Hohner-Special20_Soft_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-C/Releases/Soft/*.wav",
+       "pattern": "Hohner-Special20_Soft_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-C/Sustains/Vib/*.wav",
+       "pattern": "Hohner-Special20_Vib_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-C/Releases/Vib/*.wav",
+       "pattern": "Hohner-Special20_Vib_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "winds.harmonica.f",
+   "name": "Blues Harmonica F",
+   "family": "Flutes & Woodwinds",
+   "credit": "VCSL (Versilian Community Sample Library), diatonic harmonica in F - CC0",
+   "articulations": [
+    {
+     "name": "normal",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Sustains/Normal/*.wav",
+       "pattern": "Hohner-Special20-F_Normal_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Releases/Normal/*.wav",
+       "pattern": "Hohner-Special20-F_Normal_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "accented",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Sustains/Accented/*.wav",
+       "pattern": "Hohner-Special20-F_Accented_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Releases/Accented/*.wav",
+       "pattern": "Hohner-Special20-F_Accented_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "hand vibrato",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Sustains/HandVib/*.wav",
+       "pattern": "Hohner-Special20-F_HandVib_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Releases/HandVib/*.wav",
+       "pattern": "Hohner-Special20-F_HandVib_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "loop": true,
+     "release": 0.12,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Sustains/Vib/*.wav",
+       "pattern": "Hohner-Special20-F_Vib_{note}.wav"
+      },
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Releases/Vib/*.wav",
+       "pattern": "Hohner-Special20-F_Vib_rel_{note}.wav",
+       "trigger": "release",
+       "levelDb": -12
+      }
+     ]
+    },
+    {
+     "name": "staccato",
+     "oneShot": true,
+     "maxSeconds": 4,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Free Aerophones/Harmonica-Hohner-Special20-F/Sustains/Stac/*.wav",
+       "pattern": "Hohner-Special20-F_Stac_{note}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pluck.harp.concert",
+   "name": "Concert Harp",
+   "family": "Plucked Strings",
+   "credit": "VCSL (Versilian Community Sample Library), concert harp - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "velOrder": [
+      "soft",
+      "f"
+     ],
+     "oneShot": true,
+     "pitchFrom": 0.2,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Composite Chordophones/Concert Harp/*.wav",
+       "pattern": "KSHarp_{note}_f{rr}.wav",
+       "vel": "f"
+      },
+      {
+       "files": "vcsl:Chordophones/Composite Chordophones/Concert Harp/*.wav",
+       "pattern": "KSHarp_{note}_mf{rr}.wav",
+       "vel": "soft"
+      },
+      {
+       "files": "vcsl:Chordophones/Composite Chordophones/Concert Harp/*.wav",
+       "pattern": "KSHarp_{note}_mp{rr}.wav",
+       "vel": "soft"
+      },
+      {
+       "files": "vcsl:Chordophones/Composite Chordophones/Concert Harp/*.wav",
+       "pattern": "KSHarp_{note}_p{rr}.wav",
+       "vel": "soft"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pluck.harp.folk",
+   "name": "Folk Harp",
+   "family": "Plucked Strings",
+   "credit": "VCSL (Versilian Community Sample Library), folk (lever) harp - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.2,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Composite Chordophones/Folk Harp/*.wav",
+       "pattern": "EWHarp_Normal_{note}_v{vel}_RR{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pluck.dulcimer",
+   "name": "Stick Dulcimer",
+   "family": "Plucked Strings",
+   "credit": "VCSL (Versilian Community Sample Library), three-string stick dulcimer, fingerpicked - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.15,
+     "maxSeconds": 8,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Composite Chordophones/Strumstick/Finger/*.wav",
+       "pattern": "Strumstick_Finger_Str*_Main_{note}_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pluck.psaltery",
+   "name": "Psaltery",
+   "family": "Plucked Strings",
+   "credit": "VCSL (Versilian Community Sample Library), bowed psaltery, bowed and plucked - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.15,
+     "maxSeconds": 6,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Psaltery, Bowed and Plucked/Pluck/*.wav",
+       "pattern": "BowedPsaltery_{note}_Main_Pluck_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "bowed",
+     "loop": true,
+     "release": 0.4,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Psaltery, Bowed and Plucked/LongBow/*.wav",
+       "pattern": "BowedPsaltery_{note}_Main_LongBow_rr{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "spiccato",
+     "oneShot": true,
+     "pitchFrom": 0.1,
+     "maxSeconds": 5,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Psaltery, Bowed and Plucked/Spiccato/*.wav",
+       "pattern": "BowedPsaltery_{note}_Main_Spic_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.dantranh",
+   "name": "Dan Tranh",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), dan tranh (Vietnamese zither) - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "velOrder": [
+      "mf",
+      "f",
+      "ff"
+     ],
+     "oneShot": true,
+     "pitchFrom": 0.15,
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Dan Tranh/Normal/*.wav",
+       "pattern": "{note}_{vel}_{rr}.wav"
+      }
+     ]
+    },
+    {
+     "name": "vibrato",
+     "velOrder": [
+      "mf",
+      "ff"
+     ],
+     "oneShot": true,
+     "tune": "name",
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Dan Tranh/Vibrato/*.wav",
+       "pattern": "{note}_vib_{vel}_{rr}.wav",
+       "octave": 1
+      }
+     ]
+    },
+    {
+     "name": "tremolo",
+     "loop": true,
+     "release": 0.3,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vcsl:Chordophones/Zithers/Dan Tranh/Tremolo/*.wav",
+       "pattern": "{note}_Trem_{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mallets.marimba",
+   "name": "Marimba",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), marimba, outrigger mallets - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "velOrder": [
+      "soft",
+      "med",
+      "loud"
+     ],
+     "maxSeconds": 6,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Marimba/*.wav",
+       "pattern": "Marimba_hit_Outrigger_{note}_{vel}_{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mallets.vibraphone",
+   "name": "Vibraphone",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), vibraphone - CC0",
+   "articulations": [
+    {
+     "name": "soft mallets",
+     "maxSeconds": 10,
+     "pitchFrom": 0.15,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Vibraphone/Soft Mallets/*.wav",
+       "pattern": "Vibes_soft_{note}_v{vel}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "hard mallets",
+     "maxSeconds": 10,
+     "pitchFrom": 0.15,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Vibraphone/Hard Mallets/*.wav",
+       "pattern": "Vibes_hard_{note}_v{vel}_rr{rr}_Main.wav"
+      }
+     ]
+    },
+    {
+     "name": "bowed",
+     "loop": true,
+     "release": 0.8,
+     "xfadeMs": 150,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Vibraphone/Bowed/*.wav",
+       "pattern": "Vibes_bowed_{note}_rr{rr}_Main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mallets.xylophone",
+   "name": "Xylophone",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), xylophone, far mics - CC0",
+   "articulations": [
+    {
+     "name": "medium mallets",
+     "velOrder": [
+      "pp",
+      "ff"
+     ],
+     "maxSeconds": 4,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Xylophone/Medium Mallets/*.wav",
+       "pattern": "Xylo_Medium_{note}_{vel}_{rr}_far.wav"
+      }
+     ]
+    },
+    {
+     "name": "hard mallets",
+     "velOrder": [
+      "pp",
+      "ff"
+     ],
+     "maxSeconds": 4,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Xylophone/Hard Mallets/*.wav",
+       "pattern": "Xylo_Hard_{note}_{vel}_{rr}_far.wav"
+      }
+     ]
+    },
+    {
+     "name": "soft mallets",
+     "velOrder": [
+      "pp",
+      "ff"
+     ],
+     "maxSeconds": 4,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Xylophone/Soft Mallets/*.wav",
+       "pattern": "Xylo_Soft_{note}_{vel}_{rr}_far.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mallets.glockenspiel",
+   "name": "Glockenspiel",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), glockenspiel - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "velOrder": [
+      "soft",
+      "medium",
+      "loud"
+     ],
+     "maxSeconds": 6,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Glockenspiel/*.wav",
+       "pattern": "glock_{vel}_{note}_{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bells.tubular",
+   "name": "Tubular Bells",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), tubular bells (orchestral chimes) - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "oneShot": true,
+     "tune": "name",
+     "release": 1.0,
+     "maxSeconds": 12,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 2/*.wav",
+       "pattern": "TB_hit_{note}_v{vel}_{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bells.chimes",
+   "name": "Concert Chimes",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), tubular bells, second set - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "velOrder": [
+      "soft",
+      "loud"
+     ],
+     "oneShot": true,
+     "tune": "name",
+     "release": 1.0,
+     "maxSeconds": 12,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 1/*.wav",
+       "pattern": "chimes_{note}_pp_rr{rr}.wav",
+       "vel": "soft",
+       "octave": 1
+      },
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 1/*.wav",
+       "pattern": "chimes_{note}_p_rr{rr}.wav",
+       "vel": "soft",
+       "octave": 1
+      },
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 1/*.wav",
+       "pattern": "chimes_{note}_f_rr{rr}.wav",
+       "vel": "loud",
+       "octave": 1
+      },
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 1/*.wav",
+       "pattern": "chimes_{note}_ff_rr{rr}.wav",
+       "vel": "loud",
+       "octave": 1
+      },
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 1/*.wav",
+       "pattern": "chimes_{note}_fff_rr{rr}.wav",
+       "vel": "loud",
+       "octave": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bells.chimes.chromatic",
+   "name": "Church Chimes",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), tubular bells, legacy chromatic set - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "oneShot": true,
+     "tune": "name",
+     "release": 1.0,
+     "maxSeconds": 12,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Tubular Bells 3 - Legacy/*.ogg",
+       "pattern": "chimes_{note}.ogg",
+       "octave": 3
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bells.handchimes",
+   "name": "Hand Chimes",
+   "family": "Bells & Mallets",
+   "credit": "VCSL (Versilian Community Sample Library), hand chimes - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "oneShot": true,
+     "pitchFrom": 0.3,
+     "pitchMethod": "spectrum",
+     "release": 1.0,
+     "maxSeconds": 10,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Hand Chimes/*.wav",
+       "pattern": "sus_{note}_r{rr}_main.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fx.glass",
+   "name": "Glass Harp",
+   "family": "FX & Atmos",
+   "credit": "VCSL (Versilian Community Sample Library), wine glasses, rubbed - CC0",
+   "articulations": [
+    {
+     "name": "slow",
+     "loop": true,
+     "release": 0.6,
+     "xfadeMs": 400,
+     "minLoopMs": 1500,
+     "maxLoopMs": 5000,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Friction Idiophones/Wine Glasses/Sustains/Slow/*.wav",
+       "pattern": "glass*_{note}_Slow_{rr}_*.wav"
+      },
+      {
+       "files": "vcsl:Idiophones/Friction Idiophones/Wine Glasses/Releases/Slow/*.wav",
+       "pattern": "glass*_{note}_Slow_{rr}_Decay.wav",
+       "trigger": "release",
+       "levelDb": -6
+      }
+     ]
+    },
+    {
+     "name": "fast",
+     "loop": true,
+     "release": 0.6,
+     "xfadeMs": 400,
+     "minLoopMs": 1500,
+     "maxLoopMs": 5000,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Friction Idiophones/Wine Glasses/Sustains/Fast/*.wav",
+       "pattern": "glass*_{note}_Fast_{rr}_*.wav"
+      },
+      {
+       "files": "vcsl:Idiophones/Friction Idiophones/Wine Glasses/Releases/Fast/*.wav",
+       "pattern": "glass*_{note}_Fast_{rr}_Decay.wav",
+       "trigger": "release",
+       "levelDb": -6
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "perc.timpani",
+   "name": "Timpani",
+   "family": "Orchestral",
+   "credit": "VCSL (Versilian Community Sample Library), timpani (pitch of every tuning measured from the recording) - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "oneShot": true,
+     "maxSeconds": 8,
+     "release": 0.8,
+     "sources": [
+      {
+       "files": "vcsl:Membranophones/Struck Membranophones/Timpani 2/Hit/*.wav",
+       "pattern": "Timpani{group}_hit_v{vel}_rr{rr}_main.wav",
+       "exclude": [
+        "Timpani7F_*"
+       ],
+       "pitch": "detect",
+       "range": [
+        36,
+        62
+       ],
+       "partials": [
+        1.0,
+        1.5,
+        1.98
+       ]
+      }
+     ]
+    },
+    {
+     "name": "hit warm",
+     "oneShot": true,
+     "maxSeconds": 8,
+     "release": 0.8,
+     "sources": [
+      {
+       "files": "vcsl:Membranophones/Struck Membranophones/Timpani 1/Hit/*.wav",
+       "pattern": "Timpani{group}_Hit_v{vel}_rr{rr}_Sum.wav",
+       "pitch": "detect",
+       "range": [
+        36,
+        62
+       ],
+       "partials": [
+        1.0,
+        1.5,
+        1.98
+       ]
+      }
+     ]
+    },
+    {
+     "name": "roll",
+     "velOrder": [
+      "soft",
+      "loud"
+     ],
+     "loop": true,
+     "release": 0.6,
+     "xfadeMs": 400,
+     "minLoopMs": 1500,
+     "maxLoopMs": 5000,
+     "sources": [
+      {
+       "files": "vcsl:Membranophones/Struck Membranophones/Timpani 1/Roll/*.wav",
+       "pattern": "Timpani{group}_Roll_v3_rr{rr}_Sum.wav",
+       "vel": "soft",
+       "pitch": "detect",
+       "range": [
+        36,
+        62
+       ],
+       "partials": [
+        1.0,
+        1.5,
+        1.98
+       ]
+      },
+      {
+       "files": "vcsl:Membranophones/Struck Membranophones/Timpani 1/Roll/*.wav",
+       "pattern": "Timpani{group}_Roll_v2_rr{rr}_Sum.wav",
+       "vel": "soft",
+       "pitch": "detect",
+       "range": [
+        36,
+        62
+       ],
+       "partials": [
+        1.0,
+        1.5,
+        1.98
+       ]
+      },
+      {
+       "files": "vcsl:Membranophones/Struck Membranophones/Timpani 1/Roll/*.wav",
+       "pattern": "Timpani{group}_Roll_v5_rr{rr}_Sum.wav",
+       "vel": "loud",
+       "pitch": "detect",
+       "range": [
+        36,
+        62
+       ],
+       "partials": [
+        1.0,
+        1.5,
+        1.98
+       ]
+      },
+      {
+       "files": "vcsl:Membranophones/Struck Membranophones/Timpani 1/Roll/*.wav",
+       "pattern": "Timpani{group}_Roll_v4_rr{rr}_Sum.wav",
+       "vel": "loud",
+       "pitch": "detect",
+       "range": [
+        36,
+        62
+       ],
+       "partials": [
+        1.0,
+        1.5,
+        1.98
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.balafon",
+   "name": "Balafon",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), balafon (West African xylophone) - CC0",
+   "articulations": [
+    {
+     "name": "traditional mallet",
+     "maxSeconds": 4,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Balafon/Traditional Mallet/*.wav",
+       "pattern": "EthnicXylo_tradM_{note}_vl{vel}_rr{rr}_Mid.wav"
+      }
+     ]
+    },
+    {
+     "name": "hard mallet",
+     "maxSeconds": 4,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Balafon/Hard Mallet/*.wav",
+       "pattern": "EthnicXylo_hardM_{note}_vl{vel}_rr{rr}_Mid.wav"
+      }
+     ]
+    },
+    {
+     "name": "soft mallet",
+     "maxSeconds": 4,
+     "oneShot": true,
+     "tune": "correct",
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Balafon/Soft Mallet/*.wav",
+       "pattern": "EthnicXylo_softM_{note}_vl{vel}_rr{rr}_Mid.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.kalimba",
+   "name": "Kalimba",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), kalimba from Kenya - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.1,
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Plucked Idiophones/Kalimba, Kenya/*.wav",
+       "pattern": "Mbira6_Normal_MainSpirit_{note}_k*_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.kalimba.low",
+   "name": "Low Kalimba",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), kalimba from Tanzania - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.1,
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Plucked Idiophones/Kalimba, Tanzania/*.wav",
+       "pattern": "MBira3_pluck_Main_{note}_k*_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.mbira",
+   "name": "Mbira",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), mbira mavembe (gandanga), Zimbabwe - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.1,
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Plucked Idiophones/Mbira Mavembe (Gandanga), Zimbabwe, Low G/*.wav",
+       "pattern": "Mbira5_Normal_MainSpirit_{note}_k*_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.mbira.deep",
+   "name": "Deep Mbira",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), mbira dzavadzimu (nyamaropa tuning), Zimbabwe - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.1,
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Plucked Idiophones/Mbira dzaVadzimu Nyamaropa, Zimbabwe, Low B/*.wav",
+       "pattern": "MBira4_pluck_Main_{note}_*_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.mbira.nyunga",
+   "name": "Nyunga Mbira",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), nyunga nyunga mbira, Mozambique - CC0",
+   "articulations": [
+    {
+     "name": "pluck",
+     "oneShot": true,
+     "pitchFrom": 0.1,
+     "pitchMethod": "spectrum",
+     "release": 0.5,
+     "maxSeconds": 7,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Plucked Idiophones/Nyunga Nyunga, Mozambique, Low F/*.wav",
+       "pattern": "Mbira2_Normal_MainSpirit_{note}_k*_vl{vel}_rr{rr}.wav"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.slitdrum",
+   "name": "Slit Drum",
+   "family": "World",
+   "credit": "VSCO 2 Community Edition (Versilian Studios), slit (log) drums, pitch of every tongue measured from the recording - CC0",
+   "articulations": [
+    {
+     "name": "hit",
+     "velOrder": [
+      "ppp",
+      "p",
+      "mp",
+      "ff"
+     ],
+     "oneShot": true,
+     "maxSeconds": 3,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vsco:VSCO 1 Percussion/varWood/log_drum/*.wav",
+       "pattern": "slitdrum{group}_{vel}_{rr}.wav",
+       "pitch": "detect",
+       "range": [
+        44,
+        68
+       ],
+       "partials": [
+        1.0
+       ]
+      }
+     ]
+    },
+    {
+     "name": "log",
+     "oneShot": true,
+     "maxSeconds": 3,
+     "release": 0.3,
+     "sources": [
+      {
+       "files": "vcsl:Idiophones/Struck Idiophones/Slit Drum/*.wav",
+       "pattern": "LogDrum{group}_MedM_v{vel}_rr{rr}_Sum.wav",
+       "pitch": "detect",
+       "range": [
+        40,
+        60
+       ],
+       "partials": [
+        1.0
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "world.didgeridoo",
+   "name": "Didgeridoo",
+   "family": "World",
+   "credit": "VCSL (Versilian Community Sample Library), didgeridoo (drone pitch measured from the recording) - CC0",
+   "articulations": [
+    {
+     "name": "drone",
+     "loop": true,
+     "release": 0.5,
+     "xfadeMs": 150,
+     "maxLoopMs": 4000,
+     "extendKeys": 6,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Lip Aerophones/Didgeridoo/*.wav",
+       "pattern": "Didgeridoo1_Sus{group}_Main.wav",
+       "pitch": "detect",
+       "range": [
+        30,
+        46
+       ]
+      }
+     ]
+    },
+    {
+     "name": "phrase",
+     "oneShot": true,
+     "maxSeconds": 16,
+     "extendKeys": 6,
+     "sources": [
+      {
+       "files": "vcsl:Aerophones/Lip Aerophones/Didgeridoo/*.wav",
+       "pattern": "Didgeridoo1_Phrase{group}_Main.wav",
+       "pitch": "detect",
+       "range": [
+        30,
+        46
+       ],
+       "exclude": [
+        "*Phrase6*"
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
 }

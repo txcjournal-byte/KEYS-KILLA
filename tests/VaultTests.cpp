@@ -1447,6 +1447,30 @@ float bandShare (const juce::AudioBuffer<float>& b, int from, int len, double sr
     return (float) (band / std::max (1e-20, tot));
 }
 
+// the frequency of the strongest spectral peak within +-0.6 semitone of `expected` (Hann window, 64k FFT, parabolic
+// interpolation of the log magnitude) - the pitch of struck bars / tines, whose upper partials are inharmonic
+float fundamentalPeak (const juce::AudioBuffer<float>& b, int from, int len, double sr, double expected)
+{
+    const int order = 16, n = 1 << order;
+    len = std::min ({ len, n, b.getNumSamples() - from });
+    if (len < 2048) return 0.0f;
+    std::vector<float> data ((size_t) n * 2, 0.0f);
+    for (int i = 0; i < len; ++i)
+    {
+        float s = 0; for (int c = 0; c < b.getNumChannels(); ++c) s += b.getSample (c, from + i);
+        data[(size_t) i] = s * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) len));
+    }
+    juce::dsp::FFT fft (order);
+    fft.performFrequencyOnlyForwardTransform (data.data());
+    const int k0 = std::max (2, (int) (expected * std::pow (2.0, -0.6 / 12.0) * n / sr)), k1 = std::min (n / 2 - 2, (int) (expected * std::pow (2.0, 0.6 / 12.0) * n / sr) + 1);
+    int kb = k0;
+    for (int k = k0; k <= k1; ++k) if (data[(size_t) k] > data[(size_t) kb]) kb = k;
+    if (kb <= k0 || kb >= k1) return 0.0f;   // no peak inside the window
+    const double a = std::log (data[(size_t) kb - 1] + 1e-12), c0 = std::log (data[(size_t) kb] + 1e-12), c = std::log (data[(size_t) kb + 1] + 1e-12);
+    const double den = a - 2 * c0 + c;
+    return (float) ((kb + (std::abs (den) > 1e-12 ? 0.5 * (a - c) / den : 0.0)) * sr / n);
+}
+
 int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool asTest)
 {
     auto lib = vault::SampleLibrary::getShared();
@@ -1460,6 +1484,39 @@ int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool
     if (outDir != juce::File()) outDir.createDirectory();
     const double sr = 44100.0;
     check (true, "library: " + lib->libraryPath().getFullPathName() + " (" + juce::String (lib->numInstruments()) + " instruments)");
+    // how the builder found each articulation's roots (library.json "pitchCheck": "yin" = verified pitch, "spectrum" = bars /
+    // tines tuned on the fundamental's spectral peak, "name" = inharmonic
+    // bells / glides with trusted names, "detect" = pitch measured from the recording) - "name" / "detect" get no cents check
+    const auto libJson = juce::JSON::parse (lib->libraryPath().getChildFile ("library.json"));
+    auto pitchCheckOf = [&] (const juce::String& id, const juce::String& artName) -> juce::String
+    {
+        if (auto* arr = libJson["instruments"].getArray())
+            for (auto& iv : *arr)
+                if (iv["id"].toString() == id)
+                    if (auto* arts = iv["articulations"].getArray())
+                        for (auto& av : *arts)
+                            if (av["name"].toString() == artName && av.hasProperty ("pitchCheck")) return av["pitchCheck"].toString();
+        return "yin";
+    };
+    auto pitchFromOf = [&] (const juce::String& id, const juce::String& artName) -> double
+    {
+        if (auto* arr = libJson["instruments"].getArray())
+            for (auto& iv : *arr)
+                if (iv["id"].toString() == id)
+                    if (auto* arts = iv["articulations"].getArray())
+                        for (auto& av : *arts)
+                            if (av["name"].toString() == artName && av.hasProperty ("pitchFrom")) return juce::jlimit (0.05, 1.0, (double) av["pitchFrom"]);
+        return 0.1;
+    };
+    // the key nearest to `want` that the articulation plays (C5 is outside the range of e.g. tuba, piccolo, glockenspiel)
+    auto playable = [] (const vault::SampleArticulationDesc& a, int want)
+    {
+        int best = want, bestD = 1000;
+        for (auto& z : a.zones)
+            if (! z.releaseTrigger)
+                for (int k = z.lo; k <= z.hi; ++k) if (std::abs (k - want) < bestD) { bestD = std::abs (k - want); best = k; }
+        return best;
+    };
     for (int i = 0; i < lib->numInstruments(); ++i)
     {
         auto* h = lib->instrument (i);
@@ -1469,8 +1526,9 @@ int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool
         check (loaded, "library: " + h->desc.id + " loads (" + juce::String ((int) (h->data() != nullptr ? h->data()->bytes / 1024 / 1024 : 0)) + " MB in RAM, "
                            + juce::String (ms, 0) + " ms)");
         for (auto& art : h->desc.articulations)
-            for (int note : notes)
+            for (int wanted : notes)
             {
+                const int note = playable (art, wanted);
                 const bool sustained = ! art.oneShot;
                 const double secs = sustained ? 24.0 : 3.0;   // long enough for several loop wraps
                 juce::MidiBuffer m;
@@ -1480,7 +1538,14 @@ int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool
                 const auto st = stats (b);
                 const double f0 = 440.0 * std::pow (2.0, (note - 69) / 12.0);
                 const int a0 = (int) (0.15 * sr);
-                const float f = yinPitch (b, a0, (int) (0.8 * sr), sr, f0 * 0.6, f0 * 1.6);
+                // pitch: a looped note over 0.35-2.35 s (what the ear averages: attack drift + the loop); a decaying one where
+                // the builder measured it (library.json "pitchFrom": 0.5 s for pianos - their attack glides sharp -, else
+                // right after the attack, before plucks and bars glide / decay)
+                bool looped = false;
+                for (auto& z : art.zones) looped |= z.looped();
+                const double pFrom = pitchFromOf (h->desc.id, art.name);
+                const float f = looped ? yinPitch (b, (int) (0.35 * sr), (int) (2.0 * sr), sr, f0 * 0.6, f0 * 1.6)
+                                       : yinPitch (b, (int) (pFrom * sr), (int) ((pFrom > 0.2 ? 1.0 : 0.4) * sr), sr, f0 * 0.6, f0 * 1.6);
                 float fundDb = 0, strongDb = 0;
                 const float presence = bandShare (b, a0, (int) (0.75 * sr), sr, 2000.0, 5000.0, &fundDb, &strongDb, f0);
                 // loop wrap clicks: the largest sample jump during the held part vs the first second
@@ -1507,7 +1572,15 @@ int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool
                             wrapRatio = std::max (wrapRatio, at / std::max (1e-6f, around));
                             const int xfMid = w - (int) (z->xfade / inc / 2);
                             const float mid = stats (b, xfMid - 10 * ms, xfMid + 10 * ms).rms, out = stats (b, w - (int) (z->xfade / inc) - 60 * ms, w - (int) (z->xfade / inc) - 10 * ms).rms;
-                            dipDb = std::min (dipDb, juce::Decibels::gainToDecibels (mid / std::max (1e-6f, out)));
+                            // minus the level swing the music has on its own just before the crossfade (rubbed glass beats,
+                            // tremolo bowing): the quietest 20 ms of the 600 ms before it
+                            float natural = 1e9f;
+                            const int xfStartAt = w - (int) (z->xfade / inc);
+                            for (int s0 = xfStartAt - 600 * ms; s0 + 20 * ms <= xfStartAt - 10 * ms; s0 += 5 * ms)
+                                if (s0 > 0) natural = std::min (natural, stats (b, s0, s0 + 20 * ms).rms);
+                            const float raw = juce::Decibels::gainToDecibels (mid / std::max (1e-6f, out));
+                            const float nat = natural < 1e8f ? juce::Decibels::gainToDecibels (natural / std::max (1e-6f, out)) : 0.0f;
+                            dipDb = std::min (dipDb, std::min (0.0f, raw - std::min (0.0f, nat)));
                         }
                         std::printf ("      loop: %d wraps in the held note, jump at the wrap %.2fx the music around it, level in the crossfade %+.1f dB\n", wraps, wrapRatio, dipDb);
                     }
@@ -1517,9 +1590,26 @@ int libraryReport (const juce::File& outDir, const std::vector<int>& notes, bool
                     if (wraps > 0)
                         check (wrapRatio < 1.3f && dipDb > -3.0f, "library: " + h->desc.id + " / " + art.name + " loops without clicks or dips (" + juce::String (wraps)
                                                                   + " wraps, jump " + juce::String (wrapRatio, 2) + "x, crossfade level " + juce::String (dipDb, 1) + " dB)");
-                    if (note == vault::homeNote)
-                        check (std::abs (centsOff (f, (float) f0)) < 5.0f, "library: " + h->desc.id + " / " + art.name + " in tune at C5 ("
-                                                                         + juce::String (centsOff (f, (float) f0), 1) + " cents)");
+                    // in tune: 10 cents for looped notes (vibrato / bowing drift), 15 for decaying ones (plucks glide);
+                    // no YIN pitch (missing fundamental, e.g. organ pedal stops) = not measurable here (VaultLibBuild -qc
+                    // measures every zone with a spectral second opinion)
+                    // struck bars / tines ("spectrum"): the fundamental's spectral peak right after the strike, 15 cents
+                    if (wanted == vault::homeNote && pitchCheckOf (h->desc.id, art.name) == "spectrum")
+                    {
+                        const float fp = fundamentalPeak (b, (int) (0.06 * sr), (int) (0.35 * sr), sr, f0);
+                        check (fp > 0.0f && std::abs (centsOff (fp, (float) f0)) < 15.0f, "library: " + h->desc.id + " / " + art.name + " in tune at "
+                                   + vault::noteName (note) + " (" + juce::String (fp > 0 ? centsOff (fp, (float) f0) : 9999.0f, 1) + " cents, spectral peak)");
+                    }
+                    // YIN can be pulled off by inharmonic upper partials (FM keys, bright plucks): the fundamental's spectral
+                    // peak in the same stretch is the second opinion - in tune when either one says so
+                    if (wanted == vault::homeNote && pitchCheckOf (h->desc.id, art.name) == "yin" && f > 0.0f)
+                    {
+                        const double from = looped ? 0.35 : pFrom, len = looped ? 2.0 : (pFrom > 0.2 ? 1.0 : 0.4);
+                        const float fp = fundamentalPeak (b, (int) (from * sr), (int) (len * sr), sr, f0);
+                        const float tol = looped ? 10.0f : 15.0f, cy = centsOff (f, (float) f0), cp = fp > 0 ? centsOff (fp, (float) f0) : 9999.0f;
+                        check (std::abs (cy) < tol || std::abs (cp) < tol, "library: " + h->desc.id + " / " + art.name + " in tune at " + vault::noteName (note)
+                                                                              + " (YIN " + juce::String (cy, 1) + " cents, spectral peak " + juce::String (cp, 1) + ")");
+                    }
                 }
             }
     }
