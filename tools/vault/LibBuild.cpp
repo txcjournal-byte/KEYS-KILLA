@@ -1,6 +1,7 @@
 // VaultLibBuild - builds the CHROME VAULT sample library from CC0 source recordings (docs/VAULT.md, "Sample library").
 //
 //   VaultLibBuild [-map tools/vault/library_map.json] [-out /path/Library] [-only id1,id2] [-threads N] [-dry]
+//   VaultLibBuild -qc [-out /path/Library] [-only ids] [-demo /dir]     measure a built library (qc_report.txt, qc.json)
 //
 // Per source file: read, resample to 44.1 kHz (windowed sinc), remove DC, trim silence (with a short pre-roll and a fade-in
 // over it), cap the length (fade the tail), verify / correct the root note with YIN (octave-convention errors are fixed per
@@ -11,14 +12,17 @@
 // were normalized), set release samples relative to their note, normalise the instrument peak, encode OggVorbis (q 0.6).
 // Writes <out>/library.json, <out>/audio/<instrument>/*.ogg and <out>/build_report.txt.
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <juce_dsp/juce_dsp.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../../Source/vault/VaultLibrary.h"
+#include "../../Source/vault/VaultEngine.h"
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <map>
 #include <mutex>
 #include <regex>
+#include <set>
 #include <thread>
 
 namespace
@@ -34,10 +38,15 @@ struct Opts
     double release = 0.3, releaseDecayDb = 6.0;
     bool loop = false, oneShot = false;
     bool keepTuning = false;   // "tune": "keep" = natural tuning (stretch tuning, bar tuning), only > 30 cents fixed
+    bool trustNames = false;   // "tune": "name" = inharmonic sources (bells, chimes): the file names are the roots, no pitch correction
     double pitchFrom = 0.06;   // s: where the pitch analysis of a one-shot starts (later for pianos: the attack glides sharp)
+    int maxStretch = 4;        // semitones a zone may be played away from its root before the report flags it
+    bool spectrumPitch = false; // "pitchMethod": "spectrum" - fine tune from the fundamental's spectral peak (mallets, tines)
     void read (const juce::var& v)
     {
-        if (v.hasProperty ("tune")) keepTuning = v["tune"].toString() == "keep";
+        if (v.hasProperty ("tune")) { keepTuning = v["tune"].toString() == "keep"; trustNames = v["tune"].toString() == "name"; }
+        if (v.hasProperty ("maxStretch")) maxStretch = (int) v["maxStretch"];
+        if (v.hasProperty ("pitchMethod")) spectrumPitch = v["pitchMethod"].toString() == "spectrum";
         if (v.hasProperty ("pitchFrom")) pitchFrom = (double) v["pitchFrom"];
         auto num = [&] (const char* k, double& d) { if (v.hasProperty (k)) d = (double) v[k]; };
         if (v.hasProperty ("quality")) quality = (int) v["quality"];
@@ -57,6 +66,15 @@ struct Item   // one source file
     int rr = 0, namedNote = 60, root = 60, layer = 0;
     bool release = false;
     double levelDb = -22.0;                 // release samples: loudness relative to their note
+    // pitch from the audio instead of the file name ("pitch": "detect"): harmonic-sum search over [detLo, detHi] (MIDI)
+    // with the source's partial ratios (timpani: 1, 1.5, 1.98); files sharing a {group} get the group's median pitch
+    bool detect = false;
+    double detLo = 36, detHi = 84;
+    std::vector<double> partials { 1.0, 2.0, 3.0, 4.0 };
+    juce::String group;
+    float noiseDb = 0;                      // recording noise floor: RMS before the onset vs the peak (0 = not measurable)
+    int anaFrom = 0, anaLen = 0;            // the stretch the pitch was measured on
+    bool octaveFixed = false;               // the map set the octave ("octave"): no automatic octave correction
     // analysis
     juce::AudioBuffer<float> audio;         // processed, 44.1 kHz
     float f0 = 0, aperiodicity = 1, cents = 0;
@@ -91,6 +109,7 @@ std::regex makeRegex (const juce::String& pattern)
         if (pattern.substring (i).startsWith ("{note}")) { out += "([A-Ga-g][#b]?-?[0-9])"; i += 5; continue; }
         if (pattern.substring (i).startsWith ("{vel}"))  { out += "([A-Za-z0-9]+)"; i += 4; continue; }
         if (pattern.substring (i).startsWith ("{rr}"))   { out += "([0-9]+)"; i += 3; continue; }
+        if (pattern.substring (i).startsWith ("{group}")) { out += "([A-Za-z0-9]+)"; i += 6; continue; }
         const juce::juce_wchar c = pattern[i];
         if (c == '*') { out += ".*"; continue; }
         if (juce::String ("\\^$.|?+()[]{}").containsChar (c)) out += '\\';
@@ -198,6 +217,91 @@ float detectF0 (const juce::AudioBuffer<float>& b, int from, int len, double fEx
     return f0s[f0s.size() / 2];
 }
 
+// harmonic-sum pitch search for sources without a usable note name (timpani, tuned drums, slit drums): the log spectrum
+// of [from, from + len) is scored at f0 x every partial ratio (0.02-semitone grid over [lo, hi] MIDI); the best f0 wins.
+// The first partial weighs most, so a sub-octave (whose partials miss the spectrum) loses to the real principal tone.
+double harmonicSumMidi (const juce::AudioBuffer<float>& b, int from, int len, double lo, double hi, const std::vector<double>& partials)
+{
+    constexpr int order = 17, n = 1 << order;
+    from = juce::jlimit (0, std::max (0, b.getNumSamples() - 1), from);
+    len = std::min ({ len, n, b.getNumSamples() - from });
+    if (len < 2048) return 0.0;
+    std::vector<float> data ((size_t) n * 2, 0.0f);
+    for (int i = 0; i < len; ++i)
+    {
+        float s = 0; for (int c = 0; c < b.getNumChannels(); ++c) s += b.getSample (c, from + i);
+        data[(size_t) i] = s * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) len));
+    }
+    juce::dsp::FFT fft (order);
+    fft.performFrequencyOnlyForwardTransform (data.data());
+    float mx = 1e-12f;
+    for (int k = 1; k < n / 2; ++k) mx = std::max (mx, data[(size_t) k]);
+    std::vector<float> L ((size_t) n / 2);
+    for (int k = 0; k < n / 2; ++k) L[(size_t) k] = std::max (0.0f, 60.0f + 20.0f * std::log10 (data[(size_t) k] / mx + 1e-9f));
+    double best = -1, bestM = 0;
+    std::vector<std::pair<double, double>> scores;
+    for (double m = lo; m <= hi; m += 0.02)
+    {
+        const double f0 = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+        double sc = 0;
+        for (size_t p = 0; p < partials.size(); ++p)
+        {
+            const double fr = f0 * partials[p];
+            const int k0 = (int) (fr * 0.985 * n / outRate), k1 = std::min (n / 2 - 1, (int) (fr * 1.015 * n / outRate) + 1);
+            float v = 0; for (int k = std::max (1, k0); k <= k1; ++k) v = std::max (v, L[(size_t) k]);
+            sc += v * (p == 0 ? 1.0 : 0.8);
+        }
+        scores.push_back ({ m, sc });
+        if (sc > best) { best = sc; bestM = m; }
+    }
+    // every band is +-1.5 % wide, so the best score holds on a plateau around the true pitch: take the middle of the
+    // plateau that holds the first best grid point (taking its first point would read 25 cents flat)
+    {
+        size_t i0 = 0;
+        while (i0 < scores.size() && scores[i0].second < best - 1e-6) ++i0;
+        size_t i1 = i0;
+        while (i1 + 1 < scores.size() && scores[i1 + 1].second >= best - 1e-6) ++i1;
+        if (i0 < scores.size()) bestM = 0.5 * (scores[i0].first + scores[i1].first);
+    }
+    // refine on the STRONGEST of the listed partials near the winner (best signal-to-noise; a weak fundamental would make
+    // the estimate wander): parabolic interpolation of its log-magnitude peak, divided by its ratio
+    const double f0 = 440.0 * std::pow (2.0, (bestM - 69.0) / 12.0);
+    int kb = -1; double ratio = 1.0;
+    for (size_t p = 0; p < partials.size(); ++p)
+        for (int k = (int) (f0 * partials[p] * 0.98 * n / outRate); k <= (int) (f0 * partials[p] * 1.02 * n / outRate) + 1; ++k)
+            if (k > 1 && k < n / 2 - 1 && (kb < 0 || data[(size_t) k] > data[(size_t) kb])) { kb = k; ratio = partials[p]; }
+    if (kb > 1 && kb < n / 2 - 1 && data[(size_t) kb] >= data[(size_t) kb - 1] && data[(size_t) kb] >= data[(size_t) kb + 1])
+    {
+        const double a = std::log (data[(size_t) kb - 1] + 1e-12), c0 = std::log (data[(size_t) kb] + 1e-12), c = std::log (data[(size_t) kb + 1] + 1e-12);
+        const double den = a - 2 * c0 + c;
+        const double k = kb + (std::abs (den) > 1e-12 ? 0.5 * (a - c) / den : 0.0);
+        const double m = 12.0 * std::log2 (k * outRate / n / ratio / 440.0) + 69.0;
+        if (std::abs (m - bestM) < 0.3) return m;
+    }
+    return bestM;
+}
+
+// YIN disagrees with the expected root: the harmonic-sum spectrum (+-2.5 semitones around the root, harmonics 1-5) decides.
+// Both agree (within 0.6 semitone) -> the root moves to them; the spectrum confirms the root -> the name stays (the spectrum
+// gives the detune); YIN is far off (> 3 semitones: octave / garbage) and the spectrum finds a clear pitch inside the window
+// -> the spectrum alone; otherwise the root stays without a fine tune. YIN alone mis-hears bright piano trebles, weak bass
+// fundamentals (organ pedals, low strings) and mallet bars.
+struct PitchVerdict { int root = 60; double measured = 60, spectrum = 0; juce::String verdict; };
+PitchVerdict pitchVerdict (const juce::AudioBuffer<float>& b, int from, int len, int root, double yinMidi)
+{
+    PitchVerdict v;
+    v.root = root; v.measured = root;
+    const double hs = harmonicSumMidi (b, from, len, root - 2.5, root + 2.5, { 1.0, 2.0, 3.0, 4.0, 5.0 });
+    v.spectrum = hs;
+    const int hsNear = (int) std::lround (hs);
+    const bool clear = hs > 0 && std::abs (hs - root) < 2.3;   // not stuck at the window edge
+    if (clear && std::abs (hs - yinMidi) < 0.6 && hsNear != root) { v.root = hsNear; v.measured = hs; v.verdict = "root corrected (YIN and spectrum agree)"; }
+    else if (clear && hsNear == root) { v.measured = hs; v.verdict = "the name is right (spectrum)"; }
+    else if (clear && std::abs (yinMidi - root) > 3.0) { v.root = hsNear; v.measured = hs; v.verdict = "root from the spectrum (YIN unusable)"; }
+    else v.verdict = "kept the name, no fine tune (check!)";
+    return v;
+}
+
 std::vector<float> envelope (const juce::AudioBuffer<float>& b, int hop)
 {
     std::vector<float> e;
@@ -235,7 +339,7 @@ bool findLoop (Item& it, const Opts& o)
     int stableEnd = (int) env.size() - 1;
     while (stableEnd > attackEnd && env[(size_t) stableEnd] < med * 0.6f) --stableEnd;
     stableEnd -= 10;   // stay 100 ms clear of the release
-    const int xf = juce::jlimit ((int) (0.05 * outRate), (int) (0.15 * outRate), (int) (o.xfadeMs * 0.001 * outRate));
+    const int xf = juce::jlimit ((int) (0.05 * outRate), (int) (0.5 * outRate), (int) (o.xfadeMs * 0.001 * outRate));
     const int minL = (int) (o.minLoopMs * 0.001 * outRate), maxL = (int) (o.maxLoopMs * 0.001 * outRate);
     const int regionStart = attackEnd * hop + xf + 2205, regionEnd = std::min (stableEnd * hop, n - (int) (0.05 * outRate));
     if (regionEnd - regionStart < minL) return false;
@@ -277,7 +381,7 @@ bool findLoop (Item& it, const Opts& o)
     if (be <= bs) return false;
     it.loopCorr = (float) (best - 0.03 * (double) (be - bs) / outRate);
     // a weakly correlated loop (ensembles, vibrato) gets the longest crossfade
-    const int xfUse = it.loopCorr < 0.6f ? (int) (0.15 * outRate) : xf;
+    const int xfUse = it.loopCorr < 0.6f ? std::max (xf, (int) (0.15 * outRate)) : xf;
     it.loopStart = bs; it.loopEnd = be; it.xfade = std::min ({ xfUse, (be - bs) / 3, bs - 16 });
     return true;
 }
@@ -370,6 +474,14 @@ bool loadItem (Item& it, const Opts& o)
     const float onThr = pk * 0.01f;
     int onset = first;
     for (int i = first; i < n; ++i) { bool hit = false; for (int c = 0; c < ch; ++c) hit |= std::abs (a.getSample (c, i)) > onThr; if (hit) { onset = i; break; } }
+    // noise floor: the RMS of the lead-in before the onset (at least 20 ms of it, ending 10 ms before the onset) vs the peak
+    if (const int nEnd = onset - (int) (0.01 * outRate); nEnd >= (int) (0.02 * outRate))
+    {
+        double acc = 0;
+        const int n0 = std::max (0, nEnd - (int) (0.5 * outRate));
+        for (int c = 0; c < ch; ++c) for (int i = n0; i < nEnd; ++i) acc += (double) a.getSample (c, i) * a.getSample (c, i);
+        it.noiseDb = (float) juce::jmin (-0.1, 10.0 * std::log10 (acc / ((nEnd - n0) * ch) + 1e-20) - 20.0 * std::log10 (pk));
+    }
     const int pre = (int) (o.preRollMs * 0.001 * outRate);
     const int start = std::max (0, std::min (first, onset - pre));
     int end = std::min (n, last + (int) (0.02 * outRate));
@@ -379,7 +491,7 @@ bool loadItem (Item& it, const Opts& o)
     juce::AudioBuffer<float> t (ch, end - start);
     for (int c = 0; c < ch; ++c) t.copyFrom (c, 0, a, c, start, end - start);
     // fade-in over the pre-roll (raised cosine), fade-out at the end
-    const int fin = std::max (8, onset - start);
+    const int fin = std::max ((int) (0.0015 * outRate), onset - start);   // at least 1.5 ms: files that start mid-sound do not click
     const int fout = capped ? (int) (o.tailFadeMs * 0.001 * outRate) : (int) (0.02 * outRate);
     for (int c = 0; c < ch; ++c)
     {
@@ -397,18 +509,415 @@ void analyseItem (Item& it, const Opts& o)
 {
     it.loud = loudnessDb (it.audio);
     if (it.release) return;
-    const double fExp = 440.0 * std::pow (2.0, (it.namedNote - 69) / 12.0);
+    const double fExp = 440.0 * std::pow (2.0, (std::max (0, it.namedNote) - 69) / 12.0);
     const int n = it.audio.getNumSamples();
     int from = (int) (o.pitchFrom * outRate), len = (int) ((o.pitchFrom > 0.2 ? 1.0 : 0.35) * outRate);
     if (o.loop) { from = (int) (0.35 * outRate); len = std::max ((int) (0.5 * outRate), n - from - (int) (0.4 * outRate)); }
     len = std::min (len, n - from);
-    float ap = 1;
-    it.f0 = len > 1024 ? detectF0 (it.audio, from, len, fExp, ap) : 0.0f;
-    it.aperiodicity = ap;
-    it.pitchOk = it.f0 > 0 && ap < 0.35f;
+    it.anaFrom = from; it.anaLen = len;
+    if (it.detect)
+    {
+        // pitch from the spectrum: 80 ms after the start (past the strike) for up to 0.85 s, or the stable sustain
+        const int f2 = o.loop ? from : (int) (0.08 * outRate), l2 = o.loop ? len : std::min (n - f2, (int) (0.85 * outRate));
+        const double m = harmonicSumMidi (it.audio, f2, l2, it.detLo, it.detHi, it.partials);
+        it.f0 = m > 0 ? (float) (440.0 * std::pow (2.0, (m - 69.0) / 12.0)) : 0.0f;
+        it.aperiodicity = 0;
+        it.pitchOk = it.f0 > 0;
+        if (it.pitchOk) it.namedNote = (int) std::lround (m);
+    }
+    else
+    {
+        float ap = 1;
+        it.f0 = len > 1024 ? detectF0 (it.audio, from, len, fExp, ap) : 0.0f;
+        it.aperiodicity = ap;
+        it.pitchOk = it.f0 > 0 && ap < 0.35f;
+        if (! it.pitchOk && ! o.loop && from > (int) (0.1 * outRate))
+        {
+            // short-lived notes (piano top octave, high plucks) have decayed by pitchFrom: measure right after the attack
+            const int f2 = (int) (0.08 * outRate), l2 = std::min (n - f2, (int) (0.4 * outRate));
+            float ap2 = 1;
+            const float f = l2 > 1024 ? detectF0 (it.audio, f2, l2, fExp, ap2) : 0.0f;
+            if (f > 0 && ap2 < 0.35f) { it.f0 = f; it.aperiodicity = ap2; it.pitchOk = true; it.anaFrom = f2; it.anaLen = l2; }
+        }
+    }
     if (o.loop && ! findLoop (it, o)) it.msg << "NO LOOP FOUND (plays to the end); ";
+    else if (o.loop && ! it.detect && it.pitchOk && it.loopEnd - it.loopStart > 4096)
+    {
+        // a held note plays the sustain up to the loop end, then the loop: tune to that stretch (what is heard), not to
+        // the tail after the loop end
+        const int a0 = std::min ((int) (0.35 * outRate), it.loopStart);
+        float ap2 = 1;
+        const float fl = detectF0 (it.audio, a0, it.loopEnd - a0, it.f0, ap2);
+        if (fl > 0 && ap2 < 0.35f && std::abs (1200.0 * std::log2 (fl / it.f0)) < 50.0)
+        {
+            it.f0 = fl; it.aperiodicity = ap2;
+            it.anaFrom = a0; it.anaLen = it.loopEnd - a0;
+        }
+    }
 }
 } // namespace
+
+//==============================================================================
+// -qc: measure the BUILT library the way the plugin loads it (vault::SampleLibrary): per zone the tuning (YIN, after the
+// zone's fine tune), the start (first-frame level, onset jump), the loop wrap (sample jump vs the music around it, level dip
+// in the crossfade); per articulation the velocity-layer order, key gaps and stretch; per instrument disk + RAM size.
+// -demo <dir>: a 2 s note at C5 (MIDI 60, FL Studio naming) of every instrument's first articulation, velocity 100.
+// Writes <out>/qc_report.txt and <out>/qc.json.
+namespace qc
+{
+struct Stats { float peak = 0, rms = 0, maxJump = 0; };
+Stats stats (const juce::AudioBuffer<float>& b, int from, int to)
+{
+    Stats s; double acc = 0; int n = 0;
+    from = std::max (1, from); to = std::min (b.getNumSamples(), to);
+    for (int c = 0; c < b.getNumChannels(); ++c)
+    {
+        const float* x = b.getReadPointer (c);
+        for (int i = from; i < to; ++i) { s.peak = std::max (s.peak, std::abs (x[i])); s.maxJump = std::max (s.maxJump, std::abs (x[i] - x[i - 1])); acc += (double) x[i] * x[i]; ++n; }
+    }
+    s.rms = (float) std::sqrt (acc / std::max (1, n));
+    return s;
+}
+// 2-5 kHz share of the energy and the fundamental vs the strongest of harmonics 2..16 (dB), Hann window, 32k FFT
+float bandShare (const juce::AudioBuffer<float>& b, int from, int len, double lo, double hi, double f0, float& fundVsStrongestDb)
+{
+    const int order = 15, n = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> data ((size_t) n * 2, 0.0f);
+    len = std::min ({ len, n, b.getNumSamples() - from });
+    for (int i = 0; i < len; ++i)
+    {
+        float s = 0; for (int c = 0; c < b.getNumChannels(); ++c) s += b.getSample (c, from + i);
+        data[(size_t) i] = s * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) len));
+    }
+    fft.performFrequencyOnlyForwardTransform (data.data());
+    double tot = 0, band = 0;
+    for (int k = 1; k < n / 2; ++k) { const double f = k * outRate / n, p = (double) data[(size_t) k] * data[(size_t) k]; tot += p; if (f >= lo && f < hi) band += p; }
+    auto peakNear = [&] (double hz) { float m = 0; const int k0 = (int) (hz * 0.97 * n / outRate), k1 = (int) (hz * 1.03 * n / outRate) + 1;
+                                      for (int k = std::max (1, k0); k <= std::min (n / 2 - 1, k1); ++k) m = std::max (m, data[(size_t) k]); return m; };
+    const float fund = peakNear (f0);
+    float strongest = 1e-12f;
+    for (int h = 2; h <= 16 && h * f0 < outRate / 2; ++h) strongest = std::max (strongest, peakNear (h * f0));
+    fundVsStrongestDb = juce::Decibels::gainToDecibels (fund + 1e-9f) - juce::Decibels::gainToDecibels (strongest + 1e-9f);
+    return (float) (band / std::max (1e-20, tot));
+}
+void writeWav (const juce::AudioBuffer<float>& b, const juce::File& f)
+{
+    f.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> os (f.createOutputStream());
+    if (os == nullptr) return;
+    if (auto w = wav.createWriterFor (os, juce::AudioFormatWriterOptions().withSampleRate (outRate).withNumChannels (b.getNumChannels()).withBitsPerSample (24)))
+        w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+}
+juce::String fl (int midi)   // FL Studio note name: MIDI 60 = C5
+{
+    static const char* n[12] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    return juce::String (n[((midi % 12) + 12) % 12]) + juce::String (midi / 12);
+}
+} // namespace qc
+
+float meanCentsNow (float sumAbs, int n) { return n > 0 ? sumAbs / (float) n : 0.0f; }
+
+int runQc (const juce::File& outDir, const juce::StringArray& onlyIds, const juce::File& demoDir)
+{
+    auto lib = std::make_shared<vault::SampleLibrary> (outDir);
+    if (! lib->libraryFound()) { std::printf ("no library at %s: %s\n", outDir.getFullPathName().toRawUTF8(), lib->errorMessage().toRawUTF8()); return 1; }
+    lib->setMemoryBudget ((int64_t) 6 * 1024 * 1024 * 1024);
+    const auto json = juce::JSON::parse (outDir.getChildFile ("library.json"));
+    if (demoDir != juce::File()) demoDir.createDirectory();
+    juce::String rep;
+    auto out = [&] (const juce::String& s) { std::printf ("%s\n", s.toRawUTF8()); std::fflush (stdout); rep << s << "\n"; };
+    juce::Array<juce::var> qInsts;
+    int64_t totalDisk = 0, totalRam = 0;
+    int nFlags = 0;
+    for (int ii = 0; ii < lib->numInstruments(); ++ii)
+    {
+        auto* h = lib->instrument (ii);
+        const auto& d = h->desc;
+        if (! onlyIds.isEmpty() && ! onlyIds.contains (d.id)) continue;
+        juce::var ij;
+        for (auto& v : *json["instruments"].getArray()) if (v["id"].toString() == d.id) ij = v;
+        const bool loaded = lib->loadNow (h);
+        const auto* data = h->data();
+        int64_t disk = 0;
+        for (auto& f : outDir.getChildFile ("audio").getChildFile (d.id).findChildFiles (juce::File::findFiles, false)) disk += f.getSize();
+        totalDisk += disk;
+        const int64_t ram = data != nullptr ? (int64_t) data->bytes : 0;
+        totalRam += ram;
+        out ("== " + d.id + " \"" + d.name + "\" (" + d.family + ")  " + (loaded ? "loads" : "LOAD FAILED") + ", disk " + juce::String (disk / 1048576.0, 1)
+             + " MB, RAM " + juce::String (ram / 1048576.0, 1) + " MB");
+        auto* qi = new juce::DynamicObject();
+        qi->setProperty ("id", d.id); qi->setProperty ("name", d.name); qi->setProperty ("family", d.family);
+        qi->setProperty ("diskBytes", (juce::int64) disk); qi->setProperty ("ramBytes", (juce::int64) ram); qi->setProperty ("loads", loaded);
+        juce::Array<juce::var> qArts;
+        if (data == nullptr) { ++nFlags; qi->setProperty ("articulations", qArts); qInsts.add (juce::var (qi)); continue; }
+        for (size_t ai = 0; ai < d.articulations.size() && ai < data->articulations.size(); ++ai)
+        {
+            const auto& ad = d.articulations[ai];
+            const auto& A = data->articulations[ai];
+            juce::var aj = ij["articulations"][(int) ai];
+            const juce::String mode = aj.hasProperty ("pitchCheck") ? aj["pitchCheck"].toString() : "yin";
+            const double pitchFrom = aj.hasProperty ("pitchFrom") ? (double) aj["pitchFrom"] : 0.06;
+            std::vector<const vault::SampleZone*> dz;
+            std::vector<juce::var> zj;
+            int zi = 0;
+            for (auto& z : ad.zones)
+            {
+                if (! z.releaseTrigger) { dz.push_back (&z); zj.push_back (aj["zones"][zi]); }
+                ++zi;
+            }
+            float worstCents = 0, sumAbs = 0; int nPitch = 0, nOct = 0, nSpectrum = 0, nOver25 = 0; juce::String worstZone;
+            float worstStart = 0, worstLoop = 0, worstDip = 0; int nLoops = 0;
+            float worstNoise = -200; int nNoise = 0; float sumNoise = 0;
+            std::map<int, std::vector<std::pair<int, float>>> layerLoud;   // root -> (vlo, loudness) of rr 0
+            for (size_t j = 0; j < A.zones.size() && j < dz.size(); ++j)
+            {
+                const auto& z = A.zones[j];
+                const auto* au = z.audio;
+                if (au == nullptr || au->frames < 64) continue;
+                juce::AudioBuffer<float> b (au->channels, au->frames);
+                for (int c = 0; c < au->channels; ++c)
+                {
+                    const int16_t* src = au->channel (c);
+                    float* dst = b.getWritePointer (c);
+                    for (int i = 0; i < au->frames; ++i) dst[i] = (float) src[i] * (1.0f / 32768.0f) * z.gain;
+                }
+                const auto file = dz[j]->file.fromLastOccurrenceOf ("/", false, false);
+                const float pk = std::max (1e-6f, b.getMagnitude (0, b.getNumSamples()));
+                // tuning
+                juce::String pitchTxt = mode == "yin" ? "n/a (below E1)" : "n/a (" + mode + ")";
+                if (mode == "spectrum")
+                {
+                    // struck bars / tines: the fundamental's spectral peak, as the builder measured it
+                    const int n = b.getNumSamples();
+                    const int from = std::min ((int) (pitchFrom * outRate), n / 2), len = std::min (n - from, (int) (0.35 * outRate));
+                    const double hs = len > 2048 ? harmonicSumMidi (b, from, len, z.root - 0.75, z.root + 0.75, { 1.0 }) : 0.0;
+                    if (hs > 0)
+                    {
+                        const float c = (float) ((hs - z.root) * 100.0 + z.fine);
+                        pitchTxt = juce::String (c, 1) + " c (spectrum)";
+                        sumAbs += std::abs (c); ++nPitch; if (std::abs (c) > 25.0f) ++nOver25;
+                        if (std::abs (c) > std::abs (worstCents)) { worstCents = c; worstZone = file; }
+                    }
+                    else { pitchTxt = "unclear"; ++nOct; }
+                }
+                if (mode == "yin" && z.root >= 28)   // below E1 (piano / organ bottom) neither YIN nor the spectrum is reliable
+                {
+                    const int n = b.getNumSamples();
+                    int from = (int) (pitchFrom * outRate), len = (int) ((pitchFrom > 0.2 ? 1.0 : 0.35) * outRate);
+                    if (z.looped) { from = std::min ((int) (0.35 * outRate), z.loopStart); len = z.loopEnd - from; }   // as the builder: sustain up to the loop end
+                    len = std::min (len, n - from);
+                    float ap = 1;
+                    const double fExp = 440.0 * std::pow (2.0, (z.root - 69) / 12.0);
+                    float f = len > 1024 ? detectF0 (b, from, len, fExp, ap) : 0.0f;
+                    if ((f <= 0 || ap >= 0.35f) && ! z.looped && from > (int) (0.1 * outRate))
+                    {
+                        // decayed by pitchFrom (piano top octave, high plucks): right after the attack
+                        from = (int) (0.08 * outRate); len = std::min (n - from, (int) (0.4 * outRate));
+                        f = len > 1024 ? detectF0 (b, from, len, fExp, ap) : 0.0f;
+                    }
+                    // YIN first; where it is unclear or more than half a semitone off, the harmonic-sum spectrum around the
+                    // root (as in the builder) - YIN alone mis-hears missing fundamentals and bright trebles. A spectrum
+                    // more than a semitone off with no YIN to back it counts as "no measurable pitch".
+                    double m = f > 0 && ap < 0.35f ? 12.0 * std::log2 (f / 440.0) + 69.0 : -1000.0;
+                    juce::String how = "yin";
+                    if (len > 2048 && std::abs (m - z.root) > 0.5)
+                    {
+                        const double hs = harmonicSumMidi (b, from, len, z.root - 2.5, z.root + 2.5, { 1.0, 2.0, 3.0, 4.0, 5.0 });
+                        if (hs > 0 && (std::abs (hs - z.root) <= 1.0 || std::abs (hs - m) < 0.6)) { m = hs; how = "spectrum"; ++nSpectrum; }
+                        else if (std::abs (m - z.root) > 1.0) m = -1000.0;
+                    }
+                    if (m > -100.0)
+                    {
+                        const float c = (float) ((m - z.root) * 100.0 + z.fine);
+                        pitchTxt = juce::String (c, 1) + " c" + (how == "yin" ? "" : " (spectrum)");
+                        sumAbs += std::abs (c); ++nPitch; if (std::abs (c) > 25.0f) ++nOver25;
+                        if (std::abs (c) > std::abs (worstCents)) { worstCents = c; worstZone = file; }
+                    }
+                    else { pitchTxt = "unclear (ap " + juce::String (ap, 2) + ")"; ++nOct; }
+                }
+                // start: first frame level vs the peak, the biggest jump in the first 3 ms vs the next 50 ms
+                const float first = std::abs (b.getSample (0, 0)) / pk;
+                const float j0 = qc::stats (b, 1, (int) (0.003 * outRate)).maxJump, j1 = qc::stats (b, (int) (0.003 * outRate), (int) (0.053 * outRate)).maxJump;
+                const float startRatio = j0 / std::max (1e-6f, j1);
+                worstStart = std::max (worstStart, startRatio);
+                // loop: rebuild what the sampler plays around the wrap (linear crossfade over xfade frames before loopEnd)
+                juce::String loopTxt;
+                if (z.looped && z.xfade > 0)
+                {
+                    const int ls = z.loopStart, le = z.loopEnd, xf = z.xfade, L = le - ls;
+                    const int pre = std::min ((int) (0.25 * outRate), le - xf - 1), post = std::min ((int) (0.25 * outRate), L - xf - 1);
+                    juce::AudioBuffer<float> y (b.getNumChannels(), pre + xf + post);
+                    for (int c = 0; c < b.getNumChannels(); ++c)
+                    {
+                        const float* x = b.getReadPointer (c);
+                        float* o = y.getWritePointer (c);
+                        int k = 0;
+                        for (int p = le - xf - pre; p < le - xf; ++p) o[k++] = x[p];
+                        for (int p = le - xf; p < le; ++p) { const float t = (float) (p - (le - xf)) / (float) xf; o[k++] = x[p] + t * (x[p - L] - x[p]); }
+                        for (int p = ls; p < ls + post; ++p) o[k++] = x[p];
+                    }
+                    const int w = pre + xf, ms = (int) (0.001 * outRate);
+                    const float at = qc::stats (y, w - 2 * ms, w + 2 * ms).maxJump;
+                    const float around = std::max (qc::stats (y, w - 200 * ms, w - 10 * ms).maxJump, qc::stats (y, w + 10 * ms, w + 200 * ms).maxJump);
+                    const float ratio = at / std::max (1e-6f, around);
+                    // level dip: the quietest 20 ms in the crossfade vs the 50 ms before it, minus the dip the music has on its
+                    // own (the quietest 20 ms in the 250 ms before the crossfade: tremolo, vibrato and bow changes breathe)
+                    const float before = qc::stats (y, pre - 50 * ms, pre).rms;
+                    float minRms = 1e9f, natural = 1e9f;
+                    for (int s0 = pre; s0 + 20 * ms <= pre + xf; s0 += 5 * ms) minRms = std::min (minRms, qc::stats (y, s0, s0 + 20 * ms).rms);
+                    for (int s0 = std::max (1, pre - 250 * ms); s0 + 20 * ms <= pre; s0 += 5 * ms) natural = std::min (natural, qc::stats (y, s0, s0 + 20 * ms).rms);
+                    // slow swings (rubbed glass beats, bow changes) need a longer look back: up to 600 ms in the original
+                    for (int s0 = std::max (1, le - xf - (int) (0.6 * outRate)); s0 + 20 * ms <= le - xf; s0 += 10 * ms)
+                    {
+                        double acc = 0; int cnt = 0;
+                        for (int c = 0; c < b.getNumChannels(); ++c) for (int i = s0; i < s0 + 20 * ms; ++i) { acc += (double) b.getSample (c, i) * b.getSample (c, i); ++cnt; }
+                        natural = std::min (natural, (float) std::sqrt (acc / std::max (1, cnt)));
+                    }
+                    const float dipRaw = juce::Decibels::gainToDecibels (std::max (1e-9f, minRms) / std::max (1e-9f, before));
+                    const float dipNat = natural < 1e8f ? juce::Decibels::gainToDecibels (std::max (1e-9f, natural) / std::max (1e-9f, before)) : 0.0f;
+                    const float dip = std::min (0.0f, dipRaw - std::min (0.0f, dipNat));
+                    worstLoop = std::max (worstLoop, ratio); worstDip = std::min (worstDip, dip); ++nLoops;
+                    loopTxt = juce::String::formatted ("  loop %.2f s wrap %.2fx dip %+.1f dB (raw %+.1f, the music itself %+.1f)", L / outRate, (double) ratio, (double) dip,
+                                                       (double) dipRaw, (double) dipNat);
+                }
+                // noise floor measured by the builder (lead-in before the onset)
+                juce::String noiseTxt;
+                if (zj[j].hasProperty ("noise"))
+                {
+                    const float nd = (float) zj[j]["noise"];
+                    worstNoise = std::max (worstNoise, nd); sumNoise += nd; ++nNoise;
+                    noiseTxt = juce::String::formatted ("  noise %.0f dB", (double) nd);
+                }
+                const float loud = loudnessDb (b);
+                if (z.rr == 0) layerLoud[z.root].push_back ({ z.vlo, loud });
+                rep << juce::String::formatted ("   %-6s %-34s root %-4s fine %+6.1f  vel %3d-%3d rr %d  pitch %-14s  start %.3f/%.2fx  loud %6.1f", ad.name.substring (0, 6).toRawUTF8(),
+                                                file.toRawUTF8(), qc::fl (z.root).toRawUTF8(), (double) z.fine, z.vlo, z.vhi, z.rr, pitchTxt.toRawUTF8(),
+                                                (double) first, (double) startRatio, (double) loud)
+                    << noiseTxt << loopTxt << "\n";
+            }
+            // velocity layers: louder layer = louder sample at every root that has several layers
+            int inversions = 0, cmpNotes = 0; float minStep = 99, maxStep = -99;
+            for (auto& [root, v] : layerLoud)
+            {
+                if (v.size() < 2) continue;
+                std::sort (v.begin(), v.end());
+                ++cmpNotes;
+                for (size_t k = 1; k < v.size(); ++k)
+                {
+                    const float st = v[k].second - v[k - 1].second;
+                    minStep = std::min (minStep, st); maxStep = std::max (maxStep, st);
+                    if (st < 0.5f) ++inversions;
+                }
+            }
+            // key coverage per velocity layer
+            std::map<int, std::vector<bool>> cover;
+            int lowKey = 127, highKey = 0, inner = 0, edge = 0, gaps = 0;
+            std::map<int, std::pair<int, int>> layerSpan;
+            for (auto* z : dz)
+            {
+                auto& cv = cover[z->vlo]; cv.resize (128, false);
+                for (int k = z->lo; k <= z->hi; ++k) cv[(size_t) k] = true;
+                lowKey = std::min (lowKey, z->lo); highKey = std::max (highKey, z->hi);
+            }
+            std::set<int> rootSet; for (auto* z : dz) rootSet.insert (z->root);
+            const int lowRoot = rootSet.empty() ? 0 : *rootSet.begin(), highRoot = rootSet.empty() ? 0 : *rootSet.rbegin();
+            for (auto* z : dz)
+            {
+                const int down = z->root - z->lo, up = z->hi - z->root;
+                if (z->root == lowRoot) edge = std::max (edge, down); else inner = std::max (inner, down);
+                if (z->root == highRoot) edge = std::max (edge, up); else inner = std::max (inner, up);
+            }
+            // a key is playable when any layer covers it (the sampler falls back to the nearest velocity layer)
+            for (int k = lowKey; k <= highKey; ++k)
+            {
+                bool any = false;
+                for (auto& [vlo, cv] : cover) any |= cv[(size_t) k];
+                if (! any) ++gaps;
+            }
+            const float meanCents = nPitch > 0 ? sumAbs / (float) nPitch : 0.0f;
+            juce::StringArray flags;
+            // tuning: the mean |error| over the measured zones above 8 cents, or more than 10 % of them beyond 25 cents
+            // (single outliers are usually the measurement: plucks glide, bars and tines have stretched partials)
+            if (meanCentsNow (sumAbs, nPitch) > 8.0f || nOver25 * 10 > std::max (1, nPitch))
+                flags.add ("tuning: mean " + juce::String (meanCentsNow (sumAbs, nPitch), 1) + " c, " + juce::String (nOver25) + " of "
+                           + juce::String (nPitch) + " zones > 25 c (worst " + juce::String (worstCents, 1) + " c, " + worstZone + ")");
+            if (nOct > 0) flags.add (juce::String (nOct) + " zone(s) without a measurable pitch");
+            if (worstStart > 3.0f) flags.add ("start jump " + juce::String (worstStart, 1) + "x");
+            if (nLoops > 0 && (worstLoop > 1.5f || worstDip < -6.0f)) flags.add ("loop wrap " + juce::String (worstLoop, 2) + "x dip " + juce::String (worstDip, 1) + " dB");
+            if (inversions > 0) flags.add (juce::String (inversions) + " velocity step(s) < 0.5 dB");
+            if (gaps > 0) flags.add (juce::String (gaps) + " key gap(s)");
+            if (inner > 4) flags.add ("stretch " + juce::String (inner) + " semitones");
+            if (nNoise > 0 && worstNoise > -45.0f) flags.add ("noise " + juce::String (worstNoise, 0) + " dB");
+            nFlags += flags.size();
+            out (juce::String::formatted ("  %-12s %3d zones %2d layers  keys %s-%s (roots %s-%s)  stretch %d/%d  pitch |c| mean %.1f max %.1f  loops %d (wrap %.2fx, dip %.1f dB)  vel steps %.1f..%.1f dB  noise %s",
+                                          ad.name.toRawUTF8(), (int) dz.size(), (int) cover.size(), qc::fl (lowKey).toRawUTF8(), qc::fl (highKey).toRawUTF8(),
+                                          qc::fl (lowRoot).toRawUTF8(), qc::fl (highRoot).toRawUTF8(), inner, edge, (double) meanCents, (double) std::abs (worstCents), nLoops,
+                                          (double) worstLoop, (double) worstDip, cmpNotes > 0 ? (double) minStep : 0.0, cmpNotes > 0 ? (double) maxStep : 0.0,
+                                          nNoise > 0 ? (juce::String (juce::roundToInt (sumNoise / nNoise)) + " avg / " + juce::String (juce::roundToInt (worstNoise)) + " worst").toRawUTF8() : "n/a")
+                 + (flags.isEmpty() ? juce::String() : "  !! " + flags.joinIntoString ("; ")));
+            auto* qa = new juce::DynamicObject();
+            qa->setProperty ("name", ad.name); qa->setProperty ("oneShot", ad.oneShot); qa->setProperty ("zones", (int) dz.size());
+            qa->setProperty ("releaseZones", (int) A.releaseZones.size());
+            qa->setProperty ("layers", (int) cover.size()); qa->setProperty ("lo", lowKey); qa->setProperty ("hi", highKey);
+            qa->setProperty ("rootLo", lowRoot); qa->setProperty ("rootHi", highRoot); qa->setProperty ("stretch", inner); qa->setProperty ("edge", edge);
+            qa->setProperty ("pitchCheck", mode); qa->setProperty ("centsMean", meanCents); qa->setProperty ("centsMax", std::abs (worstCents));
+            qa->setProperty ("pitchOver25", nOver25); qa->setProperty ("pitchBySpectrum", nSpectrum); qa->setProperty ("pitchUnclear", nOct); qa->setProperty ("pitchMeasured", nPitch);
+            qa->setProperty ("loops", nLoops); qa->setProperty ("loopWrap", worstLoop); qa->setProperty ("loopDip", worstDip);
+            qa->setProperty ("velMinStep", cmpNotes > 0 ? minStep : 0.0f); qa->setProperty ("velInversions", inversions);
+            qa->setProperty ("gaps", gaps); qa->setProperty ("startJump", worstStart);
+            qa->setProperty ("noiseAvg", nNoise > 0 ? sumNoise / nNoise : 0.0f); qa->setProperty ("noiseWorst", nNoise > 0 ? worstNoise : 0.0f);
+            qa->setProperty ("flags", flags.joinIntoString ("; "));
+            qArts.add (juce::var (qa));
+        }
+        qi->setProperty ("articulations", qArts);
+        // demo: 2 s at C5 (or the covered key nearest to it), first articulation, velocity 100, note-off at 1.6 s
+        if (demoDir != juce::File() && ! d.articulations.empty())
+        {
+            int key = vault::homeNote, bestD = 1000;
+            for (auto& z : d.articulations[0].zones)
+                if (! z.releaseTrigger)
+                    for (int k = z.lo; k <= z.hi; ++k) if (std::abs (k - vault::homeNote) < bestD) { bestD = std::abs (k - vault::homeNote); key = k; }
+            VaultPreset p;
+            p.id = "qc." + d.id; p.name = d.name; p.category = vault::catPiano;
+            VaultPart part; part.kind = VaultPartKind::sample; part.source = d.id; part.articulation = d.articulations[0].name; part.label = d.name;
+            p.parts.push_back (part);
+            juce::MidiBuffer m;
+            m.addEvent (juce::MidiMessage::noteOn (1, key, (juce::uint8) 100), 0);
+            m.addEvent (juce::MidiMessage::noteOff (1, key), (int) (1.6 * outRate));
+            const auto b = VaultEngine::renderMidi (p, m, (int) (2.0 * outRate), outRate, nullptr, lib);
+            const auto st = qc::stats (b, 1, b.getNumSamples());
+            const double f0 = 440.0 * std::pow (2.0, (key - 69) / 12.0);
+            float ap = 1, fundDb = 0;
+            const float f = detectF0 (b, (int) (0.15 * outRate), (int) (0.8 * outRate), f0, ap);
+            const float share = qc::bandShare (b, (int) (0.1 * outRate), (int) (0.8 * outRate), 2000.0, 5000.0, f0, fundDb);
+            qc::writeWav (b, demoDir.getChildFile (d.id + ".wav"));
+            const float cents = f > 0 ? (float) (1200.0 * std::log2 (f / f0)) : 0.0f;
+            out (juce::String::formatted ("  demo %s: peak %.1f dBFS, loudness %.1f dB, pitch %+.1f c, fundamental vs strongest harmonic %+.1f dB, 2-5 kHz %.1f %%",
+                                          qc::fl (key).toRawUTF8(), (double) juce::Decibels::gainToDecibels (st.peak), (double) loudnessDb (b), (double) cents, (double) fundDb,
+                                          (double) share * 100.0));
+            auto* dj = new juce::DynamicObject();
+            dj->setProperty ("key", key); dj->setProperty ("peakDb", juce::Decibels::gainToDecibels (st.peak)); dj->setProperty ("loudDb", loudnessDb (b));
+            dj->setProperty ("cents", cents); dj->setProperty ("fundVsStrongestDb", fundDb); dj->setProperty ("presence", share);
+            qi->setProperty ("demo", juce::var (dj));
+        }
+        qInsts.add (juce::var (qi));
+        lib->unpin (h);
+        lib->setMemoryBudget (1);   // let it go before the next one
+        lib->waitUntilIdle (2000);
+        lib->setMemoryBudget ((int64_t) 6 * 1024 * 1024 * 1024);
+    }
+    out (juce::String::formatted ("TOTAL: %d instruments, %.1f MB on disk (audio), %.1f MB RAM decoded, %d flag(s)", qInsts.size(),
+                                  totalDisk / 1048576.0, totalRam / 1048576.0, nFlags));
+    auto* root = new juce::DynamicObject();
+    root->setProperty ("instruments", qInsts);
+    root->setProperty ("diskBytes", (juce::int64) totalDisk); root->setProperty ("ramBytes", (juce::int64) totalRam);
+    const bool partial = ! onlyIds.isEmpty();
+    outDir.getChildFile (partial ? "qc_partial.json" : "qc.json").replaceWithText (juce::JSON::toString (juce::var (root), false));
+    outDir.getChildFile (partial ? "qc_partial_report.txt" : "qc_report.txt").replaceWithText (rep);
+    return 0;
+}
 
 //==============================================================================
 int main (int argc, char** argv)
@@ -416,7 +925,8 @@ int main (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI init;   // message manager (juce::JSON, file APIs)
     juce::String mapPath = "tools/vault/library_map.json", outOverride, only;
     int threads = juce::jlimit (1, 8, (int) std::thread::hardware_concurrency());
-    bool dry = false;
+    bool dry = false, qcMode = false;
+    juce::String demoPath;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -425,6 +935,8 @@ int main (int argc, char** argv)
         else if (a == "-only" && i + 1 < argc) only = argv[++i];
         else if (a == "-threads" && i + 1 < argc) threads = juce::jmax (1, juce::String (argv[++i]).getIntValue());
         else if (a == "-dry") dry = true;
+        else if (a == "-qc") qcMode = true;
+        else if (a == "-demo" && i + 1 < argc) demoPath = argv[++i];
     }
     const auto cwd = juce::File::getCurrentWorkingDirectory();
     const auto mapFile = juce::File::isAbsolutePath (mapPath) ? juce::File (mapPath) : cwd.getChildFile (mapPath);
@@ -438,6 +950,7 @@ int main (int argc, char** argv)
     Opts defaults;
     defaults.read (map["defaults"]);
     const auto onlyIds = juce::StringArray::fromTokens (only, ",", "");
+    if (qcMode) return runQc (outDir, onlyIds, demoPath.isNotEmpty() ? juce::File (demoPath) : juce::File());
 
     // previous library.json: instruments not rebuilt this run are kept
     juce::Array<juce::var> keep;
@@ -471,6 +984,15 @@ int main (int argc, char** argv)
                 const auto rx = makeRegex (sv["pattern"].toString());
                 const bool isRel = sv["trigger"].toString() == "release";
                 const double levelDb = sv.hasProperty ("levelDb") ? (double) sv["levelDb"] : -22.0;
+                const juce::String fixedVel = sv.hasProperty ("vel") ? sv["vel"].toString() : juce::String();   // a fixed layer name
+                const int octaveShift = sv.hasProperty ("octave") ? (int) sv["octave"] : 0;                    // names this many octaves off
+                juce::StringArray exclude;   // file-name wildcards left out (broken takes, unclear pitch)
+                if (auto* ex = sv["exclude"].getArray()) for (auto& v : *ex) exclude.add (v.toString());
+                const bool detect = sv["pitch"].toString() == "detect";
+                double detLo = 36, detHi = 84;
+                if (auto* rg = sv["range"].getArray(); rg != nullptr && rg->size() == 2) { detLo = (double) (*rg)[0]; detHi = (double) (*rg)[1]; }
+                std::vector<double> partials { 1.0, 2.0, 3.0, 4.0 };
+                if (auto* pa = sv["partials"].getArray(); pa != nullptr && ! pa->isEmpty()) { partials.clear(); for (auto& v : *pa) partials.push_back ((double) v); }
                 auto files = dir.findChildFiles (juce::File::findFiles, false, glob);
                 files.sort();
                 int skipped = 0;
@@ -479,22 +1001,30 @@ int main (int argc, char** argv)
                     std::smatch m;
                     const std::string name = f.getFileName().toStdString();
                     if (! std::regex_match (name, m, rx)) { ++skipped; continue; }
+                    bool excluded = false;
+                    for (auto& e : exclude) excluded |= f.getFileName().matchesWildcard (e, true);
+                    if (excluded) { ++skipped; log ("   excluded by the map: " + f.getFileName()); continue; }
                     Item it;
                     it.src = f; it.release = isRel; it.levelDb = levelDb;
+                    it.detect = detect; it.detLo = detLo; it.detHi = detHi; it.partials = partials;
                     // groups in pattern order: {note} {vel} {rr} (each optional)
                     const auto pat = sv["pattern"].toString();
                     std::vector<std::pair<int, juce::String>> order;
-                    for (auto* key : { "{note}", "{vel}", "{rr}" }) if (pat.contains (key)) order.push_back ({ pat.indexOf (key), key });
+                    for (auto* key : { "{note}", "{vel}", "{rr}", "{group}" }) if (pat.contains (key)) order.push_back ({ pat.indexOf (key), key });
                     std::sort (order.begin(), order.end());
                     for (size_t g = 0; g < order.size(); ++g)
                     {
                         const juce::String val (m[(size_t) g + 1].str());
                         if (order[g].second == "{note}") it.noteName = val;
                         else if (order[g].second == "{vel}") it.velName = val;
+                        else if (order[g].second == "{group}") it.group = val;
                         else it.rr = std::max (0, val.getIntValue() - 1);
                     }
+                    if (fixedVel.isNotEmpty()) it.velName = fixedVel;
                     it.namedNote = parseNote (it.noteName);
-                    if (it.namedNote < 0) { ++skipped; continue; }
+                    if (it.namedNote >= 0) it.namedNote += 12 * octaveShift;
+                    it.octaveFixed = sv.hasProperty ("octave");
+                    if (it.namedNote < 0 && ! it.detect) { ++skipped; continue; }
                     art.items.push_back (std::move (it));
                 }
                 log (in.id + " / " + art.name + ": " + juce::String (files.size() - skipped) + " files from " + dir.getFullPathName()
@@ -525,10 +1055,30 @@ int main (int argc, char** argv)
                              { if (it.audio.getNumSamples() == 0) log ("!! skipped " + it.src.getFileName() + ": " + it.msg); return it.audio.getNumSamples() == 0; }),
                              art.items.end());
 
+            // detected pitches: files of one {group} (one drum tuning, one bar) share the group's median pitch
+            {
+                std::map<juce::String, std::vector<float>> groups;
+                for (auto& it : art.items) if (it.detect && it.pitchOk && it.group.isNotEmpty()) groups[it.group].push_back (it.f0);
+                for (auto& it : art.items)
+                    if (it.detect && it.group.isNotEmpty() && groups.count (it.group) != 0)
+                    {
+                        auto v = groups[it.group];
+                        std::sort (v.begin(), v.end());
+                        it.f0 = v[v.size() / 2]; it.pitchOk = true;
+                        it.namedNote = (int) std::lround (12.0 * std::log2 (it.f0 / 440.0) + 69.0);
+                        it.noteName = "group " + it.group;
+                    }
+                juce::StringArray lost;
+                for (auto& it : art.items) if (it.detect && ! it.release && ! it.pitchOk) lost.add (it.src.getFileName());
+                art.items.erase (std::remove_if (art.items.begin(), art.items.end(), [] (const Item& it) { return it.detect && ! it.release && ! it.pitchOk; }),
+                                 art.items.end());
+                for (auto& f : lost) log ("!! dropped " + f + ": no pitch found");
+                for (auto& it : art.items) if (it.detect && it.noteName.isEmpty()) it.noteName = "detected";
+            }
             // pitch: the naming convention offset (octaves) from the median, then per file
             std::vector<int> offs;
             for (auto& it : art.items)
-                if (! it.release && it.pitchOk && it.namedNote >= 36)
+                if (! it.release && ! it.detect && ! it.octaveFixed && ! art.o.trustNames && it.pitchOk && it.namedNote >= 36)
                     offs.push_back ((int) std::lround (12.0 * std::log2 (it.f0 / 440.0) + 69.0) - it.namedNote);
             int octOff = 0;
             if (! offs.empty())
@@ -539,23 +1089,81 @@ int main (int argc, char** argv)
             if (octOff != 0) log (in.id + " / " + art.name + ": file names are " + juce::String (octOff / 12) + " octave(s) off (corrected)");
             for (auto& it : art.items)
             {
-                it.root = it.namedNote + octOff;
+                it.root = it.namedNote + (it.detect || it.octaveFixed ? 0 : octOff);
                 if (it.release) continue;
-                if (it.pitchOk)
+                if (art.o.trustNames)
+                {
+                    if (it.pitchOk) it.msg << "named pitch kept (YIN " << juce::String (12.0 * std::log2 (it.f0 / 440.0) + 69.0, 2) << "); ";
+                    it.cents = 0.0f;
+                }
+                else if (it.detect)
+                {
+                    it.cents = (float) ((12.0 * std::log2 (it.f0 / 440.0) + 69.0 - it.root) * 100.0);
+                    it.msg << "pitch detected (" << juce::String (12.0 * std::log2 (it.f0 / 440.0) + 69.0, 2) << "); ";
+                }
+                else if (it.pitchOk)
                 {
                     const double detected = 12.0 * std::log2 (it.f0 / 440.0) + 69.0;
                     const int near = (int) std::lround (detected);
-                    if (near != it.root && it.root >= 36)
+                    double measured = detected;
+                    if (near != it.root && it.root >= 24)
                     {
+                        // YIN disagrees with the name: a second opinion before anything moves (pitchVerdict)
+                        const auto v = pitchVerdict (it.audio, it.anaFrom, it.anaLen, it.root, detected);
                         log ("!! " + it.src.getFileName() + ": named " + it.noteName + " (" + juce::String (it.root) + ") but YIN hears MIDI "
-                             + juce::String (detected, 2) + (std::abs (near - it.root) <= 2 ? " -> root corrected" : " -> kept the name (check!)"));
-                        if (std::abs (near - it.root) <= 2) it.root = near;
+                             + juce::String (detected, 2) + ", the spectrum " + juce::String (v.spectrum, 2) + " -> " + v.verdict);
+                        it.root = v.root;
+                        measured = v.measured;
                     }
-                    it.cents = (float) ((detected - it.root) * 100.0);
+                    // struck bars / tines (pitchMethod "spectrum"): YIN is pulled by the inharmonic upper partials; the
+                    // fundamental's spectral peak (+-0.6 semitone around the root) gives the pitch
+                    if (art.o.spectrumPitch)
+                    {
+                        const double hs = harmonicSumMidi (it.audio, it.anaFrom, it.anaLen, it.root - 0.75, it.root + 0.75, { 1.0 });
+                        if (hs > 0)
+                        {
+                            // traditional tunings (mbira, kalimba keys) sit between semitones: map to the nearest one
+                            if ((int) std::lround (hs) != it.root)
+                            {
+                                log ("   " + it.src.getFileName() + ": fundamental at MIDI " + juce::String (hs, 2) + " -> root " + juce::String ((int) std::lround (hs)));
+                                it.root = (int) std::lround (hs);
+                            }
+                            measured = hs;
+                        }
+                    }
+                    it.cents = (float) ((measured - it.root) * 100.0);
                     if (std::abs (it.cents) > 50.0f) it.cents = 0.0f;
                     if (art.o.keepTuning && std::abs (it.cents) <= 30.0f) { it.msg << "tuning kept (" << juce::String (it.cents, 1) << " c); "; it.cents = 0.0f; }
                 }
+                else if (art.o.spectrumPitch && it.anaLen > 2048)
+                {
+                    // no YIN pitch (tines, buzzing bars): the fundamental's spectral peak alone
+                    const double hs = harmonicSumMidi (it.audio, it.anaFrom, it.anaLen, it.root - 0.75, it.root + 0.75, { 1.0 });
+                    if (hs > 0)
+                    {
+                        if ((int) std::lround (hs) != it.root)
+                            log ("   " + it.src.getFileName() + ": fundamental at MIDI " + juce::String (hs, 2) + " -> root " + juce::String ((int) std::lround (hs)));
+                        it.root = (int) std::lround (hs);
+                        it.cents = (float) ((hs - it.root) * 100.0);
+                        it.msg << "pitch from the spectrum (no YIN pitch); ";
+                    }
+                    else it.msg << "pitch not verified (aperiodicity " << juce::String (it.aperiodicity, 2) << "); ";
+                }
                 else it.msg << "pitch not verified (aperiodicity " << juce::String (it.aperiodicity, 2) << "); ";
+            }
+
+            // round robins: every key / layer cell numbers its takes 0..n-1 (corrected roots, several strings or keys of one
+            // pitch, sources without {rr} can otherwise collide - and the output file names must stay unique)
+            {
+                std::map<juce::String, std::vector<Item*>> cells;
+                for (auto& it : art.items)
+                    cells[juce::String (it.release ? "r" : "a") + juce::String (it.root) + "|" + it.velName].push_back (&it);
+                for (auto& [key, list] : cells)
+                {
+                    std::stable_sort (list.begin(), list.end(), [] (const Item* a, const Item* b)
+                                      { return a->rr != b->rr ? a->rr < b->rr : a->src.getFileName() < b->src.getFileName(); });
+                    for (size_t k = 0; k < list.size(); ++k) list[k]->rr = (int) k;
+                }
             }
 
             // velocity layers: global order
@@ -662,23 +1270,71 @@ int main (int argc, char** argv)
                 for (int c = 0; c < it.audio.getNumChannels(); ++c)
                     instPeak = std::max (instPeak, (double) it.audio.getMagnitude (c, 0, it.audio.getNumSamples()) * juce::Decibels::decibelsToGain (it.gainDb));
 
-            // zones: key ranges per layer from that layer's roots (midpoints), velocity ranges split evenly over the layers
+            // zones: key ranges per layer from that layer's roots (midpoints), velocity ranges split evenly over the layers.
+            // A zone plays at most maxStretch semitones from its root while another layer covers the key within that
+            // distance (the sampler then falls back to the nearest velocity layer); only keys NO layer reaches within
+            // maxStretch keep the long stretch (reported). The outermost roots reach extendKeys beyond themselves.
             for (int t = 0; t < 2; ++t)
+            {
+                std::vector<int> allRoots;
+                for (auto& it : art.items) if ((int) it.release == t) allRoots.push_back (it.root);
+                if (allRoots.empty()) continue;
+                const int gLo = std::max (0, *std::min_element (allRoots.begin(), allRoots.end()) - art.o.extendKeys);
+                const int gHi = std::min (127, *std::max_element (allRoots.begin(), allRoots.end()) + art.o.extendKeys);
+                std::vector<int> fullLo (art.items.size()), fullHi (art.items.size());
                 for (int l = 0; l < nl; ++l)
                 {
                     std::vector<int> roots;
                     for (auto& it : art.items) if ((int) it.release == t && it.layer == l && std::find (roots.begin(), roots.end(), it.root) == roots.end()) roots.push_back (it.root);
                     std::sort (roots.begin(), roots.end());
-                    for (auto& it : art.items)
+                    for (size_t k = 0; k < art.items.size(); ++k)
                     {
+                        auto& it = art.items[k];
                         if ((int) it.release != t || it.layer != l) continue;
                         const auto pos = (size_t) (std::find (roots.begin(), roots.end(), it.root) - roots.begin());
-                        it.lo = pos == 0 ? std::max (0, it.root - art.o.extendKeys) : (roots[pos - 1] + it.root) / 2 + 1;
-                        it.hi = pos + 1 == roots.size() ? std::min (127, it.root + art.o.extendKeys) : (it.root + roots[pos + 1]) / 2;
+                        fullLo[k] = pos == 0 ? gLo : (roots[pos - 1] + it.root) / 2 + 1;
+                        fullHi[k] = pos + 1 == roots.size() ? gHi : (it.root + roots[pos + 1]) / 2;
+                        fullLo[k] = std::min (fullLo[k], it.root); fullHi[k] = std::max (fullHi[k], it.root);
+                        it.lo = std::max (fullLo[k], it.root - art.o.maxStretch);
+                        it.hi = std::min (fullHi[k], it.root + art.o.maxStretch);
+                        if (it.root - art.o.extendKeys <= gLo) it.lo = std::max (fullLo[k], gLo);   // the outermost roots: extendKeys
+                        if (it.root + art.o.extendKeys >= gHi) it.hi = std::min (fullHi[k], gHi);
                         it.vlo = 1 + (127 * l) / nl;
                         it.vhi = (127 * (l + 1)) / nl;
                     }
                 }
+                std::vector<bool> covered (128, false);
+                for (auto& it : art.items) if ((int) it.release == t) for (int k = it.lo; k <= it.hi; ++k) covered[(size_t) k] = true;
+                // keys no layer reaches within maxStretch: the zones next to them stretch further (contiguously)
+                for (size_t k = 0; k < art.items.size(); ++k)
+                {
+                    auto& it = art.items[k];
+                    if ((int) it.release != t) continue;
+                    while (it.lo - 1 >= fullLo[k] && ! covered[(size_t) it.lo - 1]) --it.lo;
+                    while (it.hi + 1 <= fullHi[k] && ! covered[(size_t) it.hi + 1]) ++it.hi;
+                }
+            }
+            // key range check: the farthest a zone is played from its root inside the range and at the outer edges, and
+            // keys no zone covers
+            {
+                int inner = 0, edge = 0, gaps = 0; juce::String worst;
+                int rLo = 127, rHi = 0;
+                for (auto& it : art.items) if (! it.release) { rLo = std::min (rLo, it.root); rHi = std::max (rHi, it.root); }
+                std::vector<bool> covered (128, false);
+                for (auto& it : art.items)
+                {
+                    if (it.release) continue;
+                    for (int k = it.lo; k <= it.hi; ++k) covered[(size_t) k] = true;
+                    const int down = it.root - it.lo, up = it.hi - it.root;
+                    if (it.root != rLo && down > inner) { inner = down; worst = it.src.getFileName(); }
+                    if (it.root != rHi && up > inner) { inner = up; worst = it.src.getFileName(); }
+                    edge = std::max ({ edge, it.root == rLo ? down : 0, it.root == rHi ? up : 0 });
+                }
+                for (int k = std::max (0, rLo - art.o.extendKeys); k <= std::min (127, rHi + art.o.extendKeys); ++k) if (! covered[(size_t) k]) ++gaps;
+                log (in.id + " / " + art.name + ": stretch inside the range <= " + juce::String (inner) + " semitones, at the edges " + juce::String (edge)
+                     + (inner > art.o.maxStretch ? "  !! more than " + juce::String (art.o.maxStretch) + " (" + worst + ": no layer has a closer sample)" : juce::String())
+                     + (gaps > 0 ? "  !! " + juce::String (gaps) + " keys uncovered" : juce::String()));
+            }
         }
 
         // pass 2 (parallel): instrument gain, encode
@@ -725,12 +1381,14 @@ int main (int argc, char** argv)
                 z->setProperty ("channels", it.audio.getNumChannels());
                 if (it.loopEnd > 0) { z->setProperty ("loopStart", it.loopStart); z->setProperty ("loopEnd", it.loopEnd); z->setProperty ("xfade", it.xfade); }
                 if (it.release) z->setProperty ("release", true);
+                if (it.noiseDb < 0.0f) z->setProperty ("noise", std::round (it.noiseDb * 10.0f) / 10.0f);   // informative: QC
                 zones.add (juce::var (z));
                 log (juce::String::formatted ("  %-44s root %3d (%s%s) %+6.1f c  ap %.2f  loud %6.1f  gain %+5.1f dB  keys %3d-%3d  vel %3d-%3d",
                                               it.src.getFileName().toRawUTF8(), it.root, it.noteName.toRawUTF8(), it.release ? " rel" : "",
                                               (double) it.cents, (double) it.aperiodicity, (double) it.loud, it.gainDb, it.lo, it.hi, it.vlo, it.vhi)
                      + (it.loopEnd > 0 ? juce::String::formatted ("  loop %.3f-%.3f s xf %d ms corr %.3f", it.loopStart / outRate, it.loopEnd / outRate,
                                                                  (int) (it.xfade * 1000 / outRate), (double) it.loopCorr) : juce::String())
+                     + (it.noiseDb < 0.0f ? juce::String::formatted ("  noise %.0f dB", (double) it.noiseDb) : juce::String())
                      + (it.msg.isNotEmpty() ? "  [" + it.msg.trim() + "]" : juce::String()));
             }
             auto* a = new juce::DynamicObject();
@@ -738,6 +1396,10 @@ int main (int argc, char** argv)
             a->setProperty ("oneShot", art.o.oneShot);
             a->setProperty ("release", art.o.release);
             a->setProperty ("releaseDecayDb", art.o.releaseDecayDb);
+            // informative, for -qc: how the roots were found and where the pitch of a one-shot is stable
+            bool anyDetect = false; for (auto& it : art.items) anyDetect |= it.detect;
+            a->setProperty ("pitchCheck", art.o.trustNames ? "name" : anyDetect ? "detect" : art.o.spectrumPitch ? "spectrum" : "yin");
+            a->setProperty ("pitchFrom", art.o.pitchFrom);
             a->setProperty ("zones", zones);
             artJson.add (juce::var (a));
             for (auto& it : art.items) it.audio.setSize (1, 0);   // free the RAM

@@ -21,12 +21,14 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 ## v2 status (what exists, what is next)
 
 * Done (core): part kinds + `CVB` v2 (v1 still read), the multi-zone sampler, the sample library format + loader + LRU
-  cache, the library builder `VaultLibBuild` with 4 test instruments in `/home/user/cv-library`, the model interface +
+  cache, the library builder `VaultLibBuild`, the model interface +
   registry (+ the `sine` example), the 16 v2 categories, Style / Character tags removed everywhere, C5 + keyboard-focus
   fixes in the editor, tests.
+* Done (library curation): the full instrument map (all pitched VSCO / VCSL instruments, `tools/vault/library_map.json`),
+  built into `/home/user/cv-library` and measured (`VaultLibBuild -qc`, `docs/VAULT_INSTRUMENTS.md`).
 * Not done here (parallel / later work): the v2 factory bank (the embedded `resources/vault/factory.cvb` is still the v1
   synth bank, read through the v1 path: categories mapped, tags dropped, "808" replaced by "Sub" in names / labels), the
-  full instrument map (all VSCO / VCSL instruments in `tools/vault/library_map.json`), the physical models themselves,
+  physical models themselves,
   installer packaging of the library.
 
 ## Files
@@ -44,6 +46,8 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h`, `VaultBrowserModel.h` (search / filters / favorites / recent), `VaultSettings.h`, `VaultThumbs.h` (thumbnails at C5), `VaultWidgets.h` (pills, categories, LAYERS chips, preset list, keyboard, DRAG WAV), `VaultMainView.h` |
 | `tools/vault/LibBuild.cpp` | console target `VaultLibBuild`: builds the sample library from the CC0 sources |
 | `tools/vault/library_map.json` | the builder's map: instruments -> source folders, file-name patterns, articulations, options |
+| `tools/vault/make_instruments_doc.py` | writes `docs/VAULT_INSTRUMENTS.md` from a built library + its `-qc` run |
+| `docs/VAULT_INSTRUMENTS.md` | the library's instruments, articulations, ranges, sizes and QC numbers (generated) |
 | `tools/vault/BankGen.cpp` | console target `VaultBankGen`: the v1 synth-bank generator (legacy; ported to compile with v2 types) |
 | `tools/vault/BankQC.h`, `BankAudit.h` | v1 quality gate / audit (shared with VaultTests) |
 | `tests/VaultTests.cpp` | console target `VaultTests` |
@@ -266,6 +270,8 @@ preset's instruments (`selectPreset` pins at once, so loading starts before the 
 ```
 cmake --build build-vault --target VaultLibBuild
 build-vault/VaultLibBuild_artefacts/Release/VaultLibBuild [-map tools/vault/library_map.json] [-out /abs/Library] [-only id1,id2] [-threads N] [-dry]
+build-vault/VaultLibBuild_artefacts/Release/VaultLibBuild -qc [-out /abs/Library] [-only ids] [-demo /abs/dir]   # QC of a built library
+python3 tools/vault/make_instruments_doc.py /home/user/cv-library tools/vault/library_map.json docs/VAULT_INSTRUMENTS.md
 ```
 
 Run from the repo root. Output defaults to the map's `output` (`/home/user/cv-library`, outside the repo; never commit
@@ -275,38 +281,55 @@ cents, aperiodicity, loudness, gain, key / velocity range, loop points and corre
 Map format: `roots` (name -> folder), `output`, `defaults`, `instruments[]` = `{ id, name, family, credit, articulations[] }`,
 articulation = `{ name, sources[], options }`, source = `{ "files": "<root>:<folder>/<glob>", "pattern": "...", "trigger":
 "release", "levelDb": -22 }`. Pattern placeholders: `{note}` (C4, F#3, Bb2, A#-1), `{vel}` (any token: 1, vl3, soft), `{rr}`
-(1-based number), `*` anything. Options (defaults in `defaults`, override per articulation): `loop`, `oneShot`, `release`,
+(1-based number), `{group}` (a token that ties files together, e.g. one timpani tuning "6C"), `*` anything. More source
+keys: `vel` (a fixed layer name for every file of the source - several sources can feed one layer), `octave` (the names
+are this many octaves off; set by hand, the automatic octave check then leaves the source alone), `exclude` (file-name
+wildcards to leave out), `pitch: "detect"` + `range` [lo, hi] MIDI + `partials` (no usable note names: the root is
+measured by a harmonic-sum search with those partial ratios, e.g. timpani `[1, 1.5, 1.98]`; files of one `{group}` share
+the median). Options (defaults in `defaults`, override per articulation): `loop`, `oneShot`, `release`,
 `releaseDecayDb`, `maxSeconds` (16), `tailFadeMs` (250, when capped), `preRollMs` (4), `silenceDb` (-62), `peakDb` (-1, the
 instrument's loudest peak), `minLoopMs` (300), `maxLoopMs` (2600), `xfadeMs` (100; 150 for weakly correlated loops),
-`extendKeys` (6: the outermost zones reach this many semitones beyond their root), `quality` (6 = Ogg q0.6),
+`extendKeys` (4 in the map: the outermost zones reach this many semitones beyond their root), `maxStretch` (4: the
+farthest a zone plays from its root while any velocity layer has a closer sample), `quality` (6 = Ogg q0.6),
 `velOrder` (layer names soft -> loud, else numeric order), `layerDb` (imposed layer levels for sources that were
 normalised per layer, e.g. `{ "2": -15, "3": -7.5, "4": 0 }`), `tune` (`"correct"` default / `"keep"`: keep the natural
-tuning, fix only > 30 cents), `pitchFrom` (s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp).
+tuning, fix only > 30 cents / `"name"`: inharmonic bells - the names are the roots, no pitch correction),
+`pitchMethod` (`"spectrum"`: struck bars and tines - the fine tune comes from the fundamental's spectral peak, +-0.75
+semitone, and a key between two semitones goes to the nearest one; YIN is pulled by their inharmonic partials), `pitchFrom` (s, where the pitch of a one-shot is measured; 0.5 for pianos - the attack glides sharp).
 
 Per file: read; resample to 44.1 kHz (windowed sinc) if needed; identical channels -> mono; mean + 5 Hz DC removal; trim to
 the first / last sample above `silenceDb` of the peak with a pre-roll before the onset (-40 dB) and a raised-cosine fade-in
 over it; length cap with a tail fade; YIN (threshold 0.15, parabolic interpolation, median of 7 frames, search 0.45-2.2 x
 the named pitch) -> the naming convention offset per articulation (VSCO / VCSL names are an octave off: corrected and
-reported), single mismatches within 2 semitones corrected, larger ones reported, the residual detune written as `fine`;
+reported; `octave` / `pitch: detect` sources skip this), a single file whose YIN pitch disagrees with its name gets a
+second opinion from a harmonic-sum spectrum (+-2.5 semitones, harmonics 1-5): the root moves only when both agree within 2
+semitones, otherwise the name stays and the spectrum's detune is used (YIN alone mis-hears bright trebles and weak bass
+fundamentals), the residual detune written as `fine`; the noise floor (RMS of the lead-in before the onset vs the peak,
+`noise` in the zone, informative);
 loudness (BS.1770 K-weighting, loudest 400 ms); loops for `loop` articulations (rising zero crossings of the mid in the
 stable sustain, normalized cross-correlation of [-xfade, +12 ms] around both points minus level mismatch, bonus for
 length; >= 300 ms). Per articulation: velocity layers matched to a smoothed per-register loudness curve of the top layer
 plus the layer offset (natural median spacing kept, at least 2.5 dB apart, whole range <= 18 dB, or `layerDb`); takes more
 than 12 dB off their layer (vs the top layer of the same note) are dropped as broken; release samples set `levelDb` under
-their note; one gain normalises the instrument peak to `peakDb`; looped files are cut 300 ms after the loop end; encoded
-OggVorbis q 0.6. The builder finally reads its own output with `vault::SampleLibrary`.
+their note; round robins renumbered per key / layer cell (no file collisions); key ranges: midpoints between a layer's
+roots, but a zone plays at most `maxStretch` semitones from its root where another velocity layer has a closer sample
+(the sampler falls back to the nearest velocity layer there), only keys no layer reaches within `maxStretch` keep the
+longer stretch (reported); one gain normalises the instrument peak to `peakDb`; looped files are cut 300 ms after the
+loop end; encoded OggVorbis q 0.6. The builder finally reads its own output with `vault::SampleLibrary`.
 
-### The first build (`/home/user/cv-library`, 4 instruments, 42 MB)
+`-qc` measures the built library as the plugin loads it (tuning per zone, start clicks, loop wraps, velocity-layer order,
+key gaps / stretch, size; `-demo <dir>`: a 2 s C5 note of every instrument as `<id>.wav`) and writes `qc_report.txt` +
+`qc.json` next to `library.json`; `make_instruments_doc.py` turns them into `docs/VAULT_INSTRUMENTS.md`.
 
-| id | name | source | articulations | notes |
-| --- | --- | --- | --- | --- |
-| `piano.grand.concert` | Concert Grand | VCSL grand piano, close mics, pedal up | `sustain` (3 velocity layers, whole-tone zones A#0-G#7, 99 release samples) | layers imposed -15 / -7.5 / 0 dB (source normalised) |
-| `strings.violins.ensemble` | Violin Section | VSCO 2 CE violin section sustain vibrato | `sustain` (looped, 2 layers, 11 notes G3-D6) | low notes have a weak fundamental (at C5 the 2nd harmonic is +20 dB, as in the recording) |
-| `winds.flute.concert` | Concert Flute | VSCO 2 CE flute | `sustain` (straight, looped, 3 layers), `vibrato` (looped, 1 layer, round robins) | |
-| `mallets.marimba` | Marimba | VCSL marimba, outrigger mallets | `hit` (one-shot, 3 layers soft / med / loud, 10 notes) | 2 broken soft takes dropped; tuning kept |
+### The full library (`/home/user/cv-library`)
 
-Measured at C5 (velocity 100, `VaultTests -libreport`): in tune within 2.5 cents, peaks -7..-14 dBFS, 2-5 kHz share
-0-8.5 %, loops: 31 wraps of the violins within 1.23x the surrounding sample jumps, crossfade level dip -1 dB.
+Every musically useful pitched instrument and articulation of both sources is mapped: **64 instruments, 146
+articulations, 5274 zones, 483 MB on disk** (OggVorbis q0.6; 4.3 GB if everything were decoded at once - the plugin
+loads only what presets use). The instrument list
+with articulations, ranges, sizes, the QC numbers per articulation, the C5 test-note measurements and the curation notes
+(what was left out and why) are in **`docs/VAULT_INSTRUMENTS.md`**. The ids of the first build are unchanged
+(`piano.grand.concert`, `strings.violins.ensemble`, `winds.flute.concert`, `mallets.marimba`); new articulations were
+added to them (`pedal`, `tremolo`, `pizzicato`, `spiccato`, `expressive`, `staccato`).
 
 ## Models (`Source/vault/models/ModelVoice.h`)
 
@@ -460,8 +483,11 @@ silent, `libraryFound()` false for a missing folder, silent-while-loading then p
 budget while unused ones are evicted, no allocation in `VaultEngine::process` (operator-new counter, 400 blocks with notes,
 pedal, bend, macros, sample / synth / model switches), model registry + the sine model in tune at C5, unknown model silent,
 CVB v2 round trip with all kinds, unknown sample keys refused, v1 file read (tags dropped, categories mapped, "808"
-removed), the embedded v1 bank read; with a library: every instrument / articulation at C5 clean, in tune within 5 cents,
-loops click-free (jump at each wrap < 1.3x the music around it, crossfade dip > -3 dB). UI: no component but the search
+removed), the embedded v1 bank read; with a library: every instrument / articulation at C5 (or the playable key nearest
+to it) clean; in tune - looped notes within 10 cents over 0.35-2.35 s, decaying ones within 15 cents where the builder
+measured them (YIN or the fundamental's spectral peak; bars / tines on the spectral peak; bells, glides and detected
+drums are not cent-checked, see `pitchCheck` in library.json); loops click-free (jump at each wrap < 1.3x the music
+around it, crossfade dip > -3 dB beyond the music's own swing in the 600 ms before it). UI: no component but the search
 box takes the keyboard (all components incl. list rows), Return / Escape hand it back, no key is used by the editor,
 keyboard labelled C5 at MIDI 60, DRAG WAV "<name> C5.wav", plus the v1 UI checks (speed, sizes, readability, state).
 
