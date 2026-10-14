@@ -28,12 +28,15 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
   built into `/home/user/cv-library` and measured (`VaultLibBuild -qc`, `docs/VAULT_INSTRUMENTS.md`).
 * Not done here (parallel / later work): the v2 factory bank (the embedded `resources/vault/factory.cvb` is still the v1
   synth bank, read through the v1 path: categories mapped, tags dropped, "808" replaced by "Sub" in names / labels), the
-  installer packaging of the library.
+  installer packaging of the library is written (below) but has not run on GitHub yet.
 * Done (models): 20 physical models for what the sample libraries lack - guitars (steel, nylon, banjo,
   12-string, clean / crunch electric, jazz archtop; pluck / palm mute / harmonic), electric basses (finger, pick, slap,
   fretless), tine / reed electric pianos, struck-string "funk keys", felt toy piano, female / male voice (ah oh oo ee,
   "ha", breathy, whisper), choir (8-24 singers), vocal pad. Details, research, targets and measurements:
   `docs/VAULT_MODELS.md`.
+* Library packaging + CI: the library lives on the orphan branch `vault-library` (`Library/library.json` +
+  `Library/audio/**`, made with `tools/vault/package_library.py branch`); CI tests with it and packs it into the
+  installers + `CHROME-VAULT-Library.zip` (details: `docs/CHROME_VAULT_INSTALL.md`, "For developers").
 
 ## Files
 
@@ -58,6 +61,7 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `tools/vault/library_map.json` | the builder's map: instruments -> source folders, file-name patterns, articulations, options |
 | `tools/vault/make_instruments_doc.py` | writes `docs/VAULT_INSTRUMENTS.md` from a built library + its `-qc` run |
 | `docs/VAULT_INSTRUMENTS.md` | the library's instruments, articulations, ranges, sizes and QC numbers (generated) |
+| `tools/vault/package_library.py` | library packaging: `check` (files exist, each < 50 MB), `size`, `zip` (release zip / parts), `branch` (builds the orphan `vault-library` branch) |
 | `tools/vault/BankGen.cpp` | console target `VaultBankGen`: the v1 synth-bank generator (legacy; ported to compile with v2 types) |
 | `tools/vault/BankQC.h`, `BankAudit.h` | v1 quality gate / audit (shared with VaultTests) |
 | `tests/VaultTests.cpp` | console target `VaultTests` |
