@@ -48,8 +48,16 @@ else
 fi
 rm -f "$OUT/keyskilla-component.pkg"
 
-if [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${MAC_INST_SIGN_ID:-}" ]; then
-    xcrun notarytool submit "$PKG" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+# notarization: App Store Connect API key (NOTARY_KEY_PATH/_ID/ISSUER, set by setup_signing.sh) or Apple ID + app password
+NOTARIZED=0
+if [ -n "${MAC_INST_SIGN_ID:-}" ] && [ -n "${NOTARY_KEY_PATH:-}" ]; then
+    xcrun notarytool submit "$PKG" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 60m
+    NOTARIZED=1
+elif [ -n "${MAC_INST_SIGN_ID:-}" ] && [ -n "${NOTARY_APPLE_ID:-}" ]; then
+    xcrun notarytool submit "$PKG" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait --timeout 60m
+    NOTARIZED=1
+fi
+if [ "$NOTARIZED" = 1 ]; then
     xcrun stapler staple "$PKG"
 fi
 echo "Created $PKG"

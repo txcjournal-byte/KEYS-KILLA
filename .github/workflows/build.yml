@@ -338,14 +338,20 @@ jobs:
           unzip -q pluginval.zip
           ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/KeysKilla_artefacts/Release/VST3/EVOLVE.vst3"
 
+      - name: Mac signing setup (Developer ID certificates + notarization key, when the secrets exist)
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        env:
+          MAC_CERT_APP_P12: ${{ secrets.MAC_CERT_APP_P12 }}
+          MAC_CERT_INSTALLER_P12: ${{ secrets.MAC_CERT_INSTALLER_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: installer/mac/setup_signing.sh
+
       - name: Installer (pkg; signed + notarized when secrets exist)
         if: ${{ !cancelled() }}
-        env:
-          MAC_APP_SIGN_ID: ${{ secrets.MAC_APP_SIGN_ID }}
-          MAC_INST_SIGN_ID: ${{ secrets.MAC_INST_SIGN_ID }}
-          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
-          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
           VERSION=$(sed -n 's/project(KEYS_KILLA VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
           installer/mac/build_pkg.sh "$VERSION"
@@ -437,12 +443,6 @@ jobs:
       - name: CHROME VAULT installer (pkg; signed + notarized when secrets exist)
         id: cv_pkg
         if: ${{ !cancelled() }}
-        env:
-          MAC_APP_SIGN_ID: ${{ secrets.MAC_APP_SIGN_ID }}
-          MAC_INST_SIGN_ID: ${{ secrets.MAC_INST_SIGN_ID }}
-          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
-          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
           VERSION=$(sed -n 's/^set(CV_VERSION "\([0-9.]*\)").*/\1/p' CMakeLists.txt | head -n 1)
           installer/mac/build_vault_pkg.sh "$VERSION"
@@ -496,3 +496,9 @@ jobs:
           fi
           gh release upload test out-vault/CHROME-VAULT-Mac.zip $( [ -f out-vault/CHROME-VAULT-Setup-Mac.pkg ] && echo out-vault/CHROME-VAULT-Setup-Mac.pkg ) --clobber
       # --- end CHROME VAULT ---------------------------------------------------------------------------------------
+
+      - name: Mac signing cleanup
+        if: ${{ always() }}
+        run: |
+          if [ -n "${MAC_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$MAC_SIGN_KEYCHAIN" || true; fi
+          rm -f "${NOTARY_KEY_PATH:-/nonexistent}"
