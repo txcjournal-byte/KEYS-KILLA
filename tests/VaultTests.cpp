@@ -7,6 +7,7 @@
 //                           VaultTests -writev2demo <out.cvb>    a few v2 presets (sample / model parts) on the test library
 //                           VaultTests -snapshot <out.png>       paint the editor into a PNG (Linux: under xvfb-run)
 //                           VaultTests -uitest                   editor behaviour (keys, filters, favorites, persistence, WAV drag)
+//                           VaultTests -models                   the physical-model tests only (tests/VaultModelTests.cpp)
 //                           VaultTests -shot <out.png> [state]   the browser UI with a 3-layer preset + a filter (xvfb-run)
 //                                      state: comma list of  scale:<pct> search:<text> cat:<n> layers:<n>
 //                                      favs recent empty keys knobs   (default "main" = its category + a held chord)
@@ -1590,6 +1591,8 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
 }
 } // namespace
 
+int vaultModelTests();   // tests/VaultModelTests.cpp: the physical models
+
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);
@@ -1620,6 +1623,8 @@ int main (int argc, char** argv)
         ed.reset();
         return ok ? 0 : 1;
     }
+    if (mode == "-models")   // the physical-model tests only
+        return vaultModelTests();
     if (mode == "-uitest")
     {
         const int f = uiTests();
@@ -1682,8 +1687,9 @@ int main (int argc, char** argv)
     }
     unitTests();
     samplerTests();
+    const int modelFailures = vaultModelTests();
     libraryReport ({}, { vault::homeNote }, true);
-    const int f = browserTests();
+    const int f = browserTests() + modelFailures;
     std::printf ("vault failures: %d\n", f);
     return f;
 }

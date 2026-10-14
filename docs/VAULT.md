@@ -26,8 +26,12 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
   fixes in the editor, tests.
 * Not done here (parallel / later work): the v2 factory bank (the embedded `resources/vault/factory.cvb` is still the v1
   synth bank, read through the v1 path: categories mapped, tags dropped, "808" replaced by "Sub" in names / labels), the
-  full instrument map (all VSCO / VCSL instruments in `tools/vault/library_map.json`), the physical models themselves,
-  installer packaging of the library.
+  full instrument map (all VSCO / VCSL instruments in `tools/vault/library_map.json`), installer packaging of the library.
+* Done (branch `v2-models`): 20 physical models for what the sample libraries lack - guitars (steel, nylon, banjo,
+  12-string, clean / crunch electric, jazz archtop; pluck / palm mute / harmonic), electric basses (finger, pick, slap,
+  fretless), tine / reed electric pianos, struck-string "funk keys", felt toy piano, female / male voice (ah oh oo ee,
+  "ha", breathy, whisper), choir (8-24 singers), vocal pad. Details, research, targets and measurements:
+  `docs/VAULT_MODELS.md`.
 
 ## Files
 
@@ -38,6 +42,12 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `Source/vault/VaultSampler.h/.cpp` | `vault::SamplerPart` (64-voice multi-zone sampler) and `vault::SincTables` (16-tap windowed-sinc interpolation) |
 | `Source/vault/models/ModelVoice.h` | the model interface (`vault::models::ModelVoice`, `ModelInfo`, `ModelRegistry`) |
 | `Source/vault/models/ModelRegistry.cpp` | the registry + `registerBuiltinModels()` (one line per model) + the `sine` example model |
+| `Source/vault/models/BuiltinModels.h`, `ModelDsp.h` | the model families' info factories; shared DSP blocks (delay line + Lagrange read, allpass, biquads, formants, anti-aliased clipper, noise) |
+| `Source/vault/models/StringModels.cpp` | waveguide strings: guitars, electric basses, struck-string keys (`docs/VAULT_MODELS.md`) |
+| `Source/vault/models/KeysModels.cpp` | tine / reed electric pianos (modal tine / reed + non-linear pickups), felt toy piano |
+| `Source/vault/models/VoiceModels.cpp` | LF-pulse source-filter voices, choir (8-24 singers, half-rate), vocal pad |
+| `tools/vault/ModelLab.cpp`, `models_measure.py` | console target `VaultModelLab` (demos, CPU, measurement renders) + the measurement / comparison script |
+| `tests/VaultModelTests.cpp` | the model unit tests (part of `VaultTests`; alone: `VaultTests -models`) |
 | `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - 4 parts of any kind -> master FX -> macros -> mono lows -> trim -> volume -> limiter; offline `render()` |
 | `Source/vault/VaultProcessor.h/.cpp` | `VaultProcessor` - the `juce::AudioProcessor` (parameters, bank loading, library pins, state) |
 | `Source/vault/VaultEditor.h/.cpp` | the editor (browser UI); `VaultMainView` / `VaultInfoPanel` are implemented here too |
@@ -335,6 +345,12 @@ never above -1 dBFS; deterministic. The engine does voice allocation (free voice
 pedal, pitch bend (EVOLVE key `bendRange` of the part, default 2), MOTION vibrato, TONE low-pass, level / pan / FX.
 Example: `sine` (`m.decay`, `m.release`, `m.level`). A preset uses a model with `kind = model`, `source = "<id>"`,
 `values = { { "m.<param>", v } ... }`.
+
+Built-in physical models (ids for `VaultPart::source`; parameters, articulations and measurements in
+`docs/VAULT_MODELS.md`): `guitar.acoustic` `guitar.nylon` `guitar.banjo` `guitar.twelve` `guitar.electric` `guitar.crunch`
+`guitar.jazz` `bass.finger` `bass.pick` `bass.slap` `bass.fretless` `ep.tine.mellow` `ep.tine.bell` `ep.reed` `ep.clav`
+`keys.toy` `voice.female` `voice.male` `voice.choir` `voice.pad`. Articulations are parameters (`m.artic`: strings 0 pluck /
+1 palm mute / 2 harmonic; voices 0 sung / 1 "ha" / 2 breathy / 3 whisper), vowels `m.vowel` (0 ah, 1 oh, 2 oo, 3 ee).
 
 ## API for preset generators / tools (`Source/vault/VaultEngine.h`)
 
