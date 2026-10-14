@@ -227,16 +227,16 @@ if(KK_BUILD_TESTS)
 endif()
 
 # --- vault bank ---------------------------------------------------------------
-# VaultBankGen: generates the 5,000-preset factory bank resources/vault/factory.cvb + docs/VAULT_BANK_REPORT.md
-# (tools/vault/BankGen.cpp, quality gate tools/vault/BankQC.h). Run from the repo root: VaultBankGen [-threads N] [-scale 0.1]
-# The generated .cvb is committed, so normal builds / CI never need to run it.
+# VaultBankGen: assembles the v2 factory bank resources/vault/factory.cvb from the preset recipes (tools/vault/recipes,
+# gate tools/vault/recipes/RecipeGate.h): VaultBankGen -recipe all -qa -out resources/vault/factory.cvb (resources/vault/README.md).
+# -v1 runs the legacy v1 synth-bank generator. The generated .cvb is committed, so normal builds / CI never need to run it.
 if(KK_BUILD_TESTS)
     juce_add_console_app(VaultBankGen PRODUCT_NAME "VaultBankGen")
     # v2 preset recipes: one file per sound designer (tools/vault/recipes/*.cpp, framework tools/vault/recipes/Recipe.h),
     # run with VaultBankGen -recipe <name>|all (gate: tools/vault/recipes/RecipeGate.h)
     file(GLOB CV_RECIPE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/vault/recipes/*.cpp)
     target_sources(VaultBankGen PRIVATE tools/vault/BankGen.cpp ${CV_ENGINE_SOURCES} ${CV_MODEL_SOURCES} ${CV_RECIPE_SOURCES} Source/Presets.cpp)
-    target_compile_definitions(VaultBankGen PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 CV_HAS_BANK=0)
+    target_compile_definitions(VaultBankGen PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 CV_HAS_BANK=0)
     target_link_libraries(VaultBankGen PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()
 # --- end vault bank -------------------------------------------------------------

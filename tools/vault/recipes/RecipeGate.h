@@ -9,8 +9,11 @@
 //   comfort   at C5: the sounding fundamental within 3 dB of the strongest harmonic (not Bells & Mallets / FX & Atmos),
 //             2-5 kHz <= 10 % of the power, > 6 kHz <= 3 %, octave-up parts >= 12 dB (K-weighted) under part 0,
 //             velocity 0.35 -> 1.0 opens >= 3 dB
-//   loudness  K-weighted loudest 400 ms at C5 set to the category target (BankQC.h) by VaultPreset::gain (quieter only
-//             when the velocity-1.0 peak would reach 0.84 - short / muted plucks - and by at most 10 dB)
+//   loudness  K-weighted loudest 400 ms at C5 set to the category target (BankQC.h) minus bankHeadroomDb (6 dB of
+//             headroom so chords stay under the safety limiter) by VaultPreset::gain (quieter only when the velocity-1.0
+//             peak would reach 0.84 - short / muted plucks - and by at most 10 dB)
+//   chords    the owner's listening phrase (C5 E5 G5 C6 + the C5 triad, velocity ~0.77) at the final gain: its peak before
+//             the safety limiter (Result::chordOver, dB over the 0.89 ceiling; the assembly QA allows maxChordOver)
 //   distinct  fingerprint = log-mel (24 bands) x 6 time segments at C5 + x 3 at C4 / C6 + 12 cepstral coefficients,
 //             normalised to the render's own maximum, + the C5 harmonic profile (H1..H12) + amplitude-modulation depth
 //             and stereo width; distance = RMS over these groups (dB). A preset closer than -dist (default 3.5) to an
@@ -21,7 +24,9 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
 #include <atomic>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 
@@ -31,6 +36,13 @@ constexpr double sr = 48000.0;
 constexpr double holdSeconds = 1.5;
 inline float tailLimit (int category) { return category == vault::catPads || category == vault::catFxAtmos ? 16.0f : 10.0f; }
 inline bool inharmonicCategory (int category) { return category == vault::catBellsMallets || category == vault::catFxAtmos; }
+// the v2 bank sits this far under the BankQC category targets: one note at velocity 0.8 at -20.5 (Piano) .. -18 (Bass)
+// K-weighted, so the C5 triad of the listening phrase stays under the engine's safety limiter (0.89) for nearly every preset
+constexpr float bankHeadroomDb = 6.0f;
+inline float bankTarget (int category) { return vaultqc::targetLoudness (category) - bankHeadroomDb; }
+constexpr float maxChordOver = 2.0f;
+constexpr float maxTrimDb = 22.0f;     // the loudness trim may lift a preset by at most 22 dB   // assembly QA: the phrase may touch the limiter by at most 2 dB
+inline juce::AudioBuffer<float> renderPhrase (const VaultPreset& p, double seconds = 4.0);
 
 inline juce::AudioBuffer<float> render (const VaultPreset& p, int note, float vel, double offSeconds, double totalSeconds)
 {
@@ -125,11 +137,15 @@ struct Result
     juce::String fail;            // empty = passed the gate
     float loud = -120, gainDb = 0, quietBy = 0, peak127 = 0;
     float h1Db = 0, share25 = 0, share6k = 0, centroid = 0, tail = 0, velRange = 0, octUpDb = -99, monoLoss = 0, spike = 0;
+    float share8k = 0;            // > 8 kHz share of the C5 power (assembly QA)
+    float chordOver = -99;        // the listening phrase's peak before the safety limiter, dB over its 0.89 ceiling (assembly QA)
     std::vector<float> print;
     float minDist = 1.0e9f; juce::String nearest;
     std::array<float, 12> harm {};
+    juce::String group;           // the recipe that made it (assembly: cross-recipe distinctness)
 };
 
+inline void roundLikeCache (Result& r);
 inline void analyse (Result& r)
 {
     auto& p = r.preset;
@@ -173,6 +189,7 @@ inline void analyse (Result& r)
         const double tot = bandPower (sp, 20, 20000);
         r.share25 = (float) (bandPower (sp, 2000, 5000) / std::max (1e-20, tot));
         r.share6k = (float) (bandPower (sp, 6000, 20000) / std::max (1e-20, tot));
+        r.share8k = (float) (bandPower (sp, 8000, 20000) / std::max (1e-20, tot));
         double num = 0;
         for (int i = 1; i < (int) sp.pow.size(); ++i) num += i * sp.binHz * sp.pow[(size_t) i];
         r.centroid = (float) (num / std::max (1e-20, tot));
@@ -203,13 +220,19 @@ inline void analyse (Result& r)
         r.octUpDb = std::max (r.octUpDb, ls - lm);
     }
     // loudness normalisation
-    const float target = vaultqc::targetLoudness (cat);
+    const float target = bankTarget (cat);
     float g = target - r.loud;
     const float peakAt = juce::Decibels::gainToDecibels (std::max (1.0e-6f, r.peak127)) + g;
     if (peakAt > juce::Decibels::gainToDecibels (0.84f)) { r.quietBy = peakAt - juce::Decibels::gainToDecibels (0.84f); g -= r.quietBy; }
     r.gainDb = g;
     r.preset.gain = juce::Decibels::decibelsToGain (g);
     const float lin = r.preset.gain;
+    {   // chord headroom at the final gain (18 dB down so the limiter never acts, the peak scaled back)
+        auto q = p;
+        q.gain = lin * 0.125f;
+        const auto ph = renderPhrase (q);
+        r.chordOver = juce::Decibels::gainToDecibels (8.0f * ph.getMagnitude (0, ph.getNumSamples()) / 0.89f);
+    }
 
     // fingerprint
     {
@@ -274,6 +297,7 @@ inline void analyse (Result& r)
     else
         for (auto& part : p.parts)
             if (part.label.containsIgnoreCase ("808") || ! vaultqc::isCleanName (part.label)) r.fail = "label";
+    roundLikeCache (r);   // a fresh analysis gives exactly what the cache gives back: same bank from a cold or a warm cache
 }
 
 // fingerprint layout: C5 log-mel 6 x 24 | 12 cepstral | C4 / C6 log-mel 2 x 3 x 24 | 12 harmonics | AM depth, width.
@@ -305,14 +329,138 @@ inline void writeWav (const juce::File& f, const juce::AudioBuffer<float>& b)
         }
 }
 
-// VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-dist 3.5] [-demo <dir> <id or name,...>] [-prints f.tsv]
+// ---- assembly (VaultBankGen -recipe all): caches, cross-recipe distinctness, the assembly QA, listening renders ----------
+constexpr int gateVersion = 4;   // bump when analyse() changes (invalidates the analysis cache)
+constexpr int peakControlVersion = 2;   // bump when the engine's peak control changes (invalidates only presets that use it)
+
+// the recipe that owns a cross-recipe near-duplicate pair keeps it in this order: real instruments first, generic synth last
+inline int recipePriority (const juce::String& g)
+{
+    static const juce::StringArray order { "keys", "strings", "orch", "winds", "perc-voc", "synth" };
+    const int i = order.indexOf (g);
+    return i < 0 ? order.size() : i;
+}
+
+// assembly QA ceilings at C5 (velocity 0.8): spectral centroid per category (Hz) and the > 8 kHz share of the power
+inline float centroidCeiling (int c)
+{
+    static const float t[vault::numCategories] { 1300, 1400, 1300, 700, 1400, 1500, 1500, 1500, 2200, 1500, 1500, 1600, 1400, 1600, 1600, 2200 };
+    return t[juce::jlimit (0, (int) vault::numCategories - 1, c)];
+}
+constexpr float maxShare8k = 0.01f;
+
+inline uint64_t presetHash (const VaultPreset& p)
+{
+    VaultPreset q = p;
+    q.gain = 1.0f;
+    const auto mb = vault::serializeBank ({ q }, false);
+    uint64_t h = 1469598103934665603ull ^ (uint64_t) gateVersion;
+    if (! p.parts.empty() && p.parts.front().get (vault::peakKey, 0.0f) < -0.01f) h ^= (uint64_t) peakControlVersion << 32;
+    const auto* d = (const uint8_t*) mb.getData();
+    for (size_t i = 0; i < mb.getSize(); ++i) { h ^= d[i]; h *= 1099511628211ull; }
+    return h;
+}
+
+// analysis cache: one line per analysed preset: hash \t fail \t numbers (scalars, harmonics, fingerprint)
+inline juce::String cacheLine (uint64_t h, const Result& r)
+{
+    juce::String s;
+    s << juce::String::toHexString ((juce::int64) h) << "\t" << r.fail << "\t";
+    for (float v : { r.loud, r.gainDb, r.quietBy, r.peak127, r.h1Db, r.share25, r.share6k, r.share8k, r.centroid, r.tail, r.velRange, r.octUpDb, r.monoLoss, r.spike, r.chordOver })
+        s << juce::String (v, 6) << " ";
+    for (auto v : r.harm) s << juce::String (v, 4) << " ";
+    s << "\t";
+    for (auto v : r.print) s << juce::String (v, 4) << " ";
+    return s;
+}
+inline bool fromCacheLine (const juce::String& line, Result& r)
+{
+    auto cols = juce::StringArray::fromTokens (line, "\t", "");
+    if (cols.size() < 4) return false;
+    r.fail = cols[1];
+    auto sc = juce::StringArray::fromTokens (cols[2], " ", ""); sc.removeEmptyStrings();
+    constexpr int ns = 15;
+    if (sc.size() != ns + 12) return false;
+    float* f[] { &r.loud, &r.gainDb, &r.quietBy, &r.peak127, &r.h1Db, &r.share25, &r.share6k, &r.share8k, &r.centroid, &r.tail, &r.velRange, &r.octUpDb, &r.monoLoss, &r.spike, &r.chordOver };
+    for (int i = 0; i < ns; ++i) *f[i] = sc[i].getFloatValue();
+    for (int i = 0; i < 12; ++i) r.harm[(size_t) i] = sc[ns + i].getFloatValue();
+    auto pr = juce::StringArray::fromTokens (cols[3], " ", ""); pr.removeEmptyStrings();
+    r.print.clear();
+    for (auto& v : pr) r.print.push_back (v.getFloatValue());
+    r.preset.gain = juce::Decibels::decibelsToGain (r.gainDb);
+    return true;
+}
+
+// the owner's listening phrase at the home note: C5 E5 G5 C6 (0.4 s each), then the C5 major triad held, 4 s in all
+inline juce::AudioBuffer<float> renderPhrase (const VaultPreset& p, double seconds)
+{
+    juce::MidiBuffer mb;
+    auto at = [] (double t) { return (int) std::round (t * sr); };
+    const int mel[] { 60, 64, 67, 72 };
+    for (int i = 0; i < 4; ++i)
+    {
+        mb.addEvent (juce::MidiMessage::noteOn (1, mel[i], (juce::uint8) 100), at (0.42 * i));
+        mb.addEvent (juce::MidiMessage::noteOff (1, mel[i]), at (0.42 * i + 0.38));
+    }
+    for (int n : { 60, 64, 67 })
+    {
+        mb.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 96), at (1.8));
+        mb.addEvent (juce::MidiMessage::noteOff (1, n), at (3.3));
+    }
+    auto b = VaultEngine::renderMidi (p, mb, at (seconds), sr);
+    const int fade = at (0.35);
+    for (int c = 0; c < b.getNumChannels(); ++c) b.applyGainRamp (c, b.getNumSamples() - fade, fade, 1.0f, 0.0f);
+    return b;
+}
+inline bool writeOgg (const juce::File& f, const juce::AudioBuffer<float>& b, int quality)
+{
+   #if JUCE_USE_OGGVORBIS
+    f.deleteFile();
+    juce::OggVorbisAudioFormat ogg;
+    if (auto os = std::unique_ptr<juce::OutputStream> (f.createOutputStream()))
+        if (auto w = std::unique_ptr<juce::AudioFormatWriter> (ogg.createWriterFor (os.get(), sr, 2, 16, {}, quality)))
+        {
+            os.release();
+            return w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+   #else
+    juce::ignoreUnused (f, b, quality);
+   #endif
+    return false;
+}
+
+inline juce::String statLine (std::vector<float> v, int decimals, float scale = 1.0f)
+{
+    if (v.empty()) return "-";
+    std::sort (v.begin(), v.end());
+    auto f = [&] (float x) { return decimals > 0 ? juce::String (x * scale, decimals) : juce::String (juce::roundToInt (x * scale)); };
+    return f (v.front()) + " / " + f (v[v.size() / 2]) + " / " + f (v.back());
+}
+
+inline void roundLikeCache (Result& r)
+{
+    const auto fail = r.fail;
+    fromCacheLine (cacheLine (0, r), r);
+    r.fail = fail;
+}
+
+// VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-dist 3.5] [-wdist 3.5] [-qa] [-spread 1.5]
+//              [-cache dir] [-rebuild name,name] [-demo <dir> <id or name,...>] [-listen <dir> <id or name|...>] [-prints f.tsv]
+//   -dist     distinctness threshold; with "all" it applies across recipes (each recipe already ran its own pass), and
+//             -wdist (default: the same as -dist) inside one recipe (0 = trust the recipe's own pass)
+//   -qa       the assembly QA on top of the gate: loudness within -spread dB of the category target, > 8 kHz share,
+//             spectral-centroid ceilings per category
+//   -cache    keep each recipe's output (<dir>/<recipe>.cvb, rebuilt only when named in -rebuild) and every analysis
+//             (<dir>/analysis.tsv, keyed by a hash of the preset) so assembly re-runs only measure what changed
 inline int runRecipes (int argc, char** argv)
 {
     const auto cwd = juce::File::getCurrentWorkingDirectory();
     const juce::String which = argv[2];
-    juce::String outPath, reportPath, demoDir, demoIds, printsPath;
+    juce::String outPath, reportPath, demoDir, demoIds, printsPath, cacheDir, listenDir, listenIds, chordsPath;
+    juce::StringArray rebuild;
     int threads = (int) std::max (1u, std::thread::hardware_concurrency());
-    float minDist = 3.5f;
+    float minDist = 3.5f, withinDist = -1.0f, spread = 1.5f;
+    bool qa = false, chords = false;
     for (int i = 3; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -320,17 +468,46 @@ inline int runRecipes (int argc, char** argv)
         else if (a == "-report" && i + 1 < argc) reportPath = argv[++i];
         else if (a == "-threads" && i + 1 < argc) threads = juce::jmax (1, juce::String (argv[++i]).getIntValue());
         else if (a == "-dist" && i + 1 < argc) minDist = (float) juce::String (argv[++i]).getDoubleValue();
+        else if (a == "-wdist" && i + 1 < argc) withinDist = (float) juce::String (argv[++i]).getDoubleValue();
+        else if (a == "-spread" && i + 1 < argc) spread = (float) juce::String (argv[++i]).getDoubleValue();
+        else if (a == "-qa") qa = true;
+        else if (a == "-cache" && i + 1 < argc) cacheDir = argv[++i];
+        else if (a == "-rebuild" && i + 1 < argc) rebuild = juce::StringArray::fromTokens (argv[++i], ",", "");
         else if (a == "-demo" && i + 2 < argc) { demoDir = argv[++i]; demoIds = argv[++i]; }
+        else if (a == "-listen" && i + 2 < argc) { listenDir = argv[++i]; listenIds = argv[++i]; }
         else if (a == "-prints" && i + 1 < argc) printsPath = argv[++i];   // TSV: id, name, result, fingerprint (threshold studies)
+        else if (a == "-chords") chords = true;
+        else if (a == "-chordsout" && i + 1 < argc) { chords = true; chordsPath = argv[++i]; }
     }
+    const bool assembly = which == "all";
+    if (withinDist < 0.0f) withinDist = minDist;   // one definition of "near-duplicate" for the whole bank
     RecipeContext ctx;
     ctx.library = vault::SampleLibrary::getShared();
     std::printf ("library: %s (%s)\n", ctx.library->libraryPath().getFullPathName().toRawUTF8(), ctx.library->libraryFound() ? "found" : "MISSING");
+    const juce::File cache = cacheDir.isNotEmpty() ? cwd.getChildFile (cacheDir) : juce::File();
+    if (cache != juce::File()) cache.createDirectory();
     std::vector<Result> all;
+    std::map<juce::String, int> builtPerRecipe;
     for (auto& e : recipe::registry())
-        if (which == "all" || which == e.name)
-            for (auto& p : e.build (ctx)) { Result r; r.preset = p; all.push_back (std::move (r)); }
+        if (assembly || which == e.name)
+        {
+            std::vector<VaultPreset> made;
+            const auto cf = cache != juce::File() ? cache.getChildFile (e.name + ".cvb") : juce::File();
+            if (cf != juce::File() && cf.existsAsFile() && ! rebuild.contains (e.name) && ! rebuild.contains ("all") && vault::loadBankFile (cf, made))
+                std::printf ("recipe %s: %d presets from the cache\n", e.name.toRawUTF8(), (int) made.size());
+            else
+            {
+                const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                made = e.build (ctx);
+                std::printf ("recipe %s: %d presets built in %.0f s\n", e.name.toRawUTF8(), (int) made.size(), (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+                if (cf != juce::File()) vault::saveBankFile (cf, made);
+            }
+            builtPerRecipe[e.name] = (int) made.size();
+            for (auto& p : made) { Result r; r.preset = p; r.group = e.name; all.push_back (std::move (r)); }
+        }
     if (all.empty()) { std::printf ("no recipe '%s' (registered:", which.toRawUTF8()); for (auto& e : recipe::registry()) std::printf (" %s", e.name.toRawUTF8()); std::printf (")\n"); return 1; }
+    if (assembly)   // real instruments win a cross-recipe near-duplicate pair (recipe order inside a recipe is kept)
+        std::stable_sort (all.begin(), all.end(), [] (const Result& a, const Result& b) { return recipePriority (a.group) < recipePriority (b.group); });
     std::printf ("%d candidate presets, %d threads\n", (int) all.size(), threads);
     {
         std::set<juce::String> ids, names;
@@ -339,47 +516,173 @@ inline int runRecipes (int argc, char** argv)
             juce::String why;
             if (! vault::validatePreset (r.preset, &why)) r.fail = "invalid: " + why;
             else if (! ids.insert (r.preset.id).second) r.fail = "duplicate id";
-            else if (! names.insert (r.preset.name.toLowerCase()).second) r.fail = "duplicate name";
+            else if (! assembly && ! names.insert (r.preset.name.toLowerCase()).second) r.fail = "duplicate name";   // assembly: checked among the accepted
         }
     }
-    std::atomic<int> next { 0 }, done { 0 };
-    std::vector<std::thread> pool;
-    for (int t = 0; t < threads; ++t)
-        pool.emplace_back ([&]
-        {
-            for (int i; (i = next++) < (int) all.size();)
+    // analysis (cached by preset hash)
+    std::map<uint64_t, juce::String> cached;
+    const auto cacheFile = cache != juce::File() ? cache.getChildFile ("analysis.tsv") : juce::File();
+    if (cacheFile.existsAsFile())
+    {
+        juce::StringArray lines;
+        cacheFile.readLines (lines);
+        for (auto& l : lines)
+            if (l.isNotEmpty()) cached[(uint64_t) l.upToFirstOccurrenceOf ("\t", false, false).getHexValue64()] = l;
+    }
+    std::vector<uint64_t> hashes (all.size());
+    std::vector<int> todo;
+    int fromCache = 0;
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        if (all[i].fail.isNotEmpty()) continue;
+        hashes[i] = presetHash (all[i].preset);
+        auto it = cached.find (hashes[i]);
+        if (it != cached.end() && fromCacheLine (it->second, all[i])) ++fromCache;
+        else todo.push_back ((int) i);
+    }
+    std::printf ("analysis: %d from the cache, %d to measure\n", fromCache, (int) todo.size());
+    std::mutex cacheLock;
+    std::unique_ptr<juce::FileOutputStream> cacheOut;
+    if (cacheFile != juce::File()) { cacheOut = std::make_unique<juce::FileOutputStream> (cacheFile); if (! cacheOut->openedOk()) cacheOut.reset(); }
+    auto store = [&] (uint64_t h, const Result& r)
+    {
+        if (cacheOut == nullptr) return;
+        const std::lock_guard<std::mutex> lock (cacheLock);
+        *cacheOut << cacheLine (h, r) << "\n";
+        cacheOut->flush();
+    };
+    auto parallelFor = [threads] (int count, const std::function<void (int)>& fn)
+    {
+        std::atomic<int> next { 0 }, done { 0 };
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t)
+            pool.emplace_back ([&]
             {
-                if (all[(size_t) i].fail.isEmpty()) analyse (all[(size_t) i]);
-                const int d = ++done;
-                if (d % 25 == 0) std::printf ("  %d / %d\n", d, (int) all.size());
+                for (int k; (k = next++) < count;)
+                {
+                    fn (k);
+                    if (const int d = ++done; d % 50 == 0) std::printf ("  %d / %d\n", d, count);
+                }
+            });
+        for (auto& t : pool) t.join();
+    };
+    parallelFor ((int) todo.size(), [&] (int k)
+    {
+        auto& r = all[(size_t) todo[(size_t) k]];
+        analyse (r);
+        store (hashes[(size_t) todo[(size_t) k]], r);
+    });
+    // peak control: a preset the vel-1.0 peak holds more than -spread dB under the category loudness, or whose listening
+    // phrase (the C5 triad) would drive the safety limiter more than maxChordOver dB, gets the preset peak control
+    // (vault::peakKey, a 1 ms look-ahead peak compressor before the trim), threshold iterated until both fit
+    int peakFixed = 0, peakTried = 0;
+    if (qa)
+    {
+        // how far a measured preset is from fitting (dB; <= 0 fits): loudness short of the target, phrase over the limiter
+        auto shortBy = [spread] (const Result& r) { return std::max (r.quietBy - (spread - 0.2f), r.chordOver - (maxChordOver - 0.2f)); };
+        std::vector<int> need;
+        for (int i = 0; i < (int) all.size(); ++i)
+            if (all[(size_t) i].fail.isEmpty() && shortBy (all[(size_t) i]) > 0.0f) need.push_back (i);
+        peakTried = (int) need.size();
+        std::printf ("peak control: %d presets under the loudness spread or over the chord headroom\n", (int) need.size());
+        std::vector<Result> best (all.size());
+        std::vector<float> excess (all.size(), 0.0f);
+        const auto orig = all;
+        for (int iter = 0; iter < 8 && ! need.empty(); ++iter)
+        {
+            parallelFor ((int) need.size(), [&] (int k)
+            {
+                const int i = need[(size_t) k];
+                const auto& o = orig[(size_t) i];
+                const float q = shortBy (iter == 0 ? o : best[(size_t) i]) + spread - 0.2f;
+                excess[(size_t) i] = juce::jmin (16.0f, excess[(size_t) i] + juce::jmax (0.5f, (q - 0.7f) * 1.2f));
+                Result t;
+                t.preset = o.preset; t.group = o.group;
+                t.preset.parts.front().set (vault::peakKey, juce::jlimit (-60.0f, -0.1f, juce::Decibels::gainToDecibels (juce::jmax (1.0e-6f, o.peak127)) - excess[(size_t) i]));
+                // the threshold follows the velocity like the sound's own level does (dB per dB of velocity, measured 0.35 -> 1.0)
+                t.preset.parts.front().set (vault::peakVelKey, juce::jlimit (0.0f, 4.0f, o.velRange / (20.0f * std::log10 (1.0f / 0.35f))));
+                const auto h = presetHash (t.preset);
+                if (auto it = cached.find (h); it == cached.end() || ! fromCacheLine (it->second, t)) { analyse (t); store (h, t); }
+                best[(size_t) i] = std::move (t);
+            });
+            std::vector<int> again;
+            for (int i : need)
+                if (best[(size_t) i].fail.isEmpty() && shortBy (best[(size_t) i]) > 0.0f && excess[(size_t) i] < 16.0f) again.push_back (i);
+            std::printf ("  pass %d: %d still under\n", iter + 1, (int) again.size());
+            need.swap (again);
+        }
+        for (int i = 0; i < (int) all.size(); ++i)
+            if (best[(size_t) i].print.size() > 0 && best[(size_t) i].fail.isEmpty() && best[(size_t) i].quietBy <= spread
+                && best[(size_t) i].chordOver <= maxChordOver)
+            {
+                all[(size_t) i] = best[(size_t) i];
+                ++peakFixed;
             }
-        });
-    for (auto& t : pool) t.join();
-    // distinctness, in recipe order
+        std::printf ("peak control: %d of %d presets now fit (loudness within %.1f dB, phrase headroom)\n", peakFixed, peakTried, spread);
+        std::map<juce::String, int> why;   // what stopped the rest
+        for (int i = 0; i < (int) all.size(); ++i)
+            if (best[(size_t) i].print.size() > 0 && ! (best[(size_t) i].fail.isEmpty() && best[(size_t) i].quietBy <= spread
+                                                         && best[(size_t) i].chordOver <= maxChordOver))
+                ++why[best[(size_t) i].fail.isNotEmpty() ? best[(size_t) i].fail.upToFirstOccurrenceOf (":", false, false)
+                      : best[(size_t) i].quietBy > spread ? "still " + juce::String ((int) std::ceil (best[(size_t) i].quietBy)) + " dB under"
+                                                          : "phrase " + juce::String ((int) std::ceil (best[(size_t) i].chordOver)) + " dB over"];
+        for (auto& [w, n] : why) std::printf ("  unresolved: %-22s %d\n", w.toRawUTF8(), n);
+    }
+    cacheOut.reset();
+    // a trim above +22 dB lifts the noise floor and the release tails of a near-silent render (and validatePreset allows at
+    // most x16 = +24 dB): such a preset is too quiet as designed
+    for (auto& r : all)
+        if (r.fail.isEmpty() && r.gainDb > maxTrimDb) r.fail = "too-quiet";
+    // assembly QA (computed from the measurements, so the limits can change without re-measuring)
+    if (qa)
+        for (auto& r : all)
+        {
+            if (r.fail.isNotEmpty()) continue;
+            const int c = r.preset.category;
+            if (r.quietBy > spread) r.fail = "loudness-spread";
+            else if (r.share8k > maxShare8k) r.fail = "air-8k";
+            else if (r.centroid > centroidCeiling (c)) r.fail = "centroid";
+            else if (r.chordOver > maxChordOver) r.fail = "chord-headroom";
+        }
+    // names for the browser list (a 22-character name fits its column; longer designer names use "&" for "and")
+    for (auto& r : all)
+        if (r.preset.name.length() > 22 && r.preset.name.contains (" and "))
+            r.preset.name = r.preset.name.replace (" and ", " & ");
+    // distinctness: in order (assembly: recipe priority, then recipe order); inside a recipe -wdist, across recipes -dist
     std::vector<int> accepted;
+    std::set<juce::String> acceptedNames;
     for (int i = 0; i < (int) all.size(); ++i)
     {
         auto& r = all[(size_t) i];
+        bool dupWithin = false, dupCross = false;
         for (int j : accepted)
         {
-            const float d = distance (r.print, all[(size_t) j].print);
-            if (d < r.minDist) { r.minDist = d; r.nearest = all[(size_t) j].preset.name; }
+            const auto& o = all[(size_t) j];
+            const float d = distance (r.print, o.print);
+            if (d < r.minDist) { r.minDist = d; r.nearest = o.preset.name; }
+            if (o.group == r.group) dupWithin |= d < withinDist;
+            else dupCross |= d < minDist;
         }
-        if (r.fail.isEmpty() && r.minDist < minDist) r.fail = "near-duplicate";
+        if (r.fail.isEmpty() && dupWithin) r.fail = "near-duplicate";
+        if (r.fail.isEmpty() && dupCross) r.fail = "cross-duplicate";
+        if (r.fail.isEmpty() && ! acceptedNames.insert (r.preset.name.toLowerCase()).second) r.fail = "duplicate name";
         if (r.fail.isEmpty()) accepted.push_back (i);
     }
-    // min pairwise distance among the accepted
-    float minPair = 1.0e9f; juce::String pairA, pairB;
+    // min pairwise distance among the accepted (all pairs, and pairs from different recipes)
+    float minPair = 1.0e9f, minCross = 1.0e9f; juce::String pairA, pairB, crossA, crossB;
     for (size_t x = 0; x < accepted.size(); ++x)
         for (size_t y = x + 1; y < accepted.size(); ++y)
         {
-            const float d = distance (all[(size_t) accepted[x]].print, all[(size_t) accepted[y]].print);
-            if (d < minPair) { minPair = d; pairA = all[(size_t) accepted[x]].preset.name; pairB = all[(size_t) accepted[y]].preset.name; }
+            const auto& a = all[(size_t) accepted[x]]; const auto& b = all[(size_t) accepted[y]];
+            const float d = distance (a.print, b.print);
+            if (d < minPair) { minPair = d; pairA = a.preset.name; pairB = b.preset.name; }
+            if (a.group != b.group && d < minCross) { minCross = d; crossA = a.preset.name; crossB = b.preset.name; }
         }
     std::map<juce::String, int> fails;
     std::map<int, int> perCat;
     for (auto& r : all) { if (r.fail.isNotEmpty()) ++fails[r.fail.upToFirstOccurrenceOf (":", false, false)]; else ++perCat[r.preset.category]; }
-    std::printf ("accepted %d of %d; min pairwise distance %.2f (%s / %s)\n", (int) accepted.size(), (int) all.size(), minPair, pairA.toRawUTF8(), pairB.toRawUTF8());
+    std::printf ("accepted %d of %d; min pairwise distance %.2f (%s / %s); across recipes %.2f (%s / %s)\n", (int) accepted.size(), (int) all.size(),
+                 minPair, pairA.toRawUTF8(), pairB.toRawUTF8(), minCross < 1e8f ? minCross : 0.0f, crossA.toRawUTF8(), crossB.toRawUTF8());
     for (auto& [c, n] : perCat) std::printf ("  %-20s %d\n", vault::categoryNames()[c].toRawUTF8(), n);
     for (auto& [f, n] : fails) std::printf ("  rejected %-16s %d\n", f.toRawUTF8(), n);
 
@@ -387,38 +690,102 @@ inline int runRecipes (int argc, char** argv)
     {
         std::vector<VaultPreset> bank;
         for (int i : accepted) bank.push_back (all[(size_t) i].preset);
+        std::stable_sort (bank.begin(), bank.end(), [] (const VaultPreset& a, const VaultPreset& b) { return a.category < b.category; });
         if (! vault::saveBankFile (cwd.getChildFile (outPath), bank)) { std::printf ("cannot write %s\n", outPath.toRawUTF8()); return 1; }
         std::printf ("wrote %s (%d presets)\n", outPath.toRawUTF8(), (int) bank.size());
     }
     if (reportPath.isNotEmpty())
     {
         juce::String s;
-        s << "# Recipe gate report: " << which << "\n\naccepted " << (int) accepted.size() << " / " << (int) all.size()
-          << ", min pairwise distance " << juce::String (minPair, 2) << " (" << pairA << " / " << pairB << "), threshold " << minDist << "\n\n"
-          << "| id | name | parts | result | loud | gain dB | H1 dB | 2-5k % | >6k % | centroid | tail s | vel dB | oct-up dB | nearest (dist) |\n"
-          << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+        s << "# CHROME VAULT bank report: " << which << "\n\n"
+          << "Generated by `VaultBankGen -recipe " << which << "` (tools/vault/recipes/RecipeGate.h). Every number is measured on the C5 render "
+          << "(MIDI 60, FL Studio naming), velocity 0.8, 48 kHz, unless noted. Nobody listened; this is measurement only.\n\n"
+          << "* accepted **" << (int) accepted.size() << "** of " << (int) all.size() << " candidates\n"
+          << "* minimum pairwise fingerprint distance **" << juce::String (minPair, 2) << "** (" << pairA << " / " << pairB << ")"
+          << (assembly ? ", across recipes **" + juce::String (minCross, 2) + "** (" + crossA + " / " + crossB + "), cross-recipe threshold " + juce::String (minDist, 2) : juce::String())
+          << "\n* peak control set on " << peakFixed << " presets (" << peakTried << " were under the loudness spread or over the chord headroom)"
+          << "\n* recipes:";
+        for (auto& [n, c] : builtPerRecipe) s << " " << n << " " << c << ";";
+        s << "\n* rejected:";
+        for (auto& [f, n] : fails) s << " " << f << " " << n << ";";
+        s << "\n\n## Per category (accepted; min / median / max)\n\n"
+          << "| category | presets | 1 / 2 / 3 / 4 parts | loudness dev dB | H1 vs strongest dB | 2-5 kHz % | > 6 kHz % | > 8 kHz % | centroid Hz (ceiling) | vel 0.35-1.0 dB | tail s | phrase peak vs limiter dB |\n"
+          << "|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+        for (int c = 0; c < vault::numCategories; ++c)
+        {
+            std::vector<float> dev, h1, s25, s6, s8, cen, vel, tail, chord;
+            int parts[5] {};
+            for (int i : accepted)
+            {
+                const auto& r = all[(size_t) i];
+                if (r.preset.category != c) continue;
+                dev.push_back (-r.quietBy); h1.push_back (r.h1Db); s25.push_back (r.share25); s6.push_back (r.share6k); s8.push_back (r.share8k);
+                cen.push_back (r.centroid); vel.push_back (r.velRange); tail.push_back (r.tail); chord.push_back (r.chordOver);
+                ++parts[juce::jlimit (1, 4, (int) r.preset.parts.size())];
+            }
+            s << "| " << vault::categoryNames()[c] << " | " << (int) dev.size() << " | " << parts[1] << " / " << parts[2] << " / " << parts[3] << " / " << parts[4]
+              << " | " << statLine (dev, 1) << " | " << statLine (h1, 1) << " | " << statLine (s25, 1, 100) << " | " << statLine (s6, 2, 100) << " | " << statLine (s8, 2, 100)
+              << " | " << statLine (cen, 0) << " (" << juce::String ((int) centroidCeiling (c)) << ") | " << statLine (vel, 1) << " | " << statLine (tail, 1) << " | " << statLine (chord, 1) << " |\n";
+        }
+        s << "\n## Every candidate\n\n"
+          << "| id | name | recipe | parts | result | loud | gain dB | dev dB | H1 dB | 2-5k % | >6k % | >8k % | centroid | tail s | vel dB | oct-up dB | phrase dB | nearest (dist) |\n"
+          << "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
         for (auto& r : all)
         {
             juce::StringArray parts;
             for (auto& pt : r.preset.parts) parts.add (pt.label + (pt.octave != 0 ? " (" + juce::String (pt.octave > 0 ? "+" : "") + juce::String (pt.octave) + ")" : juce::String()));
-            s << "| " << r.preset.id << " | " << r.preset.name << " | " << parts.joinIntoString (" + ") << " | " << (r.fail.isEmpty() ? "ok" : r.fail)
-              << " | " << juce::String (r.loud, 1) << " | " << juce::String (r.gainDb, 1) << " | " << juce::String (r.h1Db, 1) << " | " << juce::String (100 * r.share25, 1)
-              << " | " << juce::String (100 * r.share6k, 2) << " | " << juce::String ((int) r.centroid) << " | " << juce::String (r.tail, 1) << " | " << juce::String (r.velRange, 1)
-              << " | " << (r.octUpDb > -98 ? juce::String (r.octUpDb, 1) : juce::String ("-")) << " | " << r.nearest << " (" << juce::String (r.minDist < 1e8f ? r.minDist : 0.0f, 2) << ") |\n";
+            s << "| " << r.preset.id << " | " << r.preset.name << " | " << r.group << " | " << parts.joinIntoString (" + ") << " | " << (r.fail.isEmpty() ? "ok" : r.fail)
+              << " | " << juce::String (r.loud, 1) << " | " << juce::String (r.gainDb, 1) << " | " << juce::String (-r.quietBy, 1) << " | " << juce::String (r.h1Db, 1)
+              << " | " << juce::String (100 * r.share25, 1) << " | " << juce::String (100 * r.share6k, 2) << " | " << juce::String (100 * r.share8k, 2)
+              << " | " << juce::String ((int) r.centroid) << " | " << juce::String (r.tail, 1) << " | " << juce::String (r.velRange, 1)
+              << " | " << (r.octUpDb > -98 ? juce::String (r.octUpDb, 1) : juce::String ("-")) << " | " << juce::String (r.chordOver, 1) << " | " << r.nearest << " (" << juce::String (r.minDist < 1e8f ? r.minDist : 0.0f, 2) << ") |\n";
         }
         cwd.getChildFile (reportPath).replaceWithText (s);
         std::printf ("wrote %s\n", reportPath.toRawUTF8());
     }
     if (printsPath.isNotEmpty())
     {
-        juce::String t;
+        const auto pf = cwd.getChildFile (printsPath);
+        pf.deleteFile();
+        juce::FileOutputStream os (pf);
         for (auto& r : all)
         {
-            t << r.preset.id << "\t" << r.preset.name << "\t" << (r.fail.isEmpty() ? "ok" : r.fail);
+            juce::String t;
+            t << r.preset.id << "\t" << r.preset.name << "\t" << (r.fail.isEmpty() ? "ok" : r.fail) << "\t" << r.group << "\t" << (int) r.preset.parts.size()
+              << "\t" << juce::String (-r.quietBy, 2) << "\t" << juce::String (r.centroid, 0) << "\t" << juce::String (100 * r.share8k, 3);
             for (auto v : r.print) t << "\t" << juce::String (v, 2);
             t << "\n";
+            os << t;
         }
-        cwd.getChildFile (printsPath).replaceWithText (t);
+        os.flush();
+        std::printf ("wrote %s\n", printsPath.toRawUTF8());
+    }
+    if (chords)   // chord headroom: the listening phrase (melody + C5 triad) of every accepted preset, peak before the safety limiter
+    {
+        std::vector<float> over (accepted.size());
+        for (size_t k = 0; k < accepted.size(); ++k) over[k] = all[(size_t) accepted[k]].chordOver;
+        std::map<int, std::vector<float>> perCatOver;
+        for (size_t k = 0; k < accepted.size(); ++k) perCatOver[all[(size_t) accepted[k]].preset.category].push_back (over[k]);
+        std::printf ("chord headroom (phrase peak before the limiter, dB over its 0.89 ceiling: min / median / max, share over):\n");
+        for (auto& [c, v] : perCatOver)
+        {
+            int n = 0; for (auto x : v) n += x > 0.0f ? 1 : 0;
+            std::printf ("  %-20s %s  %d of %d over\n", vault::categoryNames()[c].toRawUTF8(), statLine (v, 1).toRawUTF8(), n, (int) v.size());
+        }
+        std::vector<size_t> order (accepted.size());
+        for (size_t k = 0; k < order.size(); ++k) order[k] = k;
+        std::sort (order.begin(), order.end(), [&] (size_t a, size_t b) { return over[a] > over[b]; });
+        for (size_t k = 0; k < std::min<size_t> (25, order.size()); ++k)
+        {
+            const auto& r = all[(size_t) accepted[order[k]]];
+            std::printf ("  worst %+.1f dB  %s %s (%s)\n", over[order[k]], r.preset.id.toRawUTF8(), r.preset.name.toRawUTF8(), r.group.toRawUTF8());
+        }
+        if (chordsPath.isNotEmpty())
+        {
+            juce::String t;
+            for (size_t k = 0; k < accepted.size(); ++k) t << all[(size_t) accepted[k]].preset.id << "\t" << juce::String (over[k], 2) << "\n";
+            cwd.getChildFile (chordsPath).replaceWithText (t);
+        }
     }
     if (demoDir.isNotEmpty())
     {
@@ -434,6 +801,20 @@ inline int runRecipes (int argc, char** argv)
                     const auto f = dir.getChildFile (r.preset.name.replaceCharacters (" /", "__") + " C5.wav");
                     writeWav (f, b);
                     std::printf ("demo %s\n", f.getFullPathName().toRawUTF8());
+                }
+    }
+    if (listenDir.isNotEmpty())   // the owner's listening phrase (C5 E5 G5 C6 + C5 triad, 4 s) as OGG, ids or names separated by '|'
+    {
+        auto dir = cwd.getChildFile (listenDir);
+        dir.createDirectory();
+        for (auto& id : juce::StringArray::fromTokens (listenIds, "|", ""))
+            for (auto& r : all)
+                if (r.fail.isEmpty() && (r.preset.id == id || r.preset.name == id))
+                {
+                    const auto b = renderPhrase (r.preset);
+                    const auto f = dir.getChildFile (r.preset.id + ".ogg");
+                    const bool ok = writeOgg (f, b, 2);
+                    std::printf ("listen %s %s peak %.3f %s\n", r.preset.id.toRawUTF8(), r.preset.name.toRawUTF8(), b.getMagnitude (0, b.getNumSamples()), ok ? "ok" : "FAILED");
                 }
     }
     return 0;

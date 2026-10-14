@@ -132,6 +132,12 @@ VaultCompiledPreset VaultEngine::compile (const VaultPreset& preset, std::shared
             }
     }
     c.gain = std::isfinite (preset.gain) ? juce::jlimit (0.0f, 16.0f, preset.gain) : 1.0f;
+    if (! preset.parts.empty())
+        if (const float pk = preset.parts.front().get (vault::peakKey, 0.0f); std::isfinite (pk) && pk < -0.01f)
+        {
+            c.peakThresh = juce::Decibels::decibelsToGain (juce::jlimit (-60.0f, 0.0f, pk));
+            if (const float ve = preset.parts.front().get (vault::peakVelKey, 0.0f); std::isfinite (ve)) c.peakVelExp = juce::jlimit (0.0f, 4.0f, ve);
+        }
     for (int m = 0; m < vault::numMacros; ++m)
         c.macroDefaults[m] = std::isfinite (preset.macroDefaults[m]) ? juce::jlimit (0.0f, 1.0f, preset.macroDefaults[m]) : 0.5f;
     return c;
@@ -203,7 +209,7 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
     dcX = dcY = 0; dcA = (float) std::exp (-juce::MathConstants<double>::twoPi * dcBlockHz / sr);
     limEnv = 0; limRel = (float) std::exp (-1.0 / (0.12 * sr));
     xfading = false; xfPos = 0.0f; xfStep = (float) (1.0 / (xfadeSeconds * sr));
-    held.fill (0.0f); pitchWheel = modWheel = aftertouch = 0; sustain = false; freeBeat = 0; lastBpm = 120.0;
+    held.fill (0.0f); pitchWheel = modWheel = aftertouch = 0; sustain = false; freeBeat = 0; lastBpm = 120.0; lastVelocity = 0.8f;
     for (int m = 0; m < vault::numMacros; ++m) macroSm[m] = macroTarget[m].load();
     volumeSm = volumeTarget.load();
 }
@@ -262,6 +268,8 @@ void VaultEngine::loadProgram (Program& dst, const VaultCompiledPreset& p)
     for (int k = 1; k < dst.numParts; ++k)
         dst.level[k] *= juce::Decibels::decibelsToGain (dst.values[k][kk::vk::gain] - dst.values[0][kk::vk::gain]);
     dst.gain = p.gain;
+    dst.peakThresh = p.peakThresh;
+    dst.peakVelExp = p.peakVelExp;
 }
 
 void VaultEngine::setPreset (const VaultCompiledPreset& p, bool instant)
@@ -285,6 +293,8 @@ void VaultEngine::resetSlot (Slot& s, bool clearFx)
             for (auto& t : p->toneS) t.reset();
         }
     if (clearFx && s.fx != nullptr) s.fx->clearState();
+    s.peakEnv = 0; s.peakRaw = 0; s.peakThrSm = 0; s.peakHold = 0; s.peakPos = 0;
+    for (auto& d : s.peakDl) d.fill (0.0f);
 }
 
 void VaultEngine::switchInstant()
@@ -438,6 +448,7 @@ void VaultEngine::handleMidi (const juce::MidiMessage& m)
     {
         const int n = m.getNoteNumber();
         held[(size_t) n] = std::max (0.01f, m.getFloatVelocity());
+        lastVelocity = held[(size_t) n];
         noteOnAll (s, n, held[(size_t) n]);            // new notes only on the current sound
     }
     else if (m.isNoteOff())
@@ -664,6 +675,40 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
                 for (int i = 0; i < len; ++i) { s.busL[(size_t) i] += pl[i] * gl; s.busR[(size_t) i] += prr[i] * gr; }
             }
             s.fx->process (s.busL.data(), s.busR.data(), s.busG.data(), len, s.fp);
+            if (const float thr0 = s.prog->peakThresh; thr0 > 0.0f)
+            {
+                // the threshold follows the playing velocity (thr * vel^exp, smoothed over ~5 ms), so soft and hard notes lose the
+                // same share of their attack peak and the velocity response stays as designed
+                const float thrTarget = thr0 * std::pow (juce::jlimit (0.01f, 1.0f, lastVelocity), s.prog->peakVelExp);
+                const float thrA = 1.0f - std::exp (-1.0f / (0.005f * (float) sr));
+                if (s.peakThrSm <= 0.0f) s.peakThrSm = thrTarget;
+                // peak control (vault::peakKey): a 1 ms look-ahead peak compressor, ratio 6 above thr. The detector sees the
+                // signal 1 ms before it is played (the preset's output is delayed by 1 ms), peaks are held 15 ms and released
+                // over 50 ms, and the gain glides down over the look-ahead (time constant 1/5 of it), so the first transient is
+                // already under control when it is played: no overshoot, no onset click.
+                const int la = juce::jlimit (1, Slot::peakDelayMax - 1, (int) std::round (0.001 * sr));
+                const float atk = 1.0f - std::exp (-5.0f / (float) la), rel = std::exp (-1.0f / (0.050f * (float) sr));
+                const int holdN = (int) (0.015 * sr) + la;
+                constexpr float slope = 1.0f - 1.0f / 6.0f;
+                for (int i = 0; i < len; ++i)
+                {
+                    const float xl = s.busL[(size_t) i], xr = s.busR[(size_t) i];
+                    const float pk = std::max (std::abs (xl), std::abs (xr));
+                    if (pk >= s.peakRaw) { s.peakRaw = pk; s.peakHold = holdN; }
+                    else if (s.peakHold > 0) --s.peakHold;
+                    else s.peakRaw *= rel;
+                    if (s.peakRaw > s.peakEnv) s.peakEnv += (s.peakRaw - s.peakEnv) * atk;
+                    else s.peakEnv = s.peakRaw;
+                    s.peakThrSm += (thrTarget - s.peakThrSm) * thrA;
+                    const float thr = s.peakThrSm;
+                    const int rd = (s.peakPos - la + Slot::peakDelayMax) % Slot::peakDelayMax;
+                    float g = 1.0f;
+                    if (s.peakEnv > thr) g = std::exp (-slope * std::log (s.peakEnv / thr));
+                    s.busL[(size_t) i] = s.peakDl[0][(size_t) rd] * g; s.busR[(size_t) i] = s.peakDl[1][(size_t) rd] * g;
+                    s.peakDl[0][(size_t) s.peakPos] = xl; s.peakDl[1][(size_t) s.peakPos] = xr;
+                    s.peakPos = (s.peakPos + 1) % Slot::peakDelayMax;
+                }
+            }
         }
 
         const auto& sc = slots[cur];

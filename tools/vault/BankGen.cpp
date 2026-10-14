@@ -1,6 +1,9 @@
 // CHROME VAULT factory bank generator (target VaultBankGen).
 //
-//   VaultBankGen [-out resources/vault/factory.cvb] [-report docs/VAULT_BANK_REPORT.md] [-threads N] [-scale 0.1]
+// The shipped v2 bank comes from the recipes (tools/vault/recipes, docs/VAULT.md "The v2 factory bank"):
+//   VaultBankGen -recipe all -qa -cache <dir> -out resources/vault/factory.cvb -report docs/VAULT_BANK_REPORT.md
+// The rest of this file is the legacy v1 synth-bank generator; it never writes the shipped bank by default:
+//   VaultBankGen -v1 [-out vault-v1-factory.cvb] [-report vault-v1-report.md] [-threads N] [-scale 0.1]
 //   VaultBankGen -audit <bank.cvb> [-csv out.tsv] [-every N]   independent audio audit of a bank (BankAudit.h), exit 0 = no failures
 //   VaultBankGen -check <bank.cvb> | -list <bank.cvb>           re-run the gate / list ids, names, layers, tags
 //   VaultBankGen -recipe <name>|all [-out b.cvb] [-report r.md] [-dist 3] [-demo dir ids]   v2 recipes (tools/vault/recipes)
@@ -1680,7 +1683,13 @@ int main (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI init;
     if (argc > 2 && juce::String (argv[1]) == "-recipe")   // v2 recipes (tools/vault/recipes/*.cpp) through the v2 gate (RecipeGate.h)
         return recipegate::runRecipes (argc, argv);
-    juce::String outPath = "resources/vault/factory.cvb", reportPath = "docs/VAULT_BANK_REPORT.md";
+    if (argc < 2)
+    {
+        std::printf ("usage: VaultBankGen -recipe <name>|all [options]   (the v2 bank, see tools/vault/recipes/RecipeGate.h)\n"
+                     "       VaultBankGen -v1 [-out f.cvb] [-report f.md] | -audit | -check | -list <bank.cvb>   (legacy v1 tools)\n");
+        return 1;
+    }
+    juce::String outPath = "vault-v1-factory.cvb", reportPath = "vault-v1-report.md";   // legacy v1: never the shipped bank by default
     int threads = (int) std::max (1u, std::thread::hardware_concurrency());
     double scale = 1.0;
     float dupThreshold = 3.0f;

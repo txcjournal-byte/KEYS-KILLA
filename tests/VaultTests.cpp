@@ -20,6 +20,7 @@
 #include "../Source/vault/ui/VaultMainView.h"
 #include "../Source/ParamKeys.h"
 #include "../tools/vault/BankQC.h"
+#include "../tools/vault/recipes/RecipeGate.h"
 #if CV_HAS_BANK
  #include "VaultData.h"
 #endif
@@ -153,6 +154,19 @@ void writeWav (const juce::AudioBuffer<float>& b, double sr, const juce::File& f
         }
 }
 
+// the v2 bank has sampled / modelled presets: they stay silent until their samples / voices are in (the library loads in
+// the background, the processor's timer makes the model voices); tests that need sound wait for that like a user would
+bool waitUntilPlayable (VaultProcessor& p, int timeoutMs = 30000)
+{
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    while (p.isLoading() && juce::Time::getMillisecondCounterHiRes() - t0 < timeoutMs)
+        if (auto* mm = juce::MessageManager::getInstanceWithoutCreating(); mm != nullptr && mm->isThisTheMessageThread())
+            mm->runDispatchLoopUntil (20);
+        else
+            juce::Thread::sleep (20);
+    return ! p.isLoading();
+}
+
 struct DummyProc : juce::AudioProcessor
 {
     DummyProc() : apvts (*this, nullptr, "T", createLayout()) {}
@@ -175,87 +189,110 @@ struct DummyProc : juce::AudioProcessor
     juce::AudioProcessorValueTreeState apvts;
 };
 
-// the shipped factory bank (resources/vault/*.cvb, or the CHROME_VAULT_BANK file): exact counts, unique ids / names, valid tags,
-// clean names, and a deterministic random sample of 200 presets through the generator's quality gate (tools/vault/BankQC.h)
+// the shipped v2 factory bank (resources/vault/*.cvb, or the CHROME_VAULT_BANK file): counts per category, ids
+// ("cv.<category slug>.<nnnn>"), unique clean names / labels, no "808", and a deterministic random sample through the v2
+// bank gate (tools/vault/recipes/RecipeGate.h, the gate VaultBankGen -recipe all ran): C5 comfort, clicks, mono lows,
+// tails, loudness within 1.5 dB of the category target with the shipped trim, the assembly ceilings, distinct sounds.
+// Sampled presets are only rendered when the sample library is installed (CHROME_VAULT_LIBRARY or the standard folders);
+// CV_BANK_GATE_ALL=1 runs every preset through the gate instead of the sample.
 void shippedBankTests (const VaultProcessor& proc)
 {
     const auto& bank = proc.bank();
     check (proc.bankSource() != VaultProcessor::BankSource::factoryFallback, "factory bank loaded: " + proc.bankDescription());
-    check ((int) bank.size() >= 1000 && (int) bank.size() <= VaultProcessor::maxPresets, "the bank has " + juce::String ((int) bank.size())
-                                                                                          + " presets (<= " + juce::String (VaultProcessor::maxPresets) + ")");
+    check ((int) bank.size() >= 3000 && (int) bank.size() <= VaultProcessor::maxPresets, "the bank has " + juce::String ((int) bank.size())
+                                                                                          + " presets (3,000 .. " + juce::String (VaultProcessor::maxPresets) + ")");
     int cats[vault::numCategories] {};
     for (auto& p : bank) ++cats[juce::jlimit (0, vault::numCategories - 1, p.category)];
-    int usedCats = 0;
-    for (int c : cats) usedCats += c > 0 ? 1 : 0;
-    check (usedCats >= 14, "the bank fills " + juce::String (usedCats) + " of the 16 categories");
+    int smallest = 1 << 30;
+    for (int c : cats) smallest = std::min (smallest, c);
+    check (smallest >= 100, "every one of the 16 categories holds at least 100 presets (smallest " + juce::String (smallest) + ")");
 
     std::set<juce::String> ids, names;
-    int badName = 0, badLabel = 0, has808 = 0;
+    int badName = 0, badLabel = 0, has808 = 0, badId = 0, v2Parts = 0;
     for (auto& p : bank)
     {
         ids.insert (p.id);
         names.insert (p.name.toLowerCase());
-        const bool nameOk = p.name.trim() == p.name && p.name.isNotEmpty() && p.name.length() <= 22 && vaultqc::isCleanName (p.name)
+        const bool nameOk = p.name.trim() == p.name && p.name.isNotEmpty() && p.name.length() <= 30 && vaultqc::isCleanName (p.name)
                             && p.name.containsOnly ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -'&");
         if (! nameOk && badName++ < 5) std::printf ("   bad name: '%s'\n", p.name.toRawUTF8());
+        const juce::String prefix = juce::String ("cv.") + vault::categorySlug (p.category) + ".";
+        const auto num = p.id.fromFirstOccurrenceOf (prefix, false, false);
+        if ((! p.id.startsWith (prefix) || num.length() != 4 || ! num.containsOnly ("0123456789")) && badId++ < 5)
+            std::printf ("   bad id: '%s' (category %s)\n", p.id.toRawUTF8(), vault::categoryNames()[p.category].toRawUTF8());
         has808 += p.name.contains ("808") ? 1 : 0;
         for (auto& part : p.parts)
         {
+            v2Parts += part.kind != VaultPartKind::synth ? 1 : 0;
             has808 += part.label.contains ("808") ? 1 : 0;
-            if ((part.label.isEmpty() || part.label.length() > 16 || ! vaultqc::isCleanName (part.label)) && badLabel++ < 5)
+            if ((part.label.isEmpty() || part.label.length() > 24 || ! vaultqc::isCleanName (part.label)) && badLabel++ < 5)
                 std::printf ("   bad part label: %s '%s'\n", p.id.toRawUTF8(), part.label.toRawUTF8());
         }
     }
     check (ids.size() == bank.size(), "preset ids are unique (" + juce::String ((int) ids.size()) + ")");
-    check (names.size() >= bank.size() * 99 / 100, "preset names are unique (" + juce::String ((int) names.size()) + " of " + juce::String ((int) bank.size()) + ")");
-    check (badName == 0, "names: English, <= 22 characters, no brand words (" + juce::String (badName) + " bad)");
+    check (badId == 0, "preset ids are cv.<category slug>.<nnnn> (" + juce::String (badId) + " bad)");
+    check (names.size() == bank.size(), "preset names are unique (" + juce::String ((int) names.size()) + " of " + juce::String ((int) bank.size()) + ")");
+    check (badName == 0, "names: English, <= 30 characters (the list column fits them: -uitest), no brand words (" + juce::String (badName) + " bad)");
     check (badLabel == 0, "part labels set, short, clean (" + juce::String (badLabel) + " bad)");
     check (has808 == 0, "no '808' in any preset name or layer label (" + juce::String (has808) + ")");
+    check (v2Parts > (int) bank.size() / 2, "a v2 bank: " + juce::String (v2Parts) + " sampled / modelled parts");
 
-    // a deterministic random sample through the quality gate (two notes, 48 kHz - exactly the generator's gate)
-    juce::Random rnd (20261013);
-    std::set<int> chosen;
-    while ((int) chosen.size() < std::min (200, (int) bank.size())) chosen.insert (rnd.nextInt ((int) bank.size()));
-    const std::vector<int> sample (chosen.begin(), chosen.end());
-    std::vector<juce::String> why (sample.size());
-    std::vector<vaultqc::Print> prints (sample.size());
-    std::vector<float> loud (sample.size());
+    // a deterministic random sample through the v2 bank gate (C5 = MIDI 60, 48 kHz - exactly VaultBankGen's gate)
+    const auto lib = vault::SampleLibrary::getShared();
+    const bool haveLib = lib != nullptr && lib->libraryFound();
+    const bool everyPreset = juce::SystemStats::getEnvironmentVariable ("CV_BANK_GATE_ALL", {}) == "1";
+    std::vector<int> pool;
+    for (int i = 0; i < (int) bank.size(); ++i) if (haveLib || ! bank[(size_t) i].usesSamples()) pool.push_back (i);
+    std::vector<int> sample;
+    if (everyPreset) sample = pool;
+    else
+    {
+        juce::Random rnd (20261014);
+        std::set<int> chosen;
+        while ((int) chosen.size() < std::min (160, (int) pool.size())) chosen.insert (pool[(size_t) rnd.nextInt ((int) pool.size())]);
+        sample.assign (chosen.begin(), chosen.end());
+    }
+    std::vector<recipegate::Result> res (sample.size());
     std::atomic<int> next { 0 };
-    std::vector<std::thread> pool;
+    std::vector<std::thread> threads;
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
     for (int t = 0; t < (int) std::max (1u, std::min (8u, std::thread::hardware_concurrency())); ++t)
-        pool.emplace_back ([&]
+        threads.emplace_back ([&]
         {
             for (int k = next++; k < (int) sample.size(); k = next++)
             {
-                const auto& p = bank[(size_t) sample[(size_t) k]];
-                const auto aL = vaultqc::renderAndAnalyse (p, vaultqc::noteLow (p.category));
-                const auto aH = vaultqc::renderAndAnalyse (p, vaultqc::noteHigh (p.category));
-                auto w = vaultqc::gate (aL, p.category, 1.0f, false);
-                if (w.isEmpty()) w = vaultqc::gate (aH, p.category, 1.0f, false);
-                loud[(size_t) k] = 0.5f * (aL.loud + aH.loud);
-                // +0.5 dB: the v1 bank's arps (target -14.5) now live in Synth (-14)
-                if (w.isEmpty() && std::abs (loud[(size_t) k] - vaultqc::targetLoudness (p.category)) > vaultqc::loudnessTolerance + 0.5f)
-                    w = "loudness " + juce::String (loud[(size_t) k], 2) + " dB";
-                why[(size_t) k] = w;
-                prints[(size_t) k] = aL.print;
+                auto& r = res[(size_t) k];
+                r.preset = bank[(size_t) sample[(size_t) k]];
+                recipegate::analyse (r);
             }
         });
-    for (auto& th : pool) th.join();
+    for (auto& th : threads) th.join();
     int failed = 0;
-    float worstDev = 0;
+    float worstTrim = 0, worstDev = 0;
     for (size_t k = 0; k < sample.size(); ++k)
     {
         const auto& p = bank[(size_t) sample[k]];
-        worstDev = std::max (worstDev, std::abs (loud[k] - vaultqc::targetLoudness (p.category)));
-        if (why[k].isNotEmpty() && failed++ < 8) std::printf ("   gate: %s %s: %s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), why[k].toRawUTF8());
+        auto& r = res[k];
+        const float trimDiff = std::abs (r.gainDb - juce::Decibels::gainToDecibels (p.gain));
+        worstTrim = std::max (worstTrim, trimDiff);
+        worstDev = std::max (worstDev, r.quietBy + trimDiff);
+        juce::String why = r.fail;
+        if (why.isEmpty() && trimDiff > 0.5f) why = "trim differs from the measured loudness by " + juce::String (trimDiff, 2) + " dB";
+        if (why.isEmpty() && r.quietBy > 1.5f) why = "loudness " + juce::String (r.quietBy, 2) + " dB under the category target";
+        if (why.isEmpty() && r.share8k > recipegate::maxShare8k) why = "> 8 kHz share " + juce::String (100 * r.share8k, 2) + " %";
+        if (why.isEmpty() && r.centroid > recipegate::centroidCeiling (p.category)) why = "centroid " + juce::String ((int) r.centroid) + " Hz";
+        if (why.isEmpty() && r.chordOver > recipegate::maxChordOver + 0.5f) why = "listening phrase " + juce::String (r.chordOver, 1) + " dB over the safety limiter";
+        if (why.isNotEmpty() && failed++ < 8) std::printf ("   gate: %s %s: %s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), why.toRawUTF8());
     }
-    check (failed == 0, juce::String ((int) sample.size()) + " random presets pass the quality gate (" + juce::String (failed) + " failed, loudness within "
-                        + juce::String (worstDev, 2) + " dB of the category targets, " + juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0, 1) + " s)");
-    float closest = 1.0e9f;   // no two sampled presets sound alike (low-note fingerprint)
-    for (size_t a = 0; a < prints.size(); ++a)
-        for (size_t b = a + 1; b < prints.size(); ++b) closest = std::min (closest, vaultqc::printDistance (prints[a], prints[b]));
-    check (closest > 1.0f, "sampled presets are distinct (closest fingerprint distance " + juce::String (closest, 2) + ")");
+    check (failed == 0, juce::String ((int) sample.size()) + (everyPreset ? " presets" : " random presets") + (haveLib ? "" : " (no sample library: synth / model presets only)")
+                        + " pass the v2 bank gate (" + juce::String (failed) + " failed; loudness within " + juce::String (worstDev, 2) + " dB of the category targets, trims within "
+                        + juce::String (worstTrim, 2) + " dB; " + juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0, 1) + " s)");
+    float closest = 1.0e9f;   // no two sampled presets sound alike (the gate's fingerprint)
+    juce::String pa, pb;
+    for (size_t a = 0; a < res.size(); ++a)
+        for (size_t b = a + 1; b < res.size(); ++b)
+            if (const float d = recipegate::distance (res[a].print, res[b].print); d < closest) { closest = d; pa = res[a].preset.name; pb = res[b].preset.name; }
+    check (res.size() < 2 || closest >= 3.0f, "sampled presets are distinct (closest fingerprint distance " + juce::String (closest, 2) + ": " + pa + " / " + pb + ")");
 }
 
 int unitTests()
@@ -335,7 +372,9 @@ int unitTests()
     {
         std::vector<VaultPreset> set = testPresets();
         int perCat[vault::numCategories] {};
-        for (auto& p : bank) if (perCat[p.category]++ < 2) set.push_back (p);   // two of every category of the loaded bank
+        const bool libFound = vault::SampleLibrary::getShared()->libraryFound();
+        for (auto& p : bank)   // two of every category of the loaded bank (sampled ones only when the library is installed)
+            if ((libFound || ! p.usesSamples()) && perCat[p.category]++ < 2) set.push_back (p);
         int silent = 0, nonFinite = 0, hot = 0, wideLows = 0, startClicks = 0;
         float worstPeak = 0, worstSide = 0;
         const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -424,10 +463,20 @@ int unitTests()
     {
         proc.setPlayConfigDetails (0, 2, sr, 512);
         proc.prepareToPlay (sr, 512);
-        const int target = std::min (5, (int) bank.size() - 1);
+        int target = std::min (5, (int) bank.size() - 1);
+        if (! proc.libraryFound())   // without the sample library a sampled preset is (correctly) silent: play one that needs none
+            for (int i = target; i < (int) bank.size(); ++i)
+                if (! bank[(size_t) i].usesSamples()) { target = i; break; }
         proc.selectPreset (target);
         check (proc.currentPreset() == target, "selectPreset is instant");
         juce::AudioBuffer<float> b (2, 512);
+        for (int k = 0; k < 300; ++k)   // samples / model voices are made off the audio thread: run until the sound is ready
+        {
+            juce::MidiBuffer none;
+            proc.processBlock (b, none);
+            if (! proc.isLoading()) break;
+            waitUntilPlayable (proc, 20);
+        }
         float pk = 0; bool fin = true;
         for (int k = 0; k < 120; ++k)
         {
@@ -648,9 +697,12 @@ void uiQaTests (VaultProcessor& p)
     {
         int moved[vault::numMacros] {}, tested = 0;
         juce::Random r (11);
+        const bool libOk = p.libraryFound();   // without the sample library only synth / model sounds can be heard
         for (int k = 0; k < 24; ++k, ++tested)
         {
-            const auto& pr = bank[(size_t) r.nextInt (n)];
+            int pick = r.nextInt (n);
+            for (int guard = 0; ! libOk && bank[(size_t) pick].usesSamples() && guard < 10000; ++guard) pick = r.nextInt (n);
+            const auto& pr = bank[(size_t) pick];
             const int note = vault::homeNote;
             float m[vault::numMacros];
             for (int i = 0; i < vault::numMacros; ++i) m[i] = pr.macroDefaults[i];
@@ -704,6 +756,10 @@ void uiQaTests (VaultProcessor& p)
         p.setPlayConfigDetails (0, 2, sr, block);
         p.prepareToPlay (sr, block);
         v.setCategory (vault::catPads);
+        {   // the pads browsed below have their samples in RAM (a first visit of a sampled sound plays once it is loaded)
+            const auto vis = v.browser().visible();
+            for (int k = 0; k < std::min (26, (int) vis.size()); ++k) { p.selectPreset (vis[(size_t) k]); waitUntilPlayable (p); }
+        }
         v.loadPreset (v.browser().visible().front(), false);
         auto& ks = p.getKeyboardState();
         for (int nn : { 60, 63, 67 }) ks.noteOn (1, nn, 0.8f);
@@ -754,7 +810,8 @@ void uiQaTests (VaultProcessor& p)
                              bank[(size_t) switchTo[si]].name.toRawUTF8(), fxs.toRawUTF8());
             }
             worstJump = std::max (worstJump, around);
-            minRms = std::min (minRms, stats (all, sw + (int) (0.05 * sr), sw + len - 64).rms);
+            if (p.libraryFound() || ! bank[(size_t) switchTo[si]].usesSamples())   // a sampled sound without the library is silent
+                minRms = std::min (minRms, stats (all, sw + (int) (0.05 * sr), sw + len - 64).rms);
         }
         peak = stats (all).peak;
         check (lateBlocks == 0, "ui: a picked sound is active in the very next audio block");
@@ -1324,6 +1381,10 @@ int uiTests()
         p.selectPreset (7);                           // host / automation side
         v.syncFromProcessor();
         check (v.shownPreset() == 7, "ui: follows a preset change from the host");
+        if (! p.libraryFound() && bank[7].usesSamples())   // without the library: drag a sound that needs no samples
+            for (int i = 0; i < (int) bank.size(); ++i)
+                if (! bank[(size_t) i].usesSamples()) { p.selectPreset (i); v.syncFromProcessor(); break; }
+        waitUntilPlayable (p);                        // DRAG WAV waits for the samples (never decodes on the UI thread)
         const auto wavFile = v.renderWavForDrag();
         juce::AudioFormatManager fm; fm.registerBasicFormats();
         std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (wavFile));

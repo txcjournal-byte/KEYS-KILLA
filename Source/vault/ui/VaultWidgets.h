@@ -287,13 +287,14 @@ public:
     struct Cols { juce::Rectangle<float> dot, name, tags, badge, heart; };
     static Cols columns (float w, float h)
     {
-        // name: the longest factory names are ~188 px at 15 px bold; the info line gets the rest (up to ~264 px)
+        // name: the longest factory names (up to 30 characters) are ~250 px at 15 px bold; the info line gets the rest
+        // (up to ~202 px: the main instrument always fits, further ones only whole)
         juce::Rectangle<float> r (12.0f, 0.0f, w - 24.0f, h);
         Cols c;
         c.dot = r.removeFromLeft (20.0f); r.removeFromLeft (8.0f);
         c.heart = r.removeFromRight (20.0f); r.removeFromRight (6.0f);
         c.badge = r.removeFromRight (92.0f); r.removeFromRight (8.0f);
-        c.name = r.removeFromLeft (juce::jmax (190.0f, r.getWidth() - 8.0f - 264.0f)); r.removeFromLeft (8.0f);
+        c.name = r.removeFromLeft (juce::jmax (252.0f, r.getWidth() - 8.0f - 202.0f)); r.removeFromLeft (8.0f);
         c.tags = r;
         return c;
     }

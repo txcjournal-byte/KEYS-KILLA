@@ -36,6 +36,8 @@ struct VaultCompiledPreset
     int numParts = 0;
     std::array<VaultCompiledPart, vault::maxParts> parts;
     float gain = 1;
+    float peakThresh = 0;                            // peak control threshold (linear, before the trim), 0 = off (vault::peakKey)
+    float peakVelExp = 0;                            // the threshold follows the last note-on velocity: thr * vel^exp (vault::peakVelKey)
     float macroDefaults[vault::numMacros] { 0.5f, 0.5f, 0.5f, 0.5f };
     std::shared_ptr<vault::SampleLibrary> library;   // keeps the instrument handles alive
 };
@@ -121,6 +123,7 @@ private:
         int numModelParams[vault::maxParts] {};
         float mp[vault::maxParts][vault::models::maxModelParams] {};
         float gain = 1;
+        float peakThresh = 0, peakVelExp = 0;
     };
     // One complete sound: a program, its parts (voices + LFO state), its own FX rack (with its own reverb / delay tails)
     // and scratch buffers. Two slots: the current sound and, during a preset switch, the outgoing one fading out.
@@ -134,6 +137,9 @@ private:
         std::vector<float> busL, busR, busG, partL, partR, lfo1, lfo2;
         bool prepared = false;
         vault::InstrumentHandle* held[vault::maxParts] {};   // instruments acquired by this slot's program
+        float peakEnv = 0, peakRaw = 0, peakThrSm = 0; int peakHold = 0;   // peak control state (vault::peakKey)
+        static constexpr int peakDelayMax = 256;                              // look-ahead delay line (1 ms, up to 192 kHz)
+        std::array<std::array<float, peakDelayMax>, 2> peakDl {}; int peakPos = 0;
     };
     void slotAcquire (Slot& s);
     void slotRelease (Slot& s);
@@ -168,6 +174,7 @@ private:
 
     // MIDI state
     std::array<float, 128> held {};          // velocity of keys held down (0 = up)
+    float lastVelocity = 0.8f;               // the last note-on velocity (peak control threshold, vault::peakVelKey)
     float pitchWheel = 0, modWheel = 0, aftertouch = 0;
     bool sustain = false;
     double freeBeat = 0;

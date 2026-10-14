@@ -248,6 +248,16 @@ bool validatePreset (const VaultPreset& p, juce::String* why)
         {
             if (! std::isfinite (v)) return no ("non-finite value for " + id);
             if (kk::vk::keyOf (id) >= 0) continue;   // EVOLVE synth / FX keys: valid in every kind (FX read from part 0)
+            if (id == peakKey)                        // preset peak control (read from part 0)
+            {
+                if (v < -60.0f || v > 0.0f) return no ("peak control out of -60..0 dB");
+                continue;
+            }
+            if (id == peakVelKey)
+            {
+                if (v < 0.0f || v > 4.0f) return no ("peak control velocity exponent out of 0..4");
+                continue;
+            }
             if (part.kind == VaultPartKind::sample)
             {
                 const int si = sampleParamIndex (id);

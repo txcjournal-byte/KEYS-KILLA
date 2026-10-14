@@ -26,9 +26,11 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
   fixes in the editor, tests.
 * Done (library curation): the full instrument map (all pitched VSCO / VCSL instruments, `tools/vault/library_map.json`),
   built into `/home/user/cv-library` and measured (`VaultLibBuild -qc`, `docs/VAULT_INSTRUMENTS.md`).
-* Not done here (parallel / later work): the v2 factory bank (the embedded `resources/vault/factory.cvb` is still the v1
-  synth bank, read through the v1 path: categories mapped, tags dropped, "808" replaced by "Sub" in names / labels), the
-  installer packaging of the library is written (below) but has not run on GitHub yet.
+* Done (v2 factory bank): `resources/vault/factory.cvb` is the v2 bank, 3,377 presets assembled from the six designer
+  recipes (`tools/vault/recipes/*.cpp`) by `VaultBankGen -recipe all -qa` - see "The v2 factory bank" below and the QC
+  report `docs/VAULT_BANK_REPORT.md`. Nobody has listened to it yet: every judgement is measured. The owner's listening
+  page (64 presets, 4 per category) is built by `tools/vault/listen_page.py`.
+* Not done: the installer packaging of the library is written (below) but has not run on GitHub yet.
 * Done (models): 20 physical models for what the sample libraries lack - guitars (steel, nylon, banjo,
   12-string, clean / crunch electric, jazz archtop; pluck / palm mute / harmonic), electric basses (finger, pick, slap,
   fretless), tine / reed electric pianos, struck-string "funk keys", felt toy piano, female / male voice (ah oh oo ee,
@@ -62,7 +64,10 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `tools/vault/make_instruments_doc.py` | writes `docs/VAULT_INSTRUMENTS.md` from a built library + its `-qc` run |
 | `docs/VAULT_INSTRUMENTS.md` | the library's instruments, articulations, ranges, sizes and QC numbers (generated) |
 | `tools/vault/package_library.py` | library packaging: `check` (files exist, each < 50 MB), `size`, `zip` (release zip / parts), `branch` (builds the orphan `vault-library` branch) |
-| `tools/vault/BankGen.cpp` | console target `VaultBankGen`: the v1 synth-bank generator (legacy; ported to compile with v2 types) |
+| `tools/vault/recipes/Recipe.h`, `recipes/*.cpp` | the v2 preset recipes: one file per sound designer (`keys`, `strings`, `orch`, `winds`, `perc-voc`, `synth`), each registered with `VAULT_RECIPE` |
+| `tools/vault/recipes/RecipeGate.h` | the v2 bank gate + assembly (`VaultBankGen -recipe <name>\|all`): C5 renders, comfort rules, loudness + peak control, chord headroom, distinctness, report, listening renders |
+| `tools/vault/bank_report_doc.py`, `listen_page.py`, `listen_picks.py` | `docs/VAULT_BANK_REPORT.md` from the assembly report; the owner's listening page (4 presets per category) |
+| `tools/vault/BankGen.cpp` | console target `VaultBankGen`: `-recipe` runs the v2 recipes (RecipeGate.h); the rest is the legacy v1 synth-bank generator (`-v1`, never writes the shipped bank by default) |
 | `tools/vault/BankQC.h`, `BankAudit.h` | v1 quality gate / audit (shared with VaultTests) |
 | `tests/VaultTests.cpp` | console target `VaultTests` |
 | `resources/vault/*.cvb` | the preset bank(s) embedded into the plugin |
@@ -79,6 +84,7 @@ MIDI ─┬─> part 0  synth:  kk::SynthEngine (32 voices)                     
       ├─> part 2  model:  pool of vault::models::ModelVoice (ModelInfo::maxVoices)
       └─> part 3  (any kind; transposed by octave*12+semi)                   ─┘
    ─> side high-pass 160 Hz 8th order (mono below ~120 Hz) + 5 Hz DC blocker on the mid
+   ─> peak control (only presets with `cv.peak`: 1 ms look-ahead peak compressor, ratio 6, before the trim)
    (preset gain trim per sound slot; preset switch = two slots crossfading 40 ms equal power, unchanged from v1)
    ─> master volume ─> safety limiter (-1 dBFS, instant attack, 120 ms release) + soft ceiling 0.98 ─> out
 ```
@@ -191,6 +197,12 @@ Style and Character tags no longer exist (types, bank format, browser, UI, tests
 | `s.releaseSamples` | 0/1 | 1 | play the articulation's release samples |
 | `s.polyphony` | 1..64 | 64 | voices of the part |
 | `s.oneShot` | -1/0/1 | -1 | -1 articulation default, 0 note-off releases, 1 plays to the end |
+
+Preset-level keys (part 0 of any kind, set by the bank gate, designers leave them out): `cv.peak` (-60..0 dB, threshold of
+the peak control before the trim, 0 = off) and `cv.peakvel` (0..4, the threshold follows the last note-on velocity:
+thr x vel^exp). The peak control is a 1 ms look-ahead peak compressor (hold 15 ms, release 50 ms, ratio 6): it lets very
+percussive presets (muted plucks, staccato keys) reach the category loudness without the safety limiter; the preset
+then plays 1 ms later (not reported as plugin latency).
 
 `validatePreset`: synth parts take EVOLVE keys only and no `source`; sample parts need a `source` and take EVOLVE keys +
 the `s.*` table (range-checked); model parts need a `source` and take EVOLVE keys + any `m.*` key (the model's table is
@@ -547,9 +559,97 @@ library when one is installed or named by `CHROME_VAULT_LIBRARY` (picking the bi
 the UI thread and shows Loading, the state ends when the samples are in, an instrument the library lacks gets the "newer
 sound library" card); both at 80 / 100 % with the 14 px minimum text.
 
-## The v1 factory bank (legacy: `resources/vault/factory.cvb`, generator `VaultBankGen`)
+## The v2 factory bank (`resources/vault/factory.cvb`, `VaultBankGen -recipe all`)
 
-> v1 synth-only bank, still embedded until the v2 bank replaces it. `BankGen.cpp` still builds: it plans / tags / names in the
+3,377 presets in 16 categories, every one built by a sound-design recipe and measured; nothing in the bank has been
+listened to by a person yet (the owner's listening page is the first ear). QC report of the shipped bank:
+`docs/VAULT_BANK_REPORT.md`.
+
+```
+CHROME_VAULT_LIBRARY=/home/user/cv-library build-vault/VaultBankGen_artefacts/Release/VaultBankGen -recipe all -qa \
+    -cache /tmp/cv-cache -threads 4 -out resources/vault/factory.cvb -report /tmp/cv-full-report.md [-prints p.tsv] [-chords]
+python3 tools/vault/bank_report_doc.py /tmp/cv-full-report.md docs/VAULT_BANK_REPORT.md
+VaultBankGen -recipe <name> [...]          # one recipe alone through the same gate (designers)
+VaultBankGen -recipe all -cache dir -listen <dir> "<id>|<id>|..."   # the listening phrase as OGG
+python3 tools/vault/listen_picks.py full-report.md prints.tsv picks.tsv && python3 tools/vault/listen_page.py picks.tsv <ogg dir> index.html
+```
+
+About 25 minutes on 4 cores to measure the 5,321 candidates with an empty cache (each is rendered 7 times plus the
+phrase), plus 10-22 minutes per recipe whose output is not cached yet; with `-cache`
+only changed presets are measured again (key: a hash of the preset + `gateVersion`).
+
+**Recipes** (`tools/vault/recipes/*.cpp`, one per designer, design notes at the top of each file):
+
+| recipe | categories | candidates |
+| --- | --- | ---: |
+| `keys` | Piano, Keys & Organ | 454 |
+| `strings` | Guitars, Bass | 2,128 (the gate picks the distinct ones) |
+| `orch` | Strings, Brass, Orchestral | 629 |
+| `winds` | Flutes & Woodwinds, World | 468 |
+| `perc-voc` | Bells & Mallets, Vocals & Choir | 398 |
+| `synth` | Plucks, Leads, Pads, Synth, FX & Atmos | 1,244 |
+
+**Gate** (`RecipeGate.h`, every candidate; 48 kHz, C5 = MIDI 60 at velocity 0.8, note off after 1.5 s and rendered until the
+tail is 60 dB down, plus C4 / C6 and C5 at velocity 0.35 / 1.0): NaN, silence, DC, clicks (note start / end / anywhere),
+clipping (velocity-1.0 peak under the safety limiter), mono-sum loss <= 3 dB, no side energy under 120 Hz, tail <= 10 s
+(Pads / FX & Atmos 16 s); C5 comfort: the sounding fundamental within 3 dB of the strongest harmonic (not Bells & Mallets /
+FX & Atmos), 2-5 kHz <= 10 % of the power, > 6 kHz <= 3 %, octave-up parts >= 12 dB under part 0, velocity 0.35 -> 1.0
+opens >= 3 dB; names / labels clean (no brands, no "808").
+
+**Loudness**: K-weighted loudest 400 ms at C5 set by `VaultPreset::gain` to the category target of `BankQC.h` minus 6 dB
+of headroom (`recipegate::bankHeadroomDb`: one note at velocity 0.8 sits at -20.5 Piano .. -18 Bass, so chords stay under
+the safety limiter). A preset whose velocity-1.0 peak would pass 0.84 at that level gets the peak control (`cv.peak`,
+threshold iterated, at most 16 dB); one still more than 1.5 dB under the target is rejected (`-spread`).
+
+**Assembly QA** (`-qa`): loudness within 1.5 dB of the category target, > 8 kHz <= 1 % of the power, spectral-centroid
+ceilings per category (Bass 700 Hz .. Bells / FX 2,200 Hz, `centroidCeiling`), and the listening phrase (C5 E5 G5 C6 +
+the C5 triad at velocity ~0.77) may reach the safety limiter by at most 2 dB (`maxChordOver`). Always: a trim above +22 dB
+(`maxTrimDb`: a near-silent render lifted into the noise floor) is rejected as too quiet. Names longer than 22 characters
+write "and" as "&"; the browser's name column fits 30 characters (252 px at 100 %, `PresetList::columns`).
+
+**Distinctness**: the gate's fingerprint (log-mel x time at C5, C4, C6, cepstrum, C5 harmonic profile, modulation depth,
+stereo width; RMS distance in dB). Candidates are taken in recipe priority order (keys, strings, orch, winds, perc-voc,
+synth: real instruments first, generic synth last) and each recipe's own order (plain instruments before treatments); one
+closer than 3.5 to any accepted preset, of its own recipe or another, in any category, is dropped. Names are unique
+(case-insensitive) across the bank, ids (`cv.<category slug>.<nnnn>`) come from the recipes and are stable.
+
+**Result** (the shipped bank, 2026-10-14): 3,377 of 5,321 candidates. Min pairwise fingerprint distance 3.50 (Double
+Basses / Double Bass Vibrato), across recipes 3.51. Peak control on 197 presets. At C5 over the whole bank: fundamental
+within 3 dB of the strongest harmonic (60 inharmonic bells / FX excepted), 2-5 kHz <= 8.0 % (median 0.2 %), > 6 kHz
+<= 1.8 %, > 8 kHz <= 1.0 %, loudness within 1.3 dB of the category target, trims -15 .. +22 dB, the listening phrase
+5.7 dB under the safety limiter in the median (at most 2 dB over).
+
+| category | presets | | category | presets |
+| --- | ---: | --- | --- | ---: |
+| Piano | 176 | | Bells & Mallets | 196 |
+| Keys & Organ | 200 | | Vocals & Choir | 189 |
+| Guitars | 208 | | Plucks | 271 |
+| Bass | 201 | | Leads | 195 |
+| Strings | 245 | | Pads | 214 |
+| Brass | 212 | | Synth | 256 |
+| Flutes & Woodwinds | 232 | | World | 209 |
+| Orchestral | 151 | | FX & Atmos | 222 |
+
+Per recipe (designer's selection -> shipped): keys 454 -> 376 (78 closer than 3.5: the recipe selected at 3.05), strings
+421 (gate-selected from 2,128) -> 409, orch 629 -> 608, winds 468 -> 441, perc-voc 398 -> 385, synth 1,244 -> 1,158 (80
+too close to a real-instrument preset of another recipe). Rejected: 1,733 near-duplicates inside a recipe (1,655 of them
+strings candidates), 120 across recipes, 31 too quiet (trim over +22 dB), 23 weak fundamental, 7 loudness, 6 click,
+5 duplicate names, 3 chord headroom, the rest single cases (report).
+
+The target was 3,600: the six recipes delivered 3,614 selected sounds, and one bank-wide definition of "different"
+(3.5) plus the cross-recipe pass leaves 3,377. Categories with room to grow by new recipe content (not by loosening the
+threshold): Orchestral (151), Piano (176), Vocals & Choir (189), Leads (195), Bells & Mallets (196), Keys & Organ (200).
+
+**VaultTests** (shipped-bank checks, `shippedBankTests`): 3,000..5,000 presets, every category >= 100, ids
+`cv.<slug>.<nnnn>` and names unique, names clean and <= 22 characters, labels clean, no "808", most parts sampled /
+modelled, and 160 random presets (fixed seed; with the sample library, else the synth / model ones) re-run through this
+gate: no failure, the shipped trim within 0.5 dB of the measured one, loudness within 1.5 dB of the target, > 8 kHz,
+centroid ceilings, the listening phrase at most 2.5 dB over the limiter, sampled presets >= 3.0 apart.
+`CV_BANK_GATE_ALL=1` runs every preset.
+
+## The v1 factory bank (legacy, no longer shipped: `VaultBankGen -v1`)
+
+> v1 synth-only bank, replaced by the v2 bank (above). `BankGen.cpp` still builds: it plans / tags / names in the
 > OLD category list internally (`v1c` namespace: old enums, targets, styles / characters only steer the names) and writes
 > v2 presets (v2 categories via `vault::v1::toV2Category`, no tags, "808" -> "Sub"). The text below describes the v1 run.
 
@@ -559,7 +659,7 @@ QC report of the shipped bank: `docs/VAULT_BANK_REPORT.md` (written by the gener
 
 ```
 cmake --build build-vault --target VaultBankGen
-build-vault/VaultBankGen_artefacts/Release/VaultBankGen [-threads N] [-scale 0.1] [-out file.cvb] [-report file.md] [-dup 3.0]
+build-vault/VaultBankGen_artefacts/Release/VaultBankGen -v1 [-threads N] [-scale 0.1] [-out file.cvb] [-report file.md] [-dup 3.0]
 VaultBankGen -check resources/vault/factory.cvb      # re-render every preset at its final gain through the gate
 VaultBankGen -list  resources/vault/factory.cvb      # id, name, layers, tags
 VaultBankGen -audit resources/vault/factory.cvb [-csv out.tsv] [-every N]   # independent audio audit, exit code 0 = 0 failures

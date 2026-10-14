@@ -132,6 +132,15 @@ inline const std::vector<ParamInfo>& sampleParams()
 // indices into sampleParams() (same order)
 enum SampleParam { spAttack, spDecay, spSustain, spRelease, spVelSens, spCutoff, spReso, spFilterType, spVelCutoff, spTune, spStart,
                    spBendRange, spVibrato, spVibRate, spWidth, spReleaseSamples, spPolyphony, spOneShot, numSampleParams };
+// preset peak control (part 0, any kind): threshold in dBFS before the preset trim (VaultPreset::gain), -60..0, 0 = off.
+// A 1 ms look-ahead peak compressor on the preset's output (hold 15 ms, release 50 ms, ratio 6; the preset plays 1 ms later) that softens the first
+// milliseconds of very percussive sounds so they reach the category loudness without touching the safety limiter. The
+// bank gate sets it (tools/vault/recipes/RecipeGate.h); designers normally leave it out.
+constexpr const char* peakKey = "cv.peak";
+// with it: the threshold follows the last note-on velocity, thr * vel^exp (0..4, 0 = fixed). The gate sets exp from the measured
+// velocity response, so soft and hard notes lose the same share of their attack and the velocity response stays as designed.
+constexpr const char* peakVelKey = "cv.peakvel";
+
 inline int sampleParamIndex (const juce::String& id)
 {
     const auto& t = sampleParams();
