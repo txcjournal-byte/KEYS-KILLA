@@ -1,4 +1,4 @@
-#include "ModelVoice.h"
+#include "BuiltinModels.h"
 #include <cmath>
 
 namespace vault::models
@@ -59,6 +59,30 @@ void registerBuiltinModels (ModelRegistry& r)
                { "m.release", 0.01f, 10.0f, 0.3f, "time to fall 60 dB after note-off, s" },
                { "m.level", 0.0f, 1.0f, 0.25f, "peak level, linear" } },
              16, [] { return std::make_unique<SineVoice>(); } });
+    // physical models (docs/VAULT_MODELS.md). Guitars: waveguide strings + commuted bodies / pickups + amp
+    r.add (stringModelInfo ("guitar.acoustic"));
+    r.add (stringModelInfo ("guitar.nylon"));
+    r.add (stringModelInfo ("guitar.banjo"));
+    r.add (stringModelInfo ("guitar.twelve"));
+    r.add (stringModelInfo ("guitar.electric"));
+    r.add (stringModelInfo ("guitar.crunch"));
+    r.add (stringModelInfo ("guitar.jazz"));
+    // electric basses
+    r.add (stringModelInfo ("bass.finger"));
+    r.add (stringModelInfo ("bass.pick"));
+    r.add (stringModelInfo ("bass.slap"));
+    r.add (stringModelInfo ("bass.fretless"));
+    // electric pianos / keys
+    r.add (keysModelInfo ("ep.tine.mellow"));
+    r.add (keysModelInfo ("ep.tine.bell"));
+    r.add (keysModelInfo ("ep.reed"));
+    r.add (stringModelInfo ("ep.clav"));
+    r.add (keysModelInfo ("keys.toy"));
+    // voices
+    r.add (voiceModelInfo ("voice.female"));
+    r.add (voiceModelInfo ("voice.male"));
+    r.add (voiceModelInfo ("voice.choir"));
+    r.add (voiceModelInfo ("voice.pad"));
     // further models: r.add ({ "id", "Name", { params... }, voices, [] { return std::make_unique<MyVoice>(); } });
 }
 

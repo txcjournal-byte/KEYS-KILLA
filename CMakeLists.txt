@@ -214,6 +214,9 @@ if(KK_BUILD_TESTS)
     # VaultTests: serializer, offline render, mono lows, declick, state (tests/VaultTests.cpp)
     juce_add_console_app(VaultTests PRODUCT_NAME "VaultTests")
     target_sources(VaultTests PRIVATE tests/VaultTests.cpp ${CV_SOURCES} ${CV_SHARED_SOURCES})
+    # --- vault models --- the physical-model unit tests (VaultTests -models)
+    target_sources(VaultTests PRIVATE tests/VaultModelTests.cpp)
+    # --- end vault models ---
     target_compile_definitions(VaultTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
         JucePlugin_Name="CHROME VAULT" JucePlugin_IsSynth=1 JucePlugin_VersionString="${CV_VERSION}")
@@ -245,3 +248,14 @@ if(KK_BUILD_TESTS)
     target_link_libraries(VaultLibBuild PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()
 # --- end vault library ----------------------------------------------------------
+
+# --- vault models ---------------------------------------------------------------
+# VaultModelLab: demos, CPU benchmark and measurement renders of the physical models (tools/vault/ModelLab.cpp,
+# analysis: tools/vault/models_measure.py, docs/VAULT_MODELS.md). Never part of the plugin build.
+if(KK_BUILD_TESTS)
+    juce_add_console_app(VaultModelLab PRODUCT_NAME "VaultModelLab")
+    target_sources(VaultModelLab PRIVATE tools/vault/ModelLab.cpp ${CV_ENGINE_SOURCES} ${CV_MODEL_SOURCES} Source/Presets.cpp)
+    target_compile_definitions(VaultModelLab PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 CV_HAS_BANK=0)
+    target_link_libraries(VaultModelLab PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+endif()
+# --- end vault models -----------------------------------------------------------
