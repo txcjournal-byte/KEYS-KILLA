@@ -295,8 +295,9 @@ designed; keep bright FX (drive, shimmer, exciters) under those limits.
 | `tests/VaultModelTests.cpp` | the model unit tests (part of `VaultTests`; alone: `VaultTests -models`) |
 | `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - arp -> 4 parts of any kind -> modulation -> gate -> FX chain -> trim -> mono lows -> volume -> limiter; macros, LFOs, quick knobs, locks; offline `render()` |
 | `Source/vault/VaultProcessor.h/.cpp` | `VaultProcessor` - the `juce::AudioProcessor` (parameters, bank loading, library pins, state) |
-| `Source/vault/VaultEditor.h/.cpp` | the editor (browser UI); `VaultMainView` / `VaultInfoPanel` are implemented here too |
-| `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h`, `VaultBrowserModel.h` (search / filters / favorites / recent, instrument names), `VaultSettings.h`, `VaultThumbs.h` (thumbnails at C5), `VaultWidgets.h` (pills, categories, LAYERS chips, preset list, keyboard, kind icons, spinner, DRAG WAV), `VaultMainView.h` |
+| `Source/vault/VaultEditor.h/.cpp` | the editor window (scaling, display fit, focus hand-back) + `VaultMainView` (top bar, pages, keyboard) |
+| `Source/vault/ui/*.h` | `VaultTheme.h` (palette, fonts, LookAndFeel), `VaultKnob.h` (the v3 knob + host-parameter attachment), `VaultControls.h` (panels, pills, dropdowns, segments, power buttons, tabs, LED toggles), `VaultWidgets.h` (category column, preset list, arrows, drag-out pill, keyboard, kind icons, spinner), `VaultBrowserModel.h` (search / filters / favorites / recent, instrument names), `VaultSettings.h`, `VaultPages.h` (the pages + shared context), `VaultMainView.h` |
+| `Source/vault/ui/*.cpp` | the v3 pages: `VaultMainPage.cpp`, `VaultLayersPage.cpp`, `VaultFxPage.cpp`, `VaultModPage.cpp`, `VaultArpPage.cpp`, `VaultPagesCommon.cpp` (value texts, "Modulate with..." menu) |
 | `tools/vault/LibBuild.cpp` | console target `VaultLibBuild`: builds the sample library from the CC0 sources |
 | `tools/vault/library_map.json` | the builder's map: instruments -> source folders, file-name patterns, articulations, options |
 | `tools/vault/make_instruments_doc.py` | writes `docs/VAULT_INSTRUMENTS.md` from a built library + its `-qc` run |
@@ -682,7 +683,63 @@ bool isMissingSamples() const;   // the current preset needs an instrument that 
 The bank keeps the shared library alive (`Bank::library`), presets are compiled against it once per process.
 `maxPresets` is still 5000 (the `presetIndex` parameter range 0..4999).
 
-## Editor UI (`VaultEditor`) - v2 changes
+## Editor UI (`VaultEditor`) - v3
+
+The approved v3 mockup in JUCE: pick a category, pick a sound, it already sounds finished; tweak it on the MAIN page;
+everything else is in the ADVANCED tabs. Base size 1180 x 760, scaled 80-200 % as before (sizes, settings file,
+keyboard-focus rules, C5 naming, library-missing card and loading state unchanged from v2; details below).
+
+* **Top bar**: chrome logo | MAIN | ADVANCED: LAYERS, FX, MOD, ARP · GATE | quick toggles FX / ARP / GATE (LED; the host
+  switches `fxOn`, `arpOn`, `gateOn`; a small lock when the section is kept while browsing) | size menu (`100%`, sizes that
+  do not fit the screen greyed out) | settings (preview on click, reset the MAIN knobs, revert the sound, library / bank info).
+* **MAIN** (Nexus-style): the centre "screen" - ◀ search ▶, Favorites, Recent; All Sounds + 16 categories with counts;
+  the list (name, "3 layers", heart; a `juce::ListBox`); the current sound: name ("edited" when changed, a spinner +
+  "Loading…" while its samples load), its composition ("Bells & Mallets · Tubular Bells + Vibraphone + Sine Bass"),
+  More like this (same category + main instrument), Drag WAV (the current sound with its edits, C5, 2 s), heart. Status
+  messages replace the composition line for 4 s. Library missing / instrument missing: the calm card over the bottom of
+  the list (title, "Its synth layers still play.", the folder looked in).
+  Left: FILTER · AMP (cutoff, reso, attack, release, env amount, glide - offsets of the designed sound, bipolar, a tick
+  marks "as designed") + MOTION (vibrato, tremolo; 0 = off). Right: EFFECTS (reverb, delay, chorus, drive, width, eq
+  tilt; the value is the effective amount + type, e.g. "35% Hall", "22% 1/8D"; the LED / a click on the name switches the
+  chain slot on / off, adding a default slot when the sound has none) + OUTPUT (volume, pan). Under the screen: the 4
+  SOUND MACROS named per preset (`macroName()`; an unused macro shows "—" and is disabled).
+* **LAYERS**: one card per layer (3 columns, 4 for 4 layers): power (mutes / restores the level), "A · Instrument", kind
+  pill; LEVEL / PAN / OCTAVE / FINE; AMP ENVELOPE (graph + A D S R; sampled layers: 0 = the sample's own); FILTER
+  (LP 12 / LP 24 / HP / BP for synth layers, LP / HP / BP for sampled ones) + CUTOFF / RESO / ENV (sampled: VEL) / KEY. A
+  modelled layer shows its model's first 8 parameters instead. VOICE row: POLY / MONO / LEGATO, GLIDE, UNISON, DETUNE (synth
+  layers), VEL SENS, BEND (synth + sampled), Reset to preset (`revertSound()` + `resetQuick()`).
+* **FX**: the 8 slots in a 4 x 2 grid. Card: drag grip (drop on another card = move there), power, type, ▾ menu
+  (variant - Hall / Plate / ..., Tape / Tube ..., Ping-pong / Straight / Tape ... -, change type, move, reset, remove), its
+  3 main knobs (`FxPage::mainParams`). An empty slot: + Add effect (<= 2 of a type). FX preset menu (as designed, none,
+  Warm Room, Wide Hall, Tape Echo, Lo-Fi Room, Shimmer Space, Punchy, Dreamy Chorus - all moderate), Bypass all (`fxOn`),
+  Keep while browsing (`setLock (Section::fx)`).
+* **MOD**: 2 LFO cards - power (depth 0 / back), shape segments, the wave (with the live phase while notes play), RATE
+  (divisions when synced, 0.05-20 Hz free), DELAY, FADE, PHASE, SYNC / HZ, RETRIG / FREE, DESTINATIONS chips ("● Cutoff ·
+  +1.00 oct": drag up / down for the amount, double-click removes, right-click invert / remove) + Add (target menu). MOD
+  WHEEL · VELOCITY · AFTERTOUCH: one bipolar knob per routing ("Wheel +40%"), + Wheel / + Velocity / + Aftertouch.
+  **Right-click any knob** (MAIN, LAYERS, FX, MOD rate, ARP gate, gate depth / smooth / mix) -> "Modulate with…" LFO 1,
+  LFO 2, Mod Wheel, Velocity, Aftertouch (add with a default amount or remove), Remove all modulation. A modulated knob
+  draws its value arc green and a thin green ring for the summed amount (`vui::mod::show`).
+* **ARP · GATE**: ARPEGGIATOR - power (`arpOn`), Pattern menu (Init, the sound's own pattern, all on, accent on the beats,
+  velocity ramps, random velocities / octaves, shift, reverse - no genre names), Latch, Keep while browsing, Up / Down /
+  Up/Down / As Played / Random / Chord, RATE (1/1..1/32) + Straight / Triplet / Dotted, OCTAVES, GATE, SWING, STEPS, Drag
+  MIDI (2 bars, `writeArpMidiFile`), lanes VELOCITY (draw), ON / TIE (click on / off, right-click tie), OCTAVE (click up,
+  right-click down); the running step is outlined. GATE - power (`gateOn`), Pattern menu (Init, the sound's own, all
+  open, off-beats, invert, random, shift), Keep while browsing, RATE (every division), DEPTH, SMOOTH, SWING, MIX, 16 steps
+  (click toggles, drag draws levels).
+* **Knob** (`vui::Knob`): dark body, thin track, ice value arc, white pointer, LABEL and value under it; drag up / right
+  (shift = fine), mouse wheel, double-click = the bank preset's value, right-click = menu; never takes the keyboard.
+  Labels that do not fit use a short form (OCT, ATK ...). Host parameters through `vui::KnobAttachment`
+  (`juce::ParameterAttachment`: gestures, host automation moves the knob); sound edits through `VaultProcessor::editSound`.
+  The pages read `currentSound()`; ~10x per second the view compares the sound / switches / locks with what it showed
+  and refreshes only when something changed elsewhere (host, state restore).
+* Checks (`xvfb-run -a VaultTests -uitest`): everything from v2, plus every page at 80 / 100 %: smallest text, no two
+  controls overlapping, nothing outside its parent, every knob label fitting its knob - with a 3-layer and a 4-layer sound.
+  Snapshots: `VaultTests -shot out.png "main,rich,demo,page:fx,scale:80"` (`page:main|layers|fx|mod|arp`, `rich` = the
+  3-layer sound with the longest FX chain, `four` = a 4-layer sound with modelled layers, `demo` = LFO / wheel / velocity
+  routings, arp / gate lanes and a tremolo so the green rings and lanes show).
+
+## Editor UI (`VaultEditor`) - v2 changes (where v3 differs, v3 wins: no info panel, waveform thumbnail, LAYERS chips, RANDOM or status bar any more)
 
 * Categories: the 16 v2 categories with the real counts. Filters: LAYERS (All 1 2 3 4) + Clear filters (STYLE / CHARACTER
   rows and tag pills removed everywhere).

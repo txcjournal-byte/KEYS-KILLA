@@ -31,6 +31,27 @@ inline const juce::Colour heartOff  { 0xff3a4660 };   // icon only, never text
 inline const juce::Colour topA      { 0xff121a28 }, topB { 0xff0a0f18 };
 inline const juce::Colour infoA     { 0xff0b111c }, infoB { 0xff070b12 };
 inline const juce::Colour plugA     { 0xff0e1522 }, plugB { 0xff06090f };
+// v3 (the approved v3 mockup)
+inline const juce::Colour ok        { 0xff7fe0b0 };   // LEDs that are on, modulation (green ring)
+inline const juce::Colour okLine    { 0xff2c5b4a };   // outline of a modulation chip
+inline const juce::Colour ledOff    { 0xff2e3a4e };   // LED off (never text)
+inline const juce::Colour winA      { 0xff121924 }, winB { 0xff0b1017 }, winC { 0xff090d13 };   // window background
+inline const juce::Colour barA      { 0xff151d2a }, barB { 0xff0e141d };   // top bar
+inline const juce::Colour line3     { 0xff232c3b };   // panel outlines / separators
+inline const juce::Colour panA      { 0xff131a25 }, panB { 0xff0f151e };   // panels
+inline const juce::Colour screen    { 0xff03060a };   // the browser "screen"
+inline const juce::Colour screenRim { 0xff2a3548 };
+inline const juce::Colour well      { 0xff060a10 };   // category / list wells inside the screen
+inline const juce::Colour wellLine  { 0xff182131 };
+inline const juce::Colour wellRow   { 0xff0e141d };   // list row separators
+inline const juce::Colour pillLine  { 0xff1e2838 };
+inline const juce::Colour catOn     { 0xff16243a };
+inline const juce::Colour selA      { 0xff1b3150 }, selB { 0xff0d1828 };   // selected list row
+inline const juce::Colour tabOn     { 0xff1c2534 };
+inline const juce::Colour segOn     { 0xff1c2b44 };
+inline const juce::Colour stepOff   { 0xff162030 };
+inline const juce::Colour track     { 0xff1e2838 };   // knob track
+inline const juce::Colour keyBed    { 0xff05080d };
 } // namespace col
 
 // Readability: the smallest text of the base layout is 14 px -> 11.2 px at the smallest window scale (80 %), 14 px at 100 %.
@@ -44,7 +65,7 @@ inline juce::Font font (float px, bool bold = false, float tracking = 0.0f)
     jassert (px >= minTextPx);
     smallestFontPx() = std::min (smallestFontPx(), px);
     auto o = juce::FontOptions (px, bold ? juce::Font::bold : juce::Font::plain).withPointHeight (px);
-    if (tracking != 0.0f) o = o.withKerningFactor (tracking);
+    if (! juce::exactlyEqual (tracking, 0.0f)) o = o.withKerningFactor (tracking);
     return juce::Font (o);
 }
 inline float textWidth (const juce::Font& f, const juce::String& s) { return juce::GlyphArrangement::getStringWidth (f, s); }

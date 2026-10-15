@@ -174,7 +174,8 @@ juce_add_plugin(ChromeVault
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 # every .cpp in Source/vault (engine, processor, editor and its UI parts) + the shared EVOLVE factory sounds
-file(GLOB CV_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/models/*.cpp)
+file(GLOB CV_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/models/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/ui/*.cpp)
 # the sound engine alone (no processor / editor): for console tools
 set(CV_ENGINE_SOURCES Source/vault/VaultTypes.cpp Source/vault/VaultConvert.cpp Source/vault/VaultFx.cpp Source/vault/VaultMod.cpp
     Source/vault/VaultEngine.cpp Source/vault/VaultLibrary.cpp Source/vault/VaultSampler.cpp)
