@@ -548,7 +548,7 @@ public:
                                                                          LuckyNotesBinary::trapwin_wordmark_pngSize);
         g.setOpacity (1.0f);
         if (brand.isValid())
-            g.drawImage (brand, juce::Rectangle<float> (114, 22, 16.0f * (float) brand.getWidth() / (float) brand.getHeight(), 16),
+            g.drawImage (brand, juce::Rectangle<float> (112, 10, 26.0f * (float) brand.getWidth() / (float) brand.getHeight(), 26),
                          juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yTop);
         drawGlowText (g, "LUCKY NOTES", { 112, 42, 560, 36 }, juce::Justification::centredLeft, col::green, pixelFont (30.0f), 1.3f);
         g.setFont (monoFont (13.0f));
