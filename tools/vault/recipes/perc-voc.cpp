@@ -1,7 +1,76 @@
-// CHROME VAULT v2 recipes: BELLS & MALLETS + VOCALS & CHOIR (sound designer "perc-voc").
+// CHROME VAULT recipes: BELLS & MALLETS + VOCALS & CHOIR (sound designer "perc-voc").
 // Run: VaultBankGen -recipe perc-voc (shared gate: RecipeGate.h).
 //
-// DESIGN NOTE (research summary; sources at the end of this note)
+// v3 DESIGN NOTE - every preset ships finished (namespace v3 below)
+//  * Research: commercial mallet instruments ship with their own chorus / reverb / EQ / drive on macros and the
+//    vibraphone motor as a free-running amplitude tremolo (fans open / closed crossfaded); the marimba's "mud" sits around
+//    300-500 Hz (a cut there, never a steep high-pass: the low bars carry the instrument); a pre-delay lets the mallet
+//    read before a short tail. Bells want a big hall with the lows taken out of the return. Vocals: a plate (on an aux,
+//    20-40 ms pre-delay, the return high-passed at 200-300 Hz and its top tamed), tempo delay "throws" into the reverb with
+//    a steep high / low cut on the repeats, pop-vocal compression (3:1, fast); choirs get light bus glue, a cut of the
+//    boxy band, one shared hall with pre-delay, the boom kept out of the tail; trap chops: short syllables, a punchy
+//    attack, a dotted-eighth ping-pong throw, a plate, grit on demand; vocal pads: ensemble chorus + a long hall + slow
+//    drift. Commercial patches name macros by playing gesture (mallet, motor, swell, vibrato, throw) and put vibrato /
+//    expression on the mod wheel and aftertouch.
+//  * So each preset's chain = FAMILY (the instrument's finished sound) + ROLE (the v2 treatment as a processing style),
+//    slots in the canonical rack order; the fitted v2 EQ (the low shelf / top cut that made C5 comfortable) is kept and
+//    the stereo image never gets wider than the fit allowed:
+//      wood (marimba, xylophone)  transient, 2:1 ring glue, mud cut (~500 Hz, marimba only), stage hall 15 ms, an echo
+//                                 ready (1/8D, silent)                                      macros Mallet, Hall, Body, Echo
+//      vibes                      transient, glue, a whisper of chorus, plate 20 ms, the motor = LFO 1 on level + pan
+//                                 (3.2 / 5.2 / 7 Hz, off as designed; the mod wheel plays it)   Mallet, Plate, Motor, Echo
+//      glock / celesta / music box  top tamed, 1/8D ping-pong echo (3.5 kHz / 300 Hz cuts), dark plate, a tape wobble
+//                                 ready on LFO 2                                             Tone, Plate, Wobble, Echo
+//      bells / chimes / handbells clang band cut at 700 Hz, big hall with a 250 Hz low cut, a 1/4D echo ready (silent)
+//                                 (Bloom = a slower strike and a longer ring)                Strike, Hall, Bloom, Echo
+//      bowed / glass (held)       slow ensemble, long hall 35 ms, slow brightness + pan drift  Tone, Hall, Swell, Drift
+//      choir                      1.6:1 bus glue, box cut (1.9 x f0), hall 30 ms / 250 Hz low cut, slow breathing LFO,
+//                                 delayed 5.2 Hz vibrato (off as designed)                   Tone, Hall, Swell, Vibrato
+//      solo voice                 3:1 vocal comp, box cut, 1/4 ping-pong throw, plate 30 ms, delayed vibrato
+//                                                                                            Tone, Plate, Throw, Vibrato
+//      breathy / whisper          soft comp, air tamed, throw, plate                         Tone, Plate, Throw, Width
+//      chops / "ha" hits          transient, fast comp, tape grit (silent), 1/8D ping-pong throw, short plate
+//                                                                                            Snap, Plate, Throw, Grit
+//      vocal pads                 ensemble chorus, long hall 40 ms, slow drift (cutoff + pan) Tone, Space, Motion, Ensemble
+//      synth choir                ensemble, hall, breathing, delayed vibrato                 Tone, Hall, Ensemble, Vibrato
+//    roles: Concert Hall / Cathedral = their big hall kept, short pre-delay, darker, narrower; Felt / Intimate / Behind the
+//    Wall = room ("Warmth"); Night / Trap = their delay with cut repeats ("Echo" / "Throw"); Dusty / Warped / Lo-Fi = tape
+//    wobble LFO + room ("Tape" / "Crush"); Dampened / Stab = small room (a fast compressor when a chord of strikes peaks
+//    too far); Blooming / Swelling = "Swell"; Reverse; Dream / Ambient / Haunted = cloud reverb + slow drift ("Drift");
+//    Heavy / Twin / Glimmer / Glowing / Airy = the added layer on a macro ("Sub", "Octave", "Sparkle" (down only), "Halo",
+//    "Breath"); Shimmer / Wide = "Chorus" / "Ensemble"; Gritty = drive with clean lows ("Grit"); Shadow = "Shadow".
+//  * Performance: mod wheel = vibrato / motor depth (more reverb where there is none), aftertouch = expression on held
+//    sounds, velocity keeps the touch against the compressor.
+//  * Macros: every target sits exactly at its designed value at the knob's default (the preset loads as designed). Each
+//    macro is rendered at 0 and 1 (C5) and a side that breaks a comfort rule the designed sound keeps (2-5 kHz, > 6 / 8 kHz,
+//    fundamental (not on the inharmonic bells), clipping, +4 dB louder, longer tail) is shortened until it passes.
+//  * The whole v3 sound is refitted at C5 before the macros are made (2-5 kHz <= 7.5 %, > 6 kHz <= 2 %, > 8 kHz <= 0.7 %,
+//    centroid 80 Hz under the category ceiling, fundamental >= -2.5 dB on everything but the bells).
+//  * Arp / gate: off everywhere except 4 rhythm presets with plain names, patterns from Init (rate / mode / octaves /
+//    length / steps only), appended after the shipped presets: Marimba Arpeggio (up, 1/16), Music Box Arpeggio
+//    (up-down, 1/8), Gated Choir (1/16 gate), Gated Vocal Pad (1/16 gate).
+//  * Selection: the shipped v2 selection is pinned by name (the greedy search below is order-sensitive; PV_FULL=1 runs it
+//    again), every shipped preset keeps its id and name; then the finished sounds go through the gate's own analysis
+//    in order (the shared 3.5 distance, gate fails, make-up gain, the assembly QA's 8 kHz share and centroid ceiling).
+//  * Result (VaultBankGen -recipe perc-voc -qa, library /home/user/cv-library): the 385 pinned shipped presets + 4 rhythm
+//    presets -> 388 pass the gate and the assembly QA (Bells & Mallets 197, Vocals & Choir 191), min pairwise distance
+//    3.53; 384 of the 385 shipped presets keep their id and name (Wide Gong Bell stays a near-duplicate of Gong Bell after
+//    its role was pushed and is dropped); the rhythm presets get the next free ids. 11 finished sounds were fixed after a
+//    gate failure (5 mono-loss: less ensemble chorus / width; 3 tails: a shorter hall / ring; 2 dead strokes whose chord
+//    peaked > 6 dB over the limiter: a fast compressor; Reverse Glockenspiel: the 2-5 kHz band cut), 3 near-duplicates
+//    got their role pushed; peak control at assembly fits 4. At C5: 2-5 kHz <= 9.1 % (bells) / 5.9 % (voices), > 8 kHz
+//    <= 0.17 %, voices' fundamental >= -2.4 dB, centroid <= 1458 / 975 Hz (ceilings 2200 / 1500), velocity 0.35 -> 1.0
+//    >= 5.3 / 3.3 dB, tails <= 10 / 8.9 s, phrase peak <= 1.9 dB over the limiter ceiling. 1,552 macros checked at 0 and
+//    1: 371 range narrowings, none left outside the comfort rules; 90 (mostly slow drift / width / reverb amounts that a
+//    2.5 s probe barely shows) measure as small changes.
+//  * Sources: gearspace.com "Delay into reverb" (short reverbs into a high-passed multi-tap / ping-pong delay);
+//    uaudio.com "Producer Presets Unpacked - Pure Plate Reverb" (vocal plate); sageaudio.com "How to mix vocal reverb"
+//    (pre-delay 20-50 ms, high-passing the return at 200-300 Hz); soundverse.ai "How to mix choir vocals" and
+//    forum.vsl.co.at (choir bus glue, per-section pre-delay, low cut on the tail, the boomy band); vi-control.net "EQ
+//    muddy marimba" (cut around 400 Hz, no high-pass at 150 Hz); versilian-studios.com vVibraphone manual and
+//    soniccouture vibraphone (motor tremolo from fans open / closed, chorus / reverb / drive macros).
+//
+// v2 DESIGN NOTE (research summary; sources at the end of this note)
 //  * How professional mallet libraries are voiced: every bar instrument is sold as the same player in several
 //    perspectives - close (attack, mallet "tock", dry: the pop / trap perspective), a stage / room pair (the default
 //    balance) and far / hall (scoring). Vibraphones come motor OFF and motor ON (the rotating fans in the resonators give
@@ -73,12 +142,17 @@
 //  organisation, ear-safety rules for voices); UNSW music acoustics (bar mode ratios).
 //
 // Environment (optional): PV_LIMIT (first N candidates, smoke test), PV_THREADS (default 3), PV_OWN_MIN (default 4.6),
-// PV_ROLE_CAP (default 11), PV_VERBOSE (1 = print every near-duplicate drop with its nearest kept preset).
+// PV_ROLE_CAP (default 11), PV_VERBOSE (1 = print every near-duplicate drop with its nearest kept preset); v3: PV_FULL (1 =
+// the whole v2 search instead of the pinned shipped selection), PV_V2CACHE (<file.cvb>: the v2 selection saved once with
+// its roles), PV_V3 (0 = stop after the v2 selection), PV_ONLY (ids / names), PV_SELFGATE / PV_MACROCHECK (0 = skip),
+// PV_MACROLOG (1 = every macro measurement), PV_TSV (<file>: the gate numbers of every finished preset).
 #include "RecipeGate.h"
 #include <map>
 #include <mutex>
 #include <algorithm>
 #include <set>
+#include <atomic>
+#include <thread>
 
 namespace
 {
@@ -551,7 +625,10 @@ struct Names
     }
 };
 
-struct Cand { juce::String name; int category; std::vector<VaultPart> parts; bool bell; int role; };
+struct Cand { juce::String name; int category; std::vector<VaultPart> parts; bool bell; int role; int kind = kStrike; juce::String noun, roleTag; int addIdx = -1; };
+
+// what a kept preset is (for the v3 design): its base voice, articulation kind, role, the part a role added, rhythm pattern
+struct Meta { juce::String noun, role = "plain", fam; int kind = kStrike, addIdx = -1, pattern = 0; bool bell = false; };
 
 bool isFxKey (const juce::String& k) { return ! k.startsWith ("s.") && ! k.startsWith ("m."); }
 bool isVoiceModel (const VaultPart& p) { return p.kind == VaultPartKind::model && p.source.startsWith ("voice."); }
@@ -681,7 +758,9 @@ void addAll (const RecipeContext& ctx, std::vector<Cand>& out)
         auto parts = treat (ctx, v.parts, t);
         if (parts.empty()) return;
         const auto name = names.make (t.prefixes, v.noun, rot);
-        if (name.isNotEmpty()) out.push_back ({ name, v.category, parts, v.bell, role });
+        if (name.isNotEmpty())
+            out.push_back ({ name, v.category, parts, v.bell, role, v.kind, v.noun, t.prefixes[0].isEmpty() ? juce::String ("plain") : t.prefixes[0],
+                             t.add != addNone ? (int) v.parts.size() : -1 });
     };
     const int nt = (int) std::max (mt.size(), vt.size());
     for (int t = 0; t < nt; ++t)
@@ -959,17 +1038,26 @@ bool fixGate (VaultPreset& p, const juce::String& fail)
     }
     return false;
 }
-} // namespace
-
-std::vector<VaultPreset> build_perc_voc (const RecipeContext& ctx)
+// the v2 selection (unchanged since the v2 bank): candidates -> repair -> shared gate analysis -> own distinctness
+// pinned (the shipped bank's names): only those candidates, every one that passes the gate is kept (they were distinct
+// when the bank was assembled), so the shipped sounds come back exactly without the order-sensitive greedy search
+std::vector<VaultPreset> v2Selection (const RecipeContext& ctx, std::vector<Meta>& metas, const std::set<juce::String>* pinned = nullptr)
 {
     std::vector<Cand> cands;
     addAll (ctx, cands);
+    if (pinned != nullptr)
+    {
+        std::vector<Cand> keepC;
+        for (auto& c : cands) if (pinned->count (c.name.replace (" & ", " and ").toLowerCase()) > 0) keepC.push_back (c);
+        std::printf ("perc-voc: %d of %d candidates are pinned (%d pinned names)\n", (int) keepC.size(), (int) cands.size(), (int) pinned->size());
+        cands.swap (keepC);
+    }
     if (const int lim = juce::SystemStats::getEnvironmentVariable ("PV_LIMIT", "0").getIntValue(); lim > 0 && lim < (int) cands.size())
         cands.resize ((size_t) lim);
     std::vector<VaultPreset> all;
     std::vector<char> bells;
     std::vector<int> roles;
+    std::vector<Meta> candMeta;
     int nB = 0, nV = 0;
     for (auto& c : cands)
     {
@@ -981,6 +1069,8 @@ std::vector<VaultPreset> build_perc_voc (const RecipeContext& ctx)
         all.push_back (std::move (p));
         bells.push_back (c.bell ? 1 : 0);
         roles.push_back (c.role);
+        Meta m; m.noun = c.noun; m.role = c.roleTag; m.kind = c.kind; m.addIdx = c.addIdx; m.bell = c.bell;
+        candMeta.push_back (m);
     }
     Calib calib;
     std::vector<char> keep (all.size(), 0);
@@ -999,10 +1089,11 @@ std::vector<VaultPreset> build_perc_voc (const RecipeContext& ctx)
     for (auto& t : pool) t.join();
     std::vector<VaultPreset> out;
     std::vector<int> outRole;
+    std::vector<Meta> outMeta;
     int dropped = 0;
     for (size_t i = 0; i < all.size(); ++i)
     {
-        if (keep[i]) { out.push_back (std::move (all[i])); outRole.push_back (roles[i]); }
+        if (keep[i]) { out.push_back (std::move (all[i])); outRole.push_back (roles[i]); outMeta.push_back (candMeta[i]); }
         else { ++dropped; std::printf ("  unrepairable: %s %s\n", all[i].id.toRawUTF8(), all[i].name.toRawUTF8()); }
     }
     std::printf ("perc-voc: %d candidates, %d unrepairable\n", (int) all.size(), dropped);
@@ -1050,7 +1141,16 @@ std::vector<VaultPreset> build_perc_voc (const RecipeContext& ctx)
         });
     for (auto& t : pool) t.join();
     std::printf ("perc-voc: %d presets fixed after a gate failure\n", fixedCount);
-    if (ownMin <= 0.0f) return out;
+    if (ownMin <= 0.0f) { metas = outMeta; return out; }
+    if (pinned != nullptr)
+    {
+        std::vector<VaultPreset> kept;
+        metas.clear();
+        for (size_t i = 0; i < rs.size(); ++i)
+            if (rs[i].fail.isEmpty()) { kept.push_back (out[i]); metas.push_back (outMeta[i]); }
+            else std::printf ("  pinned preset fails the gate: %s %s -> %s\n", out[i].id.toRawUTF8(), out[i].name.toRawUTF8(), rs[i].fail.toRawUTF8());
+        return kept;
+    }
     constexpr float maxGainDb = 18.0f;
     const int roleCap = juce::SystemStats::getEnvironmentVariable ("PV_ROLE_CAP", "11").getIntValue();
     std::map<std::pair<int, int>, int> roleCount;
@@ -1089,7 +1189,1121 @@ std::vector<VaultPreset> build_perc_voc (const RecipeContext& ctx)
     std::printf ("perc-voc own pass: %d of %d kept, min pairwise distance %.2f\n", (int) acc.size(), (int) rs.size(), minPair);
     for (auto& [f, n] : fails) std::printf ("  own pass dropped %-20s %d\n", f.toRawUTF8(), n);
     std::vector<VaultPreset> kept;
-    for (int i : acc) kept.push_back (out[(size_t) i]);
+    metas.clear();
+    for (int i : acc) { kept.push_back (out[(size_t) i]); metas.push_back (outMeta[(size_t) i]); }
+    return kept;
+}
+
+//==============================================================================
+// v3 SOUND DESIGN (see the v3 design note at the top): FX chain by family + role, movement, 4 named sound macros,
+// performance routings, arp / gate on the few rhythm presets
+namespace v3
+{
+using namespace recipe;
+using FT = vault::FxType;
+using R = fx::Reverb;
+
+int envInt (const char* k, int def) { auto v = juce::SystemStats::getEnvironmentVariable (k, {}); return v.isEmpty() ? def : v.getIntValue(); }
+
+// the processing family of a preset (its lead part decides)
+juce::String family (const VaultPreset& p, const Meta& m)
+{
+    const auto& p0 = p.parts.front();
+    if (p.category == vault::catBellsMallets)
+    {
+        if (m.kind == kHeld) return "bowed";
+        if (m.bell || p0.source.startsWith ("bells.") || p0.label.contains ("Bell")) return "bells";
+        if (p0.source == "mallets.vibraphone") return "vibes";
+        if (p0.source == "mallets.glockenspiel" || p0.source == "keys.toy" || p0.label == "Music Box") return "glock";
+        return "wood";   // marimba, xylophone
+    }
+    if (m.kind == kPad) return "pad";
+    if (m.kind == kChop) return "chop";
+    if (p0.kind == VaultPartKind::synth) return "synthchoir";
+    if (p0.source.startsWith ("voice.choir") || m.noun.containsIgnoreCase ("Choir") || m.noun == "Requiem" || m.noun == "Basso Profundo") return "choir";
+    if (p0.kind == VaultPartKind::model && p0.get ("m.artic", 0.0f) >= 1.5f) return "breath";
+    return "solo";
+}
+
+// the chain, one slot per type, kept in the canonical (v2 rack) order
+struct Chain
+{
+    std::map<int, VaultFxSlot> slots;   // rank -> slot
+    explicit Chain (const std::vector<VaultFxSlot>& converted) { for (auto& x : converted) if (! has (x.type)) put (x); }
+    static int rank (FT t) { return vault::fxTypeInfo (t).rank; }
+    bool has (FT t) const { return slots.count (rank (t)) > 0; }
+    VaultFxSlot& put (const VaultFxSlot& x) { return slots[rank (x.type)] = x; }
+    VaultFxSlot& at (FT t) { if (! has (t)) put (VaultFxSlot::make (t)); return slots[rank (t)]; }
+    void drop (FT t) { slots.erase (rank (t)); }
+    float get (FT t, const char* id) const { return has (t) ? slots.at (rank (t)).get (id) : VaultFxSlot::make (t).get (id); }
+    void eqAdd (const char* id, float db) { auto& e = at (FT::eq); e.set (id, juce::jlimit (-18.0f, 18.0f, e.get (id) + db)); }
+    std::vector<VaultFxSlot> build() const
+    {
+        std::vector<VaultFxSlot> v;
+        for (auto& [r, x] : slots) v.push_back (x);
+        for (auto t : { FT::transient, FT::width, FT::compressor })   // at most 8 slots: the least important go first
+            if (v.size() > (size_t) vault::maxFxSlots)
+                for (auto it = v.begin(); it != v.end(); ++it) if (it->type == t) { v.erase (it); break; }
+        if (v.size() > (size_t) vault::maxFxSlots) v.resize ((size_t) vault::maxFxSlots);
+        return v;
+    }
+};
+
+VaultFxSlot rv (R type, float size, float decay, float mix, float predelay, float damping, float lowCut)
+{
+    return fx::reverb (type, size, decay, mix).set ("predelay", predelay).set ("damping", damping).set ("lowCut", lowCut);
+}
+VaultFxSlot echo (const char* div, float fb, float mix, fx::Delay mode = fx::Delay::pingPong, float hiCut = 3800.0f, float loCut = 300.0f)
+{
+    return fx::delay (div, fb, mix, mode).set ("hiCut", hiCut).set ("loCut", loCut);
+}
+
+// a sound macro whose knob default reproduces the designed sound exactly: every target has its designed value at the knob's
+// default d and moves `span` in total (span x d below it at 0, span x (1 - d) above it at 1)
+struct M
+{
+    VaultMacro m;
+    float d;
+    M (const char* name, float dflt) : d (dflt) { m.name = name; }
+    M& rel (const char* target, float span) { m.targets.push_back ({ target, -span * d, span * (1.0f - d), 0.0f }); return *this; }
+    M& abs (const char* target, float v, float span, float lo, float hi)
+    {
+        if (d > 1.0e-4f) span = std::min (span, (v - lo) / d);
+        if (d < 1.0f - 1.0e-4f) span = std::min (span, (hi - v) / (1.0f - d));
+        span = std::max (0.0f, span);
+        m.targets.push_back ({ target, v - span * d, v + span * (1.0f - d), 0.0f });
+        return *this;
+    }
+    // designed value v at the default, `atMax` at 1 (a drive's output trim that holds the level as the drive goes up)
+    M& toMax (const char* target, float v, float atMax)
+    {
+        const float span = d < 1.0f - 1.0e-4f ? (atMax - v) / (1.0f - d) : 0.0f;
+        m.targets.push_back ({ target, v - span * d, atMax, 0.0f });
+        return *this;
+    }
+    template <typename C> M& fxp (const C& c, FT t, const char* id, float span)
+    {
+        const auto& ti = vault::fxTypeInfo (t);
+        const auto& pi = ti.params[(size_t) ti.indexOf (id)];
+        const auto target = juce::String ("fx.") + ti.id + "." + id;
+        return abs (target.toRawUTF8(), c.get (t, id), span, pi.lo, pi.hi);
+    }
+};
+void setMacro (VaultPreset& p, int i, const M& m) { p.macros[(size_t) i] = m.m; p.macroDefaults[i] = m.d; }
+
+// movement
+VaultLfo vibrato (float rate, float cents) { return lfo (VaultLfo::sine).rate (rate).delay (0.4f).fade (0.7f).depth (0.0f).to ("pitch", cents / 100.0f); }
+VaultLfo breathing (float depth, float rate, float cutoffOct, float vol) { return lfo (VaultLfo::sine).rate (rate).free().depth (depth).to ("cutoff", cutoffOct).to ("volume", vol); }
+VaultLfo drift (float depth, float rate, float cutoffOct, float pan) { return lfo (VaultLfo::sine).rate (rate).free().depth (depth).to ("cutoff", cutoffOct).to ("pan", pan).to ("volume", 0.2f); }
+VaultLfo tapeWobble (float depth, float rate = 0.55f) { return lfo (VaultLfo::triangle).rate (rate).free().depth (depth).to ("pitch", 0.09f); }
+VaultLfo motor (float rate) { return lfo (VaultLfo::sine).rate (rate).depth (0.0f).to ("volume", 0.55f).to ("pan", 0.12f); }
+
+struct Plan
+{
+    juce::String tone = "Tone", space = "Hall", third, fourth;
+    bool shortS = false;
+};
+
+//------------------------------------------------------------------------------ 1. the chain + movement (no macros yet)
+Plan designChain (VaultPreset& p, const Meta& m)
+{
+    design (p);   // v2 -> v3: the role's colour slots (delay, lo-fi, drive, chorus, reverse, ghost, width) and the fitted EQ arrive here
+    Chain c (p.fx);
+    const auto& f = m.fam;
+    const auto& t = m.role;
+    const bool vox = p.category == vault::catVocalsChoir;
+    const float f0 = recipegate::soundingHz (p, vault::homeNote);
+    Plan pl;
+    pl.shortS = m.kind == kStrike || m.kind == kChop;
+    p.mod = {};
+    // the fitted stereo image is kept (a narrowed sound stays narrow)
+    const float fittedWidth = c.has (FT::width) ? c.get (FT::width, "width") : 1.0f;
+    auto width = [&] (float w, float mono) { c.put (fx::width (std::min (w, std::max (fittedWidth, 0.3f)), mono)); };
+    auto mid = [&] (float db, float hz, float q) { auto& e = c.at (FT::eq); e.set ("mid", db).set ("midFreq", hz).set ("midQ", q); };
+    const float mudHz = juce::jlimit (250.0f, 800.0f, 1.9f * f0);
+    // roles whose space IS the sound keep their reverb (type / size / mix) and only get the family's pre-delay / low cut
+    const bool roleSpace = t == "Concert Hall" || t == "Cathedral" || t == "Dream" || t == "Ambient" || t == "Haunted" || t == "Warped"
+                        || t == "Shadow" || t == "Reverse";
+    auto space = [&] (const VaultFxSlot& famRev)
+    {
+        if (roleSpace && c.has (FT::reverb))
+        {
+            auto& r = c.at (FT::reverb);
+            r.set ("predelay", t == "Concert Hall" || t == "Cathedral" ? 12.0f : famRev.get ("predelay")).set ("lowCut", famRev.get ("lowCut"))
+             .set ("damping", std::max (0.3f, famRev.get ("damping")));
+        }
+        else c.put (famRev);
+    };
+
+    // 1. the family's finished sound
+    if (f == "wood")
+    {   // marimba / xylophone: mallet attack, mud cut, gentle compression for the ring, a stage hall, an echo ready
+        c.put (fx::transient (0.05f));
+        c.put (fx::comp (-24, 2.0f, 15, 200, 1.0f, 0.5f));
+        if (f0 < 400.0f) mid (-1.5f, mudHz, 0.9f);
+        space (rv (R::hall, 0.55f, 0.9f, 0.18f, 15, 0.3f, 200));
+        if (! c.has (FT::delay)) c.put (echo ("1/8D", 0.3f, 0.0f));
+        width (0.6f, 120);
+        pl.tone = "Mallet"; pl.third = "Body"; pl.fourth = "Echo";
+    }
+    else if (f == "vibes")
+    {   // vibraphone: soft glue, a whisper of chorus, a plate, the motor (amplitude tremolo) ready on a macro
+        c.put (fx::transient (0.04f));
+        c.put (fx::comp (-22, 2.0f, 20, 250, 1.0f, 0.5f));
+        if (! c.has (FT::chorus)) c.put (fx::chorus (0.12f, 0.3f, 0.35f));
+        c.eqAdd ("high", -1.0f);
+        space (rv (R::plate, 0.5f, 1.0f, 0.2f, 20, 0.2f, 220));
+        if (! c.has (FT::delay)) c.put (echo ("1/8D", 0.3f, 0.0f));
+        width (0.65f, 120);
+        p.mod.lfo[0] = motor (m.noun.contains ("Slow") ? 3.2f : m.noun.contains ("Fast") ? 7.0f : 5.2f);
+        pl.tone = "Mallet"; pl.space = "Plate"; pl.third = "Motor"; pl.fourth = "Echo";
+    }
+    else if (f == "glock")
+    {   // glockenspiel / celesta / music box: the top tamed, a short dotted-eighth echo, a dark plate
+        c.eqAdd ("high", -2.0f);
+        if (! c.has (FT::delay)) c.put (echo ("1/8D", 0.25f, 0.1f, fx::Delay::pingPong, 3500, 300));
+        space (rv (R::plate, 0.45f, 0.9f, 0.2f, 10, 0.4f, 300));
+        width (0.6f, 150);
+        p.mod.lfo[1] = tapeWobble (0.0f, 0.6f);
+        pl.space = "Plate"; pl.third = "Wobble"; pl.fourth = "Echo";
+    }
+    else if (f == "bells")
+    {   // tubular bells / chimes / handbells / bell towers: clang tamed, a big hall with its lows cut
+        mid (-1.5f, 700, 0.9f);
+        c.eqAdd ("high", -1.0f);
+        space (rv (R::hall, 0.75f, 1.2f, 0.24f, 25, 0.3f, 250));
+        if (! c.has (FT::delay)) c.put (echo ("1/4D", 0.3f, 0.0f));
+        width (0.65f, 150);
+        pl.tone = "Strike"; pl.third = "Bloom"; pl.fourth = "Echo";
+    }
+    else if (f == "bowed")
+    {   // bowed vibes / glass harp / held layers: a slow ensemble, a long hall, a slow brightness + pan drift
+        if (! c.has (FT::chorus)) c.put (fx::ensemble (0.18f, 0.35f, 0.4f));
+        c.eqAdd ("high", -1.0f);
+        space (rv (R::hall, 0.8f, 1.4f, 0.28f, 35, 0.25f, 220));
+        width (0.7f, 150);
+        p.mod.lfo[1] = drift (0.25f, 0.07f, 0.6f, 0.4f);
+        pl.third = "Swell"; pl.fourth = "Drift";
+    }
+    else if (f == "choir")
+    {   // choir: light bus glue, the boxy band cut, a hall with pre-delay (the consonants first), slow breathing, delayed vibrato
+        c.put (fx::comp (-26, 1.6f, 40, 300, 1.0f, 0.5f));
+        mid (-1.5f, mudHz, 0.8f);
+        space (rv (R::hall, 0.75f, 1.3f, 0.26f, 30, 0.25f, 250));
+        width (0.7f, 120);
+        p.mod.lfo[0] = vibrato (5.2f, 18.0f);
+        p.mod.lfo[1] = breathing (0.5f, 0.09f, 0.3f, 0.06f);
+        pl.third = "Swell"; pl.fourth = "Vibrato";
+    }
+    else if (f == "solo")
+    {   // a sung voice: pop vocal compression, the box cut, a plate with 30 ms pre-delay, a quarter-note throw
+        c.put (fx::comp (-20, 3.0f, 8, 120, 2.0f, 0.7f));
+        mid (-1.0f, mudHz, 0.8f);
+        c.eqAdd ("high", -1.0f);
+        if (! c.has (FT::delay)) c.put (echo ("1/4", 0.3f, 0.08f, fx::Delay::pingPong, 4000, 300));
+        space (rv (R::plate, 0.5f, 1.0f, 0.2f, 30, 0.25f, 250));
+        width (0.55f, 120);
+        p.mod.lfo[0] = vibrato (5.4f, 25.0f);
+        pl.space = "Plate"; pl.third = "Throw"; pl.fourth = "Vibrato";
+    }
+    else if (f == "breath")
+    {   // breathy / whispered voices: soft compression, the air tamed, a plate, a throw
+        c.put (fx::comp (-22, 2.0f, 15, 150, 1.0f, 0.5f));
+        c.eqAdd ("high", -2.0f);
+        if (! c.has (FT::delay)) c.put (echo ("1/4", 0.3f, 0.06f, fx::Delay::pingPong, 3500, 300));
+        space (rv (R::plate, 0.5f, 1.0f, 0.2f, 25, 0.35f, 250));
+        width (0.6f, 120);
+        pl.space = "Plate"; pl.third = "Throw"; pl.fourth = "Width";
+    }
+    else if (f == "chop")
+    {   // vocal chops / "ha" hits: a punchy attack, fast compression, a short plate, a dotted-eighth ping-pong throw, grit ready
+        c.put (fx::transient (0.12f));
+        c.put (fx::comp (-20, 3.0f, 5, 100, 1.0f, 0.6f));
+        if (! c.has (FT::drive)) c.put (fx::drive (fx::Drive::tape, 0.0f, 0.6f, 5000).set ("cleanLow", 1.0f));
+        c.eqAdd ("high", -1.0f);
+        if (! c.has (FT::delay)) c.put (echo ("1/8D", 0.3f, 0.12f, fx::Delay::pingPong, 3500, 350));
+        space (rv (R::plate, 0.45f, 0.85f, 0.18f, 10, 0.25f, 300));
+        width (0.6f, 150);
+        pl.tone = "Snap"; pl.space = "Plate"; pl.third = "Throw"; pl.fourth = "Grit";
+    }
+    else if (f == "pad")
+    {   // vocal pads: ensemble chorus, a long hall, a slow drift of brightness and pan
+        if (! c.has (FT::chorus)) c.put (fx::ensemble (0.3f, 0.4f, 0.5f));
+        c.eqAdd ("low", 0.5f); c.eqAdd ("high", -1.0f);
+        space (rv (R::hall, 0.85f, 1.5f, 0.3f, 40, 0.3f, 220));
+        width (0.75f, 150);
+        p.mod.lfo[1] = drift (0.25f, 0.07f, 0.8f, 0.5f);
+        pl.space = "Space"; pl.third = "Motion"; pl.fourth = "Ensemble";
+    }
+    else   // synth choir
+    {
+        if (! c.has (FT::chorus)) c.put (fx::ensemble (0.3f, 0.5f, 0.45f));
+        space (rv (R::hall, 0.75f, 1.3f, 0.26f, 30, 0.3f, 220));
+        width (0.7f, 150);
+        p.mod.lfo[0] = vibrato (5.2f, 20.0f);
+        p.mod.lfo[1] = breathing (0.5f, 0.09f, 0.3f, 0.05f);
+        pl.third = "Ensemble"; pl.fourth = "Vibrato";
+    }
+
+    // 2. the role as a processing style
+    juce::String roleMacro;
+    if (t == "Concert Hall" || t == "Cathedral")
+    {
+        c.eqAdd ("high", -1.5f);
+        width (0.6f, 150);
+    }
+    else if (t == "Felt" || t == "Intimate" || t == "Behind the Wall")
+    {
+        c.put (rv (R::room, 0.4f, 0.9f, t == "Behind the Wall" ? 0.22f : 0.16f, 5, 0.4f, 200));
+        pl.space = "Room"; roleMacro = "Warmth";
+    }
+    else if (t == "Night" || t == "Trap")
+    {
+        if (c.has (FT::delay)) c.at (FT::delay).set ("hiCut", 3800.0f).set ("loCut", 300.0f);
+        roleMacro = vox ? "Throw" : "Echo";
+        if (t == "Trap" && c.has (FT::drive)) c.at (FT::drive).set ("cleanLow", 1.0f).set ("tone", std::min (5000.0f, c.get (FT::drive, "tone")));
+    }
+    else if (t == "Dusty" || t == "Warped" || t == "Lo-Fi")
+    {
+        p.mod.lfo[1] = tapeWobble (t == "Warped" ? 0.7f : 0.45f);
+        if (t != "Warped") { c.put (rv (R::room, 0.4f, 0.9f, 0.16f, 5, 0.45f, 200)); pl.space = "Room"; }
+        roleMacro = t == "Lo-Fi" ? "Crush" : "Tape";
+    }
+    else if (t == "Dampened" || t == "Stab")
+    {   // a dead stroke in a small room (a chord of strikes that peaks too far gets a fast compressor in the gate fixes)
+        c.put (rv (R::room, 0.35f, 0.8f, 0.15f, 5, 0.35f, 220));
+        pl.space = "Room";
+    }
+    else if (t == "Blooming" || t == "Swelling") roleMacro = "Swell";
+    else if (t == "Reverse") roleMacro = "Reverse";
+    else if (t == "Dream" || t == "Ambient" || t == "Haunted")
+    {
+        p.mod.lfo[1] = drift (0.3f, 0.06f, 0.7f, 0.6f);
+        pl.space = "Space"; roleMacro = "Drift";
+    }
+    else if (t == "Heavy") roleMacro = "Sub";
+    else if (t == "Twin") roleMacro = "Octave";
+    else if (t == "Glimmer") roleMacro = "Sparkle";
+    else if (t == "Glowing") roleMacro = "Halo";
+    else if (t == "Airy") roleMacro = "Breath";
+    else if (t == "Shimmer" || t == "Wide") roleMacro = vox ? "Ensemble" : "Chorus";
+    else if (t == "Gritty")
+    {
+        if (c.has (FT::drive)) c.at (FT::drive).set ("cleanLow", 1.0f).set ("tone", std::min (5000.0f, c.get (FT::drive, "tone")));
+        roleMacro = "Grit";
+    }
+    else if (t == "Shadow") roleMacro = "Shadow";
+    // a role that brings its own LFO 2 (tape wobble, drift) takes the family's LFO 2 macro away; a short role has no swell
+    const bool roleLfo2 = t == "Dusty" || t == "Warped" || t == "Lo-Fi" || t == "Dream" || t == "Ambient" || t == "Haunted";
+    if (roleLfo2 && (pl.third == "Motion" || pl.third == "Drift" || pl.third == "Wobble")) pl.third = pl.shortS ? "Width" : "Swell";
+    if ((t == "Dampened" || t == "Stab") && (pl.third == "Swell" || pl.third == "Bloom")) pl.third = "Width";
+    if (roleMacro.isNotEmpty())
+    {
+        if (roleMacro == pl.third) pl.third = pl.fourth;
+        pl.fourth = roleMacro;
+    }
+    if (pl.third == pl.fourth) pl.fourth = pl.third == "Width" ? "Body" : "Width";
+
+    // 3. rhythm presets
+    if (m.pattern == 1)
+    {   // marimba arpeggio: up, sixteenths, one octave
+        p.arp = arp (VaultArp::up, "1/16", 1, 0.6f, 0.0f, true);
+        pl.third = "Length";
+    }
+    else if (m.pattern == 2)
+    {   // music box arpeggio: up-down eighths
+        p.arp = arp (VaultArp::upDown, "1/8", 1, 0.8f, 0.0f, true);
+        pl.third = "Length";
+    }
+    else if (m.pattern == 3)
+    {   // gated choir: sixteenths
+        p.gate = gate ("1/16", { 1, 0, 1, 0.6f, 1, 0, 1, 0, 1, 0, 1, 0.6f, 1, 0, 1, 1 }, 1.0f, 0.3f, 1.0f, true);
+        pl.third = "Gate";
+    }
+    else if (m.pattern == 4)
+    {   // gated vocal pad: sixteenths
+        p.gate = gate ("1/16", { 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0 }, 1.0f, 0.3f, 1.0f, true);
+        pl.third = "Gate";
+    }
+    if (pl.third == pl.fourth) pl.fourth = pl.third == "Width" ? "Body" : "Width";
+
+    p.fx = c.build();
+    p.finish = 0.04f;
+    return pl;
+}
+
+//------------------------------------------------------------------------------ 2. C5 comfort of the whole v3 sound
+struct Probe
+{
+    juce::AudioBuffer<float> c5;
+    float loud = -120, s25 = 0, s6 = 0, s8 = 0, h1 = 0, centroid = 0, peak127 = 0, tailEnd = -200, tailMax = -200;
+};
+Probe probe (const VaultPreset& p, const float* mv, double total, bool withPeak = true)
+{
+    Probe r;
+    const double sr = recipegate::sr;
+    juce::MidiBuffer mb;
+    mb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 102), 0);
+    mb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (recipegate::holdSeconds * sr));
+    r.c5 = VaultEngine::renderMidi (p, mb, (int) (total * sr), sr, mv);
+    r.loud = vaultqc::analyse (r.c5, sr, recipegate::holdSeconds).loud;
+    const auto sp = recipegate::spectrum (r.c5, 0.05);
+    const double tot = std::max (1e-20, recipegate::bandPower (sp, 20, 20000));
+    r.s25 = (float) (recipegate::bandPower (sp, 2000, 5000) / tot);
+    r.s6 = (float) (recipegate::bandPower (sp, 6000, 20000) / tot);
+    r.s8 = (float) (recipegate::bandPower (sp, 8000, 20000) / tot);
+    double num = 0;
+    for (int i = 1; i < (int) sp.pow.size(); ++i) num += i * sp.binHz * sp.pow[(size_t) i];
+    r.centroid = (float) (num / tot);
+    const float f0 = recipegate::soundingHz (p, vault::homeNote);
+    const float h1 = recipegate::peakDb (sp, f0 * 0.97, f0 * 1.03);
+    float strongest = h1;
+    for (int k = 2; k <= 24 && k * f0 < 16000.0f; ++k) strongest = std::max (strongest, recipegate::peakDb (sp, k * f0 * 0.985, k * f0 * 1.015));
+    r.h1 = h1 - strongest;
+    const int fr = (int) (0.01 * sr), nf = r.c5.getNumSamples() / fr;
+    for (int fi = 0; fi < nf; ++fi)
+    {
+        double acc = 0;
+        for (int i = fi * fr; i < (fi + 1) * fr; ++i) acc += 0.5 * ((double) r.c5.getSample (0, i) * r.c5.getSample (0, i) + (double) r.c5.getSample (1, i) * r.c5.getSample (1, i));
+        const float e = vaultaudit::db (acc / fr + 1e-20);
+        r.tailMax = std::max (r.tailMax, e);
+        if (fi >= nf - 10) r.tailEnd = std::max (r.tailEnd, e);
+    }
+    r.peak127 = r.c5.getMagnitude (0, r.c5.getNumSamples());
+    if (withPeak)
+    {
+        juce::MidiBuffer hb;
+        hb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 127), 0);
+        hb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (0.7 * sr));
+        const auto hard = VaultEngine::renderMidi (p, hb, (int) (0.8 * sr), sr, mv);
+        r.peak127 = std::max (hard.getMagnitude (0, hard.getNumSamples()), r.peak127);
+    }
+    return r;
+}
+// the designed v3 sound keeps a margin under the gate's comfort limits (the macros may move from there); the inharmonic
+// bells are exempt from the fundamental rule, every voice and bar keeps it
+juce::String comfort (VaultPreset& p, bool bell)
+{
+    const float ceil = recipegate::centroidCeiling (p.category) - 80.0f;
+    juce::String log;
+    for (int it = 0; it < 10; ++it)
+    {
+        const auto x = probe (p, p.macroDefaults, 3.0, false);
+        const bool bright = x.s25 > 0.075f || x.s6 > 0.02f || x.s8 > 0.007f || x.centroid > ceil;
+        const bool weak = ! bell && x.h1 < -2.5f;
+        if (! bright && ! weak) return log;
+        int e = -1;
+        for (int i = 0; i < (int) p.fx.size(); ++i) if (p.fx[(size_t) i].type == FT::eq) e = i;
+        if (e < 0)
+        {   // an EQ at its canonical place (before delay / reverb)
+            Chain c (p.fx); c.at (FT::eq); p.fx = c.build();
+            continue;
+        }
+        auto& q = p.fx[(size_t) e];
+        if (bright)
+        {
+            log << "h";
+            q.set ("high", std::max (-16.0f, q.get ("high") - 2.0f)).set ("highFreq", std::min (q.get ("highFreq"), 5000.0f));
+            for (auto& s : p.fx) if (s.type == FT::drive) s.set ("tone", std::max (2500.0f, std::min (s.get ("tone"), 6000.0f) * 0.85f));
+            if (q.get ("high") <= -15.9f) return log + "!";
+            continue;
+        }
+        log << "l";
+        const float f0 = recipegate::soundingHz (p, vault::homeNote);
+        q.set ("lowFreq", juce::jlimit (30.0f, 1000.0f, std::max (q.get ("lowFreq"), 1.4f * f0)));
+        if (q.get ("low") >= 12.0f) return log + "!";
+        q.set ("low", std::min (12.0f, q.get ("low") + 1.5f));
+    }
+    return log;
+}
+
+//------------------------------------------------------------------------------ 3. the sound macros
+void designMacros (VaultPreset& p, const Meta& meta, const Plan& pl)
+{
+    Chain c (p.fx);
+    auto has = [&] (FT x) { return c.has (x); };
+    const bool vox = p.category == vault::catVocalsChoir;
+
+    // 1. tone: the mallet / strike / snap (attack + brightness), or the brightness of a held sound
+    {
+        const auto& n = pl.tone;
+        M m (n.toRawUTF8(), 0.6f);
+        if (n == "Mallet" || n == "Strike" || n == "Snap")
+        {   // soft felt .. hard mallet: the attack and the brightness together (darker has more room than brighter)
+            m = M (n.toRawUTF8(), 0.6f);
+            if (has (FT::transient)) m.fxp (c, FT::transient, "attack", 0.7f);
+            m.rel ("cutoff", 4.0f);
+            if (n == "Snap" && has (FT::compressor)) m.fxp (c, FT::compressor, "threshold", 10.0f);
+        }
+        else m.rel ("cutoff", 5.0f).fxp (c, FT::eq, "tilt", 10.0f);
+        setMacro (p, 0, m);
+    }
+    // 2. space: the reverb amount, length and pre-delay (a delay that is part of the sound comes along)
+    {
+        M m (pl.space.toRawUTF8(), 0.4f);
+        const bool small = c.get (FT::reverb, "type") == (float) R::room;
+        m.fxp (c, FT::reverb, "mix", 0.6f).fxp (c, FT::reverb, "decay", small ? 2.0f : 1.6f);
+        if (! small) m.fxp (c, FT::reverb, "predelay", 40.0f);
+        if (has (FT::delay) && c.get (FT::delay, "mix") > 0.05f && pl.third != "Echo" && pl.fourth != "Echo" && pl.third != "Throw" && pl.fourth != "Throw")
+            m.fxp (c, FT::delay, "mix", 0.25f);
+        setMacro (p, 1, m);
+    }
+    auto layerMacro = [&] (const char* name, bool upToo) -> M
+    {
+        const int k = meta.addIdx >= 0 && meta.addIdx < (int) p.parts.size() ? meta.addIdx : (int) p.parts.size() - 1;
+        const float l = p.parts[(size_t) k].level;
+        M m (name, upToo ? 0.5f : 1.0f);
+        m.abs (("layer" + juce::String (k + 1) + ".level").toRawUTF8(), l, upToo ? 2.0f * l : l, 0.0f, 2.0f);
+        return m;
+    };
+    // 3 / 4. the family / role characters
+    auto make = [&] (const juce::String& n) -> M
+    {
+        if (n == "Swell" || n == "Bloom") { M m (n.toRawUTF8(), 0.0f); m.rel ("quick.attack", 0.42f).rel ("quick.release", 0.22f); return m; }
+        if (n == "Vibrato") { M m ("Vibrato", 0.0f); m.abs ("lfo1.depth", 0.0f, 1.0f, 0, 1); return m; }
+        if (n == "Motor") { M m ("Motor", 0.0f); m.abs ("lfo1.depth", 0.0f, 1.0f, 0, 1); return m; }
+        if (n == "Wobble") { M m ("Wobble", 0.0f); m.abs ("lfo2.depth", p.mod.lfo[1].depth, 1.0f, 0, 1); return m; }
+        if (n == "Motion" || n == "Drift")
+        {   // from the designed slow drift to a deeper, faster one, wider
+            const float rate = p.mod.lfo[1].rate, dep = p.mod.lfo[1].depth;
+            M m (n.toRawUTF8(), 0.0f); m.abs ("lfo2.depth", dep, 1.0f - dep, 0, 1).abs ("lfo2.rate", rate, std::max (0.0f, 1.5f - rate), 0.02f, 2.0f);
+            if (has (FT::width)) m.fxp (c, FT::width, "width", 0.25f);
+            return m;
+        }
+        if (n == "Body" || n == "Warmth") { M m (n.toRawUTF8(), 0.5f); m.fxp (c, FT::eq, "low", 9.0f).fxp (c, FT::eq, "mid", 4.0f); return m; }
+        if (n == "Grit" || n == "Tape")
+        {
+            // a drive that is silent as designed starts the knob at 0
+            M m (n.toRawUTF8(), c.get (FT::drive, "amount") < 0.01f ? 0.0f : n == "Tape" ? 0.5f : 0.2f);
+            if (has (FT::drive)) m.fxp (c, FT::drive, "amount", n == "Grit" ? 0.8f : 0.5f).toMax ("fx.drive.output", c.get (FT::drive, "output"), c.get (FT::drive, "output") - 6.0f);
+            if (n == "Tape" && has (FT::lofi)) m.fxp (c, FT::lofi, "wow", 0.6f);
+            if (n == "Tape" && p.mod.lfo[1].dests.size() == 1 && p.mod.lfo[1].dests[0].target == "pitch") m.abs ("lfo2.depth", p.mod.lfo[1].depth, 1.0f, 0, 1);
+            return m;
+        }
+        if (n == "Crush")
+        {
+            M m ("Crush", 0.5f); m.fxp (c, FT::lofi, "crush", 0.6f).fxp (c, FT::lofi, "mix", 0.6f);
+            if (p.mod.lfo[1].dests.size() == 1 && p.mod.lfo[1].dests[0].target == "pitch") m.abs ("lfo2.depth", p.mod.lfo[1].depth, 1.0f, 0, 1);
+            return m;
+        }
+        if (n == "Echo" || n == "Throw")
+        {
+            const float dm = c.get (FT::delay, "mix");
+            M m (n.toRawUTF8(), dm > 0.05f ? 0.2f : 0.0f);
+            m.fxp (c, FT::delay, "mix", 0.5f).fxp (c, FT::delay, "feedback", 0.4f);
+            return m;
+        }
+        if (n == "Width") { M m ("Width", 0.5f); m.fxp (c, FT::width, "width", 0.5f); return m; }
+        if (n == "Chorus" || n == "Ensemble") { M m (n.toRawUTF8(), c.get (FT::chorus, "mix") < 0.01f ? 0.0f : 0.4f); m.fxp (c, FT::chorus, "mix", 0.7f).fxp (c, FT::chorus, "depth", 0.5f); return m; }
+        if (n == "Reverse") { M m ("Reverse", 0.5f); m.fxp (c, FT::reverse, "mix", 0.8f); return m; }
+        if (n == "Shadow") { M m ("Shadow", 0.5f); m.fxp (c, FT::ghost, "mix", 0.8f); return m; }
+        if (n == "Gate") { M m ("Gate", 1.0f); m.abs ("gate.depth", p.gate.depth, 1.0f, 0, 1); return m; }
+        if (n == "Length") { M m ("Length", 0.5f); m.abs ("arp.gate", p.arp.gate, 0.8f, 0.1f, 1.0f); return m; }
+        if (n == "Sub") return layerMacro ("Sub", true);
+        if (n == "Octave") return layerMacro ("Octave", true);
+        if (n == "Halo") return layerMacro ("Halo", true);
+        if (n == "Breath") return layerMacro ("Breath", true);
+        if (n == "Sparkle") return layerMacro ("Sparkle", false);   // an octave-up layer: only down from the design
+        M m ("Width", 0.5f); m.fxp (c, FT::width, "width", 0.5f); return m;
+    };
+    setMacro (p, 2, make (pl.third));
+    setMacro (p, 3, make (pl.fourth));
+
+    // performance: mod wheel = vibrato / motor where there is one (more space otherwise), aftertouch = expression on held
+    // sounds, velocity keeps the touch against the compressor
+    if (! p.mod.lfo[0].dests.empty()) p.mod.modWheel.push_back ({ "lfo1.depth", 0.8f });
+    else p.mod.modWheel.push_back ({ "fx.reverb.mix", 0.25f });
+    if (! pl.shortS) p.mod.aftertouch.push_back ({ "volume", 0.25f });
+    const bool deadStroke = meta.role == "Dampened" || meta.role == "Stab";   // their compressor holds the peaks: no velocity lift
+    if ((has (FT::compressor) || has (FT::drive)) && ! deadStroke) p.mod.velocity.push_back ({ "volume", pl.shortS ? 0.7f : 0.45f });
+    juce::ignoreUnused (vox);
+}
+
+//------------------------------------------------------------------------------ macro extremes against the comfort rules
+juce::String judge (const Probe& x, const Probe& ref, float lin, bool longTail, bool bell)
+{
+    if (x.peak127 * lin >= 0.885f && x.peak127 > ref.peak127 * 1.06f) return "clip";
+    if (x.s25 > 0.10f && x.s25 > ref.s25 + 0.005f) return "harsh-2-5k";
+    if ((x.s6 > 0.03f && x.s6 > ref.s6 + 0.002f) || (x.s8 > 0.01f && x.s8 > ref.s8 + 0.001f)) return "piercing-highs";
+    if (! bell && x.h1 < -3.0f && x.h1 < ref.h1 - 0.5f) return "fundamental";
+    if (x.loud > ref.loud + 4.0f) return "louder";
+    if (longTail && x.tailEnd > x.tailMax - 55.0f && x.tailEnd > ref.tailEnd + 3.0f) return "tail";
+    return {};
+}
+float extremeDistance (const Probe& a, const Probe& b)
+{
+    const std::vector<std::pair<double, double>> segs { { 0.0, 0.15 }, { 0.15, 0.8 }, { 0.8, 1.4 }, { 1.5, 2.5 } };
+    const auto x = recipegate::melFrames (a.c5, segs), y = recipegate::melFrames (b.c5, segs);
+    double s = 0;
+    for (size_t i = 0; i < x.size() && i < y.size(); ++i) s += (x[i] - y[i]) * (x[i] - y[i]);
+    return (float) std::sqrt (s / std::max<size_t> (1, x.size()));
+}
+float amDepth (const juce::AudioBuffer<float>& b)
+{
+    const int fr = (int) (0.01 * recipegate::sr);
+    std::vector<float> e;
+    for (int f = 20; f < 140 && (f + 1) * fr <= b.getNumSamples(); ++f)
+    {
+        double acc = 0;
+        for (int i = f * fr; i < (f + 1) * fr; ++i) acc += (double) b.getSample (0, i) * b.getSample (0, i) + (double) b.getSample (1, i) * b.getSample (1, i);
+        e.push_back (vaultaudit::db (acc / fr + 1.0e-12));
+    }
+    double am = 0;
+    for (int f = 7; f + 7 < (int) e.size(); ++f)
+    {
+        double m = 0;
+        for (int g = f - 7; g <= f + 7; ++g) m += e[(size_t) g];
+        am += std::pow (e[(size_t) f] - m / 15.0, 2.0);
+    }
+    return (float) std::sqrt (am / std::max (1, (int) e.size() - 14));
+}
+float tailRatioDb (const juce::AudioBuffer<float>& b)
+{
+    auto energy = [&b] (double t0, double t1)
+    {
+        double acc = 1.0e-12;
+        for (int c = 0; c < 2; ++c)
+            for (int i = (int) (t0 * recipegate::sr); i < std::min (b.getNumSamples(), (int) (t1 * recipegate::sr)); ++i) acc += (double) b.getSample (c, i) * b.getSample (c, i);
+        return acc;
+    };
+    return (float) (10.0 * std::log10 (energy (1.6, 2.6) / energy (0.05, 1.4)));
+}
+struct MacroReport { int fixes = 0, checked = 0; juce::StringArray harsh, quiet; };
+MacroReport checkMacros (VaultPreset& p, float lin, bool bell)
+{
+    MacroReport mr;
+    bool longTail = false;
+    for (auto& m : p.macros) for (auto& t : m.targets) if (t.target.contains ("reverb") || t.target.contains ("delay") || t.target.contains ("release")) longTail = true;
+    const double total = longTail ? 8.0 : 3.5;
+    const auto ref = probe (p, p.macroDefaults, total);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& mac = p.macros[(size_t) i];
+        if (mac.targets.empty()) continue;
+        ++mr.checked;
+        Probe lo, hi;
+        for (int round = 0; round < 5; ++round)
+        {
+            float mv[4];
+            std::copy (std::begin (p.macroDefaults), std::end (p.macroDefaults), mv);
+            mv[i] = 0.0f; lo = probe (p, mv, total);
+            mv[i] = 1.0f; hi = probe (p, mv, total);
+            const auto badLo = judge (lo, ref, lin, longTail, bell), badHi = judge (hi, ref, lin, longTail, bell);
+            if (badLo.isEmpty() && badHi.isEmpty()) break;
+            if (round == 4) { mr.harsh.add (p.name + ": " + mac.name + " (" + (badLo.isNotEmpty() ? badLo : badHi) + ")"); break; }
+            if (envInt ("PV_MACROLOG", 0) != 0) std::printf ("  narrow %s / %s: %s | %s\n", p.name.toRawUTF8(), mac.name.toRawUTF8(), badLo.toRawUTF8(), badHi.toRawUTF8());
+            // shorten the failing side (the last round takes it away); the designed point stays where it is
+            const float k = round == 3 ? 0.0f : 0.55f;
+            const float d = p.macroDefaults[i];
+            const float kl = badLo.isNotEmpty() ? k : 1.0f, kh = badHi.isNotEmpty() ? k : 1.0f;
+            for (auto& t : mac.targets)
+            {
+                const float v = t.min + (t.max - t.min) * d;
+                t.min = v + (t.min - v) * kl;
+                t.max = v + (t.max - v) * kh;
+            }
+            const float den = d * kl + (1 - d) * kh;
+            if (den > 1.0e-6f) p.macroDefaults[i] = d * kl / den;
+            ++mr.fixes;
+        }
+        const bool pitchLfo = [&]
+        {
+            for (auto& t : mac.targets)
+                if (t.target.startsWith ("lfo") && t.target.endsWith ("depth"))
+                    for (auto& dd : p.mod.lfo[juce::jlimit (0, 1, t.target.substring (3, 4).getIntValue() - 1)].dests)
+                        if (dd.target == "pitch" && std::abs (t.max - t.min) * std::abs (dd.amount) >= 0.04f) return true;
+            return false;
+        }();
+        const float dist = extremeDistance (lo, hi);
+        if (envInt ("PV_MACROLOG", 0) != 0)
+            std::printf ("  macro %s / %s: dist %.2f, loud %.1f / %.1f / %.1f, AM %.2f / %.2f, tail %.1f / %.1f dB\n", p.name.toRawUTF8(), mac.name.toRawUTF8(), dist,
+                         lo.loud, ref.loud, hi.loud, amDepth (lo.c5), amDepth (hi.c5), tailRatioDb (lo.c5), tailRatioDb (hi.c5));
+        if (dist < 1.0f && std::abs (lo.loud - hi.loud) < 1.0f && std::abs (amDepth (lo.c5) - amDepth (hi.c5)) < 0.4f && ! pitchLfo
+            && std::abs (tailRatioDb (lo.c5) - tailRatioDb (hi.c5)) < 2.0f)
+            mr.quiet.add (p.name + ": " + mac.name);
+    }
+    return mr;
+}
+
+//------------------------------------------------------------------------------ 4. gate failures of the finished sound
+// the macros / routings come off before a fix (their designed points are the chain's values) and are made again after
+void strip (VaultPreset& p)
+{
+    for (int i = 0; i < 4; ++i) { p.macros[(size_t) i] = {}; p.macroDefaults[i] = 0.5f; }
+    p.mod.modWheel.clear(); p.mod.velocity.clear(); p.mod.aftertouch.clear();
+}
+// a mechanical fix of the chain (or the parts) for a gate failure; false = no fix for it
+bool fixV3 (VaultPreset& p, const juce::String& fail)
+{
+    Chain c (p.fx);
+    if (fail == "mono-loss" || fail == "low-side")
+    {
+        if (c.has (FT::chorus)) c.at (FT::chorus).set ("mix", c.get (FT::chorus, "mix") * 0.4f);
+        auto& w = c.at (FT::width);
+        w.set ("width", std::min (0.5f, w.get ("width")) * 0.7f).set ("monoBelow", std::max (200.0f, w.get ("monoBelow")));
+        for (auto& part : p.parts) { part.pan *= 0.6f; if (part.kind == VaultPartKind::sample) part.set ("s.width", std::min (0.5f, part.get ("s.width", 1.0f))); }
+    }
+    else if (fail == "tail")
+    {
+        if (c.has (FT::reverb)) c.at (FT::reverb).set ("decay", std::max (0.25f, c.get (FT::reverb, "decay") * 0.7f)).set ("mix", c.get (FT::reverb, "mix") * 0.85f);
+        if (c.has (FT::delay)) c.at (FT::delay).set ("feedback", std::min (0.2f, c.get (FT::delay, "feedback")));
+        for (auto& part : p.parts)
+        {
+            if (part.kind == VaultPartKind::sample)
+            {
+                if (part.get ("s.oneShot", -1.0f) != 0.0f) { const float d = part.get ("s.decay", 0.0f); part.set ("s.decay", d > 0.0f ? d * 0.7f : 5.5f); part.set ("s.sustain", 0.0f); }
+                else part.set ("s.release", std::min (part.get ("s.release", 1.0f) > 0 ? part.get ("s.release", 1.0f) : 1.0f, 0.8f));
+            }
+            else if (part.kind == VaultPartKind::synth) part.set ("release", std::min (part.get ("release", 0.3f), 0.8f));
+            else part.set ("m.release", std::min (part.get ("m.release", 1.0f), 1.0f));
+        }
+    }
+    else if (fail == "harsh-2-5k" || fail == "piercing-highs" || fail == "air-8k" || fail == "centroid")
+    {
+        auto& e = c.at (FT::eq);
+        e.set ("high", std::max (-16.0f, e.get ("high") - 3.0f)).set ("highFreq", std::min (4500.0f, e.get ("highFreq"))).set ("tilt", std::max (-6.0f, e.get ("tilt") - 1.0f));
+        if (c.has (FT::drive)) c.at (FT::drive).set ("tone", std::max (2500.0f, std::min (6000.0f, c.get (FT::drive, "tone")) * 0.8f));
+        if (c.has (FT::reverb)) c.at (FT::reverb).set ("damping", std::min (1.0f, c.get (FT::reverb, "damping") + 0.2f));
+        if (std::abs (e.get ("mid")) < 0.01f) e.set ("mid", -3.0f).set ("midFreq", 3200.0f).set ("midQ", 0.8f);   // the 2-5 kHz band itself
+        const bool cut = lowerCut (p, 0.8f);
+        if (e.get ("high") <= -15.9f && ! cut) return false;
+    }
+    else if (fail == "chord-peak")
+    {   // the strike of a chord peaks far over the limiter: a faster, deeper compressor on the attack
+        if (c.has (FT::compressor)) c.at (FT::compressor).set ("threshold", std::max (-48.0f, c.get (FT::compressor, "threshold") - 6.0f)).set ("attack", 1.0f)
+                                                       .set ("ratio", std::max (3.0f, c.get (FT::compressor, "ratio"))).set ("mix", 1.0f);
+        else c.put (fx::comp (-28, 3.0f, 1.0f, 120, 2.0f, 1.0f));
+    }
+    else if (fail == "too-quiet")
+    {   // a short, quiet sound: every part's calibrated gain up 3 dB (the trim then lifts less)
+        bool any = false;
+        for (auto& part : p.parts) if (part.get ("gain", 0.0f) < 11.9f) { part.set ("gain", std::min (12.0f, part.get ("gain", 0.0f) + 3.0f)); any = true; }
+        if (! any) return false;
+    }
+    else if (fail == "velocity")
+    {
+        if (c.has (FT::compressor)) c.at (FT::compressor).set ("ratio", 1.5f).set ("mix", c.get (FT::compressor, "mix") * 0.6f);
+        for (auto& part : p.parts) part.set (part.kind == VaultPartKind::sample ? "s.velSens" : part.kind == VaultPartKind::synth ? "velSens" : "m.velSens", 1.0f);
+    }
+    else if (fail == "click-start" || fail == "click-end")
+    {
+        for (auto& part : p.parts)
+            if (fail == "click-start") { if (part.kind == VaultPartKind::sample) part.set ("s.attack", std::max (0.004f, part.get ("s.attack", 0.0f))); else if (part.kind == VaultPartKind::synth) part.set ("attack", std::max (0.004f, part.get ("attack", 0.002f))); }
+            else { if (part.kind == VaultPartKind::sample) part.set ("s.release", std::max (0.12f, part.get ("s.release", 0.0f))); else if (part.kind == VaultPartKind::synth) part.set ("release", std::max (0.12f, part.get ("release", 0.3f))); }
+        if (fail == "click-start" && c.has (FT::transient)) c.at (FT::transient).set ("attack", c.get (FT::transient, "attack") * 0.5f);
+    }
+    else return false;
+    p.fx = c.build();
+    return true;
+}
+// a near-duplicate of an earlier preset: the role is pushed further (more of its space, echo, chorus and movement)
+void pushRole (VaultPreset& p)
+{
+    Chain c (p.fx);
+    if (c.has (FT::reverb))
+        c.at (FT::reverb).set ("mix", std::min (0.5f, c.get (FT::reverb, "mix") * 1.35f + 0.04f)).set ("size", std::min (1.0f, c.get (FT::reverb, "size") + 0.12f))
+                         .set ("decay", std::min (2.5f, c.get (FT::reverb, "decay") * 1.2f));
+    if (c.has (FT::delay) && c.get (FT::delay, "mix") > 0.05f) c.at (FT::delay).set ("mix", std::min (0.35f, c.get (FT::delay, "mix") * 1.4f));
+    if (c.has (FT::chorus) && c.get (FT::chorus, "mix") > 0.05f) c.at (FT::chorus).set ("mix", std::min (0.7f, c.get (FT::chorus, "mix") * 1.5f));
+    if (! p.mod.lfo[1].dests.empty()) p.mod.lfo[1].depth = std::min (1.0f, std::max (0.3f, p.mod.lfo[1].depth * 1.5f));
+    p.fx = c.build();
+}
+} // namespace v3
+
+// the ids the shipped bank gave these sounds (the v2 bank as assembled: 385 presets). A v2 sound keeps its id and name;
+// a sound the selection picks today that the shipped bank did not have gets the next free id of its category, so an
+// id never changes its sound.
+const std::vector<std::pair<const char*, const char*>>& shippedIds()
+{
+    static const std::vector<std::pair<const char*, const char*>> t {
+{ "cv.bell.0001", "Marimba" }, { "cv.bell.0002", "Vibraphone" }, { "cv.bell.0003", "Xylophone" }, 
+{ "cv.bell.0004", "Glockenspiel" }, { "cv.bell.0005", "Tubular Bells" }, { "cv.bell.0006", "Celesta" }, 
+{ "cv.bell.0007", "Hand Chimes" }, { "cv.bell.0008", "Glass Harp" }, { "cv.bell.0009", "Music Box Comb" }, 
+{ "cv.bell.0010", "Bowed Vibraphone" }, { "cv.bell.0011", "Motor Vibes" }, { "cv.bell.0013", "Hard Vibraphone" }, 
+{ "cv.bell.0015", "Concert Chimes" }, { "cv.bell.0016", "Church Chimes" }, { "cv.bell.0017", "Wine Glass Tremolo" }, 
+{ "cv.bell.0018", "High Marimba" }, { "cv.bell.0019", "High Vibraphone" }, { "cv.bell.0020", "Soft Xylophone" }, 
+{ "cv.bell.0021", "High Hand Chimes" }, { "cv.bell.0023", "Low Music Box Comb" }, { "cv.bell.0024", "High Bowed Vibraphone" }, 
+{ "cv.bell.0028", "High Hard Vibraphone" }, { "cv.bell.0029", "Bell Tower" }, { "cv.bell.0030", "Crystal Bell" }, 
+{ "cv.bell.0031", "Handbell" }, { "cv.bell.0034", "High Music Box Comb" }, { "cv.bell.0036", "Low Bell Tower" }, 
+{ "cv.bell.0037", "Ice Crystal Bell" }, { "cv.bell.0038", "Gong Bell" }, { "cv.bell.0041", "Trap Bells" }, 
+{ "cv.bell.0042", "Celesta and Harp" }, { "cv.bell.0045", "Piano and Vibes" }, { "cv.bell.0046", "Chimes and Marimba" }, 
+{ "cv.bell.0047", "Bowed Glass" }, { "cv.bell.0049", "Cathedral Bells" }, { "cv.bell.0050", "Bells and Choir" }, 
+{ "cv.bell.0051", "Music Box and Strings" }, { "cv.bell.0052", "Vibes and Flute" }, { "cv.bell.0053", "Midnight Bells" }, 
+{ "cv.bell.0056", "Marimba and Nylon" }, { "cv.bell.0057", "Vibes and Upright Bass" }, { "cv.bell.0058", "Xylophone and Marimba" }, 
+{ "cv.bell.0059", "Xylophone & Glockenspiel" }, { "cv.bell.0060", "Ice Bells" }, { "cv.bell.0061", "Bells and Timpani" }, 
+{ "cv.bell.0063", "Vibes and Choir" }, { "cv.bell.0064", "Celesta and Strings" }, { "cv.bell.0065", "Music Box and Celesta" }, 
+{ "cv.bell.0066", "Trap Mallet Stack" }, { "cv.bell.0067", "Dark Trap Bells" }, { "cv.bell.0069", "Bell Pad" }, 
+{ "cv.bell.0070", "Chimes and Celesta" }, { "cv.bell.0071", "Wooden Bells" }, { "cv.bell.0072", "Music Box Lullaby" }, 
+{ "cv.bell.0073", "Vibes and Celesta" }, { "cv.bell.0074", "Glockenspiel and Harp" }, { "cv.bell.0075", "Marimba & Glockenspiel" }, 
+{ "cv.bell.0076", "Snowfall Bells" }, { "cv.bell.0078", "Marimba Swell" }, { "cv.bell.0079", "Celestial Choir Bells" }, 
+{ "cv.bell.0080", "Glass and Choir" }, { "cv.bell.0083", "Xylophone & Pizzicato" }, { "cv.bell.0084", "Sunday Bells" }, 
+{ "cv.bell.0085", "Bell Strings" }, { "cv.bell.0086", "Vibes and Nylon" }, { "cv.bell.0087", "Chimes & Glockenspiel" }, 
+{ "cv.bell.0088", "Vibes and Strings" }, { "cv.bell.0166", "Stage Music Box & Glass" }, { "cv.bell.0175", "Velvet Glockenspiel" }, 
+{ "cv.bell.0186", "Soft Felt Concert Chimes" }, { "cv.bell.0187", "Felt Church Chimes" }, { "cv.bell.0202", "Felt Handbell" }, 
+{ "cv.bell.0212", "Velvet Trap Bells" }, { "cv.bell.0216", "Soft Felt Piano & Vibes" }, { "cv.bell.0217", "Felt Chimes & Marimba" }, 
+{ "cv.bell.0220", "Felt Cathedral Bells" }, { "cv.bell.0222", "Felt Music Box & Strings" }, { "cv.bell.0223", "Felt Vibes and Flute" }, 
+{ "cv.bell.0224", "Velvet Midnight Bells" }, { "cv.bell.0271", "Echo Hard Xylophone" }, { "cv.bell.0296", "Midnight Toy Celesta" }, 
+{ "cv.bell.0302", "Midnight Piano & Vibes" }, { "cv.bell.0358", "Faded Concert Chimes" }, { "cv.bell.0359", "Dusty Church Chimes" }, 
+{ "cv.bell.0388", "Faded Piano and Vibes" }, { "cv.bell.0393", "Cassette Bells & Choir" }, { "cv.bell.0408", "Dusty Dark Trap Bells" }, 
+{ "cv.bell.0411", "Dusty Chimes & Celesta" }, { "cv.bell.0415", "Faded Glockenspiel & Harp" }, { "cv.bell.0423", "Faded Sunday Bells" }, 
+{ "cv.bell.0427", "Dampened Marimba" }, { "cv.bell.0429", "Stopped Xylophone" }, { "cv.bell.0433", "Dampened Hand Chimes" }, 
+{ "cv.bell.0434", "Stopped Music Box Comb" }, { "cv.bell.0435", "Muted Motor Vibes" }, { "cv.bell.0436", "Stopped Deep Marimba" }, 
+{ "cv.bell.0439", "Stopped Concert Chimes" }, { "cv.bell.0440", "Dampened Church Chimes" }, { "cv.bell.0442", "Dampened High Vibraphone" }, 
+{ "cv.bell.0444", "Stopped High Hand Chimes" }, { "cv.bell.0466", "Unfolding Tubular Bells" }, { "cv.bell.0467", "Blooming Hand Chimes" }, 
+{ "cv.bell.0469", "Unfolding Motor Vibes" }, { "cv.bell.0473", "Bowed Concert Chimes" }, { "cv.bell.0478", "Bowed High Hand Chimes" }, 
+{ "cv.bell.0493", "Behind the Wall Marimba" }, { "cv.bell.0494", "Next Room Vibraphone" }, { "cv.bell.0495", "Muffled Xylophone" }, 
+{ "cv.bell.0497", "Next Room Tubular Bells" }, { "cv.bell.0501", "Muffled Music Box Comb" }, { "cv.bell.0503", "Next Room Motor Vibes" }, 
+{ "cv.bell.0510", "Muffled High Marimba" }, { "cv.bell.0511", "Next Room High Vibraphone" }, { "cv.bell.0528", "Next Room Ice Crystal Bell" }, 
+{ "cv.bell.0531", "Reverse Marimba" }, { "cv.bell.0533", "Rewind Xylophone" }, { "cv.bell.0534", "Reverse Glockenspiel" }, 
+{ "cv.bell.0537", "Reverse Hand Chimes" }, { "cv.bell.0539", "Rewind Music Box Comb" }, { "cv.bell.0541", "Backward Motor Vibes" }, 
+{ "cv.bell.0542", "Rewind Deep Marimba" }, { "cv.bell.0545", "Rewind Concert Chimes" }, { "cv.bell.0548", "Rewind High Marimba" }, 
+{ "cv.bell.0553", "Backward Low Music Box Comb" }, { "cv.bell.0561", "Reverse Handbell" }, { "cv.bell.0592", "Cloud Low Music Box Comb" }, 
+{ "cv.bell.0595", "Cloud Fast Motor Vibes" }, { "cv.bell.0601", "Cloud Steel Glockenspiel" }, { "cv.bell.0603", "Dream High Music Box Comb" }, 
+{ "cv.bell.0617", "Haze Handbell Choir" }, { "cv.bell.0650", "Haze Xylophone & Pizzicato" }, { "cv.bell.0656", "Heavy Marimba" }, 
+{ "cv.bell.0658", "Deep Xylophone" }, { "cv.bell.0659", "Heavy Glockenspiel" }, { "cv.bell.0660", "Weighted Tubular Bells" }, 
+{ "cv.bell.0661", "Deep Celesta" }, { "cv.bell.0662", "Heavy Hand Chimes" }, { "cv.bell.0663", "Deep Music Box Comb" }, 
+{ "cv.bell.0664", "Weighted Motor Vibes" }, { "cv.bell.0665", "Heavy Deep Marimba" }, { "cv.bell.0666", "Heavy Hard Vibraphone" }, 
+{ "cv.bell.0668", "Deep Concert Chimes" }, { "cv.bell.0691", "Twin Marimba" }, { "cv.bell.0692", "Doubled Celesta" }, 
+{ "cv.bell.0693", "Doubled High Marimba" }, { "cv.bell.0694", "Twin High Vibraphone" }, { "cv.bell.0695", "Doubled High Hand Chimes" }, 
+{ "cv.bell.0696", "Twin Low Celesta" }, { "cv.bell.0697", "Twin High Bowed Vibraphone" }, { "cv.bell.0698", "Twin High Hard Vibraphone" }, 
+{ "cv.bell.0700", "Doubled Toy Celesta" }, { "cv.bell.0702", "Sparkle Vibraphone" }, { "cv.bell.0703", "Starlit Xylophone" }, 
+{ "cv.bell.0704", "Glimmer Glockenspiel" }, { "cv.bell.0705", "Sparkle Tubular Bells" }, { "cv.bell.0707", "Glimmer Hand Chimes" }, 
+{ "cv.bell.0708", "Sparkle Glass Harp" }, { "cv.bell.0711", "Starlit Deep Marimba" }, { "cv.bell.0712", "Glimmer Hard Vibraphone" }, 
+{ "cv.bell.0714", "Starlit Concert Chimes" }, { "cv.bell.0715", "Glimmer Church Chimes" }, { "cv.bell.0719", "Sparkle Soft Xylophone" }, 
+{ "cv.bell.0731", "Glowing Marimba" }, { "cv.bell.0732", "Halo Vibraphone" }, { "cv.bell.0733", "Aurora Xylophone" }, 
+{ "cv.bell.0734", "Glowing Glockenspiel" }, { "cv.bell.0735", "Halo Tubular Bells" }, { "cv.bell.0736", "Aurora Celesta" }, 
+{ "cv.bell.0738", "Halo Glass Harp" }, { "cv.bell.0739", "Aurora Music Box Comb" }, { "cv.bell.0740", "Glowing Bowed Vibraphone" }, 
+{ "cv.bell.0742", "Aurora Deep Marimba" }, { "cv.bell.0743", "Glowing Hard Vibraphone" }, { "cv.bell.0779", "Shimmer Bowed Vibraphone" }, 
+{ "cv.bell.0807", "Wide Gong Bell" }, { "cv.bell.0816", "Wide Bowed Glass" }, { "cv.bell.0857", "Smoky Vibraphone" }, 
+{ "cv.bell.0858", "Saturated Xylophone" }, { "cv.bell.0859", "Gritty Glockenspiel" }, { "cv.bell.0860", "Smoky Tubular Bells" }, 
+{ "cv.bell.0861", "Saturated Celesta" }, { "cv.bell.0862", "Gritty Hand Chimes" }, { "cv.bell.0863", "Smoky Glass Harp" }, 
+{ "cv.bell.0864", "Saturated Music Box Comb" }, { "cv.bell.0865", "Gritty Bowed Vibraphone" }, { "cv.bell.0868", "Gritty Hard Vibraphone" }, 
+{ "cv.bell.0899", "Seasick Tubular Bells" }, { "cv.bell.0905", "Seasick Motor Vibes" }, { "cv.bell.0907", "Warped Hard Vibraphone" }, 
+{ "cv.bell.0923", "Seasick Bell Tower" }, { "cv.bell.0928", "Warped High Music Box Comb" }, { "cv.bell.0942", "Deep Water Music Box Comb" }, 
+{ "cv.bell.0963", "Deep Water Crystal Bell" }, { "cv.bell.0967", "Shadow High Music Box Comb" }, { "cv.bell.0970", "Shadow Ice Crystal Bell" }, 
+{ "cv.bell.1082", "Lo-Fi High Bowed Vibraphone" }, { "cv.vox.0001", "Female Eh Chop" }, { "cv.vox.0002", "Choir Oohs" }, 
+{ "cv.vox.0003", "Female Ah" }, { "cv.vox.0004", "Male Ah" }, { "cv.vox.0005", "Chamber Choir" }, 
+{ "cv.vox.0006", "Vocal Pad" }, { "cv.vox.0007", "Female Oo" }, { "cv.vox.0008", "Soprano Ah" }, 
+{ "cv.vox.0009", "Female Ha" }, { "cv.vox.0010", "Breathy Eh Chop" }, { "cv.vox.0011", "Choir Aahs" }, 
+{ "cv.vox.0012", "Male Ha" }, { "cv.vox.0013", "Female Whisper" }, { "cv.vox.0015", "Men's Choir" }, 
+{ "cv.vox.0016", "Choir Hits" }, { "cv.vox.0017", "Breathy Female" }, { "cv.vox.0019", "Female Oh" }, 
+{ "cv.vox.0021", "Male Hum" }, { "cv.vox.0022", "Oo Vocal Pad" }, { "cv.vox.0023", "Male Vocal Pad" }, 
+{ "cv.vox.0024", "Low Choir Oohs" }, { "cv.vox.0025", "High Choir Oohs" }, { "cv.vox.0026", "Low Choir Aahs" }, 
+{ "cv.vox.0027", "High Choir Aahs" }, { "cv.vox.0028", "High Eh Chop" }, { "cv.vox.0029", "High Breathy Chop" }, 
+{ "cv.vox.0030", "Tenor Ah" }, { "cv.vox.0031", "Male Oo" }, { "cv.vox.0032", "Female Ee" }, 
+{ "cv.vox.0033", "Breathy Male" }, { "cv.vox.0034", "Male Whisper" }, { "cv.vox.0035", "Female Ho" }, 
+{ "cv.vox.0036", "Female Hoo" }, { "cv.vox.0037", "Male Ho" }, { "cv.vox.0039", "Mixed Choir Oh" }, 
+{ "cv.vox.0042", "Men's Choir Ah" }, { "cv.vox.0045", "Men's Choir Hits" }, { "cv.vox.0048", "Synth Choir" }, 
+{ "cv.vox.0049", "Low Synth Choir" }, { "cv.vox.0052", "Low Female Ah" }, { "cv.vox.0053", "Female Hee" }, 
+{ "cv.vox.0055", "High Choir Hits" }, { "cv.vox.0058", "Female Aw" }, { "cv.vox.0060", "Whispered Oo" }, 
+{ "cv.vox.0061", "Ee Vocal Pad" }, { "cv.vox.0062", "Low Vocal Pad" }, { "cv.vox.0063", "Bass Voice" }, 
+{ "cv.vox.0065", "Voice and Strings" }, { "cv.vox.0067", "SATB Choir" }, { "cv.vox.0068", "Choir Stab" }, 
+{ "cv.vox.0069", "Ha Stack" }, { "cv.vox.0071", "Whisper Pad" }, { "cv.vox.0074", "Soprano and Choir" }, 
+{ "cv.vox.0076", "Vocal Pad and Strings" }, { "cv.vox.0077", "Duet Ah" }, { "cv.vox.0079", "Choir and Piano" }, 
+{ "cv.vox.0080", "Voice and Flute" }, { "cv.vox.0081", "Choir and Bells" }, { "cv.vox.0082", "Breath Choir" }, 
+{ "cv.vox.0084", "Basso Profundo" }, { "cv.vox.0085", "Choir Aahs and Cellos" }, { "cv.vox.0086", "Chops and Choir" }, 
+{ "cv.vox.0087", "Two Sopranos" }, { "cv.vox.0089", "Female Oo and Pad" }, { "cv.vox.0091", "Ghost Duet" }, 
+{ "cv.vox.0094", "Chop Pad" }, { "cv.vox.0095", "Whispered Chop" }, { "cv.vox.0097", "Tremolo Choir" }, 
+{ "cv.vox.0098", "Epic Choir" }, { "cv.vox.0102", "Ha Chop Stack" }, { "cv.vox.0103", "Synth and Voice" }, 
+{ "cv.vox.0149", "Distant Whisper Choir" }, { "cv.vox.0159", "Chapel Tenor Ha" }, { "cv.vox.0162", "Chapel Tenor Oh" }, 
+{ "cv.vox.0180", "Chapel Male Hum & Choir" }, { "cv.vox.0205", "Distant Choir Pad" }, { "cv.vox.0210", "Intimate Female Eh Chop" }, 
+{ "cv.vox.0211", "Close Choir Oohs" }, { "cv.vox.0216", "Intimate Female Oo" }, { "cv.vox.0217", "Close Soprano Ah" }, 
+{ "cv.vox.0219", "Intimate Breathy Eh Chop" }, { "cv.vox.0225", "Intimate Choir Hits" }, { "cv.vox.0230", "Hushed Male Hum" }, 
+{ "cv.vox.0233", "Hushed Low Choir Oohs" }, { "cv.vox.0234", "Intimate High Choir Oohs" }, { "cv.vox.0237", "Intimate High Eh Chop" }, 
+{ "cv.vox.0238", "Close High Breathy Chop" }, { "cv.vox.0432", "Dusty Female Whisper" }, { "cv.vox.0446", "Faded High Choir Aahs" }, 
+{ "cv.vox.0458", "Faded Mixed Choir Oh" }, { "cv.vox.0493", "Cassette Soprano & Choir" }, { "cv.vox.0494", "Faded Male Hum & Choir" }, 
+{ "cv.vox.0498", "Dusty Choir and Piano" }, { "cv.vox.0504", "Dusty Choir Aahs & Cellos" }, { "cv.vox.0505", "Cassette Chops & Choir" }, 
+{ "cv.vox.0506", "Faded Two Sopranos" }, { "cv.vox.0508", "Cassette Female Oo & Pad" }, { "cv.vox.0525", "Rising Choir Oohs" }, 
+{ "cv.vox.0531", "Rising Soprano Ah" }, { "cv.vox.0540", "Dawn Male Hum" }, { "cv.vox.0544", "Swelling High Choir Oohs" }, 
+{ "cv.vox.0629", "Ambient Choir and Harp" }, { "cv.vox.0646", "Weightless Aria & Strings" }, { "cv.vox.0653", "Floating Whisper Choir Pad" }, 
+{ "cv.vox.0662", "Rewind Female Ha" }, { "cv.vox.0669", "Reverse Choir Hits" }, { "cv.vox.0671", "Rewind Male Oh" }, 
+{ "cv.vox.0698", "Rewind Men's Choir Hits" }, { "cv.vox.0706", "Backward Female Hee" }, { "cv.vox.0708", "Reverse High Choir Hits" }, 
+{ "cv.vox.0775", "Ensemble Breathy Female Ah" }, { "cv.vox.0809", "Chorus Hum Duet" }, { "cv.vox.0869", "Deep Water Synth Choir" }, 
+{ "cv.vox.0885", "Octave Choir Oohs" }, { "cv.vox.0888", "Octave Chamber Choir" }, { "cv.vox.0889", "Doubled Vocal Pad" }, 
+{ "cv.vox.0899", "Twin Female Oh" }, { "cv.vox.0902", "Twin Oo Vocal Pad" }, { "cv.vox.0904", "Twin High Choir Oohs" }, 
+{ "cv.vox.0906", "Doubled High Choir Aahs" }, { "cv.vox.0907", "Twin High Eh Chop" }, { "cv.vox.0908", "Octave High Breathy Chop" }, 
+{ "cv.vox.0909", "Doubled Tenor Ah" }, { "cv.vox.0911", "Octave Female Ee" }, { "cv.vox.0947", "Heavenly Female Ha" }, 
+{ "cv.vox.0948", "Glowing Breathy Eh Chop" }, { "cv.vox.0950", "Heavenly Male Ha" }, { "cv.vox.0954", "Glowing Choir Hits" }, 
+{ "cv.vox.0960", "Heavenly Low Choir Oohs" }, { "cv.vox.0964", "Glowing High Eh Chop" }, { "cv.vox.0965", "Halo High Breathy Chop" }, 
+{ "cv.vox.0967", "Glowing Male Oo" }, { "cv.vox.0971", "Halo Female Ho" }, { "cv.vox.0973", "Glowing Male Ho" }, 
+{ "cv.vox.0981", "Heavenly Men's Choir Hits" }, { "cv.vox.0997", "Stab Female Eh Chop" }, { "cv.vox.0998", "Clipped Choir Oohs" }, 
+{ "cv.vox.1003", "Short Low Choir Oohs" }, { "cv.vox.1004", "Stab High Choir Oohs" }, { "cv.vox.1005", "Clipped Low Choir Aahs" }, 
+{ "cv.vox.1007", "Stab High Eh Chop" }, { "cv.vox.1008", "Clipped High Breathy Chop" }, { "cv.vox.1009", "Short Synth Choir" }, 
+{ "cv.vox.1010", "Stab Low Synth Choir" }, { "cv.vox.1035", "Young Male Ho" }, { "cv.vox.1055", "Small Breathy Female Ah" }, 
+{ "cv.vox.1077", "Colossal Tenor Ah" }, { "cv.vox.1099", "Colossal Tenor Ha" }, { "cv.vox.1140", "Straight Choir Ee" }, 
+{ "cv.vox.1148", "Airy Female Eh Chop" }, { "cv.vox.1149", "Breathy Choir Oohs" }, { "cv.vox.1154", "Airy Female Oo" }, 
+{ "cv.vox.1155", "Breathy Soprano Ah" }, { "cv.vox.1158", "Breathy Choir Aahs" }, { "cv.vox.1162", "Windswept Men's Choir" }, 
+{ "cv.vox.1164", "Windswept Breathy Female" }, { "cv.vox.1170", "Breathy Male Vocal Pad" }, { "cv.vox.1171", "Windswept Low Choir Oohs" }, 
+{ "cv.vox.1172", "Airy High Choir Oohs" }, { "cv.vox.1174", "Windswept High Choir Aahs" }, { "cv.vox.1211", "Gritty Female Eh Chop" }, 
+{ "cv.vox.1212", "Smoky Choir Oohs" }, { "cv.vox.1217", "Gritty Female Oo" }, { "cv.vox.1218", "Smoky Soprano Ah" }, 
+{ "cv.vox.1219", "Saturated Female Ha" }, { "cv.vox.1220", "Gritty Breathy Eh Chop" }, { "cv.vox.1221", "Smoky Choir Aahs" }, 
+{ "cv.vox.1234", "Saturated Low Choir Oohs" }, { "cv.vox.1235", "Gritty High Choir Oohs" }, { "cv.vox.1238", "Gritty High Eh Chop" }, 
+{ "cv.vox.1239", "Smoky High Breathy Chop" }, { "cv.vox.1282", "Melted Female Ha" }, { "cv.vox.1289", "Warped Choir Hits" }, 
+{ "cv.vox.1310", "Warped Male Ho" }, { "cv.vox.1318", "Melted Men's Choir Hits" }, { "cv.vox.1322", "Warped Low Synth Choir" }, 
+{ "cv.vox.1328", "Warped High Choir Hits" }, { "cv.vox.1333", "Melted Whispered Oo" }, { "cv.vox.1337", "Haunted Female Eh Chop" }, 
+{ "cv.vox.1343", "Haunted Female Oo" }, { "cv.vox.1344", "Phantom Soprano Ah" }, { "cv.vox.1345", "Spectral Female Ha" }, 
+{ "cv.vox.1346", "Haunted Breathy Eh Chop" }, { "cv.vox.1347", "Phantom Choir Aahs" }, { "cv.vox.1349", "Haunted Female Whisper" }, 
+{ "cv.vox.1352", "Haunted Choir Hits" }, { "cv.vox.1363", "Spectral High Choir Aahs" }, { "cv.vox.1364", "Haunted High Eh Chop" }, 
+{ "cv.vox.1365", "Phantom High Breathy Chop" }
+    };
+    return t;
+}
+juce::String nameKey (const juce::String& n) { return n.replace (" & ", " and ").toLowerCase(); }
+void assignShippedIds (std::vector<VaultPreset>& sel, std::vector<Meta>& metas)
+{
+    std::map<juce::String, juce::String> byName;
+    int next[vault::numCategories] {};
+    for (auto& [id, name] : shippedIds())
+    {
+        byName[nameKey (name)] = id;
+        const juce::String sid (id);
+        for (int c = 0; c < vault::numCategories; ++c)
+            if (sid.startsWith (juce::String ("cv.") + vault::categorySlug (c) + "."))
+                next[c] = std::max (next[c], sid.fromLastOccurrenceOf (".", false, false).getIntValue());
+    }
+    std::set<juce::String> used;
+    for (auto& p : sel)
+    {
+        auto it = byName.find (nameKey (p.name));
+        p.id = it != byName.end() && used.count (it->second) == 0 ? it->second
+             : juce::String ("cv.") + vault::categorySlug (p.category) + "." + juce::String (++next[p.category]).paddedLeft ('0', 4);
+        used.insert (p.id);
+    }
+    std::vector<size_t> order (sel.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort (order.begin(), order.end(), [&] (size_t a, size_t b)
+    {
+        if (sel[a].category != sel[b].category) return sel[a].category < sel[b].category;
+        return sel[a].id.fromLastOccurrenceOf (".", false, false).getIntValue() < sel[b].id.fromLastOccurrenceOf (".", false, false).getIntValue();
+    });
+    std::vector<VaultPreset> s2; std::vector<Meta> m2;
+    for (auto i : order) { s2.push_back (sel[i]); m2.push_back (metas[i]); }
+    sel.swap (s2); metas.swap (m2);
+}
+
+// the few presets where a rhythm is the point of the sound (arp / gate on, plain names), appended after the selection
+struct Pattern { const char* name; int category; std::vector<VaultPart> parts; int kind; int pattern; };
+std::vector<Pattern> patterns()
+{
+    return {
+        { "Marimba Arpeggio", vault::catBellsMallets, { with (marimba (0), { { "s.cutoff", 3000.0f } }) }, kStrike, 1 },
+        { "Music Box Arpeggio", vault::catBellsMallets, { musicBox (1) }, kStrike, 2 },
+        { "Gated Choir", vault::catVocalsChoir, choirBlend (0, 0.6f, 8), kHeld, 3 },
+        { "Gated Vocal Pad", vault::catVocalsChoir, { vpad (2, 0.9f) }, kPad, 4 },
+    };
+}
+
+template <typename Fn> void parallel (int n, Fn fn)
+{
+    std::atomic<int> next { 0 };
+    std::vector<std::thread> pool;
+    const int nt = std::max (1, std::min (n, juce::SystemStats::getEnvironmentVariable ("PV_THREADS", "3").getIntValue()));
+    for (int t = 0; t < nt; ++t) pool.emplace_back ([&] { for (int i; (i = next++) < n;) fn (i); });
+    for (auto& t : pool) t.join();
+}
+} // namespace
+
+std::vector<VaultPreset> build_perc_voc (const RecipeContext& ctx)
+{
+    std::vector<VaultPreset> sel;
+    std::vector<Meta> metas;
+    // 1. the v2 selection (PV_V2CACHE=<file.cvb>: saved once with its roles, for design iterations)
+    const auto cachePath = juce::SystemStats::getEnvironmentVariable ("PV_V2CACHE", {});
+    if (cachePath.isNotEmpty() && juce::File (cachePath).existsAsFile())
+    {
+        vault::loadBankFile (juce::File (cachePath), sel);
+        juce::StringArray lines;
+        lines.addLines (juce::File (cachePath + ".roles").loadFileAsString());
+        std::map<juce::String, Meta> byId;
+        for (auto& l : lines)
+        {
+            auto f = juce::StringArray::fromTokens (l, "\t", "");
+            if (f.size() < 6) continue;
+            Meta m; m.noun = f[1]; m.role = f[2]; m.kind = f[3].getIntValue(); m.addIdx = f[4].getIntValue(); m.bell = f[5].getIntValue() != 0;
+            byId[f[0]] = m;
+        }
+        for (auto& p : sel) metas.push_back (byId[p.id]);
+        std::printf ("perc-voc: %d v2 presets from the cache\n", (int) sel.size());
+    }
+    else
+    {
+        // PV_FULL=1: the whole v2 search (2,653 candidates); default: the shipped selection, pinned by name
+        std::set<juce::String> pin;
+        for (auto& [id, name] : shippedIds()) pin.insert (nameKey (name));
+        sel = v2Selection (ctx, metas, v3::envInt ("PV_FULL", 0) != 0 ? nullptr : &pin);
+        if (cachePath.isNotEmpty())
+        {
+            vault::saveBankFile (juce::File (cachePath), sel);
+            juce::String rl;
+            for (size_t i = 0; i < sel.size(); ++i)
+                rl << sel[i].id << "\t" << metas[i].noun << "\t" << metas[i].role << "\t" << metas[i].kind << "\t" << metas[i].addIdx << "\t" << (metas[i].bell ? 1 : 0) << "\n";
+            juce::File (cachePath + ".roles").replaceWithText (rl);
+        }
+    }
+    if (v3::envInt ("PV_V3", 1) == 0) return sel;
+
+    // 2. the rhythm presets (calibrated and repaired like every other sound), appended
+    {
+        Calib calib;
+        std::set<juce::String> names;
+        for (auto& p : sel) names.insert (p.name.toLowerCase());
+        for (auto& pt : patterns())
+        {
+            bool ok = names.count (juce::String (pt.name).toLowerCase()) == 0;
+            for (auto& part : pt.parts)
+                if (part.kind == VaultPartKind::sample && (! ctx.hasArticulation (part.source, part.articulation) || ! inRange (ctx, part, 0))) ok = false;
+            if (! ok) continue;
+            VaultPreset p;
+            p.category = pt.category; p.name = pt.name; p.parts = pt.parts; p.id = "cv.pattern";
+            for (auto& part : p.parts) if (part.kind == VaultPartKind::sample) part.set ("revMix", 0.0f);
+            if (! repair (ctx, p, calib, false)) { std::printf ("perc-voc: pattern %s cannot be made comfortable\n", pt.name); continue; }
+            Meta m; m.noun = pt.name; m.kind = pt.kind; m.pattern = pt.pattern;
+            sel.push_back (p); metas.push_back (m);
+        }
+    }
+    assignShippedIds (sel, metas);
+    for (size_t i = 0; i < sel.size(); ++i) metas[i].fam = v3::family (sel[i], metas[i]);
+    // PV_ONLY=<id or name,...>: just these presets (demos, listening)
+    if (const auto only = juce::StringArray::fromTokens (juce::SystemStats::getEnvironmentVariable ("PV_ONLY", {}), ",", ""); ! only.isEmpty())
+    {
+        std::vector<VaultPreset> o; std::vector<Meta> mo;
+        for (size_t i = 0; i < sel.size(); ++i) if (only.contains (sel[i].id) || only.contains (sel[i].name)) { o.push_back (sel[i]); mo.push_back (metas[i]); }
+        sel.swap (o); metas.swap (mo);
+    }
+
+    // 3. v3: every preset finished - chain + movement, C5 comfort of the whole sound, sound macros
+    std::vector<juce::String> fitLog (sel.size());
+    std::vector<v3::Plan> plans (sel.size());
+    parallel ((int) sel.size(), [&] (int i)
+    {
+        auto& p = sel[(size_t) i];
+        p.gain = 1.0f;
+        plans[(size_t) i] = v3::designChain (p, metas[(size_t) i]);
+        fitLog[(size_t) i] = v3::comfort (p, metas[(size_t) i].bell);
+        v3::designMacros (p, metas[(size_t) i], plans[(size_t) i]);
+    });
+    {
+        int nf = 0, nbad = 0;
+        for (auto& l : fitLog) { if (l.isNotEmpty()) ++nf; if (l.endsWith ("!")) ++nbad; }
+        std::printf ("perc-voc: v3 designed %d presets; comfort refit %d (%d at the EQ limit)\n", (int) sel.size(), nf, nbad);
+    }
+    if (v3::envInt ("PV_SELFGATE", 1) == 0) return sel;
+
+    // 4. the bank gate's own selection on the finished sounds (same analysis, same order, the shared 3.5), plus the
+    //    assembly QA's spectral limits, so the bank assembly keeps every preset this returns
+    auto gateFail = [] (recipegate::Result& r)
+    {
+        juce::String why;
+        if (r.fail.isEmpty() && ! vault::validatePreset (r.preset, &why)) r.fail = "invalid: " + why;
+        // the assembly's peak control lifts a peaky sound by its quietBy: the trim must stay under the limit with that lift
+        if (r.fail.isEmpty() && r.gainDb + (r.quietBy > 1.3f ? r.quietBy : 0.0f) > recipegate::maxTrimDb - 1.0f) r.fail = "too-quiet";
+        if (r.fail.isEmpty() && r.chordOver > 6.0f) r.fail = "chord-peak";   // more than the assembly's peak control can hold
+        if (r.fail.isEmpty() && r.share8k > recipegate::maxShare8k) r.fail = "air-8k";
+        if (r.fail.isEmpty() && r.centroid > recipegate::centroidCeiling (r.preset.category)) r.fail = "centroid";
+    };
+    std::vector<recipegate::Result> res (sel.size());
+    std::vector<juce::String> fixLog (sel.size());
+    parallel ((int) sel.size(), [&] (int i)
+    {
+        auto& r = res[(size_t) i];
+        r.preset = sel[(size_t) i];
+        recipegate::analyse (r);
+        gateFail (r);
+        // a gate failure of the finished sound: a mechanical fix of the chain, then the macros again (up to 3 rounds)
+        auto p = sel[(size_t) i];
+        for (int round = 0; round < 3 && r.fail.isNotEmpty(); ++round)
+        {
+            const auto fail = r.fail;
+            v3::strip (p);
+            if (! v3::fixV3 (p, fail)) break;
+            v3::designMacros (p, metas[(size_t) i], plans[(size_t) i]);
+            recipegate::Result r2;
+            r2.preset = p;
+            recipegate::analyse (r2);
+            gateFail (r2);
+            fixLog[(size_t) i] << fail << (r2.fail.isEmpty() ? " fixed; " : " -> " + r2.fail + "; ");
+            if (r2.fail.isEmpty()) { sel[(size_t) i] = p; r = std::move (r2); }
+            else r.fail = r2.fail;
+        }
+    });
+    // in order: a near-duplicate of an earlier preset gets its role pushed further once, then the order is run again
+    auto select = [&] (std::vector<int>& acc, float& minPair, bool quiet)
+    {
+        acc.clear(); minPair = 1.0e9f;
+        std::vector<int> near;
+        for (int i = 0; i < (int) res.size(); ++i)
+        {
+            auto& r = res[(size_t) i];
+            if (r.fail.isNotEmpty() && ! r.fail.startsWith ("near-duplicate")) continue;
+            float d = 1.0e9f;
+            juce::String nearest;
+            for (int j : acc) if (const float dj = recipegate::distance (r.print, res[(size_t) j].print); dj < d) { d = dj; nearest = res[(size_t) j].preset.name; }
+            r.fail = d < 3.5f ? "near-duplicate (" + nearest + ", " + juce::String (d, 2) + ")" : juce::String();
+            if (r.fail.isEmpty()) { acc.push_back (i); minPair = std::min (minPair, d); }
+            else near.push_back (i);
+        }
+        if (! quiet) for (int i : near) std::printf ("  near: %s %s\n", res[(size_t) i].preset.name.toRawUTF8(), res[(size_t) i].fail.toRawUTF8());
+        return near;
+    };
+    std::vector<int> acc;
+    float minPair = 1.0e9f;
+    const auto near = select (acc, minPair, false);
+    parallel ((int) near.size(), [&] (int k)
+    {
+        const int i = near[(size_t) k];
+        auto p = sel[(size_t) i];
+        v3::strip (p);
+        v3::pushRole (p);
+        v3::designMacros (p, metas[(size_t) i], plans[(size_t) i]);
+        recipegate::Result r2;
+        r2.preset = p;
+        recipegate::analyse (r2);
+        gateFail (r2);
+        fixLog[(size_t) i] << "near: role pushed; ";
+        if (r2.fail.isEmpty()) { sel[(size_t) i] = p; res[(size_t) i] = std::move (r2); }
+    });
+    if (! near.empty()) select (acc, minPair, true);
+    std::map<juce::String, int> fails;
+    for (int i = 0; i < (int) res.size(); ++i)
+    {
+        const auto& r = res[(size_t) i];
+        if (fixLog[(size_t) i].isNotEmpty()) std::printf ("  fix %s %s: %s\n", r.preset.id.toRawUTF8(), r.preset.name.toRawUTF8(), fixLog[(size_t) i].toRawUTF8());
+        if (r.fail.isNotEmpty())
+        {
+            ++fails[r.fail.upToFirstOccurrenceOf (" ", false, false).upToFirstOccurrenceOf (":", false, false)];
+            std::printf ("  rejected %s %s: %s\n", r.preset.id.toRawUTF8(), r.preset.name.toRawUTF8(), r.fail.toRawUTF8());
+        }
+    }
+    std::printf ("perc-voc: %d of %d pass the gate (min distance %.2f)\n", (int) acc.size(), (int) res.size(), minPair);
+    for (auto& [f, n] : fails) std::printf ("  perc-voc rejected %-16s %d\n", f.toRawUTF8(), n);
+    if (const auto fp = juce::SystemStats::getEnvironmentVariable ("PV_TSV", {}); fp.isNotEmpty())
+    {
+        juce::String s;
+        for (size_t i = 0; i < res.size(); ++i)
+        {
+            const auto& r = res[i];
+            s << r.preset.id << "\t" << r.preset.name << "\t" << metas[i].fam << "\t" << metas[i].role << "\t" << (r.fail.isEmpty() ? juce::String ("ok") : r.fail) << "\t"
+              << juce::String (r.h1Db, 1) << "\t" << juce::String (100 * r.share25, 2) << "\t" << juce::String (100 * r.share6k, 2) << "\t" << juce::String (100 * r.share8k, 2)
+              << "\t" << juce::String (r.centroid, 0) << "\t" << juce::String (r.velRange, 1) << "\t" << juce::String (r.tail, 1) << "\t" << juce::String (r.gainDb, 1) << "\t" << fitLog[i] << "\n";
+        }
+        juce::File (fp).replaceWithText (s);
+    }
+
+    // 5. macro extremes
+    std::vector<v3::MacroReport> mr (acc.size());
+    std::vector<VaultPreset> kept (acc.size());
+    parallel ((int) acc.size(), [&] (int k)
+    {
+        kept[(size_t) k] = sel[(size_t) acc[(size_t) k]];
+        if (v3::envInt ("PV_MACROCHECK", 1) != 0) mr[(size_t) k] = v3::checkMacros (kept[(size_t) k], res[(size_t) acc[(size_t) k]].preset.gain, metas[(size_t) acc[(size_t) k]].bell);
+    });
+    int fixes = 0, checked = 0;
+    juce::StringArray harsh, quiet;
+    for (auto& m : mr) { fixes += m.fixes; checked += m.checked; harsh.addArray (m.harsh); quiet.addArray (m.quiet); }
+    std::printf ("perc-voc: %d macros checked at 0 and 1; ranges narrowed %d times; %d macro extremes still outside the comfort rules; %d macros barely audible\n",
+                 checked, fixes, harsh.size(), quiet.size());
+    for (auto& h : harsh) std::printf ("  harsh: %s\n", h.toRawUTF8());
+    for (auto& q : quiet) std::printf ("  quiet: %s\n", q.toRawUTF8());
     return kept;
 }
 
