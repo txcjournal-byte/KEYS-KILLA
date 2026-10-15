@@ -32,7 +32,8 @@
 // came out too close is designed again without the family polish, then with its role pushed further, then in the
 // neighbouring colour, light, and finally with its v2 sound; still too close = dropped (the assembly would drop it).
 // The v2 stage below (voices, treatments, spaces, layers, distinctness, names, ids) is unchanged; only the few pattern
-// presets are renamed. KEYS_V2_CACHE=<dir> keeps the v2 stage's result between runs while the design is tuned.
+// presets are renamed; the v2 selection is pinned (pinnedV2) so ids and names stay as shipped. KEYS_V2_CACHE=<dir> keeps the
+// v2 stage's result between runs while the design is tuned.
 //
 // v2 notes
 // DESIGN NOTE (research summary - what professional keyboard libraries do, and what this recipe copies)
@@ -2344,6 +2345,533 @@ static std::vector<VaultPreset> buildV2 (const RecipeContext& ctx, std::vector<j
 }
 
 //==============================================================================
+// THE PINNED v2 SELECTION: the presets the v2 search accepted (id | recipe tag | name | 1 = in the shipped v2 bank), in its order.
+// The greedy search (buildV2) sits on its thresholds, so a tiny numeric change anywhere (engine, library, compiler) can swap
+// a few presets and renumber the ids after them - and preset ids are saved in host projects. The bank therefore rebuilds
+// this list (same candidates, same calibration and v2 repairs); KEYS_V2_SEARCH=1 runs the search instead (new material).
+const char* const pinnedV2[] = {
+    "cv.piano.0001|concert/natural/dry|Concert Grand|1",
+    "cv.piano.0002|pedal/natural/dry|Pedal Grand|1",
+    "cv.piano.0003|concert+strings|Grand & Strings|1",
+    "cv.piano.0004|studio/natural/dry|Studio Grand|1",
+    "cv.piano.0005|chamber/natural/dry|Chamber Grand|1",
+    "cv.piano.0006|upright/natural/dry|Upright|1",
+    "cv.piano.0007|parlor/natural/dry|Parlor Upright|1",
+    "cv.piano.0008|concert+pad|Concert Grand & Pad|0",
+    "cv.piano.0009|digital/natural/dry|Digital Piano|1",
+    "cv.piano.0010|tine/natural/dry|Tine Piano|1",
+    "cv.piano.0011|tinebell/natural/dry|Bell Tines|1",
+    "cv.piano.0012|reed/natural/dry|Reed Piano|1",
+    "cv.piano.0013|concert+vox|Concert Grand & Voices|0",
+    "cv.piano.0014|fmep/natural/dry|FM Piano|1",
+    "cv.piano.0015|toy/natural/dry|Toy Piano|1",
+    "cv.keys.0001|principal/natural/dry|Principal Organ|1",
+    "cv.keys.0002|pipesoft/natural/dry|Soft Flute Organ|1",
+    "cv.keys.0003|pedalorgan/natural/dry|Pedal Organ|1",
+    "cv.piano.0016|concert+octave|Octave Concert Grand|1",
+    "cv.keys.0004|chamber8/natural/dry|Chamber Organ|1",
+    "cv.keys.0005|chamber4/natural/dry|Four Foot Organ|0",
+    "cv.keys.0006|chamberfull/natural/dry|Full Chamber Organ|1",
+    "cv.keys.0007|drawsoft/natural/dry|Soft Drawbars|1",
+    "cv.keys.0008|drawfull/natural/dry|Full Drawbars|1",
+    "cv.keys.0009|harmonium/natural/dry|Harmonium|1",
+    "cv.keys.0010|hpsEnglish/natural/dry|English Harpsichord|1",
+    "cv.piano.0017|concert+vibes|Concert Grand & Vibes|1",
+    "cv.keys.0011|hpsLute/natural/dry|Lute Stop|1",
+    "cv.keys.0012|hpsFlemLo/natural/dry|Flemish Harpsichord|1",
+    "cv.piano.0018|concert+fmep|Ballad Concert Grand|1",
+    "cv.keys.0013|hpsFlemUp/natural/dry|Upper Manual|1",
+    "cv.keys.0014|hpsFrench/natural/dry|French Harpsichord|1",
+    "cv.keys.0015|hpsItalian/natural/dry|Italian Harpsichord|1",
+    "cv.keys.0016|clav/natural/dry|Funk Keys|1",
+    "cv.keys.0017|fmclav/natural/dry|FM Clav|1",
+    "cv.keys.0018|hpsEnglish+coupled|Twin Manual Spinet|1",
+    "cv.keys.0019|fmkeys/natural/dry|FM Keys|1",
+    "cv.keys.0020|fmbell/natural/dry|Soft FM Keys|1",
+    "cv.keys.0021|clavbridge/natural/dry|Bridge Clav|1",
+    "cv.keys.0022|principal+pedal16|Full Pedal Organ|1",
+    "cv.keys.0023|draw16/natural/dry|Deep Drawbars|1",
+    "cv.keys.0024|combo/natural/dry|Combo Organ|1",
+    "cv.keys.0025|calliope/natural/dry|Calliope|1",
+    "cv.keys.0026|musette/natural/dry|Accordion|1",
+    "cv.piano.0019|concert/felt/room|Felt Concert Grand|1",
+    "cv.piano.0020|pedal/felt/room|Velvet Pedal Grand|1",
+    "cv.piano.0021|tine+marimba|Rosewood Tine Piano|1",
+    "cv.piano.0022|studio/felt/room|Hushed Studio Grand|1",
+    "cv.piano.0023|chamber/felt/room|Muffled Chamber Grand|1",
+    "cv.piano.0024|parlor/felt/room|Velvet Parlor Upright|1",
+    "cv.piano.0025|digital/dark/hall|Shadow Digital Piano|1",
+    "cv.piano.0026|tine+thumb|Tin Tine Piano|1",
+    "cv.piano.0027|fmep/dark/hall|Shadow FM Piano|1",
+    "cv.keys.0027|hpsEnglish+chapel|Cloister Harpsichord|1",
+    "cv.keys.0028|principal/dark/hall|Dark Principal Organ|1",
+    "cv.keys.0029|pedalorgan/dark/hall|Shadow Pedal Organ|1",
+    "cv.keys.0030|pedalsoft/dark/hall|Soft Pedal Organ Hall|1",
+    "cv.piano.0028|concert+velvethybrid|Velvet Hybrid Grand|1",
+    "cv.piano.0029|tine+loungenight|Late Set Tine Piano|1",
+    "cv.keys.0031|chamberfull/dark/hall|Shadow Plenum Organ|1",
+    "cv.piano.0030|concert+feltstrings|Felt & Strings Grand|1",
+    "cv.keys.0032|drawfull/dark/hall|Dark Full Drawbars|1",
+    "cv.piano.0031|concert+cinema|Cinematic Grand|0",
+    "cv.keys.0033|hpsEnglish/felt/room|Muffled Spinet|1",
+    "cv.keys.0034|hpsLute/felt/room|Felt Lute Stop|1",
+    "cv.keys.0035|hpsFlemLo/felt/room|Velvet Lower Manual|1",
+    "cv.piano.0032|tine+dreamep|Night Drive Tine Piano|1",
+    "cv.keys.0036|hpsFlemUp/felt/room|Hushed Upper Manual|1",
+    "cv.keys.0037|hpsFrench/felt/room|Court Harpsichord Room|1",
+    "cv.piano.0033|concert+lullaby|Lullaby Concert Grand|0",
+    "cv.keys.0038|hpsItalian/felt/room|Felt Venetian Keys|1",
+    "cv.keys.0039|hpsBaroque/felt/room|Velvet Continuo|1",
+    "cv.keys.0040|chamber8+continuo|Ensemble Chamber Organ|1",
+    "cv.keys.0041|clav/dark/hall|Shadow Funk Keys|1",
+    "cv.keys.0042|fmclav/dark/hall|Nocturne FM Clav|1",
+    "cv.piano.0034|pedal+strings|Silver String Grand|0",
+    "cv.keys.0043|clavbridge/dark/hall|Nocturne Bridge Clav|0",
+    "cv.keys.0044|calliope/tape/room|Reel Calliope|1",
+    "cv.keys.0045|musicbox/lofi/room|Lo-Fi Music Box|1",
+    "cv.keys.0046|celeste/lofi/room|Dusty Celeste Keys|0",
+    "cv.piano.0035|concert/dark/hall|Dark Concert Grand|1",
+    "cv.piano.0036|pedal/dark/hall|Midnight Pedal Grand|1",
+    "cv.piano.0037|studio/dark/hall|Shadow Studio Grand|1",
+    "cv.piano.0038|chamber/dark/hall|Nocturne Chamber Grand|1",
+    "cv.piano.0039|parlor/dark/hall|Parlor Upright Hall|0",
+    "cv.piano.0040|pedal+octave|Doubled Pedal Grand|1",
+    "cv.piano.0041|digital/lofi/room|Bedroom Digital Piano|1",
+    "cv.piano.0042|fmep/lofi/room|Bedroom FM Piano|1",
+    "cv.keys.0047|principal/lofi/room|Lo-Fi Principal Organ|1",
+    "cv.piano.0043|pedal+vibes|Lounge Pedal Grand|0",
+    "cv.keys.0048|pedalorgan/lofi/room|Bedroom Pedal Organ|0",
+    "cv.piano.0044|pedal+fmep|Eighties Pedal Grand|1",
+    "cv.keys.0049|chamberfull/lofi/room|Bedroom Plenum Organ|1",
+    "cv.keys.0050|drawfull/lofi/room|Lo-Fi Full Drawbars|0",
+    "cv.keys.0051|hpsLute+coupled|Coupled Lute Stop|1",
+    "cv.keys.0052|hpsEnglish/dark/hall|Nocturne Spinet|1",
+    "cv.keys.0053|hpsLute/dark/hall|Dark Lute Stop|1",
+    "cv.keys.0054|hpsFlemLo/dark/hall|Midnight Lower Manual|1",
+    "cv.keys.0055|pipesoft+pedal16|Plenum Organ|1",
+    "cv.keys.0056|hpsFlemUp/dark/hall|Shadow Upper Manual|1",
+    "cv.keys.0057|hpsFrench/dark/hall|Court Harpsichord Hall|1",
+    "cv.keys.0058|hpsItalian/dark/hall|Dark Venetian Keys|1",
+    "cv.keys.0059|fmclav/lofi/room|Crumbled FM Clav|1",
+    "cv.keys.0060|fmbell/lofi/room|Dusty Soft FM Keys|1",
+    "cv.piano.0045|tinebell+marimba|Timber Bell Tines|1",
+    "cv.keys.0061|clavbridge/lofi/room|Crumbled Bridge Clav|1",
+    "cv.keys.0062|draw16/lofi/room|Lo-Fi Deep Drawbars|0",
+    "cv.keys.0063|combo/lofi/room|Dusty Combo Organ|1",
+    "cv.piano.0046|tinebell+thumb|Lamella Bell Tines|1",
+    "cv.keys.0064|musicbox/swell/cloud|Swelling Music Box|1",
+    "cv.keys.0065|hpsLute+chapel|Chapel Lute Stop|1",
+    "cv.keys.0066|pipesoft+horns|Fanfare Organ|1",
+    "cv.piano.0047|pedal+velvethybrid|Silk Hybrid Grand|1",
+    "cv.piano.0048|tinebell+loungenight|Blue Smoke Bell Tines|1",
+    "cv.piano.0049|fmep/tape/room|Reel FM Piano|1",
+    "cv.piano.0050|toy/muted/room|Staccato Toy Piano|1",
+    "cv.piano.0051|tinebell+dreamep|Neon Haze Bell Tines|1",
+    "cv.keys.0067|chamber8/tape/room|Tape Chamber Organ|1",
+    "cv.keys.0068|chamberfull/tape/room|Reel Plenum Organ|0",
+    "cv.keys.0069|drawsoft/tape/room|Warped Soft Drawbars|1",
+    "cv.keys.0070|hpsEnglish/intimate/dry|Quiet Spinet|1",
+    "cv.piano.0052|studio+strings|Bowed String Grand|1",
+    "cv.piano.0053|studio+cellos|Cello Studio Grand|1",
+    "cv.keys.0071|fmbell/chorus/room|Silk Soft FM Keys|0",
+    "cv.piano.0054|studio+choir|Hymnal Studio Grand|0",
+    "cv.piano.0055|studio+octave|Twin Octave Grand|1",
+    "cv.keys.0072|musicbox/bell/plate|Bell Music Box|1",
+    "cv.piano.0056|concert/lofi/room|Lo-Fi Concert Grand|1",
+    "cv.piano.0057|pedal/lofi/room|Dusty Pedal Grand|1",
+    "cv.piano.0058|studio+glock|Star Dust Studio Grand|0",
+    "cv.piano.0059|studio/lofi/room|Bedroom Studio Grand|0",
+    "cv.piano.0060|chamber/lofi/room|Crumbled Chamber Grand|0",
+    "cv.piano.0061|studio+vibes|Vibe Studio Grand|0",
+    "cv.piano.0062|studio+fmep|Satin Studio Grand|1",
+    "cv.piano.0063|fmep/muted/room|Damped FM Piano|1",
+    "cv.keys.0073|hpsFlemLo+coupled|Double Manual Lower|1",
+    "cv.keys.0074|principal/swell/cloud|Principal Organ Cloud|1",
+    "cv.keys.0075|pedalorgan/swell/cloud|Rising Pedal Organ|1",
+    "cv.keys.0076|pedalorgan+pedal16|Foundation Pedal Organ|1",
+    "cv.keys.0077|pedalorgan+fourfoot|Octave Stop Organ|1",
+    "cv.keys.0078|chamberfull/swell/cloud|Rising Plenum Organ|1",
+    "cv.keys.0079|drawsoft/vinyl/room|Record Soft Drawbars|0",
+    "cv.keys.0080|hpsEnglish/lofi/room|Crumbled Spinet|0",
+    "cv.piano.0064|reed+marimba|Reed Piano & Marimba|1",
+    "cv.keys.0081|hpsLute/lofi/room|Lo-Fi Lute Stop|1",
+    "cv.keys.0082|hpsFlemLo/lofi/room|Dusty Lower Manual|1",
+    "cv.piano.0065|studio+cellopizz|Pulse Studio Grand|1",
+    "cv.keys.0083|hpsFlemUp/lofi/room|Bedroom Upper Manual|1",
+    "cv.keys.0084|hpsFrench/lofi/room|Crumbled Rococo Keys|1",
+    "cv.keys.0085|hpsItalian/lofi/room|Lo-Fi Venetian Keys|1",
+    "cv.piano.0066|toy+thumb|Lamella Toy Piano|1",
+    "cv.keys.0086|clav/muted/room|Damped Funk Keys|1",
+    "cv.keys.0087|fmclav/muted/room|Staccato FM Clav|1",
+    "cv.piano.0067|reed+twinep|Twin EP Reed Piano|1",
+    "cv.keys.0088|hpsFlemLo+chapel|Vespers Harpsichord|1",
+    "cv.keys.0089|pedalorgan+horns|Herald Pedal Organ|1",
+    "cv.piano.0068|reed+loungenight|Lounge Night Piano|1",
+    "cv.piano.0069|studio+feltstrings|Low Light Studio Grand|0",
+    "cv.piano.0070|studio+cinema|Epic Studio Grand|1",
+    "cv.piano.0071|digital/muted/room|Damped Digital Piano|1",
+    "cv.piano.0072|reed/muted/room|Plucked Reed Piano|1",
+    "cv.keys.0090|chamberfull+continuo|Continuo Organ|1",
+    "cv.piano.0073|fmep/swell/cloud|Rising FM Piano|1",
+    "cv.piano.0074|chamber+strings|Salon Grand & Strings|1",
+    "cv.piano.0075|chamber+pad|Chamber Grand & Pad|1",
+    "cv.piano.0076|chamber+vox|Chamber Grand & Voices|0",
+    "cv.piano.0077|chamber+choir|Chamber Grand & Choir|0",
+    "cv.piano.0078|chamber+octave|Octave Chamber Grand|1",
+    "cv.keys.0091|fmkeys/echopluck/ping|Echo FM Keys|1",
+    "cv.keys.0092|fmbell/echopluck/ping|Bouncing Soft FM Keys|1",
+    "cv.piano.0079|chamber+vibes|Chamber Grand & Vibes|1",
+    "cv.piano.0080|chamber+fmep|Ballad Chamber Grand|1",
+    "cv.piano.0081|concert/vinyl/room|Vinyl Concert Grand|0",
+    "cv.piano.0082|pedal/vinyl/room|Crackle Pedal Grand|0",
+    "cv.piano.0083|upright/vinyl/room|Vinyl Upright|1",
+    "cv.keys.0093|pedalsoft+pedal16|Full Pedal Pipes|1",
+    "cv.piano.0084|digital/swell/cloud|Rising Digital Piano|1",
+    "cv.piano.0085|reed/swell/cloud|Bowed Reed Piano|1",
+    "cv.piano.0086|chamber+organpiano|Gospel Chamber Grand|1",
+    "cv.piano.0087|fmep/chorus/room|Shimmer FM Piano|1",
+    "cv.piano.0088|fmep+marimba|Rosewood FM Piano|1",
+    "cv.keys.0094|pedalorgan/rotary/room|Whirl Pedal Organ|1",
+    "cv.piano.0089|chamber+cellopizz|Pizz Chamber Grand|1",
+    "cv.keys.0095|hpsFlemUp+chapel|Cloister Upper Manual|0",
+    "cv.keys.0096|pedalsoft+horns|Hushed Pipes & Horns|1",
+    "cv.piano.0090|fmep+loungenight|Late Set FM Piano|1",
+    "cv.keys.0097|hpsBaroque/vinyl/room|Crackle Continuo|1",
+    "cv.piano.0091|chamber+feltstrings|Quiet Hours Grand|1",
+    "cv.piano.0092|chamber+cinema|Cinematic Salon Grand|0",
+    "cv.piano.0093|chamber+lullaby|Lullaby Chamber Grand|1",
+    "cv.keys.0098|hpsEnglish+continuo|Baroque Harpsichord|1",
+    "cv.piano.0094|chamber+ambient|Ambient Chamber Grand|1",
+    "cv.piano.0095|concert/muted/room|Muted Concert Grand|1",
+    "cv.piano.0096|pedal/muted/room|Plucked Pedal Grand|1",
+    "cv.piano.0097|upright+strings|Silver String Upright|0",
+    "cv.piano.0098|studio/muted/room|Damped Studio Grand|1",
+    "cv.piano.0099|chamber/muted/room|Staccato Chamber Grand|1",
+    "cv.piano.0100|upright/muted/room|Muted Upright|1",
+    "cv.piano.0101|parlor/muted/room|Plucked Parlor Upright|1",
+    "cv.piano.0102|tine/muted/room|Staccato Tine Piano|1",
+    "cv.piano.0103|tinebell/muted/room|Muted Bell Tines|1",
+    "cv.piano.0104|reed/bright/dry|Pop Reed Piano|1",
+    "cv.piano.0105|upright+vox|Angel Upright|1",
+    "cv.piano.0106|fmep/phaser/room|Orbit FM Piano|1",
+    "cv.piano.0107|upright+octave|Doubled Upright|1",
+    "cv.piano.0108|upright+hybrid|Electric Grand Upright|1",
+    "cv.keys.0099|drawsoft/phaser/room|Spiral Soft Drawbars|0",
+    "cv.piano.0109|upright+glock|Twinkle Upright|0",
+    "cv.keys.0100|hpsEnglish/muted/room|Staccato Spinet|1",
+    "cv.piano.0110|tine+vibes|Lounge Tine Piano|1",
+    "cv.keys.0101|hpsLute/muted/room|Muted Lute Stop|1",
+    "cv.keys.0102|hpsFlemLo/muted/room|Plucked Lower Manual|1",
+    "cv.piano.0111|digital+fmep|Ballad Digital Piano|1",
+    "cv.keys.0103|hpsFlemUp/muted/room|Damped Upper Manual|1",
+    "cv.keys.0104|hpsFrench/muted/room|Staccato Rococo Keys|1",
+    "cv.piano.0112|tine+flute|Breeze Tine Piano|1",
+    "cv.keys.0105|hpsItalian/muted/room|Muted Venetian Keys|1",
+    "cv.keys.0106|fmclav/drive/room|Hot FM Clav|1",
+    "cv.keys.0107|hpsFrench+coupled|Coupled Harpsichord|1",
+    "cv.keys.0108|chamber8+pedal16|Plenum Chamber Organ|1",
+    "cv.keys.0109|draw16/phaser/room|Phased Deep Drawbars|1",
+    "cv.keys.0110|musicbox/echopluck/ping|Echo Music Box|1",
+    "cv.piano.0113|tine+harp|Harpstring Tine Piano|1",
+    "cv.piano.0114|concert/swell/cloud|Swelling Concert Grand|1",
+    "cv.piano.0115|pedal/swell/cloud|Bowed Pedal Grand|1",
+    "cv.piano.0116|toy+marimba|Timber Toy Piano|1",
+    "cv.piano.0117|studio/swell/cloud|Rising Studio Grand|1",
+    "cv.piano.0118|chamber/swell/cloud|Chamber Grand Cloud|1",
+    "cv.piano.0119|upright/swell/cloud|Swelling Upright|1",
+    "cv.piano.0120|parlor/swell/cloud|Bowed Parlor Upright|1",
+    "cv.piano.0121|digital/chorus/room|Shimmer Digital Piano|1",
+    "cv.piano.0122|tinebell/swell/cloud|Swelling Bell Tines|1",
+    "cv.keys.0111|chamber8+horns|Fanfare Chamber Organ|1",
+    "cv.piano.0123|upright+velvethybrid|Silk Hybrid Upright|1",
+    "cv.piano.0124|upright+feltstrings|Quiet Hours Upright|1",
+    "cv.keys.0112|drawfull/drive/room|Driven Full Drawbars|1",
+    "cv.piano.0125|toy+lullaby|Nightlight Toy Piano|1",
+    "cv.keys.0113|hpsEnglish/swell/cloud|Breathing Spinet|1",
+    "cv.keys.0114|hpsLute+continuo|Continuo Lute Stop|1",
+    "cv.keys.0115|hpsLute/swell/cloud|Swelling Lute Stop|1",
+    "cv.keys.0116|hpsFlemLo/swell/cloud|Bowed Lower Manual|1",
+    "cv.keys.0117|hpsFlemUp/swell/cloud|Rising Upper Manual|1",
+    "cv.keys.0118|hpsFrench/swell/cloud|Breathing Rococo Keys|1",
+    "cv.piano.0126|parlor+strings|Bowed String Upright|1",
+    "cv.keys.0119|hpsItalian/swell/cloud|Swelling Venetian Keys|1",
+    "cv.keys.0120|hpsBaroque/swell/cloud|Bowed Continuo|1",
+    "cv.piano.0127|parlor+cellos|Cello Parlor Upright|0",
+    "cv.piano.0128|parlor+air|Mist Parlor Upright|0",
+    "cv.keys.0121|draw16/drive/room|Driven Deep Drawbars|1",
+    "cv.keys.0122|pipesoft+choir|Choral Organ|1",
+    "cv.piano.0129|parlor+bowed|Aura Parlor Upright|1",
+    "cv.keys.0123|musicbox/reverse/hall|Reversed Music Box|1",
+    "cv.piano.0130|parlor+octave|Twin Octave Upright|1",
+    "cv.piano.0131|tine+chimes|Chiming Tine Piano|1",
+    "cv.piano.0132|parlor+glock|Star Dust Upright|1",
+    "cv.piano.0133|tine/bright/dry|Stage Tine Piano|1",
+    "cv.piano.0134|tinebell+vibes|Vibe Bell Tines|1",
+    "cv.piano.0135|tinebell/bright/dry|Bright Bell Tines|1",
+    "cv.piano.0136|fmep/underwater/cloud|Sunken FM Piano|1",
+    "cv.piano.0137|tinebell+flute|Soul Flute Bell Tines|1",
+    "cv.keys.0124|hpsItalian+coupled|Double Manual Keys|1",
+    "cv.keys.0125|hpsEnglish/bright/dry|Stage Spinet|1",
+    "cv.piano.0138|parlor+organpiano|Sunday Parlor Upright|1",
+    "cv.keys.0126|hpsFlemLo/bright/dry|Pop Lower Manual|1",
+    "cv.piano.0139|tinebell+harp|Angelic Bell Tines|0",
+    "cv.keys.0127|hpsFrench/bright/dry|Stage Rococo Keys|1",
+    "cv.keys.0128|clav+marimba|Funk Keys & Marimba|1",
+    "cv.keys.0129|hpsItalian/bright/dry|Bright Venetian Keys|1",
+    "cv.piano.0140|parlor+tremstr|Nervous Parlor Upright|1",
+    "cv.keys.0130|hpsItalian+chapel|Vespers Venetian Keys|1",
+    "cv.keys.0131|clavneck/wooden/room|Timber Neck Clav|0",
+    "cv.piano.0141|parlor+feltstrings|Low Light Upright|1",
+    "cv.keys.0132|pipesoft+heaven|Cathedral Light Organ|1",
+    "cv.keys.0133|hpsFlemLo+continuo|Ensemble Harpsichord|1",
+    "cv.piano.0142|reed/drive/room|Barking Reed Piano|1",
+    "cv.piano.0143|digital+strings|Digi Grand & Strings|1",
+    "cv.piano.0144|fmep/echopluck/ping|Ricochet FM Piano|1",
+    "cv.piano.0145|tine+cellos|Low String Tine Piano|1",
+    "cv.piano.0146|digital+pad|Digital Piano & Pad|0",
+    "cv.piano.0147|tine+air|Haze Tine Piano|1",
+    "cv.piano.0148|tine+vox|Angel Tine Piano|1",
+    "cv.keys.0134|pedalorgan+choir|Hymnal Pedal Organ|1",
+    "cv.keys.0135|drawperc/rotary/room|Percussive Organ Room|0",
+    "cv.piano.0149|tine+bowed|Halo Tine Piano|1",
+    "cv.piano.0150|digital+octave|Octave Digital Piano|1",
+    "cv.piano.0151|tine+glock|Twinkle Tine Piano|1",
+    "cv.piano.0152|reed+vibes|Reed Piano & Vibes|1",
+    "cv.keys.0136|clav/echopluck/ping|Ricochet Funk Keys|1",
+    "cv.keys.0137|fmclav/echopluck/ping|Ping FM Clav|1",
+    "cv.piano.0153|tinebell+fmep|Satin Bell Tines|1",
+    "cv.piano.0154|reed+flute|Reed Piano & Flute|1",
+    "cv.keys.0138|hpsBaroque+coupled|Twin Manual Continuo|1",
+    "cv.keys.0139|chamberfull+pedal16|Plenum Chapel Organ|1",
+    "cv.piano.0155|concert/underwater/cloud|Concert Grand Cloud|0",
+    "cv.piano.0156|fmep+harp|Harpstring FM Piano|1",
+    "cv.piano.0157|studio/underwater/cloud|Sunken Studio Grand|0",
+    "cv.piano.0158|chamber/underwater/cloud|Deep Sea Chamber Grand|1",
+    "cv.keys.0140|fmclav+marimba|Rosewood FM Clav|1",
+    "cv.piano.0159|parlor/underwater/cloud|Parlor Upright Cloud|0",
+    "cv.piano.0160|digital/underwater/cloud|Sunken Digital Piano|1",
+    "cv.piano.0161|reed/tremolo/room|Suitcase Reed Piano|1",
+    "cv.keys.0141|hpsBaroque+chapel|Cloister Continuo|1",
+    "cv.piano.0162|fmep/reverse/hall|Rewind FM Piano|0",
+    "cv.keys.0142|pedalsoft/vinyl/hall|Record Hushed Pipes|1",
+    "cv.keys.0143|pedalorgan+heaven|Sanctuary Pedal Organ|1",
+    "cv.keys.0144|hpsFlemUp+continuo|Baroque Upper Manual|1",
+    "cv.keys.0145|hpsEnglish/underwater/cloud|Deep Sea Spinet|0",
+    "cv.piano.0163|tine+strings|Silver String Piano|1",
+    "cv.keys.0146|hpsLute/underwater/cloud|Underwater Lute Stop|0",
+    "cv.piano.0164|tinebell+cellos|Cello Bell Tines|1",
+    "cv.keys.0147|hpsFlemUp/underwater/cloud|Sunken Upper Manual|1",
+    "cv.keys.0148|hpsFrench/underwater/cloud|Deep Sea Rococo Keys|1",
+    "cv.keys.0149|hpsItalian/underwater/cloud|Venetian Keys Cloud|1",
+    "cv.keys.0150|hpsBaroque/underwater/cloud|Submerged Continuo|0",
+    "cv.piano.0165|tinebell+air|Mist Bell Tines|0",
+    "cv.piano.0166|tinebell+vox|Vocal Bell Tines|0",
+    "cv.keys.0151|clavbridge/natural/hall|Bridge Clav Hall|0",
+    "cv.piano.0167|tinebell+bowed|Aura Bell Tines|1",
+    "cv.piano.0168|tine+octave|Doubled Tine Piano|1",
+    "cv.piano.0169|fmep+chimes|Chiming FM Piano|1",
+    "cv.piano.0170|tinebell+glock|Star Dust Bell Tines|1",
+    "cv.piano.0171|fmep+vibes|Lounge FM Piano|1",
+    "cv.keys.0152|hpsEnglish+flute|Soul Flute Harpsichord|0",
+    "cv.keys.0153|clav+pizz|Funk Keys & Pizzicato|1",
+    "cv.piano.0172|digital/echopluck/ping|Ricochet Digital Piano|1",
+    "cv.piano.0173|tine/drive/room|Hot Tine Piano|1",
+    "cv.piano.0174|tinebell/drive/room|Driven Bell Tines|1",
+    "cv.keys.0154|pipesoft+tremstr|Suspense Organ|1",
+    "cv.keys.0155|drawsoft/underwater/cloud|Deep Sea Soft Drawbars|1",
+    "cv.keys.0156|pedalsoft+heaven|Heavenly Organ|1",
+    "cv.keys.0157|drawfull/underwater/cloud|Full Drawbars Cloud|1",
+    "cv.keys.0158|hpsFrench+continuo|Continuo Harpsichord|1",
+    "cv.keys.0159|hpsLute/wooden/room|Wooden Lute Stop|1",
+    "cv.piano.0175|tinebell+strings|Bowed String Tines|1",
+    "cv.piano.0176|fmep+air|Haze FM Piano|1",
+    "cv.keys.0160|fmkeys/dark/cloud|Dark FM Keys Cloud|0",
+    "cv.keys.0161|chamber8+choir|Choral Chamber Organ|1",
+    "cv.keys.0162|draw16/underwater/cloud|Deep Drawbars Cloud|1",
+    "cv.keys.0163|combo/underwater/cloud|Submerged Combo Organ|1",
+    "cv.piano.0177|fmep+bowed|Halo FM Piano|1",
+    "cv.piano.0178|tinebell+octave|Twin Octave Bell Tines|1",
+    "cv.piano.0179|toy+chimes|Belfry Toy Piano|1",
+    "cv.piano.0180|concert/echopluck/ping|Echo Concert Grand|1",
+    "cv.piano.0181|studio/echopluck/ping|Ricochet Studio Grand|1",
+    "cv.piano.0182|chamber/echopluck/ping|Ping Chamber Grand|1",
+    "cv.keys.0164|hpsLute+flute|Lute Stop & Flute|1",
+    "cv.piano.0183|upright/echopluck/ping|Echo Upright|1",
+    "cv.piano.0184|parlor/echopluck/ping|Parlor Upright Delay|1",
+    "cv.piano.0185|digital/reverse/hall|Rewind Digital Piano|1",
+    "cv.piano.0186|tine/tremolo/room|Wobble Tine Piano|1",
+    "cv.piano.0187|tinebell/tremolo/room|Tremolo Bell Tines|1",
+    "cv.piano.0188|toy/muted/echo|Toy Piano Echo|0",
+    "cv.keys.0165|pedalorgan+tremstr|Nervous Pedal Organ|0",
+    "cv.keys.0166|chamber8+heaven|Sanctuary Organ|1",
+    "cv.keys.0167|hpsItalian+continuo|Ensemble Venetian Keys|1",
+    "cv.keys.0168|hpsEnglish/echopluck/ping|Ping Spinet|1",
+    "cv.keys.0169|hpsLute/echopluck/ping|Echo Lute Stop|1",
+    "cv.keys.0170|pipesoft+cellos|Low String Organ|1",
+    "cv.keys.0171|hpsFlemLo/echopluck/ping|Bouncing Lower Manual|1",
+    "cv.keys.0172|hpsFlemUp/echopluck/ping|Ricochet Upper Manual|1",
+    "cv.piano.0189|reed+pad|Reed Piano & Pad|0",
+    "cv.keys.0173|hpsFrench/echopluck/ping|Ping Court Harpsichord|1",
+    "cv.keys.0174|hpsItalian/echopluck/ping|Echo Venetian Keys|1",
+    "cv.piano.0190|toy+air|Mist Toy Piano|1",
+    "cv.piano.0191|toy+bowed|Aura Toy Piano|1",
+    "cv.piano.0192|reed+octave|Octave Reed Piano|1",
+    "cv.piano.0193|concert/reverse/hall|Reversed Concert Grand|0",
+    "cv.piano.0194|toy+glock|Star Dust Toy Piano|1",
+    "cv.piano.0195|studio/reverse/hall|Rewind Studio Grand|1",
+    "cv.piano.0196|upright/reverse/hall|Reversed Upright|0",
+    "cv.piano.0197|reed/echopluck/ping|Bouncing Reed Piano|1",
+    "cv.keys.0175|drawperc+horns|Click Organ & Horns|1",
+    "cv.keys.0176|hpsBaroque+continuo|Baroque Continuo|1",
+    "cv.keys.0177|pipesoft+strings|Silver String Organ|1",
+    "cv.keys.0178|hpsEnglish/reverse/hall|Mirror Spinet|1",
+    "cv.piano.0198|fmep+pad|Dream FM Piano|1",
+    "cv.keys.0179|hpsLute/reverse/hall|Reversed Lute Stop|1",
+    "cv.keys.0180|hpsFlemLo/reverse/hall|Backwards Lower Manual|0",
+    "cv.keys.0181|hpsFrench/reverse/hall|Mirror Rococo Keys|1",
+    "cv.keys.0182|pedalorgan+vox|Vocal Pedal Organ|1",
+    "cv.keys.0183|hpsItalian/reverse/hall|Reversed Venetian Keys|1",
+    "cv.keys.0184|chamberfull+choir|Plenum Organ & Choir|1",
+    "cv.piano.0199|fmep+octave|Doubled FM Piano|1",
+    "cv.keys.0185|celeste/natural/stage|Celeste Keys Stage|0",
+    "cv.keys.0186|hpsFlemUp+harp|Angelic Upper Manual|1",
+    "cv.piano.0200|tinebell/round/room|Round Bell Tines|0",
+    "cv.keys.0187|chamberfull+heaven|Heavenly Plenum Organ|0",
+    "cv.piano.0201|toy+pad|Padded Toy Piano|1",
+    "cv.keys.0188|drawsoft+choir|Choral Soft Drawbars|1",
+    "cv.keys.0189|hpsEnglish+octave|Twin Octave Spinet|1",
+    "cv.keys.0190|clav/muted/echo|Damped Funk Keys Echo|0",
+    "cv.keys.0191|musicbox+pizz|Plucked Court Box|1",
+    "cv.keys.0192|fmclav/muted/echo|Staccato FM Clav Echo|1",
+    "cv.keys.0193|clavbridge/muted/echo|Staccato Bridge Clav|1",
+    "cv.keys.0194|hpsLute+tremstr|Trembling Strings Stop|1",
+    "cv.keys.0195|musicbox/natural/cloud|Music Box Cloud|1",
+    "cv.keys.0196|combo+horns|Fanfare Combo Organ|1",
+    "cv.keys.0197|musicbox+heaven|Cathedral Light Box|1",
+    "cv.piano.0202|fmep/muted/echo|Damped FM Piano Echo|1",
+    "cv.keys.0198|drawfull+choir|Hymnal Full Drawbars|1",
+    "cv.keys.0199|hpsLute+octave|Octave Lute Stop|1",
+    "cv.keys.0200|celeste+pizz|Minuet Celeste Keys|0",
+    "cv.keys.0201|chamber8+strings|Bowed String Organ|0",
+    "cv.keys.0202|pipesoft+pad|Dream Soft Flute Organ|1",
+    "cv.keys.0203|hpsFlemLo+octave|Doubled Harpsichord|1",
+    "cv.keys.0204|hpsBaroque+flute|Soul Flute Continuo|1",
+    "cv.keys.0205|clav+cellopizz|Pizz Funk Keys|1",
+    "cv.keys.0206|hpsFlemUp+tremstr|Nervous Upper Manual|0",
+    "cv.keys.0207|pedalorgan+pad|Padded Pedal Organ|1",
+    "cv.keys.0208|hpsFlemUp+octave|Twin Octave Manual|1",
+    "cv.keys.0209|musicbox+harp|Harpstring Music Box|1",
+    "cv.keys.0210|fmclav/phaser/echo|Spiral FM Clav Echo|1",
+    "cv.keys.0211|hpsFrench+octave|Octave Harpsichord|1",
+    "cv.keys.0212|hpsBaroque+air|Mist Harpsichord|1",
+    "cv.keys.0213|calliope+vox|Vocal Calliope|0",
+    "cv.keys.0214|hpsItalian+octave|Doubled Venetian Keys|1",
+    "cv.keys.0215|clavbridge+cellopizz|Pulse Bridge Clav|0",
+    "cv.keys.0216|hpsLute+strings|Lute Stop & Strings|1",
+    "cv.keys.0217|fmkeys+air|Mist FM Keys|1",
+    "cv.piano.0203|digital/muted/echo|Digital Piano Echo|0",
+    "cv.piano.0204|tine/echopluck/ping|Ping Tine Piano|0",
+    "cv.piano.0205|tinebell/echopluck/ping|Echo Bell Tines|1",
+    "cv.keys.0218|hpsBaroque+octave|Twin Octave Continuo|1",
+    "cv.keys.0219|hpsBaroque+cellos|Cello Harpsichord|1",
+    "cv.keys.0220|fmbell+air|Soft FM Keys & Air|1",
+    "cv.keys.0221|musicbox+vox|Angel Music Box|1",
+    "cv.keys.0222|fmkeys+pad|Padded FM Keys|1",
+    "cv.keys.0223|hpsFrench+choir|Rococo Keys & Choir|0",
+    "cv.keys.0224|fmbell+pad|Soft FM Keys & Pad|1",
+    "cv.keys.0225|hpsItalian+strings|Silver String Keys|0",
+    "cv.piano.0206|tine/reverse/hall|Mirror Tine Piano|1",
+    "cv.piano.0207|tinebell/reverse/hall|Reversed Bell Tines|1",
+    "cv.piano.0208|reed/muted/echo|Reed Piano Echo|1",
+    "cv.keys.0226|combo+pad|Dream Combo Organ|0",
+    "cv.keys.0227|draw16+choir|Deep Drawbars & Choir|1",
+    "cv.keys.0228|drawfull/phaser/echo|Phased Full Drawbars|0",
+    "cv.keys.0229|combo+choir|Choral Combo Organ|1",
+    "cv.keys.0230|combo/phaser/echo|Swirl Combo Organ Echo|1",
+    "cv.piano.0209|studio/vinyl/hall|Dust Studio Grand Hall|1",
+    "cv.keys.0231|hpsBaroque/vinyl/hall|Crackle Continuo Hall|1",
+    "cv.keys.0232|clavneck/dark/cloud|Shadow Neck Clav Cloud|0",
+    "cv.piano.0210|pedal/muted/echo|Pedal Grand Echo|1",
+    "cv.piano.0211|chamber/muted/echo|Chamber Grand Echo|1",
+    "cv.piano.0212|parlor/muted/echo|Parlor Upright Echo|1",
+    "cv.keys.0233|hpsFlemLo/muted/echo|Lower Manual Echo|0",
+    "cv.keys.0234|hpsFlemUp/muted/echo|Upper Manual Echo|0",
+    "cv.keys.0235|hpsFrench/muted/echo|Court Harpsichord Echo|1",
+    "cv.keys.0236|hpsItalian/muted/echo|Venetian Keys Echo|0",
+    "cv.keys.0237|clav/muted/dry|Damped Funk Keys Close|1",
+    "cv.piano.0213|fmep/muted/dry|Damped FM Piano Close|1",
+    "cv.keys.0238|clav/natural/cloud|Funk Keys Cloud|1",
+    "cv.piano.0214|fmep/natural/cloud|FM Piano Cloud|0",
+    "cv.piano.0215|tinebell/phaser/echo|Phased Bell Tines Echo|0",
+    "cv.piano.0216|tine/tape/echo|Warped Tine Piano Echo|0",
+};
+
+static bool shippedV2 (const juce::String& id)
+{
+    static const std::set<juce::String> ids = []
+    {
+        std::set<juce::String> r;
+        for (auto* row : pinnedV2) { const auto c = juce::StringArray::fromTokens (row, "|", ""); if (c[3] == "1") r.insert (c[0]); }
+        return r;
+    }();
+    return ids.count (id) > 0;
+}
+
+static std::vector<VaultPreset> buildPinned (const RecipeContext& ctx, std::vector<juce::String>& tags)
+{
+    const float ownMax25 = 0.08f, ownMax6k = 0.02f;
+    const int threads = envInt ("KEYS_THREADS", (int) std::max (1u, std::thread::hardware_concurrency()));
+    std::map<juce::String, Cand> byTag;
+    for (auto& c : candidates()) byTag.emplace (c.recipe, c);
+    struct Pin { juce::String id, tag, name; VaultPreset p; bool ok = false; };
+    std::vector<Pin> pins;
+    for (auto* row : pinnedV2)
+    {
+        const auto cols = juce::StringArray::fromTokens (row, "|", "");
+        auto it = byTag.find (cols[1]);
+        if (it == byTag.end()) { std::printf ("keys: pinned %s (%s) is no longer a candidate\n", cols[0].toRawUTF8(), cols[1].toRawUTF8()); continue; }
+        bool have = true;
+        for (auto& part : it->second.preset.parts)
+            if (part.kind == VaultPartKind::sample && ! ctx.hasInstrument (part.source)) have = false;
+        if (! have) continue;
+        pins.push_back ({ cols[0], cols[1], cols[2], it->second.preset });
+    }
+    std::atomic<int> next { 0 };
+    std::vector<std::thread> pool;
+    for (int t = 0; t < threads; ++t)
+        pool.emplace_back ([&]
+        {
+            for (int i; (i = next++) < (int) pins.size();)
+            {
+                auto& pin = pins[(size_t) i];
+                auto& p = pin.p;
+                p.id = pin.id; p.name = pin.name;
+                calibrate (p);
+                recipegate::Result r;
+                for (int attempt = 0; attempt < 5; ++attempt)   // the v2 stage's own gate + repairs, as in buildV2
+                {
+                    r = recipegate::Result();
+                    r.preset = p;
+                    recipegate::analyse (r);
+                    if (r.fail.isEmpty() && r.share25 > ownMax25) r.fail = "harsh-2-5k";
+                    if (r.fail.isEmpty() && r.share6k > ownMax6k) r.fail = "piercing-highs";
+                    if (r.fail.isEmpty() || r.fail.startsWith ("name") || r.fail == "label") break;
+                    if (! repair (p, r.fail, attempt)) break;
+                    calibrate (p);
+                }
+                pin.ok = r.fail.isEmpty();
+                if (! pin.ok) std::printf ("keys: pinned %s %s now fails the v2 gate (%s); the v3 stage decides\n", pin.id.toRawUTF8(), pin.name.toRawUTF8(), r.fail.toRawUTF8());
+                p.gain = 1.0f;
+            }
+        });
+    for (auto& t : pool) t.join();
+    std::vector<VaultPreset> out;
+    for (auto& pin : pins) { out.push_back (pin.p); tags.push_back (pin.tag); }
+    std::printf ("keys: v2 stage pinned, %d presets\n", (int) out.size());
+    return out;
+}
+
+//==============================================================================
 std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
 {
     if (envInt ("KEYS_CALIB", 0) != 0) { calibrationReport(); return {}; }
@@ -2395,7 +2923,7 @@ std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
     }
     else
     {
-        base = buildV2 (ctx, tags);
+        base = envInt ("KEYS_V2_SEARCH", 0) != 0 ? buildV2 (ctx, tags) : buildPinned (ctx, tags);
         if (cacheBank != juce::File())
         {
             vault::saveBankFile (cacheBank, base);
@@ -2486,11 +3014,15 @@ std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
             });
         for (auto& t : pool) t.join();
     };
-    // the presets (in recipe order) that are too close to an earlier kept one
+    // the presets that are too close to an earlier kept one; the presets of the shipped v2 bank go first (in recipe
+    // order), so a preset whose id is already in host projects keeps its place and a new one gives way
+    std::vector<int> order;
+    for (int pass = 0; pass < 2; ++pass)
+        for (int i = 0; i < n; ++i) if (shippedV2 (base[(size_t) i].id) == (pass == 0)) order.push_back (i);
     auto nearOnes = [&]
     {
         std::vector<int> kept, near;
-        for (int i = 0; i < n; ++i)
+        for (int i : order)
         {
             auto& o = res[(size_t) i];
             if (o.res.fail.isNotEmpty() || o.dropped) continue;
