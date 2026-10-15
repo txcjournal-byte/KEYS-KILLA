@@ -8,10 +8,9 @@
 //                           VaultTests -snapshot <out.png>       paint the editor into a PNG (Linux: under xvfb-run)
 //                           VaultTests -uitest                   editor behaviour (keys, filters, favorites, persistence, WAV drag)
 //                           VaultTests -models                   the physical-model tests only (tests/VaultModelTests.cpp)
-//                           VaultTests -shot <out.png> [state]   the browser UI with a 3-layer preset + a filter (xvfb-run)
-//                                      state: comma list of  scale:<pct> search:<text> cat:<n> layers:<n>
-//                                      favs recent empty keys knobs   (default "main" = its category + a held chord)
-//                                      pick:<preset name>  nowait (paint at once: a sampled sound still loading)
+//                           VaultTests -shot <out.png> [state]   the editor with a 3-layer preset (xvfb-run); state = comma list:
+//                                                                page:main|layers|fx|mod|arp, scale:80, rich, demo, pick:<name>,
+//                                                                search:<text>, cat:<n>, recent, favs, empty, knobs, nowait
 //                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
 //                           VaultTests -writeuidemo <out.cvb>    the v2 UI demo bank (sampled / model / synth layers) for -shot
 //                           VaultTests -uitestv2                 v2 editor checks (child process of -uitest)
@@ -737,19 +736,12 @@ void uiQaTests (VaultProcessor& p)
         check (all, "ui: every macro audibly changes the sound (" + s.trim() + ")");
 
         const int idx = v.shownPreset();
-        auto& knob = v.infoPanel().knob[1];
-        knob.setValue (1.0, juce::sendNotificationSync);
-        check (std::abs (p.getMacro (1) - 1.0f) < 1e-4f, "ui: SPACE knob drives the macro parameter");
-        float mac[vault::numMacros];
-        for (int i = 0; i < vault::numMacros; ++i) mac[i] = p.getMacro (i);
-        VaultThumbs::Thumb def, liveT;
-        v.thumbnails().waitFor (idx, 10000);
-        v.thumbnails().get (idx, def);
-        const bool ok = v.thumbnails().waitForLive (idx, mac, 10000) && v.thumbnails().getLive (idx, mac, liveT);
-        float d = 0;
-        for (int b = 0; b < VaultThumbs::numBins; ++b) d += std::abs (def.level[(size_t) b] - liveT.level[(size_t) b]);
-        check (ok && d > 0.5f, "ui: the waveform follows the macros (difference " + juce::String (d, 2) + ")");
-        knob.setValue (bank[(size_t) idx].macroDefaults[1], juce::sendNotificationSync);
+        auto& knob = v.mainPage().macroKnob (1);
+        knob.userSet (1.0f);
+        check (std::abs (p.getMacro (1) - 1.0f) < 1e-4f && std::abs (knob.getValue() - 1.0f) < 1e-4f, "ui: sound macro knob 2 drives the macro parameter");
+        p.setMacro (2, 0.25f);
+        check (std::abs (v.mainPage().macroKnob (2).getValue() - 0.25f) < 1e-4f, "ui: a host change of a macro moves its knob");
+        knob.userSet (bank[(size_t) idx].macroDefaults[1]);
     }
 
     // ---- browsing through the whole plugin while a chord is held: instant, click-free, never silent, never clipping
@@ -879,8 +871,9 @@ void uiQaTests (VaultProcessor& p)
         v.syncFromProcessor();
         check (p.currentPreset() == target && v.shownPreset() == target && v.presetList().listBox().getModel()->getNumRows() > 0,
                "ui: state restore with the editor open shows the restored sound");
-        check (std::abs (v.infoPanel().knob[0].getValue() - 0.15) < 1e-3 && std::abs (v.infoPanel().knob[3].getValue() - 0.9) < 1e-3
-                   && std::abs (v.infoPanel().volume.getValue() + 6.0) < 0.05,
+        const float volDb = p.apvts.getParameter (VaultProcessor::idVolume)->convertFrom0to1 (v.mainPage().volumeKnob().getValue());
+        check (std::abs (v.mainPage().macroKnob (0).getValue() - 0.15) < 1e-3 && std::abs (v.mainPage().macroKnob (3).getValue() - 0.9) < 1e-3
+                   && std::abs (volDb + 6.0f) < 0.05f,
                "ui: state restore moves the knobs and the volume slider");
         juce::MemoryBlock junk ("not a state", 11);
         p.setStateInformation (junk.getData(), (int) junk.getSize());
@@ -975,29 +968,78 @@ void readabilityTests (VaultProcessor& p)
         check (rendered >= need - 0.01f, "ui: smallest text at " + juce::String (juce::roundToInt (sc * 100)) + " % = "
                                              + juce::String (rendered, 1) + " px (>= " + juce::String (need, 0) + ")");
     }
-    // no "..." hiding information in the list: every name and every info line of the bank fits its column
+    // no "..." hiding information in the list: every name of the bank fits its column; the categories fit theirs
     {
         ed.setUiScale (1.0f);
         const auto cols = vui::PresetList::columns ((float) v.presetList().listBox().getVisibleRowWidth(), (float) vui::PresetList::rowH);
-        int namesCut = 0, tagsCut = 0, noInstrument = 0, several = 0;
+        int namesCut = 0;
         juce::String worst;
         for (int i = 0; i < (int) bank.size(); ++i)
-        {
-            const auto& x = bank[(size_t) i];
-            if (vui::textWidth (vui::PresetList::nameFont(), x.name) > cols.name.getWidth()) { ++namesCut; worst = x.name; }
-            const auto& inst = v.browser().instruments (i);
-            const auto t = vui::PresetList::infoText (inst, cols.tags.getWidth());
-            if (vui::textWidth (vui::PresetList::tagFont(), t) > cols.tags.getWidth() || (! inst.isEmpty() && ! t.startsWith (inst[0])))
-            { ++tagsCut; worst = t; }
-            noInstrument += t.isEmpty() ? 1 : 0;
-            several += t.contains (vui::midDot()) ? 1 : 0;
-        }
-        check (namesCut == 0 && tagsCut == 0 && noInstrument == 0,
-               "ui: every name (" + juce::String (cols.name.getWidth(), 0) + " px) and instrument line ("
-                   + juce::String (cols.tags.getWidth(), 0) + " px) of the bank fits its list column ("
-                   + juce::String (namesCut) + " / " + juce::String (tagsCut) + " cut, " + juce::String (noInstrument) + " empty, "
-                   + juce::String (several) + " with 2+ instruments" + (worst.isEmpty() ? "" : ": " + worst) + ")");
+            if (vui::textWidth (vui::PresetList::nameFont(), bank[(size_t) i].name) > cols.name.getWidth()) { ++namesCut; worst = bank[(size_t) i].name; }
+        check (namesCut == 0, "ui: every name of the bank fits its list column (" + juce::String (cols.name.getWidth(), 0) + " px, "
+                                  + juce::String (namesCut) + " cut" + (worst.isEmpty() ? juce::String() : ": " + worst) + ")");
+        auto& cl = v.mainPage().categoryList();
+        check (cl.widestRow() <= (float) cl.getWidth() && cl.rowH >= 20, "ui: every category name + count fits its column ("
+                   + juce::String (cl.widestRow(), 0) + " of " + juce::String (cl.getWidth()) + " px, rows " + juce::String (cl.rowH) + " px)");
     }
+    // every page at 80 / 100 %: text >= 11 / 13 px, knob labels fit their knob, no two controls overlap, nothing outside the page
+    // (a 3-layer sound, then a 4-layer one with the most modelled / synth layers: the narrowest layer cards)
+    int four = -1;
+    {
+        int bestScore = -1;
+        for (int i = 0; i < (int) bank.size(); ++i)
+        {
+            if (bank[(size_t) i].parts.size() != 4) continue;
+            int score = 0;
+            for (auto& part : bank[(size_t) i].parts) score += part.kind == VaultPartKind::model ? 2 : part.kind == VaultPartKind::synth ? 1 : 0;
+            if (score > bestScore) { bestScore = score; four = i; }
+        }
+    }
+    for (int round = 0; round < (four >= 0 ? 2 : 1); ++round)
+    for (int pg = 0; pg < VaultMainView::numPages; ++pg)
+    {
+        if (pg == 0) { v.loadPreset (round == 0 ? pick : four, false); v.refreshAll(); }
+        v.showPage (pg);
+        for (float sc : { 0.8f, 1.0f })
+        {
+            ed.setUiScale (sc);
+            vui::smallestFontPx() = 1000.0f;
+            juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
+            const float rendered = vui::smallestFontPx() * sc;
+            check (rendered >= (sc < 0.95f ? 11.0f : 13.0f) - 0.01f, "ui: page " + juce::String (pg) + " smallest text at "
+                       + juce::String (juce::roundToInt (sc * 100)) + " % = " + juce::String (rendered, 1) + " px");
+        }
+        int overlaps = 0, outside = 0, labelsCut = 0;
+        juce::String what;
+        std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
+        {
+            std::vector<juce::Component*> kids;
+            for (auto* ch : c.getChildren()) if (ch->isVisible() && ! ch->getBounds().isEmpty()) kids.push_back (ch);
+            for (size_t i = 0; i < kids.size(); ++i)
+            {
+                if (! c.getLocalBounds().contains (kids[i]->getBounds()) && dynamic_cast<juce::Viewport*> (&c) == nullptr
+                    && dynamic_cast<juce::ListBox*> (&c) == nullptr && c.getParentComponent() != nullptr
+                    && dynamic_cast<juce::Viewport*> (c.getParentComponent()) == nullptr)
+                { ++outside; what = typeid (*kids[i]).name() + juce::String (" ") + kids[i]->getBounds().toString() + " in " + c.getLocalBounds().toString(); }
+                for (size_t j = i + 1; j < kids.size(); ++j)
+                    if (kids[i]->getBounds().intersects (kids[j]->getBounds()) && dynamic_cast<juce::ScrollBar*> (kids[j]) == nullptr
+                        && dynamic_cast<juce::ScrollBar*> (kids[i]) == nullptr && dynamic_cast<juce::Viewport*> (&c) == nullptr)
+                    { ++overlaps; what = juce::String (typeid (*kids[i]).name()) + " " + kids[i]->getBounds().toString() + " x " + typeid (*kids[j]).name() + " " + kids[j]->getBounds().toString(); }
+                if (auto* k = dynamic_cast<vui::Knob*> (kids[i]))
+                {
+                    const auto f = vui::font (14.0f, true, 0.0f);
+                    const float need = std::min (vui::textWidth (f, k->label), k->shortLabel.isEmpty() ? 1.0e9f : vui::textWidth (f, k->shortLabel)) + (k->hasLed ? 11.0f : 0.0f);
+                    if (need > (float) k->getWidth()) { ++labelsCut; what = "label " + k->label + " in " + juce::String (k->getWidth()) + " px"; }
+                }
+            }
+            for (auto* ch : kids) walk (*ch);
+        };
+        walk (v.pageComponent (pg));
+        walk (v);
+        check (overlaps == 0 && outside == 0 && labelsCut == 0, "ui: page " + juce::String (pg) + " (" + bank[(size_t) (round == 0 ? pick : four)].name + ") layout: " + juce::String (overlaps) + " overlaps, "
+                   + juce::String (outside) + " outside, " + juce::String (labelsCut) + " knob labels too wide" + (what.isEmpty() ? juce::String() : " (" + what + ")"));
+    }
+    v.showPage (VaultMainView::pageMain);
     // text colours: nothing darker than the "dim" tertiary text on the dark panels, primary text #E3E8F0
     const auto lum = [] (juce::Colour c) { return 0.2126f * c.getFloatRed() + 0.7152f * c.getFloatGreen() + 0.0722f * c.getFloatBlue(); };
     check (vui::col::dim == juce::Colour (0xff8593ab) && vui::col::text == juce::Colour (0xffe3e8f0)
@@ -1217,16 +1259,16 @@ int uiV2Tests()
     {
         v.loadPreset (grandStrings, false);
         v.syncFromProcessor();
-        const auto& info = v.infoPanel();
-        check (info.notice() == VaultInfoPanel::Notice::libraryMissing && info.noticeTitle().startsWith ("Sound library not found")
+        auto& info = v.mainPage();
+        check (info.notice() == vui::MainPage::Notice::libraryMissing && info.noticeTitle().startsWith ("Sound library not found")
                    && info.noticeTitle().contains ("run the CHROME VAULT installer") && v.statusHint().startsWith ("Sound library not found"),
                "ui v2: library missing -> \"" + info.noticeTitle() + "\" + " + p.libraryPath().getFullPathName());
-        check (info.partState (bank[(size_t) grandStrings].parts[0]) == VaultInfoPanel::PartState::missing,
+        check (info.partState (bank[(size_t) grandStrings].parts[0]) == vui::MainPage::PartState::missing,
                "ui v2: its sampled layers are marked not installed");
         juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
         v.loadPreset (synthOnly, false);
         v.syncFromProcessor();
-        check (info.notice() == VaultInfoPanel::Notice::none && ! v.statusHint().contains ("library"), "ui v2: a synth sound shows no library notice");
+        check (info.notice() == vui::MainPage::Notice::none && ! v.statusHint().contains ("library"), "ui v2: a synth sound shows no library notice");
         constexpr double sr = 48000.0;
         constexpr int block = 512;
         p.setPlayConfigDetails (0, 2, sr, block);
@@ -1266,22 +1308,22 @@ int uiV2Tests()
             v.loadPreset (pick, true);
             v.syncFromProcessor();
             const double ms = msSince (t0);
-            const auto st = v.infoPanel().notice();
+            const auto st = v.mainPage().notice();
             juce::ignoreUnused (ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.0f));
-            check (ms < 20.0 && st == VaultInfoPanel::Notice::loading && v.statusHint().startsWith ("Loading samples"),
+            check (ms < 20.0 && st == vui::MainPage::Notice::loading && v.statusHint().startsWith ("Loading samples"),
                    "ui v2: picking \"" + bank[(size_t) pick].name + "\" takes " + juce::String (ms, 2) + " ms on the UI thread and shows Loading");
             const auto until = juce::Time::getMillisecondCounter() + 30000;
             while (p.isLoading() && juce::Time::getMillisecondCounter() < until) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
             v.syncFromProcessor();
-            check (v.infoPanel().notice() == VaultInfoPanel::Notice::none
-                       && v.infoPanel().partState (bank[(size_t) pick].parts[0]) == VaultInfoPanel::PartState::ready,
+            check (v.mainPage().notice() == vui::MainPage::Notice::none
+                       && v.mainPage().partState (bank[(size_t) pick].parts[0]) == vui::MainPage::PartState::ready,
                    "ui v2: the loading state ends when the samples are in");
         }
         else check (true, "ui v2: (every demo instrument already in RAM - loading state not tested)");
         v.loadPreset (celesta, false);
         v.syncFromProcessor();
-        check (v.infoPanel().notice() == VaultInfoPanel::Notice::instrumentMissing && v.infoPanel().noticeTitle().contains ("newer sound library"),
-               "ui v2: an instrument the installed library lacks -> \"" + v.infoPanel().noticeTitle() + "\"");
+        check (v.mainPage().notice() == vui::MainPage::Notice::instrumentMissing && v.mainPage().noticeTitle().contains ("newer sound library"),
+               "ui v2: an instrument the installed library lacks -> \"" + v.mainPage().noticeTitle() + "\"");
     }
     // ---- readability of the v2 states at 80 / 100 %
     for (float sc : { 0.8f, 1.0f })
@@ -1332,6 +1374,150 @@ void runUiV2Children()
     setEnv ("CHROME_VAULT_LIBRARY", oldLib);
 }
 
+// v3 editor pages: the knobs edit the sound / the host parameters, double-click returns to the preset, LEDs switch the
+// chain slots, modulation shows as a green ring, the ADVANCED pages follow the sound
+vui::Knob* findKnob (juce::Component& c, const juce::String& label)
+{
+    for (auto* ch : c.getChildren())
+    {
+        if (! ch->isVisible()) continue;
+        if (auto* k = dynamic_cast<vui::Knob*> (ch); k != nullptr && k->label == label) return k;
+        if (auto* k = findKnob (*ch, label)) return k;
+    }
+    return nullptr;
+}
+
+void v3PageTests (VaultProcessor& p)
+{
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    const auto& bank = p.bank();
+    int pick = -1;
+    for (int i = 0; i < (int) bank.size() && pick < 0; ++i)
+        if (bank[(size_t) i].parts.size() >= 2 && bank[(size_t) i].parts[0].kind != VaultPartKind::model) pick = i;
+    if (pick < 0) pick = 0;
+    v.loadPreset (pick, false);
+    v.syncFromProcessor();
+    auto& main = v.mainPage();
+
+    // MAIN knobs = host parameters (both ways), double-click = as designed
+    {
+        auto& k = main.quickKnob (vault::qCutoff);
+        k.userSet (0.75f);
+        const bool drives = std::abs (p.getQuick (vault::qCutoff) - 0.75f) < 1e-3f && k.currentValueText() == "+2.0 oct";
+        p.setQuick (vault::qCutoff, 0.25f);
+        const bool follows = std::abs (k.getValue() - 0.25f) < 1e-3f;
+        k.userSet (k.resetValue);
+        check (drives && follows && std::abs (p.getQuick (vault::qCutoff) - 0.5f) < 1e-3f,
+               "ui v3: a MAIN knob drives its host parameter, follows the host and double-clicks back to the sound as designed");
+    }
+    // EFFECTS LED: switches the reverb slot (adds a default one when the sound has none) and back
+    {
+        auto& k = main.quickKnob (vault::qReverb);
+        const bool before = p.isQuickFxOn (vault::qReverb);
+        if (k.onLedClick) k.onLedClick();
+        const bool mid = p.isQuickFxOn (vault::qReverb);
+        if (k.onLedClick) k.onLedClick();
+        check (k.hasLed && mid != before && p.isQuickFxOn (vault::qReverb) == before && k.ledOn == before,
+               "ui v3: the REVERB LED switches the chain's reverb (" + juce::String (before ? "on" : "off") + " -> " + (mid ? "on" : "off") + " -> back)");
+    }
+    // sound macros: named per preset
+    {
+        bool named = true;
+        for (int i = 0; i < vault::numMacros; ++i)
+        {
+            const auto n = p.macroName (i).trim();
+            named &= n.isEmpty() ? ! main.macroKnob (i).isEnabledLook() : main.macroKnob (i).label == n.toUpperCase();
+        }
+        check (named, "ui v3: the 4 sound macros carry the sound's macro names (" + main.macroKnob (0).label + ", " + main.macroKnob (1).label + ", ...)");
+    }
+    // LAYERS: LEVEL of layer A edits the sound, Reset to preset reverts it
+    {
+        v.showPage (VaultMainView::pageLayers);
+        auto* lvl = findKnob (v.layersPage(), "LEVEL");
+        bool ok = lvl != nullptr && v.layersPage().numCards() == (int) bank[(size_t) pick].parts.size();
+        if (lvl != nullptr)
+        {
+            lvl->userSet (0.25f);
+            ok &= std::abs (p.currentSound().parts[0].level - 0.5f) < 1e-3f && p.isSoundEdited();
+            p.revertSound();
+            v.refreshAll();
+            ok &= ! p.isSoundEdited() && std::abs (lvl->getValue() - lvl->resetValue) < 1e-4f;
+        }
+        check (ok, "ui v3: LAYERS - one card per layer, LEVEL edits the sound, revert restores it");
+    }
+    // FX: a slot card per chain slot; its knobs edit the slot
+    {
+        p.editSound ([] (VaultPreset& x)
+        {
+            int rev = 0;
+            for (auto& s : x.fx) rev += s.type == vault::FxType::reverb ? 1 : 0;
+            if (rev == 0 && (int) x.fx.size() < vault::maxFxSlots) x.fx.push_back (VaultFxSlot::make (vault::FxType::reverb));
+        });
+        v.showPage (VaultMainView::pageFx);
+        auto* size = findKnob (v.fxPage(), "SIZE");
+        bool ok = size != nullptr;
+        if (size != nullptr)
+        {
+            size->userSet (0.9f);
+            float got = -1;
+            for (auto& s : p.currentSound().fx) if (s.type == vault::FxType::reverb) { got = s.get ("size"); break; }
+            ok &= std::abs (got - 0.9f) < 1e-3f;
+        }
+        check (ok, "ui v3: FX - the reverb card's SIZE knob edits the chain");
+        p.revertSound();
+    }
+    // MOD: an LFO destination makes the MAIN knob green; the chip and the routing knob show up
+    {
+        p.editSound ([] (VaultPreset& x) { x.mod.lfo[0].dests = { { "cutoff", 1.0f } }; x.mod.lfo[0].depth = 1.0f; x.mod.modWheel = { { "fx.reverb.mix", 0.3f } }; });
+        v.showPage (VaultMainView::pageMod);
+        v.refreshAll();
+        auto* wheel = findKnob (v.modPage(), "REVERB MIX");
+        v.showPage (VaultMainView::pageMain);
+        bool any = false;
+        const float amt = vui::mod::amountOn (p.currentSound(), "cutoff", any);
+        check (any && std::abs (amt - 0.25f) < 1e-4f && main.quickKnob (vault::qCutoff).isModulated() && wheel != nullptr
+                   && main.quickKnob (vault::qReverb).isModulated(),
+               "ui v3: MOD - LFO 1 -> cutoff and the wheel -> reverb mix show as green rings on the MAIN knobs, the wheel routing as a knob");
+        p.revertSound();
+    }
+    // ARP · GATE: knobs and lanes edit the arp / gate, the power buttons are the host switches
+    {
+        v.showPage (VaultMainView::pageArp);
+        auto* oct = findKnob (v.arpPage(), "OCTAVES");
+        auto* depth = findKnob (v.arpPage(), "DEPTH");
+        bool ok = oct != nullptr && depth != nullptr;
+        if (ok)
+        {
+            oct->userSet (1.0f);
+            depth->userSet (0.5f);
+            ok &= p.currentSound().arp.octaves == 4 && std::abs (p.currentSound().gate.depth - 0.5f) < 1e-3f;
+        }
+        p.setSwitch (VaultProcessor::idArpOn, true);
+        v.syncFromProcessor();
+        ok &= p.getSwitch (VaultProcessor::idArpOn);
+        p.setSwitch (VaultProcessor::idArpOn, false);
+        check (ok, "ui v3: ARP / GATE page - OCTAVES / DEPTH edit the arp / gate");
+        p.revertSound();
+        v.showPage (VaultMainView::pageMain);
+    }
+    // a preset switch shows the new sound on every page (no stale cards)
+    {
+        int other = -1;
+        for (int i = 0; i < (int) bank.size() && other < 0; ++i) if (i != pick && bank[(size_t) i].parts.size() != bank[(size_t) pick].parts.size()) other = i;
+        if (other >= 0)
+        {
+            v.showPage (VaultMainView::pageLayers);
+            p.selectPreset (other);   // from the host
+            v.syncFromProcessor();
+            check (v.layersPage().numCards() == (int) bank[(size_t) other].parts.size() && v.shownPreset() == other,
+                   "ui v3: a host preset change rebuilds the LAYERS page (" + juce::String (v.layersPage().numCards()) + " cards)");
+            v.showPage (VaultMainView::pageMain);
+        }
+    }
+    p.resetQuick();
+}
+
 // editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
 // host automation is followed, DRAG WAV renders a valid file
 int uiTests()
@@ -1378,8 +1564,6 @@ int uiTests()
         v.setFavoritesOnly (true);
         check (v.visibleCount() == 1 && v.browser().visible().front() == fav, "ui: favorites filter");
         v.setFavoritesOnly (false);
-        v.randomSound();
-        check (p.currentPreset() >= 0, "ui: random loads a sound");
         v.loadPreset (pads0, false);
         p.selectPreset (7);                           // host / automation side
         v.syncFromProcessor();
@@ -1413,6 +1597,7 @@ int uiTests()
         check (f.existsAsFile() && f.loadFileAsString().contains (bank[(size_t) fav].id), "ui: settings file " + f.getFileName());
     }
     focusTests (p);
+    v3PageTests (p);
     windowSizeTests (p);
     readabilityTests (p);
     VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
@@ -1996,6 +2181,29 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
         if (t.trim().startsWith ("pick:"))   // "pick:<preset name>"
             for (int i = 0; i < (int) bank.size(); ++i)
                 if (bank[(size_t) i].name.equalsIgnoreCase (t.fromFirstOccurrenceOf (":", false, false).trim())) { pick = i; break; }
+        if (t.trim() == "four")   // a 4-layer sound, with a modelled layer when there is one (LAYERS page)
+        {
+            int best = -1, bestScore = -1;
+            for (int i = 0; i < (int) bank.size(); ++i)
+            {
+                const auto& x = bank[(size_t) i];
+                if (x.parts.size() != 4) continue;
+                int score = 0;
+                for (auto& part : x.parts) score += part.kind == VaultPartKind::model ? 2 : part.kind == VaultPartKind::synth ? 1 : 0;
+                if (score > bestScore) { bestScore = score; best = i; }
+            }
+            if (best >= 0) pick = best;
+        }
+        if (t.trim() == "rich")   // the 3-layer sound with the longest FX chain (FX / MOD pages)
+        {
+            size_t most = 0;
+            for (int i = 0; i < (int) bank.size(); ++i)
+            {
+                auto x = bank[(size_t) i];
+                vault::upgradeToV3 (x);
+                if (x.parts.size() == 3 && x.fx.size() > most) { most = x.fx.size(); pick = i; }
+            }
+        }
     }
     for (int i = 0; i < 6; ++i)   // some history for RECENT (synth-only sounds: a "nowait" shot must still catch its own loading)
     {
@@ -2006,7 +2214,9 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     v.loadPreset (pick, false);
     const auto& pr = bank[(size_t) pick];
 
-    bool macrosAfterLoad = false;   // "knobs": SPACE + MOTION up, the waveform follows
+    bool macrosAfterLoad = false;   // "knobs": the sound macros moved
+    bool demoEdits = false;         // "demo": modulation, arp / gate lanes and a MAIN knob edited (shows the green rings, lanes)
+    int pageAfterLoad = -1;         // "page:main|layers|fx|mod|arp"
     auto tokens = juce::StringArray::fromTokens (stateArg.isEmpty() ? "main" : stateArg, ",", "");
     for (auto t : tokens)
     {
@@ -2020,6 +2230,12 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
         else if (key == "empty")   v.setQuery ("zzqx nothing");
         else if (key == "recent")  v.setRecentOnly (true);
         else if (key == "knobs")   { macrosAfterLoad = true; }
+        else if (key == "page")
+        {
+            const int pg = juce::StringArray { "main", "layers", "fx", "mod", "arp" }.indexOf (val);
+            pageAfterLoad = pg;
+        }
+        else if (key == "demo")    demoEdits = true;
         else if (key == "favs")
         {
             for (int i = 0; i < 9; ++i) v.toggleFavorite ((pick + i * 13) % (int) bank.size());
@@ -2029,17 +2245,42 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     v.loadPreset (pick, false);
     if (wait)
     {
-        v.thumbnails().waitFor (pick, 10000);
         const auto until = juce::Time::getMillisecondCounter() + 30000;
         while (p.isLoading() && juce::Time::getMillisecondCounter() < until) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
     }
     v.syncFromProcessor();
+    if (demoEdits)
+    {
+        p.editSound ([] (VaultPreset& x)
+        {
+            x.mod.lfo[0].dests = { { "pitch", 0.08f }, { "cutoff", 1.0f } };
+            x.mod.lfo[0].sync = true; x.mod.lfo[0].div = (uint8_t) vault::divisionIndex ("1/4");
+            x.mod.lfo[0].delay = 0.3f; x.mod.lfo[0].fade = 0.5f;
+            x.mod.lfo[1].shape = VaultLfo::triangle; x.mod.lfo[1].sync = true; x.mod.lfo[1].div = (uint8_t) vault::divisionIndex ("1/8");
+            x.mod.lfo[1].delay = 0.3f; x.mod.lfo[1].fade = 0.5f;
+            x.mod.lfo[1].dests = { { "volume", 0.15f }, { "pan", 0.4f } };
+            x.mod.modWheel = { { "cutoff", 1.6f }, { "quick.vibrato", 0.3f } };
+            x.mod.velocity = { { "quick.attack", -0.2f }, { "layer1.cutoff", 1.4f } };
+            x.mod.aftertouch = { { "fx.reverb.mix", 0.2f } };
+            const float vel[16] { 1.0f, 0.6f, 0.8f, 0.6f, 0.95f, 0.55f, 0.75f, 0.6f, 1.0f, 0.6f, 0.85f, 0.55f, 0.9f, 0.6f, 0.7f, 0.5f };
+            const int on[16] { 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1 };
+            for (int i = 0; i < 16; ++i)
+            {
+                x.arp.vel[(size_t) i] = vel[i];
+                x.arp.type[(size_t) i] = (uint8_t) (on[i] ? VaultArp::play : VaultArp::rest);
+                x.arp.oct[(size_t) i] = (int8_t) (i % 4 == 3 ? 1 : 0);
+                x.gate.level[(size_t) i] = (float) on[i];
+            }
+            x.arp.gate = 0.75f;
+            x.gate.smooth = 0.1f;
+        });
+        p.setQuick (vault::qTremolo, 0.15f);
+        v.refreshAll();
+    }
+    if (pageAfterLoad >= 0) v.showPage (pageAfterLoad);
     if (macrosAfterLoad)
     {
         p.setMacro (1, 1.0f); p.setMacro (3, 0.95f); p.setMacro (0, 0.2f);
-        float m[vault::numMacros];
-        for (int i = 0; i < vault::numMacros; ++i) m[i] = p.getMacro (i);
-        v.thumbnails().waitForLive (pick, m, 10000);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
     }
     vui::smallestFontPx() = 1000.0f;

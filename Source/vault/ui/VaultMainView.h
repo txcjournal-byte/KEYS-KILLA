@@ -1,56 +1,15 @@
 #pragma once
-#include "VaultWidgets.h"
-#include "VaultThumbs.h"
-#include "VaultSettings.h"
-#include "../VaultProcessor.h"
+#include "VaultPages.h"
 
-// right column: preset name, category, pills (what plays it, loading, C5), waveform thumbnail - or a calm notice when the
-// sound library is missing -, layer stack (each layer's instrument / model), the 4 macro knobs and volume
-class VaultInfoPanel : public juce::Component
+// the whole CHROME VAULT v3 UI at the base size 1180 x 760 (VaultEditor scales it as one piece):
+//   top bar   logo | MAIN | ADVANCED: LAYERS FX MOD ARP · GATE | quick toggles FX ARP GATE | size menu | settings
+//   page      MAIN (browser screen, quick knobs, sound macros) or one ADVANCED page
+//   keyboard  C3..B6, C5 (MIDI 60) = the ice key
+class VaultMainView : public juce::Component
 {
 public:
-    VaultInfoPanel (VaultProcessor&, VaultBrowserModel&, VaultThumbs&);
-    ~VaultInfoPanel() override;
-
-    // the state of the shown (= current) sound: its samples are loading (it plays as soon as they are in), the library is
-    // not installed, or the installed library lacks an instrument it needs (its synth / model layers play anyway)
-    enum class Notice { none, loading, libraryMissing, instrumentMissing };
-    Notice notice() const;
-    enum class PartState { ready, loading, missing };
-    PartState partState (const VaultPart&) const;   // sample layers of the shown sound: in RAM, loading, not installed
-    juce::String noticeTitle() const;               // the notice card's first line (empty without a card)
-    void repaintStatus();                           // the pills + layer rows (spinners while loading)
-
-    void setPreset (int bankIndex);
-    void paint (juce::Graphics&) override;
-    void resized() override;
-    void mouseMove (const juce::MouseEvent&) override;
-    void mouseExit (const juce::MouseEvent&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-
-    std::function<void (int bankIndex)> onToggleFavorite;
-    vui::DragPill dragPill;
-    juce::Slider knob[vault::numMacros], volume;
-
-private:
-    juce::Rectangle<float> heartRect() const;
-    void paintNotice (juce::Graphics&, juce::Rectangle<float>, Notice) const;
-    VaultProcessor& proc;
-    VaultBrowserModel& model;
-    VaultThumbs& thumbs;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> knobAtt[vault::numMacros], volumeAtt;
-    int preset = -1;
-    bool heartOver = false;
-    // fixed layout (base coordinates) - nothing moves while browsing
-    static constexpr int volumeLabelW = 78, volumeValueW = 70;
-    juce::Rectangle<int> nameR, catR, tagsR, waveR, layersLabelR, stackR, knobsR, volumeR;
-};
-
-// the whole UI at the base size 1180 x 760 (VaultEditor scales it as one piece)
-class VaultMainView : public juce::Component, private juce::ChangeListener
-{
-public:
-    static constexpr int topH = 66, statusH = 36, keysH = 112, catW = 210, infoW = 320;
+    static constexpr int topH = 54, keysH = 66, padX = 16, padTop = 14, padBottom = 14;
+    enum PageId { pageMain, pageLayers, pageFx, pageMod, pageArp, numPages };
 
     VaultMainView (VaultProcessor&, std::shared_ptr<VaultSettings>);
     ~VaultMainView() override;
@@ -58,78 +17,66 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    // browsing (all message thread)
-    void loadPreset (int bankIndex, bool audition);     // select in the processor + recent + optional preview note
-    void step (int delta, bool wrap);                   // through the CURRENT filtered list
-    void stepToEnd (bool last);                         // first / last sound of the filtered list (Home / End)
-    int pageRows() const;                               // rows per page of the list (Page Up / Page Down)
-    void randomSound();
-    void auditionCurrent();
-    void syncFromProcessor();                           // follows host automation / state restore (timer)
-    void setCategory (int c);                           // -1 = All Sounds
-    void setQuery (const juce::String& q);              // also updates the search box
-    void setLayers (int n);
-    void setFavoritesOnly (bool);
-    void setRecentOnly (bool);
-    void toggleFavorite (int bankIndex);
-    void showStatus (const juce::String& msg);
-    int visibleCount() const { return (int) model.visible().size(); }
-    int shownPreset() const { return shown; }
-    bool searchHasFocus() const { return search.hasKeyboardFocus (true); }
-    juce::Component& searchBox() { return search; }
-    vui::VaultKeyboard& keys() { return keyboard; }
-    VaultThumbs& thumbnails() { return thumbs; }
-    VaultBrowserModel& browser() { return model; }
-    vui::PresetList& presetList() { return list; }
-    VaultInfoPanel& infoPanel() { return info; }
-    juce::File renderWavForDrag();                      // the current sound at C5 (MIDI 60), 2 s, with the macros, as a WAV in the temp folder
-    juce::String statusHint() const;                    // the status-bar hint (loading / library missing / how to browse)
+    void showPage (int pageId);
+    int currentPage() const { return page; }
+    vui::Page& pageComponent (int pageId);
+    vui::MainPage& mainPage() { return *mainP; }
+    vui::LayersPage& layersPage() { return *layersP; }
+    vui::FxPage& fxPage() { return *fxP; }
+    vui::ModPage& modPage() { return *modP; }
+    vui::ArpGatePage& arpPage() { return *arpP; }
+    juce::Rectangle<int> pageArea() const;
+    void refreshAll();                                  // every page reads the current sound again
 
-    void updateToggles();                               // RECENT / FAVORITES / preview / scale pills follow the state
-    void giveFocusBack();                               // nobody keeps the keyboard: the DAW gets its keys back
-    int focusReturns() const { return focusReturnCount; }   // tests: how often the keyboard was handed back
+    // browsing (MAIN page)
+    void loadPreset (int bankIndex, bool audition) { mainP->loadPreset (bankIndex, audition); }
+    void step (int delta, bool wrap) { mainP->step (delta, wrap); }
+    void auditionCurrent() { mainP->auditionCurrent(); }
+    void syncFromProcessor();                           // timer: host automation / state restore, step lights, loading state
+    void setCategory (int c) { mainP->setCategory (c); }
+    void setQuery (const juce::String& q) { mainP->setQuery (q); }
+    void setLayers (int n) { mainP->setLayers (n); }
+    void setFavoritesOnly (bool on) { mainP->setFavoritesOnly (on); }
+    void setRecentOnly (bool on) { mainP->setRecentOnly (on); }
+    void toggleFavorite (int idx) { mainP->toggleFavorite (idx); }
+    void showStatus (const juce::String& msg) { mainP->showStatus (msg); }
+    int visibleCount() const { return mainP->visibleCount(); }
+    int shownPreset() const { return mainP->shownPreset(); }
+    bool searchHasFocus() const { return mainP->searchHasFocus(); }
+    juce::Component& searchBox() { return mainP->searchBox(); }
+    vui::VaultKeyboard& keys() { return keyboard; }
+    VaultBrowserModel& browser() { return mainP->browser(); }
+    vui::PresetList& presetList() { return mainP->presetList(); }
+    juce::File renderWavForDrag() { return mainP->renderWavForDrag(); }
+    juce::String statusHint() const { return mainP->statusHint(); }
+    void giveFocusBack() { mainP->giveFocusBack(); }
+    int focusReturns() const { return mainP->focusReturns(); }
+
+    void updateToggles();                               // FX / ARP / GATE toggles, size menu text
+    void showScaleMenu();
+    void showSettingsMenu();
 
     std::function<void (float)> onScaleChosen;
     std::function<float()> currentScale;
 
 private:
-    struct SearchKeys : juce::KeyListener
-    {
-        VaultMainView& v;
-        explicit SearchKeys (VaultMainView& o) : v (o) {}
-        bool keyPressed (const juce::KeyPress& k, juce::Component*) override
-        {
-            if (k == juce::KeyPress::downKey) { v.step (1, false); return true; }
-            if (k == juce::KeyPress::upKey)   { v.step (-1, false); return true; }
-            return false;
-        }
-    } searchKeys { *this };
-
-    void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void filterChanged (bool scrollToCurrent = true, bool keepScroll = false);
-    void setShown (int bankIndex);
-    void showScaleMenu();
     static int logoWidth();
-    juce::Rectangle<int> searchRect() const, curRect() const, statusRect() const, keysRect() const;
-
     VaultProcessor& proc;
     std::shared_ptr<VaultSettings> settings;
-    VaultBrowserModel model;
-    VaultThumbs thumbs;
-
-    juce::TextEditor search;
-    vui::ArrowButton prevBtn { false }, nextBtn { true };
-    vui::PillButton randomBtn { "RANDOM", vui::PillButton::Icon::dice }, recentBtn { "RECENT", vui::PillButton::Icon::clock },
-                    favBtn { "FAVORITES", vui::PillButton::Icon::heart };
-    vui::CategoryList categories;
-    vui::ChipBar chips;
-    vui::PresetList list;
-    VaultInfoPanel info;
-    vui::PillButton previewBtn { "Preview on click", vui::PillButton::Icon::none, 14.0f }, scaleBtn { "100 %", vui::PillButton::Icon::none, 14.0f };
+    vui::UiContext ctx;
+    std::unique_ptr<vui::MainPage> mainP;
+    std::unique_ptr<vui::LayersPage> layersP;
+    std::unique_ptr<vui::FxPage> fxP;
+    std::unique_ptr<vui::ModPage> modP;
+    std::unique_ptr<vui::ArpGatePage> arpP;
+    std::array<vui::TabButton, numPages> tabs { vui::TabButton ("MAIN"), vui::TabButton ("LAYERS"), vui::TabButton ("FX"), vui::TabButton ("MOD"),
+                                                vui::TabButton (juce::String (juce::CharPointer_UTF8 ("ARP \xc2\xb7 GATE"))) };
+    vui::LedToggle fxT { "FX" }, arpT { "ARP" }, gateT { "GATE" };
+    vui::Dropdown scaleBtn { "100%" };
+    vui::GearButton gear;
     vui::VaultKeyboard keyboard;
-
-    int shown = -2, lastLoadState = -1, focusReturnCount = 0;
-    juce::String statusMsg;
-    juce::uint32 statusUntil = 0;
-    juce::Random rng;
+    std::vector<std::unique_ptr<juce::ParameterAttachment>> switchAtts;
+    int page = pageMain, ticks = 0, advLabelX = 0, sepX = 0;
+    VaultPreset lastSound;                              // what the pages last showed (a change from elsewhere refreshes them)
+    int lastStateSig = -1;                              // switches + locks
 };

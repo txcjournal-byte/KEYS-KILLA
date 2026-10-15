@@ -7,7 +7,8 @@
 class VaultMainView;
 class VaultSettings;
 
-// CHROME VAULT editor: the preset browser (search, categories, filter chips, list, info panel with macros, keyboard).
+// CHROME VAULT editor (v3): MAIN (browser screen, quick knobs, sound macros) + the ADVANCED pages LAYERS / FX / MOD /
+// ARP · GATE, the top bar and the keyboard (VaultMainView, Source/vault/ui).
 // Everything is laid out at the base size 1180 x 760 (= 100 %) and scaled as one piece (80 % .. 200 %, aspect kept).
 // 80 % = 944 x 608 (1366 x 768 laptop next to a DAW), 200 % = 2360 x 1520.
 // Size on open: first time the largest preset <= 100 % that fits 85 % of the screen; later the remembered scale, shrunk
