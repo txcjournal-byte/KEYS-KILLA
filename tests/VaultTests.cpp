@@ -15,6 +15,8 @@
 //                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
 //                           VaultTests -writeuidemo <out.cvb>    the v2 UI demo bank (sampled / model / synth layers) for -shot
 //                           VaultTests -uitestv2                 v2 editor checks (child process of -uitest)
+//                           VaultTests -v3                       the v3 tests only (tests/VaultV3Tests.cpp; part of -unit)
+//                           VaultTests -convcheck <bank.cvb> [step] [threads]   v1 / v2 bank: frozen v2 engine vs the v3 conversion
 #include "../Source/vault/VaultProcessor.h"
 #include "../Source/vault/VaultEditor.h"
 #include "../Source/vault/ui/VaultMainView.h"
@@ -349,6 +351,7 @@ int unitTests()
         for (auto& t : testPresets()) all.push_back (t);
         all.back().parts[0].values.push_back ({ "someFutureParam", 0.25f });   // unknown IDs survive a round trip
         all.back().macroDefaults[2] = 0.8f; all.back().name = juce::CharPointer_UTF8 ("Caf\xc3\xa9 Lead");
+        for (auto& p : all) vault::upgradeToV3 (p);   // v3 is written: v1 / v2 style presets come back converted
         for (bool gz : { true, false })
         {
             const auto mb = vault::serializeBank (all, gz);
@@ -1742,7 +1745,8 @@ int samplerTests()
         check (! vault::validatePreset (bad), "cvb: an unknown sample parameter is refused");
         const auto mb = vault::serializeBank (all, true);
         std::vector<VaultPreset> back; int ver = 0;
-        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &ver) && back == all && ver == 2, "cvb: v2 round trip (sample / model / synth parts)");
+        auto allV3 = all; for (auto& p : allV3) vault::upgradeToV3 (p);
+        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &ver) && back == allV3 && ver == 3, "cvb: v3 round trip (sample / model / synth parts)");
         std::vector<VaultPreset> v1src = { preset ("cv.808.0001", "Glide 808 Monster", 0, { part ({ { ID::engine, 6 } }, 1, 0, 0, "Sub 808") }),
                                            preset ("cv.keys.0001", "Felt Dream", 0, { part ({ { ID::engine, 0 } }, 1, 0, 0, "Felt Piano") }),
                                            preset ("cv.keys.0002", "Organ Church", 0, { part ({ { ID::engine, 4 } }, 1, 0, 0, "Organ") }),
@@ -2056,6 +2060,9 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
 
 int vaultModelTests();   // tests/VaultModelTests.cpp: the physical models
 
+int vaultConvCheck (const juce::File& bankFile, int step, int threads);   // tests/VaultV3Tests.cpp
+int vaultV3Tests();
+
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);
@@ -2086,6 +2093,10 @@ int main (int argc, char** argv)
         ed.reset();
         return ok ? 0 : 1;
     }
+    if (mode == "-convcheck" && argc > 2)
+        return vaultConvCheck (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]), argc > 3 ? juce::String (argv[3]).getIntValue() : 1,
+                               argc > 4 ? juce::String (argv[4]).getIntValue() : (int) std::max (1u, std::thread::hardware_concurrency()));
+    if (mode == "-v3") { const int f = vaultV3Tests(); std::printf ("vault v3 failures: %d\n", f); return f; }
     if (mode == "-models")   // the physical-model tests only
         return vaultModelTests();
     if (mode == "-uitest")
@@ -2166,7 +2177,8 @@ int main (int argc, char** argv)
     samplerTests();
     const int modelFailures = vaultModelTests();
     libraryReport ({}, { vault::homeNote }, true);
-    const int f = browserTests() + modelFailures;
+    const int v3Failures = vaultV3Tests();
+    const int f = browserTests() + modelFailures + v3Failures;
     std::printf ("vault failures: %d\n", f);
     return f;
 }

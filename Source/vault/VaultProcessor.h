@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "VaultEngine.h"
+#include <functional>
 
 // CHROME VAULT by TrapWin - the plugin. A preset-bank instrument: pick a sound, play.
 class VaultProcessor : public juce::AudioProcessor, private juce::Timer
@@ -8,9 +9,16 @@ class VaultProcessor : public juce::AudioProcessor, private juce::Timer
 public:
     // parameter IDs (stable - saved in host projects)
     static constexpr const char* idPreset = "presetIndex";   // int 0..maxPresets-1 (automatable)
-    static constexpr const char* idMacro[vault::numMacros] { "macro1", "macro2", "macro3", "macro4" };   // TONE SPACE DRIVE MOTION, 0..1
+    static constexpr const char* idMacro[vault::numMacros] { "macro1", "macro2", "macro3", "macro4" };   // the 4 sound macros, 0..1
     static constexpr const char* idVolume = "volume";        // dB, -60..+6 (default 0)
+    // v3: the MAIN page knobs (vault::Quick order; 0..1, vault::quickInfo()[i].neutral = as designed) + the quick switches
+    static constexpr const char* idQuick[vault::numQuick] { "qCutoff", "qReso", "qAttack", "qRelease", "qEnvAmt", "qGlide", "qVibrato",
+                                                            "qTremolo", "qReverb", "qDelay", "qChorus", "qDrive", "qWidth", "qEqTilt", "qPan" };
+    static constexpr const char* idFxOn = "fxOn";             // bool, default on: every FX slot (the output stage stays)
+    static constexpr const char* idArpOn = "arpOn";           // bool: the arpeggiator (a preset that uses it turns it on)
+    static constexpr const char* idGateOn = "gateOn";         // bool: the gate
     static constexpr int maxPresets = 5000;
+    enum class Section { fx, arp, gate };                     // "keep while browsing" locks
 
     enum class BankSource { embedded, file, factoryFallback };
 
@@ -30,6 +38,34 @@ public:
     void setMacro (int index, float value01);      // notifies the host
     float getVolumeDb() const;
     void setVolumeDb (float dB);
+
+    //==========================================================================
+    // v3 editor API (message thread)
+    // The current sound: the selected preset + every edit (FX chain, modulation, macro targets, arp / gate, layers).
+    // Saved with the host project; a preset switch starts from the bank preset again (keeping the locked sections).
+    const VaultPreset& currentSound() const { return live; }
+    bool isSoundEdited() const;                            // differs from the bank preset
+    void editSound (const std::function<void (VaultPreset&)>& change);   // change the current sound (applied without re-striking)
+    void revertSound();                                    // back to the bank preset (locked sections stay)
+    juce::String macroName (int index) const;              // the current sound's macro names ("" = unused knob)
+    float getQuick (int q) const;                          // vault::Quick, 0..1
+    void setQuick (int q, float value01);                  // notifies the host
+    void resetQuick();                                     // every MAIN knob to neutral
+    bool getSwitch (const char* id) const;                 // idFxOn / idArpOn / idGateOn
+    void setSwitch (const char* id, bool on);
+    void setLock (Section s, bool locked) { locks[(int) s] = locked; }
+    bool getLock (Section s) const { return locks[(int) s].load(); }
+    // MAIN page EFFECTS: the chain slot a knob drives (-1 = none: the knob uses a default slot) and its LED
+    int fxSlotForQuick (int q) const;
+    bool isQuickFxOn (int q) const;                        // the slot is on (a default slot counts as on while the knob is up)
+    void setQuickFxOn (int q, bool on);                    // toggles the slot; switching on with no slot adds one (default settings)
+    // the effective state of the audio engine (approximate, for meters / step lights)
+    int arpStep() const { return engine.arpStep(); }
+    float lfoOutput (int i) const { return engine.lfoOutput (i); }
+    const VaultEngine& audioEngine() const { return engine; }
+    // MIDI drag: the arp pattern (held keys, else the C5 major triad) for `bars` bars at the host tempo
+    juce::MidiFile arpPatternMidi (double bars = 2.0) const;
+    juce::File writeArpMidiFile (double bars = 2.0) const;  // a temporary .mid file for performExternalDragDropOfFiles
     void previewNote (int midiNote = vault::homeNote, float velocity = 0.8f, double seconds = 0.9);   // audition from the UI (any thread)
 
     // sample library (shared by all instances; see vault::SampleLibrary)
@@ -85,6 +121,8 @@ private:
 
     void timerCallback() override;
     void updatePins (int presetIndex);
+    void resetLiveTo (int index, bool keepLocked);      // live = bank preset (+ the locked sections of the previous live sound)
+    void publishLive();                                 // compile `live` and hand it to the audio thread
 
     std::shared_ptr<const Bank> bankData;
     std::shared_ptr<vault::SampleLibrary> library;
@@ -100,6 +138,20 @@ private:
     int previewActive = -1, previewOffIn = -1;
     std::atomic<float> outPeak { 0.0f };
     double sr = 44100.0;
+
+    // v3: the current sound (message thread) and its hand-over to the audio thread (triple buffer, no locks / allocation there)
+    VaultPreset live;
+    int liveFor = -1;                                    // the bank index `live` belongs to
+    std::array<VaultCompiledPreset, 3> editBuf;
+    std::array<int, 3> editBufFor { -1, -1, -1 };
+    std::atomic<int> editMid { 1 };
+    int editBack = 0, editFront = 2;                     // writer / reader ends
+    int editAppliedFor = -2;                             // audio thread: the preset the last edit belongs to
+    std::atomic<bool> locks[3] { { false }, { false }, { false } };
+    std::atomic<float>* quickParam[vault::numQuick] {};
+    std::atomic<float>* fxOnParam = nullptr; std::atomic<float>* arpOnParam = nullptr; std::atomic<float>* gateOnParam = nullptr;
+    std::atomic<double> hostBpm { 120.0 };
+    std::array<std::atomic<float>, 128> keysHeldUi {};   // keys down (arp MIDI export)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VaultProcessor)
 };

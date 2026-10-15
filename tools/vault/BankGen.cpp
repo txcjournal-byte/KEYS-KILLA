@@ -8,6 +8,8 @@
 //   VaultBankGen -check <bank.cvb> | -list <bank.cvb>           re-run the gate / list ids, names, layers, tags
 //   VaultBankGen -recipe <name>|all [-out b.cvb] [-report r.md] [-dist 3] [-demo dir ids]   v2 recipes (tools/vault/recipes)
 //   VaultBankGen -env <bank.cvb> <id> | -switch <bank.cvb> <first> [count]   debugging: level curve / preset-switch clicks
+//   VaultBankGen -convert <in.cvb> <out.cvb>   a v1 / v2 bank -> CVB v3 (vault::upgradeToV3: the FX of part 0 become the
+//                                              chain, the classic macros sound macros 1-4; renders exactly like before)
 //
 // Deterministic: the same source tree gives the same bank (own RNG, every candidate seeded by its slot; candidates are
 // rendered in parallel but accepted in slot order). Builds exactly v1c::target(c) presets per category and the
@@ -1683,6 +1685,31 @@ int main (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI init;
     if (argc > 2 && juce::String (argv[1]) == "-recipe")   // v2 recipes (tools/vault/recipes/*.cpp) through the v2 gate (RecipeGate.h)
         return recipegate::runRecipes (argc, argv);
+    if (argc > 3 && juce::String (argv[1]) == "-convert")   // -convert <in.cvb> <out.cvb>: any bank -> CVB v3
+    {
+        const auto cwd = juce::File::getCurrentWorkingDirectory();
+        juce::MemoryBlock mb;
+        std::vector<VaultPreset> bank;
+        int version = 0;
+        juce::String err;
+        if (! cwd.getChildFile (argv[2]).loadFileAsData (mb) || ! vault::deserializeBank (mb.getData(), mb.getSize(), bank, &err, &version, true))
+        { std::printf ("cannot read %s: %s\n", argv[2], err.toRawUTF8()); return 1; }
+        int invalid = 0, slots = 0, maxSlots = 0, lossy = 0;
+        for (auto& p : bank) { int dropped = 0; vault::upgradeToV3 (p, &dropped); if (dropped > 0 && lossy++ < 10) std::printf ("  %s: %d FX stages over 8 left out\n", p.id.toRawUTF8(), dropped); }
+        std::map<juce::String, int> perType;
+        for (auto& p : bank)
+        {
+            juce::String why;
+            if (! vault::validatePreset (p, &why)) { if (invalid++ < 10) std::printf ("  invalid: %s\n", why.toRawUTF8()); }
+            slots += (int) p.fx.size(); maxSlots = juce::jmax (maxSlots, (int) p.fx.size());
+            for (auto& f : p.fx) ++perType[vault::fxTypeInfo (f.type).name];
+        }
+        if (! vault::saveBankFile (cwd.getChildFile (argv[3]), bank)) { std::printf ("cannot write %s\n", argv[3]); return 1; }
+        std::printf ("%s (CVB v%d, %d presets) -> %s (CVB v%d): %d invalid, %d with > 8 FX stages, %.2f FX slots per preset (max %d)\n", argv[2], version,
+                     (int) bank.size(), argv[3], vault::bankFormatVersion, invalid, lossy, bank.empty() ? 0.0 : (double) slots / (double) bank.size(), maxSlots);
+        for (auto& [t, c] : perType) std::printf ("  %-12s %d\n", t.toRawUTF8(), c);
+        return invalid + lossy;
+    }
     if (argc < 2)
     {
         std::printf ("usage: VaultBankGen -recipe <name>|all [options]   (the v2 bank, see tools/vault/recipes/RecipeGate.h)\n"

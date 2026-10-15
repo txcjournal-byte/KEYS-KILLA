@@ -34,8 +34,9 @@ public:
     void setSource (const SampleInstrumentData* data, int articulation);
     const SampleInstrumentData* source() const { return inst; }
     void setParams (const float* sampleParams);        // vault::numSampleParams values (sanitized)
-    // per 128-sample chunk: TONE cutoff factor, MOTION vibrato depth (cents) and the pitch wheel (-1..1)
-    void setControl (float cutoffMul, float vibratoCents, float pitchWheel);
+    // per 128-sample chunk: TONE cutoff factor, MOTION vibrato depth (cents), the pitch wheel (-1..1) and a pitch offset
+    // in semitones (v3 modulation)
+    void setControl (float cutoffMul, float vibratoCents, float pitchWheel, float extraSemis = 0.0f);
 
     void noteOn (int note, float velocity);            // note includes the part transpose
     void noteOff (int note);
@@ -69,7 +70,7 @@ private:
     const SampleInstrumentData* inst = nullptr;
     int art = 0;
     float p[numSampleParams] {};
-    float cutMul = 1.0f, vibCents = 0.0f, wheel = 0.0f, vibPhase = 0.0f;
+    float cutMul = 1.0f, vibCents = 0.0f, wheel = 0.0f, vibPhase = 0.0f, extraSt = 0.0f;
     bool sustain = false;
     uint32_t ageCounter = 0;
     int64_t clock = 0;

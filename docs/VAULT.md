@@ -20,6 +20,7 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 
 ## v2 status (what exists, what is next)
 
+* v3 (FX chain, modulation, sound macros, arp, gate, MAIN knobs, locks; CVB v3; the bank converted): see "v3" below.
 * Done (core): part kinds + `CVB` v2 (v1 still read), the multi-zone sampler, the sample library format + loader + LRU
   cache, the library builder `VaultLibBuild`, the model interface +
   registry (+ the `sine` example), the 16 v2 categories, Style / Character tags removed everywhere, C5 + keyboard-focus
@@ -40,11 +41,248 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
   `Library/audio/**`, made with `tools/vault/package_library.py branch`); CI tests with it and packs it into the
   installers + `CHROME-VAULT-Library.zip` (details: `docs/CHROME_VAULT_INSTALL.md`, "For developers").
 
+## v3: FX chain, modulation, sound macros, arpeggiator, gate
+
+Every preset now ships "finished": an FX chain, modulation, four named sound macros and (optionally) arp / gate settings,
+all of which the MAIN page tweaks and the ADVANCED tabs edit. Status: engine, data format, processor API, recipe API,
+converted bank and tests are done; the v3 editor (MAIN / LAYERS / FX / MOD / ARP·GATE, from the approved mockup) and the
+designers' enrichment of the bank are next. The shipped bank is the v2 bank converted losslessly (below): it sounds
+exactly as before until the recipes set the new sections.
+
+### Data model (`VaultTypes.h`)
+
+```cpp
+struct VaultFxSlot  { vault::FxType type; bool on = true; std::array<float, vault::maxFxParams> p;   // vault::fxTypeInfo (type).params order
+                      static VaultFxSlot make (FxType); float get (const char* id) const; VaultFxSlot& set (const char* id, float v); };
+struct VaultModDest { juce::String target; float amount; };
+struct VaultLfo     { uint8_t shape (sine, triangle, square, saw, sampleHold); float rate (Hz); bool sync; uint8_t div (vault::divisions());
+                      float delay, fade (s); float phase (0..1); bool retrig; float depth (0..1); std::vector<VaultModDest> dests;   // <= 4
+                    };
+struct VaultMod     { VaultLfo lfo[2]; std::vector<VaultModDest> modWheel, velocity, aftertouch; };              // <= 4 routings each
+struct VaultMacroTarget { juce::String target; float min, max, curve (-1..1); };
+struct VaultMacro   { juce::String name; std::vector<VaultMacroTarget> targets; };                            // <= 8 targets
+struct VaultArp     { bool on; uint8_t mode (up, down, upDown, asPlayed, random, chord), rate (division), octaves (1..4);
+                      float gate (0.01..1), swing (0..1); bool latch; uint8_t steps (1..16);
+                      std::array<float,16> vel; std::array<uint8_t,16> type (rest / play / tie); std::array<int8_t,16> oct (-2..2); };
+struct VaultGate    { bool on; uint8_t rate, steps; std::array<float,16> level; float depth, smooth, swing, mix; };
+struct VaultPreset  { ...v2 fields...; bool v3; std::vector<VaultFxSlot> fx (<= 8, <= 2 per type); float finish;
+                      VaultMod mod; std::array<VaultMacro, 4> macros; VaultArp arp; VaultGate gate; };   // macroDefaults = the macro values
+```
+
+`v3 = false` marks a v1 / v2 style preset (FX from part 0's EVOLVE FX keys, classic macros). `vault::upgradeToV3 (p)`
+converts it; `VaultEngine::compile` and `serializeBank` do that by themselves, `deserializeBank` returns v1 / v2 files
+converted (`keepLegacy = true` keeps them as stored). Arp / gate default to "Init" (Up, 1/16, 1 octave, 80 %, all steps on;
+gate 1/16 on / off) and stay off unless a preset really needs them.
+
+### FX types (`vault::fxTypeInfo`, parameters in order; `fx.<type>.<param>` targets)
+
+| type id | name | parameters (range, default) |
+| --- | --- | --- |
+| `eq` | EQ | tilt (+-12 dB, 0: high shelf +t, low shelf -t/2), low (+-18 dB), lowFreq (30..1000 Hz, 160), mid (+-18 dB), midFreq (150..12000, 1000), midQ (0.2..8, 0.7), high (+-18 dB), highFreq (1000..18000, 6000) |
+| `comp` | Compressor | threshold (-48..0 dB, -18), ratio (1..20, 3), attack (0.1..200 ms, 10), release (10..2000 ms, 150), makeup (0..24 dB), mix (0..1, 1), knee (0..12 dB, 6) |
+| `drive` | Drive | amount (0..1), type (Tube, Tape, Hard, Blown, Fold, Bit), tone (500..20000 Hz low-pass, 20000 = off), mix, cleanLow (keep the lows clean), output (+-12 dB) |
+| `lofi` | Lo-Fi | crush, wow, mix |
+| `chorus` | Chorus | mix, rate (0.05..5 Hz, 0.33), depth (0..1, 0.5 = +-4 ms), mode (Chorus, Ensemble) |
+| `phaser` | Phaser | mix, rate (0.35 Hz), depth (1 = 3.5 octaves), feedback (0.5), center (250 Hz) |
+| `flanger` | Flanger | mix, rate (0.22 Hz), depth, feedback (-0.95..0.95, 0.65) |
+| `filter` | Filter | cutoff (20..20000 Hz), reso, mode (LP, HP, BP), env (-1..1 = +-4 oct with the input level), lfo (0..1 = +-2 oct), lfoRate, lfoSync, lfoDiv, mix |
+| `delay` | Delay | mix, time (division, 1/8D), feedback (0..0.95), mode (Ping-pong, Straight, Tape), sync (on), ms (free time), hiCut, loCut, flutter |
+| `reverb` | Reverb | mix, size, type (Hall, Plate, Cloud, Room, Shimmer), decay (x0.25..4), predelay (+0..250 ms), damping (-1..1), lowCut (160 Hz), shimmer (octave feedback), freeze |
+| `width` | Width | width (0..1, 0.5 = as is), monoBelow (0..400 Hz, 0 = off) |
+| `reverse` | Reverse | mix, length (division, 1/8) |
+| `transient` | Transient | attack (0..1) |
+| `body` | Body | model (Kalimba, Bell, Glass, Metal Pipe, Wood Box, String), mix |
+| `ghost` | Ghost | mix, blur, reverse (the EVOLVE ghost bus; needs synth layers with `ghost`) |
+| `stutter` | Stutter | amount, rate (division), seed (EVOLVE circuit bend) |
+| `halftime` | Half-Time | mix |
+
+The DSP is the EVOLVE FX (`Source/Fx.h`: FxRack is now built from independent stages - `DriveStage`, `ChorusStage`,
+`PhaserStage`, `FlangerStage`, `EqStage`, `DelayStage`, `ReverseStage`, `PunchStage`, `BodyStage`, `LofiStage`,
+`GhostStage`, `CircuitStage`, `HalftimeStage` - and `FdnReverb` in `Studio.h` gained room / shimmer / decay / pre-delay /
+damping / low cut). EVOLVE renders exactly as before (the stages default to the values FxRack always used).
+`Source/vault/VaultFx.h` wraps every type as a slot processor (`vault::FxProcessor`) in `vault::FxChain`: a pool of 2
+processors per type (allocation-free structure changes), on / off with a 10 ms crossfade (a processor switched on again
+starts clean), the global FX switch fades every slot, then the output stage of the v2 rack (mono lows for bass presets,
+DC block, part 0's `gain` as output gain, the "finish" glue / air / widening = the old MASTER, its -0.8 dBFS limiter).
+
+**Default slots.** If a preset has no slot of a type a MAIN page EFFECTS knob (reverb, delay, chorus, drive, width, EQ
+tilt) or a classic macro needs, the engine adds a silent one (reverb = Hall size 0.6, delay = 1/8D ping-pong 0.35) at its
+canonical place (the v2 rack order: transient, comp, drive, body, lo-fi, stutter, half-time, filter, chorus, phaser,
+flanger, EQ, delay, reverb, reverse, ghost, width). It does nothing until the knob is turned up.
+
+### Targets (modulation and macros)
+
+| target | macro (min..max) | modulation unit (LFO x amount, routings x amount) |
+| --- | --- | --- |
+| `pitch` | offset, semitones | semitones |
+| `cutoff` / `reso` | offset: octaves / +0..1 (every layer) | octaves / + |
+| `volume` / `pan` | offset (gain x (1 + v)) / +-1 | gain x (1 + v) / + |
+| `quick.<cutoff, reso, attack, release, envAmt, glide, vibrato, tremolo, reverb, delay, chorus, drive, width, eqTilt, pan>` | offset on the MAIN knob (0..1) | + |
+| `classic.<tone, space, drive, motion>` | the v2 macro value (0.5 = as designed) | + |
+| `layer<1-4>.level` / `.pan` | level 0..2 / pan -1..1 (set) | gain x (1 + v) / + |
+| `layer<1-4>.cutoff` / `.reso` / `.attack` / `.release` / `.tune` | offset: octaves / + / x2^v / x2^v / semitones | same |
+| `fx.<type>.<param>` (first slot of the type, or its default slot) / `fx<1-8>.<param>` (chain position) | the parameter's value (set) | 0..1 of the parameter's range (log for frequencies) |
+| `lfo<1-2>.depth` / `lfo<1-2>.rate` | depth 0..1 / rate Hz (set) | + / x2^(4 v) |
+| `gate.depth` / `gate.mix` / `gate.smooth` / `arp.gate` / `finish` | value 0..1 (set) | + |
+
+Order per block (128 samples, control rate): base values -> sound macros (absolute targets set to min + (max - min) x
+curve (m); relative ones offset; curve > 0 = slow start m^(1+3c), < 0 = fast start) -> mod wheel / velocity (the last
+note-on) / aftertouch routings -> LFO 1, LFO 2 (each sees what the routings / LFO 1 did to its depth / rate) -> classic
+macros on the first slot of each type -> MAIN knobs -> FX modulation in the normalised range, values clamped. FX
+parameters are smoothed by their processors (20 ms), layer gains / volume / pan ramp over the block. A target into the
+FX chain is resolved when the sound loads: by slot position (`fx3.mix`) if the slot still has that type, else the first
+slot of that type (a locked chain), else the target is dropped.
+
+LFOs: sine / triangle / square / saw (down) / S&H, free (Hz) or tempo-synced (any division incl. dotted / triplet),
+start phase, delay + fade from the first note, retrig (phase and delay restart when the first key goes down; synced:
+counted from that beat) or free (synced: aligned to the host's bar grid). The value is computed once per block.
+
+### MAIN page quick knobs (processor parameters, any preset)
+
+0..1, 0.5 = as designed (vibrato / tremolo: 0 = off): cutoff (+-4 octaves on every layer: synth filter, sample filter,
+model tone low-pass), resonance (+-1), attack / release (x1/16..x16 plus up to 2 / 4 s), filter env amount (+-1, synth
+layers), glide (+-1, synth layers), vibrato (built-in 5.5 Hz, up to +-60 cents, no LFO needed), tremolo (built-in
+4.5 Hz), reverb / delay / chorus / drive / width (the first slot of that type: below 0.5 scales the designed amount down to
+0, above it moves it up to 0.7 / 0.6 / 1 / 0.8 / 1), EQ tilt (+-9 dB), pan (output balance). Volume stays the `volume`
+parameter (dB). The EFFECTS LEDs (`setQuickFxOn`) switch the slot; with no slot, switching on adds one.
+
+### Arpeggiator and gate (`Source/vault/VaultMod.h`)
+
+* Arp (before the voices, global): Up, Down, Up-Down (ends not repeated), As Played, Random, Chord; rate = any division
+  (straight / dotted / triplet); 1-4 octaves; gate 1..100 % of a step (ties extend over the following tie steps); swing
+  (every second step up to half a step later, 50 % -> 75 %); latch (a new chord after all keys were up replaces the
+  held one); 16-step lanes: velocity (x the played velocity), rest / play / tie, octave -2..+2; pattern length 1-16.
+  Host playing: steps on the host grid (a new chord starts on the next step line, lanes aligned to the song position);
+  stopped: free-running from the first key. A jump of the host position re-aligns. `vault::arpPatternToMidi` /
+  `VaultProcessor::writeArpMidiFile` render the pattern (held keys, else the C5 triad) as a 960 PPQ MIDI file for drag.
+* Gate (per sound slot, on the layer mix before the FX so tails fill the gaps): 16 steps (levels 0..1), rate, depth,
+  smooth (edge time, share of a step), swing, mix; host grid when playing, else counted from the first note. Its switch
+  fades over 10 ms.
+
+### Locks ("keep while browsing")
+
+`VaultEngine::setLocks (fx, arp, gate)` / `VaultProcessor::setLock (Section, bool)`: on a preset switch the locked
+sections of the sound that plays now stay (FX lock: chain + finish, and the FX knobs keep their positions; arp / gate
+locks: settings and switch). The switch is still the 40 ms crossfade.
+
+### Engine / processor API
+
+```cpp
+// VaultEngine (audio thread unless noted)
+void setPreset (const VaultCompiledPreset&, bool instant = false, bool applyLocks = true);
+void updateSound (const VaultCompiledPreset&);   // an edit of the current sound, applied in place (else a crossfaded switch)
+void setMacro (int, float); void setQuick (int, float); void setFxOn (bool); void setArpOn (bool); void setGateOn (bool);
+void setLocks (bool fx, bool arp, bool gate);    // any thread
+int arpStep() const; float lfoPhase (int) const; float lfoOutput (int) const;   // UI (approximate)
+int chainSize() const; vault::FxType chainType (int); int chainSlot (int); float chainParam (int, int); float chainOnGain (int);
+int readNoteLog (NoteLog*, int) const;           // tests: the notes the voices got (arp output)
+
+// VaultProcessor (message thread)
+const VaultPreset& currentSound() const; bool isSoundEdited() const; void revertSound();
+void editSound (const std::function<void (VaultPreset&)>&);   // any v3 change; compiled here, handed over lock-free
+juce::String macroName (int) const;
+float getQuick (int) const; void setQuick (int, float); void resetQuick();
+bool getSwitch (const char* id) const; void setSwitch (const char* id, bool);   // idFxOn, idArpOn, idGateOn
+void setLock (Section, bool); bool getLock (Section) const;
+int fxSlotForQuick (int q) const; bool isQuickFxOn (int q) const; void setQuickFxOn (int q, bool on);
+int arpStep() const; float lfoOutput (int) const; const VaultEngine& audioEngine() const;
+juce::MidiFile arpPatternMidi (double bars = 2) const; juce::File writeArpMidiFile (double bars = 2) const;
+```
+
+Parameters (automatable; IDs never change): `presetIndex`, `macro1`..`macro4` (the 4 sound macros, named per preset in
+the UI), `volume` (dB), `qCutoff qReso qAttack qRelease qEnvAmt qGlide qVibrato qTremolo qReverb qDelay qChorus qDrive
+qWidth qEqTilt qPan` (0..1), `fxOn`, `arpOn`, `gateOn` (bool). `selectPreset` sets the macros to the preset's values, the
+arp / gate switches to the preset's (unless locked) and the MAIN knobs back to neutral (the FX ones stay while the FX are
+locked). Plugin state version 2 adds the knobs, switches, locks and - when it differs from the bank preset - the whole
+current sound (one-preset CVB v3, base64); version 1 states load with everything as designed.
+
+### CVB v3 (bank format version 3)
+
+After each preset's parts (v2 layout unchanged): `float finish`, `uint8 fxCount`, per slot `uint8 type, uint8 on,
+uint8 paramCount, paramCount x float`; 2 x LFO (`uint8 shape, float rate, uint8 sync, uint8 div, float delay, fade, phase,
+uint8 retrig, float depth, dests`); modWheel / velocity / aftertouch dests (`uint8 n, n x (z-string target, float amount)`);
+4 x macro (`z-string name, uint8 n, n x (target, float min, max, curve)`); arp (`uint8 on, mode, rate, octaves, float gate,
+swing, uint8 latch, steps, 16 x float vel, 16 x uint8 type, 16 x int8 oct`); gate (`uint8 on, rate, steps, 16 x float level,
+float depth, smooth, swing, mix`). Versions 1 and 2 are still read (converted). Parameter tables only grow at the end.
+
+### The v2 -> v3 conversion (`Source/vault/VaultConvert.cpp`, `VaultBankGen -convert in.cvb out.cvb`)
+
+The v2 master FX were one `kk::FxRack` driven by part 0's EVOLVE FX keys (including what the EVOLVE macros, time macro
+and morph did to them). The conversion builds exactly those FxParams and turns each stage that does something into a slot
+in the rack's order; MASTER becomes `finish`; the pure FX keys are removed from the parts; the TONE / SPACE / DRIVE /
+MOTION macros become sound macros 1-4 named Tone / Space / Drive / Motion with the single target `classic.*` (the engine
+applies the v2 macro formulas to the first slot of each type, and the default slots stand in for the stages a v2 rack
+always had). Result: `resources/vault/factory.cvb` is the v2 bank in CVB v3 (3,377 presets, 1.75 slots on average, at
+most 7) and every preset renders bit-identically to the v2 engine - with the macros as designed and moved, with pitch
+bend / mod wheel / pedal (checked for the whole bank with `VaultTests -convcheck <v2 bank>` against the frozen v2 engine in
+`tests/legacy/`, and for a sample of the EVOLVE starter sounds in every `VaultTests` run). Only two EVOLVE starter sounds
+with the FUTURE macro far up used more than 8 rack stages; they keep the first 8.
+
+### v3 recipe API (`tools/vault/recipes/Recipe.h`)
+
+```cpp
+namespace recipe::fx {
+  enum class Reverb { hall, plate, cloud, room, shimmer };  enum class Delay { pingPong, straight, tape };
+  enum class Drive { tube, tape, hard, blown, fold, bit };  enum class Filter { lowPass, highPass, bandPass };
+  VaultFxSlot reverb (Reverb, float size, float decay, float mix);            // decay = x the type's natural decay
+  VaultFxSlot delay (const char* division, float feedback, float mix, Delay = Delay::pingPong);   // "1/8D", "1/4T", "1/16"
+  VaultFxSlot delayMs (float ms, float feedback, float mix, Delay = Delay::straight);
+  VaultFxSlot chorus (float mix, float rateHz = 0.33f, float depth = 0.5f, bool ensemble = false);  VaultFxSlot ensemble (float mix, ...);
+  VaultFxSlot phaser (float mix, float rateHz = 0.35f, float depth = 1, float feedback = 0.5f);
+  VaultFxSlot flanger (float mix, float rateHz = 0.22f, float depth = 1, float feedback = 0.65f);
+  VaultFxSlot eq (float lowDb, float midDb, float highDb, float tiltDb = 0, float midHz = 1000);  VaultFxSlot tilt (float db);
+  VaultFxSlot comp (float thresholdDb, float ratio, float attackMs = 10, float releaseMs = 150, float makeupDb = 0, float mix = 1);
+  VaultFxSlot drive (Drive, float amount, float mix = 1, float toneHz = 20000);  VaultFxSlot lofi (float crush, float wow, float mix = 1);
+  VaultFxSlot filter (Filter, float cutoffHz, float reso, float envAmt = 0, float lfoAmt = 0, float lfoRateHz = 1);
+  VaultFxSlot width (float width, float monoBelowHz = 0);  VaultFxSlot transient (float);  VaultFxSlot reverse (float mix, const char* division = "1/8");
+  VaultFxSlot off (VaultFxSlot);                       // in the chain but switched off
+  // any parameter: fx::reverb (...).set ("predelay", 20)
+}
+LfoBuilder recipe::lfo (VaultLfo::Shape = VaultLfo::sine);   // .rate (hz) .sync ("1/4D") .delay (s) .fade (s) .phase (p) .free() .depth (d) .to (target, amount)
+MacroBuilder recipe::macro (const char* name);                // .to (target, min, max, curve = 0)
+VaultArp recipe::arp (VaultArp::Mode, const char* division, int octaves = 1, float gate = 0.8f, float swing = 0, bool on = false);
+VaultGate recipe::gate (const char* division, std::initializer_list<float> steps, float depth = 1, float smooth = 0.25f, float mix = 1, bool on = false);
+Design recipe::design (VaultPreset&);   // converts a v2-style preset first, then:
+  // .fx ({...}) .addFx (slot) .finish (a) .macro (index, macro, value = 0.5) .clearMacros() .lfo (index, lfo)
+  // .modWheel (target, amount) .velocity (target, amount) .aftertouch (target, amount) .arp (a) .gate (g)
+```
+
+Example (an electric piano that already sounds finished):
+
+```cpp
+using namespace recipe;   // in a recipe file
+VaultPreset p;            // id, name, category, parts as before (no FX keys needed)
+p.id = "cv.keys.0900"; p.name = "Warm Tine Room"; p.category = vault::catKeysOrgan;
+p.parts.push_back (modelPart ("ep.tine.mellow", "Tine Piano"));
+design (p)
+    .fx ({ fx::comp (-20, 2.5f, 15, 120), fx::drive (fx::Drive::tape, 0.15f, 0.7f, 9000), fx::chorus (0.25f, 0.5f),
+           fx::eq (1.0f, 0, -2.0f), fx::delay ("1/8D", 0.25f, 0.10f), fx::reverb (fx::Reverb::room, 0.5f, 1.0f, 0.18f) })
+    .finish (0.2f)
+    .clearMacros()
+    .macro (0, macro ("Bark").to ("fx.drive.amount", 0.0f, 0.6f).to ("fx.eq.mid", 0, 3), 0.25f)
+    .macro (1, macro ("Space").to ("fx.reverb.mix", 0.05f, 0.45f).to ("fx.delay.mix", 0.0f, 0.3f), 0.3f)
+    .macro (2, macro ("Tremolo").to ("lfo1.depth", 0, 1), 0.0f)
+    .macro (3, macro ("Tone").to ("cutoff", -1.5f, 1.0f), 0.6f)
+    .lfo (0, lfo (VaultLfo::sine).sync ("1/8T").to ("volume", 0.5f).to ("pan", 0.3f))
+    .modWheel ("lfo1.depth", 1.0f)
+    .velocity ("fx.drive.amount", 0.2f);
+```
+
+(This exact example is compiled, validated and rendered by `VaultTests` - "recipe API: the docs example".)
+
+The bank gate (`RecipeGate.h`) renders presets with their whole v3 sound (arp / gate when `on`), so every C5 comfort
+rule (fundamental dominance, 2-5 kHz <= 10 %, > 6 / 8 kHz shares, category loudness, chord headroom) applies to the FX as
+designed; keep bright FX (drive, shimmer, exciters) under those limits.
+
 ## Files
 
 | File | What |
 | --- | --- |
-| `Source/vault/VaultTypes.h/.cpp` | `VaultPart` (kind, source, articulation, values), `VaultPreset`, the 16 categories, sample-parameter table, home note, the `CVB` bank format (v2 written, v1 read) |
+| `Source/vault/VaultTypes.h/.cpp` | `VaultPart` (kind, source, articulation, values), `VaultPreset` (+ v3: FX chain, modulation, sound macros, arp, gate), the 16 categories, sample-parameter / FX-type / quick-knob / division tables, targets, home note, the `CVB` bank format (v3 written, v1 / v2 read) |
+| `Source/vault/VaultConvert.cpp` | `vault::upgradeToV3` (v1 / v2 -> v3, lossless) |
+| `Source/vault/VaultFx.h/.cpp` | `vault::FxProcessor` (one per FX type, around the EVOLVE stages of `Source/Fx.h`) and `vault::FxChain` (pool, crossfaded bypass, output stage) |
+| `Source/vault/VaultMod.h/.cpp` | `vault::Arp`, `vault::Gate`, LFO shapes, `vault::arpPatternToMidi` |
+| `tests/VaultV3Tests.cpp`, `tests/legacy/` | the v3 tests (`VaultTests -v3`, part of `-unit`), `-convcheck`; the frozen v2 engine + rack used as the conversion reference |
 | `Source/vault/VaultLibrary.h/.cpp` | `vault::SampleLibrary` (library.json index, background loader, LRU cache, location search), `InstrumentHandle`, `SampleInstrumentData` (decoded zones, `pick()`) |
 | `Source/vault/VaultSampler.h/.cpp` | `vault::SamplerPart` (64-voice multi-zone sampler) and `vault::SincTables` (16-tap windowed-sinc interpolation) |
 | `Source/vault/models/ModelVoice.h` | the model interface (`vault::models::ModelVoice`, `ModelInfo`, `ModelRegistry`) |
@@ -55,7 +293,7 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 | `Source/vault/models/VoiceModels.cpp` | LF-pulse source-filter voices, choir (8-24 singers, half-rate), vocal pad |
 | `tools/vault/ModelLab.cpp`, `models_measure.py` | console target `VaultModelLab` (demos, CPU, measurement renders) + the measurement / comparison script |
 | `tests/VaultModelTests.cpp` | the model unit tests (part of `VaultTests`; alone: `VaultTests -models`) |
-| `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - 4 parts of any kind -> master FX -> macros -> mono lows -> trim -> volume -> limiter; offline `render()` |
+| `Source/vault/VaultEngine.h/.cpp` | `VaultEngine` - arp -> 4 parts of any kind -> modulation -> gate -> FX chain -> trim -> mono lows -> volume -> limiter; macros, LFOs, quick knobs, locks; offline `render()` |
 | `Source/vault/VaultProcessor.h/.cpp` | `VaultProcessor` - the `juce::AudioProcessor` (parameters, bank loading, library pins, state) |
 | `Source/vault/VaultEditor.h/.cpp` | the editor (browser UI); `VaultMainView` / `VaultInfoPanel` are implemented here too |
 | `Source/vault/ui/*.h` | header-only UI parts: `VaultTheme.h`, `VaultBrowserModel.h` (search / filters / favorites / recent, instrument names), `VaultSettings.h`, `VaultThumbs.h` (thumbnails at C5), `VaultWidgets.h` (pills, categories, LAYERS chips, preset list, keyboard, kind icons, spinner, DRAG WAV), `VaultMainView.h` |
@@ -80,7 +318,7 @@ Every `Source/vault/*.cpp` and `Source/vault/models/*.cpp` is compiled into `Chr
 
 ```
 MIDI ─┬─> part 0  synth:  kk::SynthEngine (32 voices)                      ─┐  x level, pan (equal power), part gain
-      ├─> part 1  sample: vault::SamplerPart (64 voices) <- InstrumentHandle ├─> sum ─> kk::FxRack (FX values of PART 0)
+      ├─> part 1  sample: vault::SamplerPart (64 voices) <- InstrumentHandle ├─> sum ─> mod / gate ─> vault::FxChain (v3; v2: FxRack of part 0)
       ├─> part 2  model:  pool of vault::models::ModelVoice (ModelInfo::maxVoices)
       └─> part 3  (any kind; transposed by octave*12+semi)                   ─┘
    ─> side high-pass 160 Hz 8th order (mono below ~120 Hz) + 5 Hz DC blocker on the mid
@@ -208,7 +446,7 @@ then plays 1 ms later (not reported as plugin latency).
 the `s.*` table (range-checked); model parts need a `source` and take EVOLVE keys + any `m.*` key (the model's table is
 applied at compile time, unknown `m.*` keys are ignored, values clamped to the model's ranges).
 
-## Bank file format `CVB` (v2; v1 still read)
+## Bank file format `CVB` (v2 layout; v3 appends the sections described in "CVB v3" above; v1 still read)
 
 ```
 "CVB1" | uint16 version (2) | uint16 flags (bit0 = gzip/zlib payload) | uint32 presetCount | uint32 rawPayloadSize | payload
@@ -527,8 +765,10 @@ State (`getStateInformation`): XML `CHROMEVAULT` with `presetId` (restored by id
 
 ```
 cmake -B build-vault -DCMAKE_BUILD_TYPE=Release [-DKK_JUCE_DIR=/path/to/JUCE]
-cmake --build build-vault --target ChromeVault_VST3 ChromeVault_Standalone VaultTests VaultLibBuild KeysKilla_VST3 KeysKillaTests -j4
+cmake --build build-vault --target ChromeVault_VST3 ChromeVault_Standalone VaultTests VaultBankGen VaultLibBuild KeysKilla_VST3 KeysKillaTests EvolveFX_VST3 -j4
 build-vault/VaultTests_artefacts/Release/VaultTests                    # "vault failures: 0" (real-library checks run when a library is found)
+build-vault/VaultTests_artefacts/Release/VaultTests -v3                # only the v3 tests ("vault v3 failures: 0")
+CHROME_VAULT_LIBRARY=/home/user/cv-library build-vault/VaultTests_artefacts/Release/VaultTests -convcheck old_v2_bank.cvb [step] [threads]
 CHROME_VAULT_LIBRARY=/home/user/cv-library build-vault/VaultTests_artefacts/Release/VaultTests
 xvfb-run -a build-vault/VaultTests_artefacts/Release/VaultTests -uitest
 CHROME_VAULT_LIBRARY=/home/user/cv-library build-vault/VaultTests_artefacts/Release/VaultTests -libreport /tmp/renders 48 60 72

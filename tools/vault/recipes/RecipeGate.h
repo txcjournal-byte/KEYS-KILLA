@@ -1,5 +1,7 @@
 #pragma once
 // CHROME VAULT v2 recipe quality gate (VaultBankGen -recipe <name>|all). Header-only, included by BankGen.cpp.
+// v3: presets are rendered with their whole sound - FX chain, modulation, sound macros at their values, arp / gate when
+// `on` (recipe::design, Recipe.h) - so every rule below applies to the FX as designed. The bank is written as CVB v3.
 //
 // Every preset of the recipe(s) is rendered at 48 kHz, velocity 0.8, at C5 (MIDI 60 = the home note, FL Studio naming),
 // note off after 1.5 s and rendered on until the tail is gone, plus 2.5 s at C4 / C6 and C5 at velocity 0.35 / 1.0.

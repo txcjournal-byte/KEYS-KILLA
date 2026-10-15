@@ -17,29 +17,43 @@ public:
         for (auto& l : lines) l.prepare ((int) (0.35f * sr) + 64);
         for (auto& d : diff) d.prepare ((int) (0.03f * sr) + 8);
         pre.prepare ((int) (0.2f * sr) + 8);
-        wetHp[0].setHz (160.0f, sr); wetHp[1].setHz (160.0f, sr);
+        preExtra.prepare ((int) (0.26f * sr) + 8);   // CHROME VAULT's extra pre-delay (a separate line: the main one keeps its size)
+        shimRing.prepare ((int) (0.2f * sr) + 8);
+        wetHp[0].setHz (160.0f, sr); wetHp[1].setHz (160.0f, sr); lowCut = 160.0f;
         reset();
     }
     void reset()
     {
         for (auto& l : lines) l.clear();
         for (auto& d : diff) d.clear();
-        pre.clear();
+        pre.clear(); preExtra.clear(); shimRing.clear(); shimPhase = 0;
         damp.fill (0.0f); hcut.fill (0.0f); wetHp[0].reset(); wetHp[1].reset();
         phase = 0;
     }
-    // type: 0 hall, 1 plate, 2 cloud. size 0..1, mix 0..1
+    // type: 0 hall, 1 plate, 2 cloud, 3 room, 4 shimmer (cloud-like with an octave-up feedback). size 0..1, mix 0..1.
+    // Extra (CHROME VAULT): decay multiplier, extra pre-delay, damping multiplier, wet low cut, shimmer amount. The
+    // defaults give exactly the EVOLVE reverb.
+    struct Extra { float decayMul = 1.0f, preMs = 0.0f, dampMul = 1.0f, lowCutHz = 160.0f, shimmer = 0.0f; };
     void process (float* L, float* R, int n, int type, float size, float mix, bool freeze)
+    {
+        process (L, R, n, type, size, mix, freeze, Extra());
+    }
+    void process (float* L, float* R, int n, int type, float size, float mix, bool freeze, const Extra& ex)
     {
         if (mix <= 0.0005f && ! freeze && quiet) return;
         static constexpr float baseMs[N] { 37.1f, 43.7f, 51.3f, 59.9f, 67.3f, 73.1f, 83.9f, 97.1f };
         static constexpr float diffMs[4] { 4.7f, 7.3f, 11.1f, 15.7f };
-        const float scale = type == 1 ? 0.55f + size * 0.6f : type == 2 ? 1.4f + size * 1.2f : 0.8f + size * 1.1f;
-        const float rt60 = type == 1 ? 0.7f + size * 3.0f : type == 2 ? 5.0f + size * 15.0f : 1.0f + size * 5.0f;
-        const float dampHz = type == 1 ? 9000.0f : type == 2 ? 3200.0f : 5200.0f;
-        const float modDepth = (type == 2 ? 0.012f : 0.004f) * sr * 0.05f;
-        const float preSamples = (type == 1 ? 0.004f : 0.012f + size * 0.025f) * sr;
+        const bool shim = type == 4;
+        const float scale = type == 1 ? 0.55f + size * 0.6f : type == 2 ? 1.4f + size * 1.2f : type == 3 ? 0.3f + size * 0.45f
+                          : shim ? 1.2f + size * 1.0f : 0.8f + size * 1.1f;
+        const float rt60 = (type == 1 ? 0.7f + size * 3.0f : type == 2 ? 5.0f + size * 15.0f : type == 3 ? 0.25f + size * 1.2f
+                          : shim ? 3.0f + size * 9.0f : 1.0f + size * 5.0f) * ex.decayMul;
+        const float dampHz = (type == 1 ? 9000.0f : type == 2 ? 3200.0f : type == 3 ? 6500.0f : shim ? 6000.0f : 5200.0f) * ex.dampMul;
+        const float modDepth = (type == 2 ? 0.012f : shim ? 0.008f : type == 3 ? 0.003f : 0.004f) * sr * 0.05f;
+        const float preSamples = (type == 1 ? 0.004f : type == 3 ? 0.003f + size * 0.008f : 0.012f + size * 0.025f) * sr;
+        const float extraPre = std::clamp (ex.preMs, 0.0f, 250.0f) * 0.001f * sr;
         const float dampA = std::exp (-twoPi * std::min (dampHz, sr * 0.4f) / sr), hcutA = std::exp (-twoPi * std::min (11000.0f, sr * 0.4f) / sr);
+        if (std::abs (ex.lowCutHz - lowCut) > 0.0f) { lowCut = ex.lowCutHz; wetHp[0].setHz (lowCut, sr); wetHp[1].setHz (lowCut, sr); }
         std::array<float, N> len {}, gain {};
         for (int i = 0; i < N; ++i)
         {
@@ -47,12 +61,24 @@ public:
             gain[(size_t) i] = freeze ? 1.0f : std::pow (10.0f, -3.0f * len[(size_t) i] / (rt60 * sr));
         }
         const float wet = freeze ? std::max (mix, 0.5f) : mix;
-        const float dryGain = 1.0f - wet * 0.35f, wetGain = wet * (type == 2 ? 0.9f : 0.75f);
+        const float dryGain = 1.0f - wet * 0.35f, wetGain = wet * (type == 2 ? 0.9f : shim ? 0.85f : 0.75f);
         const float modInc = twoPi * 0.37f / sr;
+        const float shimFb = shim ? 0.55f * std::clamp (ex.shimmer, 0.0f, 1.0f) : 0.0f;
+        const float shimP = 0.09f * sr, shimInc = 1.0f / shimP;
         float energy = 0;
         for (int s = 0; s < n; ++s)
         {
             float in = freeze ? 0.0f : (L[s] + R[s]) * 0.5f;
+            if (shim)
+            {
+                // octave up: two crossfaded grains read the wet ring at double speed, fed back into the tank
+                float g1 = shimPhase, g2 = shimPhase + 0.5f; if (g2 >= 1) g2 -= 1;
+                const float up = shimRing.read (1.0f + shimP * (1.0f - g1)) * std::sin (pi * g1)
+                               + shimRing.read (1.0f + shimP * (1.0f - g2)) * std::sin (pi * g2);
+                shimPhase += shimInc; if (shimPhase >= 1) shimPhase -= 1;
+                in += up * shimFb;
+            }
+            if (extraPre >= 1.0f) { preExtra.push (in); in = preExtra.read (extraPre); }
             pre.push (in);
             in = pre.read (preSamples);
             for (int d = 0; d < 4; ++d)   // Schroeder all-pass diffusion
@@ -77,6 +103,7 @@ public:
             float wl = (y[0] - y[2] + y[4] - y[6]) * 0.5f, wr = (y[1] - y[3] + y[5] - y[7]) * 0.5f;
             hcut[0] = wl + hcutA * (hcut[0] - wl); hcut[1] = wr + hcutA * (hcut[1] - wr);
             wl = hcut[0] - wetHp[0].lp (hcut[0]); wr = hcut[1] - wetHp[1].lp (hcut[1]);   // low cut keeps the low end dry
+            if (shim) shimRing.push ((wl + wr) * 0.5f);
             energy += wl * wl + wr * wr;
             L[s] = L[s] * dryGain + wl * wetGain;
             R[s] = R[s] * dryGain + wr * wetGain;
@@ -92,11 +119,11 @@ private:
                 for (int j = i; j < i + h; ++j) { const float a = x[(size_t) j], b = x[(size_t) (j + h)]; x[(size_t) j] = a + b; x[(size_t) (j + h)] = a - b; }
         for (auto& v : x) v *= 0.35355339f;   // 1 / sqrt (8)
     }
-    float sr = 44100, phase = 0;
+    float sr = 44100, phase = 0, lowCut = 160.0f, shimPhase = 0;
     bool quiet = true;
     std::array<DelayLine, N> lines;
     std::array<DelayLine, 4> diff;
-    DelayLine pre;
+    DelayLine pre, preExtra, shimRing;
     std::array<float, N> damp {};
     std::array<float, 2> hcut {};
     OnePole wetHp[2];

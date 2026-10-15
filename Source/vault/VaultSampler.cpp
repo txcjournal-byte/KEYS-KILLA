@@ -66,10 +66,10 @@ void SamplerPart::setSource (const SampleInstrumentData* d, int articulation)
 
 void SamplerPart::setParams (const float* sp) { for (int i = 0; i < numSampleParams; ++i) p[i] = sp[i]; }
 
-void SamplerPart::setControl (float cutoffMul, float vibratoCents, float pitchWheel)
+void SamplerPart::setControl (float cutoffMul, float vibratoCents, float pitchWheel, float extraSemis)
 {
     const bool cutChanged = std::abs (cutoffMul - cutMul) > 0.003f * cutMul;
-    cutMul = cutoffMul; vibCents = vibratoCents; wheel = pitchWheel;
+    cutMul = cutoffMul; vibCents = vibratoCents; wheel = pitchWheel; extraSt = extraSemis;
     for (auto& v : voices)
         if (v.stage != Voice::off) { updatePitch (v); if (cutChanged) updateFilter (v); }
 }
@@ -83,7 +83,8 @@ int SamplerPart::activeVoices() const
 
 void SamplerPart::updatePitch (Voice& v)
 {
-    const float semis = wheel * p[spBendRange] + vibCents * std::sin (vibPhase) * 0.01f;
+    float semis = wheel * p[spBendRange] + vibCents * std::sin (vibPhase) * 0.01f;
+    if (extraSt != 0.0f) semis += extraSt;
     v.inc = v.incBase * std::exp2 (semis / 12.0);
     v.table = SincTables::tableFor (v.inc);
 }

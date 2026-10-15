@@ -14,11 +14,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout createVaultLayout()
     AudioProcessorValueTreeState::ParameterLayout l;
     l.add (std::make_unique<AudioParameterInt> (ParameterID { VaultProcessor::idPreset, 1 }, "Preset", 0, VaultProcessor::maxPresets - 1, 0));
     for (int m = 0; m < vault::numMacros; ++m)
-    {
-        const auto name = vault::macroNames()[m].substring (0, 1) + vault::macroNames()[m].substring (1).toLowerCase();
-        l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idMacro[m], 1 }, name, NormalisableRange<float> (0.0f, 1.0f), 0.5f,
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idMacro[m], 1 }, "Macro " + String (m + 1), NormalisableRange<float> (0.0f, 1.0f), 0.5f,
                    AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + " %"; })));
+    // v3: the MAIN page knobs (bipolar around "as designed", vibrato / tremolo from 0) and the quick switches
+    for (int q = 0; q < vault::numQuick; ++q)
+    {
+        const auto& qi = vault::quickInfo()[(size_t) q];
+        const float neutral = qi.neutral;
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idQuick[q], 1 }, String (qi.name), NormalisableRange<float> (0.0f, 1.0f), neutral,
+                   AudioParameterFloatAttributes().withStringFromValueFunction ([neutral] (float v, int)
+                   {
+                       if (neutral <= 0.0f) return String (roundToInt (v * 100.0f)) + " %";
+                       const int d = roundToInt ((v - 0.5f) * 200.0f);
+                       return d == 0 ? String ("as designed") : (d > 0 ? "+" : "") + String (d) + " %";
+                   })));
     }
+    l.add (std::make_unique<AudioParameterBool> (ParameterID { VaultProcessor::idFxOn, 1 }, "FX On", true));
+    l.add (std::make_unique<AudioParameterBool> (ParameterID { VaultProcessor::idArpOn, 1 }, "Arp On", false));
+    l.add (std::make_unique<AudioParameterBool> (ParameterID { VaultProcessor::idGateOn, 1 }, "Gate On", false));
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idVolume, 1 }, "Volume", NormalisableRange<float> (-60.0f, 6.0f, 0.0f, 2.5f), 0.0f,
                AudioParameterFloatAttributes().withLabel ("dB")
                    .withStringFromValueFunction ([] (float v, int) { return v <= -59.9f ? String ("-inf dB") : String (v, 1) + " dB"; })));
@@ -132,12 +145,19 @@ VaultProcessor::VaultProcessor()
     presetParam = apvts.getRawParameterValue (idPreset);
     for (int m = 0; m < vault::numMacros; ++m) macroParam[m] = apvts.getRawParameterValue (idMacro[m]);
     volumeParam = apvts.getRawParameterValue (idVolume);
+    for (int q = 0; q < vault::numQuick; ++q) quickParam[q] = apvts.getRawParameterValue (idQuick[q]);
+    fxOnParam = apvts.getRawParameterValue (idFxOn);
+    arpOnParam = apvts.getRawParameterValue (idArpOn);
+    gateOnParam = apvts.getRawParameterValue (idGateOn);
+    for (auto& k : keysHeldUi) k.store (0.0f);
     startTimerHz (20);
     if (! bank().empty())
     {
         const auto& d = bank().front().macroDefaults;
         for (int m = 0; m < vault::numMacros; ++m)
             if (auto* p = apvts.getParameter (idMacro[m])) p->setValueNotifyingHost (p->convertTo0to1 (d[m]));
+        resetLiveTo (0, false);
+        publishLive();
     }
 }
 
@@ -168,6 +188,170 @@ void VaultProcessor::timerCallback()
 {
     updatePins (currentPreset());
     engine.serviceResources();
+    // the preset changed without selectPreset (host automation / a host preset recall): the current sound follows
+    if (const int i = currentPreset(); i >= 0 && i != liveFor) { resetLiveTo (i, true); publishLive(); }
+}
+
+//==============================================================================
+void VaultProcessor::resetLiveTo (int index, bool keepLocked)
+{
+    if (! juce::isPositiveAndBelow (index, (int) bank().size())) return;
+    const auto prev = live;
+    const bool hadPrev = liveFor >= 0;
+    live = bank()[(size_t) index];
+    vault::upgradeToV3 (live);
+    if (keepLocked && hadPrev)
+    {
+        if (getLock (Section::fx)) { live.fx = prev.fx; live.finish = prev.finish; }
+        if (getLock (Section::arp)) live.arp = prev.arp;
+        if (getLock (Section::gate)) live.gate = prev.gate;
+    }
+    liveFor = index;
+}
+
+void VaultProcessor::publishLive()
+{
+    if (liveFor < 0) return;
+    editBuf[(size_t) editBack] = VaultEngine::compile (live, library);
+    editBufFor[(size_t) editBack] = liveFor;
+    editBack = editMid.exchange (editBack | 4) & 3;
+}
+
+bool VaultProcessor::isSoundEdited() const
+{
+    if (! juce::isPositiveAndBelow (liveFor, (int) bank().size())) return false;
+    auto b = bank()[(size_t) liveFor];
+    vault::upgradeToV3 (b);
+    return ! (b == live);
+}
+
+void VaultProcessor::editSound (const std::function<void (VaultPreset&)>& change)
+{
+    if (liveFor < 0 || ! change) return;
+    change (live);
+    vault::upgradeToV3 (live);
+    publishLive();
+}
+
+void VaultProcessor::revertSound()
+{
+    if (liveFor < 0) return;
+    const int i = liveFor;
+    liveFor = -1;
+    auto locked = live;
+    live = bank()[(size_t) i];
+    vault::upgradeToV3 (live);
+    if (getLock (Section::fx)) { live.fx = locked.fx; live.finish = locked.finish; }
+    if (getLock (Section::arp)) live.arp = locked.arp;
+    if (getLock (Section::gate)) live.gate = locked.gate;
+    liveFor = i;
+    publishLive();
+}
+
+juce::String VaultProcessor::macroName (int index) const
+{
+    return juce::isPositiveAndBelow (index, (int) vault::numSoundMacros) ? live.macros[(size_t) index].name : juce::String();
+}
+
+float VaultProcessor::getQuick (int q) const
+{
+    return juce::isPositiveAndBelow (q, (int) vault::numQuick) ? quickParam[q]->load() : 0.5f;
+}
+
+void VaultProcessor::setQuick (int q, float value01)
+{
+    if (! juce::isPositiveAndBelow (q, (int) vault::numQuick)) return;
+    if (auto* p = apvts.getParameter (idQuick[q]))
+    {
+        const float v = juce::jlimit (0.0f, 1.0f, value01);
+        if (std::abs (p->getValue() - v) > 1.0e-6f) { p->beginChangeGesture(); p->setValueNotifyingHost (v); p->endChangeGesture(); }
+    }
+}
+
+void VaultProcessor::resetQuick()
+{
+    for (int q = 0; q < vault::numQuick; ++q) setQuick (q, vault::quickInfo()[(size_t) q].neutral);
+}
+
+bool VaultProcessor::getSwitch (const char* id) const
+{
+    if (auto* v = apvts.getRawParameterValue (id)) return v->load() > 0.5f;
+    return false;
+}
+
+void VaultProcessor::setSwitch (const char* id, bool on)
+{
+    if (auto* p = apvts.getParameter (id))
+        if ((p->getValue() > 0.5f) != on) { p->beginChangeGesture(); p->setValueNotifyingHost (on ? 1.0f : 0.0f); p->endChangeGesture(); }
+}
+
+namespace
+{
+int quickFxType (int q)
+{
+    switch (q)
+    {
+        case vault::qReverb: return (int) vault::FxType::reverb;
+        case vault::qDelay:  return (int) vault::FxType::delay;
+        case vault::qChorus: return (int) vault::FxType::chorus;
+        case vault::qDrive:  return (int) vault::FxType::drive;
+        case vault::qWidth:  return (int) vault::FxType::width;
+        case vault::qEqTilt: return (int) vault::FxType::eq;
+        default: return -1;
+    }
+}
+} // namespace
+
+int VaultProcessor::fxSlotForQuick (int q) const
+{
+    const int t = quickFxType (q);
+    if (t < 0) return -1;
+    for (int i = 0; i < (int) live.fx.size(); ++i) if ((int) live.fx[(size_t) i].type == t) return i;
+    return -1;
+}
+
+bool VaultProcessor::isQuickFxOn (int q) const
+{
+    const int s = fxSlotForQuick (q);
+    if (s >= 0) return live.fx[(size_t) s].on;
+    return quickFxType (q) >= 0 && getQuick (q) > vault::quickInfo()[(size_t) q].neutral + 0.004f;
+}
+
+void VaultProcessor::setQuickFxOn (int q, bool on)
+{
+    const int t = quickFxType (q);
+    if (t < 0) return;
+    if (const int s = fxSlotForQuick (q); s >= 0) { editSound ([s, on] (VaultPreset& p) { p.fx[(size_t) s].on = on; }); return; }
+    if (! on) { setQuick (q, vault::quickInfo()[(size_t) q].neutral); return; }
+    editSound ([t] (VaultPreset& p)
+    {
+        if ((int) p.fx.size() >= vault::maxFxSlots) return;
+        auto slot = VaultFxSlot::make ((vault::FxType) t);
+        if (slot.type == vault::FxType::width) slot.set ("width", 0.7f);
+        const int rank = vault::fxTypeInfo (slot.type).rank;
+        auto at = p.fx.end();
+        for (auto it = p.fx.begin(); it != p.fx.end(); ++it) if (vault::fxTypeInfo (it->type).rank > rank) { at = it; break; }
+        p.fx.insert (at, slot);
+    });
+}
+
+juce::MidiFile VaultProcessor::arpPatternMidi (double bars) const
+{
+    std::vector<std::pair<int, float>> notes;
+    for (int k = 0; k < 128; ++k) if (const float v = keysHeldUi[(size_t) k].load(); v > 0.0f) notes.push_back ({ k, v });
+    if (notes.empty()) notes = { { 60, 0.8f }, { 64, 0.8f }, { 67, 0.8f } };   // the C5 major triad
+    return vault::arpPatternToMidi (live.arp, notes, bars, hostBpm.load());
+}
+
+juce::File VaultProcessor::writeArpMidiFile (double bars) const
+{
+    const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("CHROME VAULT Arp.mid");
+    f.deleteFile();
+    juce::FileOutputStream os (f);
+    if (! os.openedOk()) return {};
+    arpPatternMidi (bars).writeTo (os);
+    os.flush();
+    return f;
 }
 
 bool VaultProcessor::isLoading() const
@@ -231,6 +415,17 @@ void VaultProcessor::selectPreset (int index)
     updatePins (index);
     const auto& d = bank()[(size_t) index].macroDefaults;
     for (int m = 0; m < vault::numMacros; ++m) setMacro (m, d[m]);
+    // v3: the new sound (+ the locked sections), its arp / gate switches, the MAIN knobs back to "as designed"
+    // (the FX knobs stay while the FX are locked)
+    resetLiveTo (index, true);
+    publishLive();
+    if (! getLock (Section::arp)) setSwitch (idArpOn, live.arp.on);
+    if (! getLock (Section::gate)) setSwitch (idGateOn, live.gate.on);
+    for (int q = 0; q < vault::numQuick; ++q)
+    {
+        const bool fxKnob = q == vault::qReverb || q == vault::qDelay || q == vault::qChorus || q == vault::qDrive || q == vault::qWidth || q == vault::qEqTilt;
+        if (! (fxKnob && getLock (Section::fx))) setQuick (q, vault::quickInfo()[(size_t) q].neutral);
+    }
     updateHostDisplay (ChangeDetails().withProgramChanged (true));
 }
 
@@ -288,6 +483,15 @@ void VaultProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const int n = buffer.getNumSamples();
     if (! engine.isPrepared() || n <= 0) { buffer.clear(); return; }
 
+    // the switches, locks and MAIN knobs (before a preset load: the locks decide what it keeps)
+    engine.setLocks (getLock (Section::fx), getLock (Section::arp), getLock (Section::gate));
+    engine.setFxOn (fxOnParam->load() > 0.5f);
+    engine.setArpOn (arpOnParam->load() > 0.5f);
+    engine.setGateOn (gateOnParam->load() > 0.5f);
+    for (int q = 0; q < vault::numQuick; ++q) engine.setQuick (q, quickParam[q]->load());
+    // the current sound from the editor (an edit, a restored project, a preset pick): a triple buffer, no locks
+    const VaultCompiledPreset* edit = nullptr;
+    if (editMid.load() & 4) { editFront = editMid.exchange (editFront) & 3; edit = &editBuf[(size_t) editFront]; editAppliedFor = editBufFor[(size_t) editFront]; }
     // preset: from the parameter (UI pick or host automation)
     if (! bank().empty())
     {
@@ -295,9 +499,11 @@ void VaultProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         const int want = fromParam;   // the APVTS stores a new value at once, so UI picks arrive here in the next block
         if (want != loadedIndex)
         {
-            engine.setPreset (bankData->compiled[(size_t) want], loadedIndex < 0);
+            if (editAppliedFor == want) engine.setPreset (editBuf[(size_t) editFront], loadedIndex < 0, false);   // the current sound of that preset
+            else engine.setPreset (bankData->compiled[(size_t) want], loadedIndex < 0);
             loadedIndex = want;
         }
+        else if (edit != nullptr && editAppliedFor == loadedIndex) engine.updateSound (*edit);
     }
     for (int m = 0; m < vault::numMacros; ++m) engine.setMacro (m, macroParam[m]->load());
     engine.setVolume (volumeGain (volumeParam->load()));
@@ -315,6 +521,13 @@ void VaultProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         previewActive = pn; previewOffIn = (int) (sr * previewLen.load() / 1000.0);
     }
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
+    for (const auto meta : midi)   // the keys down (arp pattern MIDI export)
+    {
+        if (meta.numBytes < 3) continue;
+        const int status = meta.data[0] & 0xf0, key = meta.data[1] & 0x7f;
+        if (status == 0x90 && meta.data[2] > 0) keysHeldUi[(size_t) key].store ((float) meta.data[2] / 127.0f);
+        else if (status == 0x80 || status == 0x90) keysHeldUi[(size_t) key].store (0.0f);
+    }
 
     VaultEngine::Transport t;
     if (auto* ph = getPlayHead())
@@ -323,6 +536,7 @@ void VaultProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             if (auto b = pos->getBpm()) t.bpm = *b;
             if (pos->getIsPlaying()) if (auto p = pos->getPpqPosition()) { t.playing = true; t.ppq = *p; }
         }
+    hostBpm.store (t.bpm);
     engine.process (buffer, midi, t);
     outPeak = buffer.getMagnitude (0, n);
 }
@@ -333,11 +547,22 @@ juce::AudioProcessorEditor* VaultProcessor::createEditor() { return new VaultEdi
 void VaultProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree st ("CHROMEVAULT");
-    st.setProperty ("version", 1, nullptr);
+    st.setProperty ("version", 2, nullptr);
     if (const auto* p = currentPresetData()) { st.setProperty ("presetId", p->id, nullptr); st.setProperty ("presetName", p->name, nullptr); }
     st.setProperty ("presetIndex", currentPreset(), nullptr);
     for (int m = 0; m < vault::numMacros; ++m) st.setProperty (idMacro[m], getMacro (m), nullptr);
     st.setProperty (idVolume, getVolumeDb(), nullptr);
+    // v3: MAIN knobs, switches, locks and the current sound when it differs from the bank preset
+    for (int q = 0; q < vault::numQuick; ++q) st.setProperty (idQuick[q], getQuick (q), nullptr);
+    for (auto* id : { idFxOn, idArpOn, idGateOn }) st.setProperty (id, getSwitch (id), nullptr);
+    st.setProperty ("lockFx", getLock (Section::fx), nullptr);
+    st.setProperty ("lockArp", getLock (Section::arp), nullptr);
+    st.setProperty ("lockGate", getLock (Section::gate), nullptr);
+    if (liveFor == currentPreset() && isSoundEdited())
+    {
+        const auto mb = vault::serializeBank ({ live }, true);
+        st.setProperty ("sound", mb.toBase64Encoding(), nullptr);
+    }
     if (auto xml = st.createXml()) copyXmlToBinary (*xml, destData);
 }
 
@@ -356,6 +581,26 @@ void VaultProcessor::setStateInformation (const void* data, int sizeInBytes)
     for (int m = 0; m < vault::numMacros; ++m)
         if (st.hasProperty (idMacro[m])) setMacro (m, (float) st.getProperty (idMacro[m]));
     if (st.hasProperty (idVolume)) setVolumeDb ((float) st.getProperty (idVolume));
+    // v3 (a version 1 state: everything as designed)
+    setLock (Section::fx, (bool) st.getProperty ("lockFx", false));
+    setLock (Section::arp, (bool) st.getProperty ("lockArp", false));
+    setLock (Section::gate, (bool) st.getProperty ("lockGate", false));
+    for (int q = 0; q < vault::numQuick; ++q) setQuick (q, (float) st.getProperty (idQuick[q], vault::quickInfo()[(size_t) q].neutral));
+    if (bank().empty()) return;
+    liveFor = -1;
+    resetLiveTo (idx, false);
+    setSwitch (idFxOn, (bool) st.getProperty (idFxOn, true));
+    setSwitch (idArpOn, (bool) st.getProperty (idArpOn, live.arp.on));
+    setSwitch (idGateOn, (bool) st.getProperty (idGateOn, live.gate.on));
+    if (st.hasProperty ("sound"))
+    {
+        juce::MemoryBlock mb;
+        std::vector<VaultPreset> snd;
+        if (mb.fromBase64Encoding (st.getProperty ("sound").toString()) && vault::deserializeBank (mb.getData(), mb.getSize(), snd)
+            && snd.size() == 1 && vault::validatePreset (snd.front()))
+            live = snd.front();
+    }
+    publishLive();
 }
 
 //==============================================================================

@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-// CHROME VAULT by TrapWin - preset bank data model and the compact "CVB" bank file format (v2; v1 files are still read).
+// CHROME VAULT by TrapWin - preset bank data model and the compact "CVB" bank file format (v3; v1 / v2 files are still read).
 // Light header: only juce_core. See docs/VAULT.md.
 
 //==============================================================================
@@ -47,6 +47,109 @@ struct VaultPart
     }
 };
 
+//==============================================================================
+// v3: the per-preset sound design around the layers - FX chain, modulation, 4 named sound macros, arpeggiator, gate.
+// Parameter ranges / names of every FX type: vault::fxTypeInfo(). Modulation and macro targets are text ids
+// (vault::describeTarget, docs/VAULT.md "Targets"), resolved by the engine when a preset loads.
+namespace vault
+{
+// FX slot types (stored as numbers in banks: append only, never renumber)
+enum class FxType : uint8_t { eq = 0, compressor, drive, lofi, chorus, phaser, flanger, filter, delay, reverb, width, reverse,
+                              transient, body, ghost, stutter, halftime, numTypes };
+enum { numFxTypes = (int) FxType::numTypes, maxFxSlots = 8, maxFxParams = 10, maxSameFxType = 2,
+       numLfos = 2, maxLfoDests = 4, maxRoutings = 4, numSoundMacros = 4, maxMacroTargets = 8, numSteps = 16 };
+} // namespace vault
+
+struct VaultFxSlot
+{
+    vault::FxType type = vault::FxType::reverb;
+    bool on = true;
+    std::array<float, vault::maxFxParams> p {};      // real values in the order of vault::fxTypeInfo (type).params
+
+    static VaultFxSlot make (vault::FxType t);       // every parameter at its default
+    float get (const char* id) const;                // the default for an unknown id
+    VaultFxSlot& set (const char* id, float v);      // unknown ids are ignored (jassert)
+    bool operator== (const VaultFxSlot& o) const;
+};
+
+struct VaultModDest                                  // one modulation route: target id + amount (units: docs/VAULT.md "Targets")
+{
+    juce::String target;
+    float amount = 0;
+    bool operator== (const VaultModDest& o) const { return target == o.target && juce::exactlyEqual (amount, o.amount); }
+};
+
+struct VaultLfo
+{
+    enum Shape : uint8_t { sine, triangle, square, saw, sampleHold, numShapes };
+    uint8_t shape = sine;
+    float rate = 2.0f;                               // Hz (free running)
+    bool sync = false;                               // true: `div` (vault::divisions) follows the host tempo
+    uint8_t div = 0;                                 // index into vault::divisions(), set to "1/4" by the constructor
+    float delay = 0, fade = 0;                       // seconds after the note-on before the LFO starts / reaches full depth
+    float phase = 0;                                 // start phase 0..1
+    bool retrig = true;                              // true: restarts (phase, delay, fade) with the first note; false: free / bar-aligned
+    float depth = 1.0f;                              // 0..1 scales every destination (macro / mod target "lfo1.depth")
+    std::vector<VaultModDest> dests;                 // up to vault::maxLfoDests
+    VaultLfo();
+    bool operator== (const VaultLfo& o) const;
+};
+
+struct VaultMod
+{
+    VaultLfo lfo[vault::numLfos];
+    std::vector<VaultModDest> modWheel, velocity, aftertouch;   // up to vault::maxRoutings each
+    bool operator== (const VaultMod& o) const;
+};
+
+struct VaultMacroTarget
+{
+    juce::String target;
+    float min = 0, max = 1;                          // the target's value (absolute targets) or offset (relative targets) at macro 0 / 1
+    float curve = 0;                                 // -1..1: 0 linear, > 0 slow start (exponential), < 0 fast start
+    bool operator== (const VaultMacroTarget& o) const
+    { return target == o.target && juce::exactlyEqual (min, o.min) && juce::exactlyEqual (max, o.max) && juce::exactlyEqual (curve, o.curve); }
+};
+struct VaultMacro
+{
+    juce::String name;                               // shown on the MAIN page ("Hammer", "Air", ...); empty = unused knob
+    std::vector<VaultMacroTarget> targets;           // up to vault::maxMacroTargets
+    bool operator== (const VaultMacro& o) const { return name == o.name && targets == o.targets; }
+};
+
+struct VaultArp
+{
+    enum Mode : uint8_t { up, down, upDown, asPlayed, random, chord, numModes };
+    enum StepType : uint8_t { rest = 0, play = 1, tie = 2 };
+    bool on = false;
+    uint8_t mode = up;
+    uint8_t rate = 0;                                // vault::divisions() index, "1/16" by the constructor
+    uint8_t octaves = 1;                             // 1..4
+    float gate = 0.8f;                               // note length, share of a step (0.05..1; ties extend over steps)
+    float swing = 0;                                 // 0..1: every second step later by up to half a step (50 % -> 75 %)
+    bool latch = false;
+    uint8_t steps = 16;                              // pattern length 1..16
+    std::array<float, vault::numSteps> vel;          // 0..1 x the played velocity
+    std::array<uint8_t, vault::numSteps> type;       // StepType
+    std::array<int8_t, vault::numSteps> oct;         // -2..2 octaves
+    VaultArp();                                      // "Init": Up, 1/16, 1 octave, 80 %, every step on at velocity 1
+    bool operator== (const VaultArp& o) const;
+};
+
+struct VaultGate
+{
+    bool on = false;
+    uint8_t rate = 0;                                // vault::divisions() index, "1/16" by the constructor
+    uint8_t steps = 16;                              // 1..16
+    std::array<float, vault::numSteps> level;        // 0..1 per step (Init: on / off alternating)
+    float depth = 1.0f;                              // 0..1: how far a closed step closes
+    float smooth = 0.25f;                            // 0..1: edge time, share of a step
+    float swing = 0;                                 // 0..1 like the arpeggiator
+    float mix = 1.0f;                                // 0..1 dry / gated
+    VaultGate();
+    bool operator== (const VaultGate& o) const;
+};
+
 struct VaultPreset
 {
     juce::String id;                     // stable unique id, e.g. "cv.piano.0001" (saved in host projects - never change)
@@ -54,14 +157,26 @@ struct VaultPreset
     int category = 0;                    // 0..vault::numCategories-1 (vault::categoryNames())
     std::vector<VaultPart> parts;        // 1..4 layers
     float gain = 1.0f;                   // loudness trim, linear, applied after the FX
-    float macroDefaults[4] { 0.5f, 0.5f, 0.5f, 0.5f };   // TONE, SPACE, DRIVE, MOTION (0..1, 0.5 = exactly as designed)
+    float macroDefaults[4] { 0.5f, 0.5f, 0.5f, 0.5f };   // the 4 sound macros' values when the preset loads (0..1)
+
+    // ---- v3 (`v3` = true: these sections define the sound; false = a v1 / v2 style preset whose FX come from part 0's
+    //      EVOLVE FX keys and whose 4 macros are the classic TONE / SPACE / DRIVE / MOTION - vault::upgradeToV3 converts it,
+    //      the engine does that by itself when it compiles one)
+    bool v3 = false;
+    std::vector<VaultFxSlot> fx;         // the FX chain after the layers, in order, up to vault::maxFxSlots
+    float finish = 0;                    // output "finish" (glue compression, air, mono-safe widening) 0..1
+    VaultMod mod;
+    std::array<VaultMacro, 4> macros;    // the 4 sound macros (name + targets), values: macroDefaults / the plugin's macro knobs
+    VaultArp arp;
+    VaultGate gate;
 
     bool usesSamples() const { for (auto& p : parts) if (p.kind == VaultPartKind::sample) return true; return false; }
     bool operator== (const VaultPreset& o) const
     {
         return id == o.id && name == o.name && category == o.category && parts == o.parts
             && juce::exactlyEqual (gain, o.gain)
-            && std::equal (std::begin (macroDefaults), std::end (macroDefaults), std::begin (o.macroDefaults), [] (float a, float b) { return juce::exactlyEqual (a, b); });
+            && std::equal (std::begin (macroDefaults), std::end (macroDefaults), std::begin (o.macroDefaults), [] (float a, float b) { return juce::exactlyEqual (a, b); })
+            && v3 == o.v3 && fx == o.fx && juce::exactlyEqual (finish, o.finish) && mod == o.mod && macros == o.macros && arp == o.arp && gate == o.gate;
     }
 };
 
@@ -149,18 +264,104 @@ inline int sampleParamIndex (const juce::String& id)
 }
 
 //==============================================================================
-// Bank file "CVB" (see docs/VAULT.md). Version 2 is written; version 1 (synth-only, style / character tags,
-// old category list) is still read: tags are dropped, categories mapped (v1::toV2Category).
+// v3 tables
+
+// tempo divisions (LFO sync, delay time, arpeggiator / gate rate): name + length in beats (quarter notes)
+struct Division { const char* name; double beats; };
+const std::vector<Division>& divisions();
+int divisionIndex (const char* name);            // -1 if unknown ("1/16", "1/8T", "1/4D", "1 bar", ...)
+inline double divisionBeats (int index)
+{
+    const auto& d = divisions();
+    return d[(size_t) juce::jlimit (0, (int) d.size() - 1, index)].beats;
+}
+
+// FX types: id (recipes, targets "fx.<id>.<param>"), display name, rank (the canonical chain position: the order the v2
+// master FX ran in; a default slot a MAIN page knob needs is inserted by it) and the parameters
+struct FxParamInfo
+{
+    const char* id; const char* name;
+    float lo, hi, def;
+    enum Flags : uint8_t { linear = 0, logScale = 1, integer = 2, toggle = 4 };
+    uint8_t flags = linear;
+    const char* choices = nullptr;               // integer parameters with names: "Hall|Plate|Cloud|Room|Shimmer"
+    const char* unit = "";
+    float toNorm (float v) const;                // 0..1 (log parameters on a log scale)
+    float fromNorm (float n) const;
+};
+struct FxTypeInfo
+{
+    FxType type; const char* id; const char* name; int rank;
+    std::vector<FxParamInfo> params;
+    int indexOf (const char* paramId) const;     // -1 if unknown
+};
+const FxTypeInfo& fxTypeInfo (FxType t);
+int fxTypeOf (const juce::String& id);           // "reverb" -> (int) FxType::reverb, -1 if unknown
+
+// the main amount parameter of a type that a MAIN page EFFECTS knob drives (reverb / delay / chorus "mix", drive "amount",
+// width "width", eq "tilt"); -1 for other types
+int fxMainParam (FxType t);
+
+// the MAIN page quick parameters (global, for any preset): 0..1, `neutral` = the sound as designed
+enum Quick { qCutoff, qReso, qAttack, qRelease, qEnvAmt, qGlide, qVibrato, qTremolo, qReverb, qDelay, qChorus, qDrive,
+             qWidth, qEqTilt, qPan, numQuick };
+struct QuickInfo { const char* id; const char* name; float neutral; const char* what; };
+const std::array<QuickInfo, numQuick>& quickInfo();
+
+// The classic macros of v1 / v2 presets (TONE, SPACE, DRIVE, MOTION; 0.5 = as designed): converted presets keep them as
+// sound macros with the single target "classic.tone" etc.
+inline const juce::StringArray& classicMacroNames()
+{
+    static const juce::StringArray n { "Tone", "Space", "Drive", "Motion" };
+    return n;
+}
+
+// Modulation / macro target ids (text). Absolute targets are set by a macro to its min..max; LFOs / routings add.
+//   pitch | cutoff | reso | volume | pan                  global (semitones | octaves | +0..1 | gain x(1 + a) | +-1)
+//   quick.<id>                                             a MAIN page knob (quick.reverb ...): 0..1
+//   classic.tone|space|drive|motion                        the v2 macros (0..1, 0.5 = as designed)
+//   layer<1-4>.level|pan|cutoff|reso|attack|release|tune   one layer (level x, pan +, cutoff / tune in octaves / semitones, ...)
+//   fx.<type>.<param> | fx<1-8>.<param>                    the first slot of a type (or the default slot a MAIN knob uses) /
+//                                                          the slot at a chain position; LFO amounts in 0..1 of the range
+//   lfo<1-2>.depth | lfo<1-2>.rate                         depth 0..1 / rate (x 2^(4 a) for LFO amounts)
+//   gate.depth | gate.mix | gate.smooth | arp.gate         0..1
+//   finish                                                 the output finish amount 0..1
+struct TargetRef
+{
+    enum Kind : uint8_t { none, pitch, cutoff, reso, volume, pan, quick, classic, layer, fxType, fxSlot, lfo, gate, arpGate, finish };
+    enum LayerParam : uint8_t { lLevel, lPan, lCutoff, lReso, lAttack, lRelease, lTune, numLayerParams };
+    enum LfoParam : uint8_t { lfoDepth, lfoRate };
+    enum GateParam : uint8_t { gDepth, gMix, gSmooth };
+    Kind kind = none;
+    uint8_t a = 0, b = 0;                        // quick / classic / layer / lfo / gate index, fx type or slot ; param index
+    bool valid() const { return kind != none; }
+    bool absolute() const;                       // a macro sets it (else adds an offset)
+};
+TargetRef parseTarget (const juce::String& id);  // kind none for an unknown / malformed id
+juce::String describeTarget (const juce::String& id);   // "Reverb Mix", "Layer 2 Level", "Pitch" ... (UI)
+
+// v1 / v2 -> v3: the FX that part 0's EVOLVE FX keys made (FX keys removed from the parts), the classic macros as sound
+// macros 1-4 ("classic.*" targets), arp / gate off. The converted preset sounds exactly like the old one. No-op for v3.
+// A v2 preset whose FX used more than 8 stages (only EVOLVE sounds with the FUTURE macro far up) keeps the first 8 in rack
+// order; `droppedSlots` (optional) receives how many stages were left out (0 for every preset of the v2 factory bank).
+void upgradeToV3 (VaultPreset& p, int* droppedSlots = nullptr);
+
+//==============================================================================
+// Bank file "CVB" (see docs/VAULT.md). Version 3 is written (v1 / v2 presets are converted with upgradeToV3 first);
+// version 2 and version 1 (synth-only, style / character tags, old category list) are still read and come back as v3.
 //   "CVB1" | uint16 version | uint16 flags (bit0 = payload zlib/gzip) | uint32 presetCount | uint32 rawPayloadSize | payload
 juce::MemoryBlock serializeBank (const std::vector<VaultPreset>& bank, bool compress = true);
 // false (and `out` left empty) on a damaged / foreign file. `version` (optional) receives the file's format version.
-bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& out, juce::String* error = nullptr, int* version = nullptr);
+// keepLegacy: v1 / v2 presets stay as they were stored (v3 = false) instead of being converted (tests / tools)
+bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& out, juce::String* error = nullptr, int* version = nullptr,
+                      bool keepLegacy = false);
 bool saveBankFile (const juce::File& file, const std::vector<VaultPreset>& bank);
 bool loadBankFile (const juce::File& file, std::vector<VaultPreset>& out, juce::String* error = nullptr);
-constexpr int bankFormatVersion = 2;
+constexpr int bankFormatVersion = 3;
 
 // checks one preset against the format rules (1..4 parts, category range, finite values, known keys per part kind,
-// sample parts name an instrument, model parts name a model, id / name not empty)
+// sample parts name an instrument, model parts name a model, id / name not empty; v3: FX chain <= 8 slots, <= 2 of a type,
+// parameters in range, valid targets, <= 4 LFO destinations / routings, <= 8 macro targets, arp / gate in range)
 bool validatePreset (const VaultPreset& p, juce::String* why = nullptr);
 
 //==============================================================================

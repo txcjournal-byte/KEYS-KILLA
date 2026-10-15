@@ -176,7 +176,8 @@ juce_add_plugin(ChromeVault
 # every .cpp in Source/vault (engine, processor, editor and its UI parts) + the shared EVOLVE factory sounds
 file(GLOB CV_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/models/*.cpp)
 # the sound engine alone (no processor / editor): for console tools
-set(CV_ENGINE_SOURCES Source/vault/VaultTypes.cpp Source/vault/VaultEngine.cpp Source/vault/VaultLibrary.cpp Source/vault/VaultSampler.cpp)
+set(CV_ENGINE_SOURCES Source/vault/VaultTypes.cpp Source/vault/VaultConvert.cpp Source/vault/VaultFx.cpp Source/vault/VaultMod.cpp
+    Source/vault/VaultEngine.cpp Source/vault/VaultLibrary.cpp Source/vault/VaultSampler.cpp)
 file(GLOB CV_MODEL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Source/vault/models/*.cpp)
 set(CV_SHARED_SOURCES Source/Presets.cpp)
 
@@ -216,6 +217,8 @@ if(KK_BUILD_TESTS)
     target_sources(VaultTests PRIVATE tests/VaultTests.cpp ${CV_SOURCES} ${CV_SHARED_SOURCES})
     # --- vault models --- the physical-model unit tests (VaultTests -models)
     target_sources(VaultTests PRIVATE tests/VaultModelTests.cpp)
+    # the frozen v2 engine: the reference the v3 conversion is checked against (VaultTests, "v3 conversion")
+    target_sources(VaultTests PRIVATE tests/legacy/LegacyVaultEngine.cpp tests/VaultV3Tests.cpp)
     # --- end vault models ---
     target_compile_definitions(VaultTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
