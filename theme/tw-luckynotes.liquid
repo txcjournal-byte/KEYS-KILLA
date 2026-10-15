@@ -1,0 +1,183 @@
+{%- comment -%}
+  TrapWin Lucky Notes – custom product landing (analog phosphor look).
+  Used by templates/product.lucky-notes.json. Images come from the product media
+  (1 cover, 2 UI, 3 how it works, 4 before/after, 5 features, 6 drag MIDI).
+  The promo video is the first product video; until one is uploaded the section
+  falls back to the MP4 in the lucky-notes-media branch.
+{%- endcomment -%}
+{%- assign current_variant = product.selected_or_first_available_variant -%}
+{%- assign ln_video = product.media | where: 'media_type', 'video' | first -%}
+{%- assign imgs = product.images -%}
+
+<section class="twln" id="twln-{{ section.id }}" data-section="{{ section.id }}">
+  <div class="twln-crt" aria-hidden="true"></div>
+
+  <div class="twln-hero">
+    <div class="twln-stage">
+      <div class="twln-screen">
+        {%- if ln_video -%}
+          {{ ln_video | video_tag: autoplay: true, loop: true, muted: true, playsinline: true, controls: true, preload: 'metadata', image_size: '1080x' }}
+        {%- else -%}
+          <video src="{{ 'tw-luckynotes-promo.mp4' | asset_url }}"
+                 poster="{{ product.featured_image | image_url: width: 1080 }}"
+                 autoplay loop muted playsinline controls preload="metadata"
+                 aria-label="Lucky Notes promo: generate 12 melodies, preview the beep, drag the MIDI into your DAW"></video>
+        {%- endif -%}
+      </div>
+      <p class="twln-stage__note">Sound on: the beep is the plugin's preview. The nice part at the end is the same MIDI with real instruments.</p>
+    </div>
+
+    <aside class="twln-buy">
+      <div class="twln-buy__inner">
+        <p class="twln-kicker">MIDI melody generator · VST3 / AU</p>
+        <h1 class="twln-title"><span class="twln-clover" aria-hidden="true"></span>Lucky Notes</h1>
+        <p class="twln-lede">No idea for a melody? Click once, get 12. Every note is in your key, at your project tempo. Pick the one you like, drag the MIDI into your DAW and give it your own sound.</p>
+        <p class="twln-slogan">Your MIDI. Your world.</p>
+
+        <div class="twln-price">
+          <span class="twln-price__now" data-price>{{ current_variant.price | money }}</span>
+          <span class="twln-price__note">Launch price for the first 30 days after release, then $29 (USD). One-time, no subscription.</span>
+        </div>
+
+        {%- form 'product', product, class: 'twln-form', novalidate: 'novalidate', data-type: 'add-to-cart-form' -%}
+          <input type="hidden" name="id" value="{{ current_variant.id }}" data-variant-input>
+          <fieldset class="twln-os">
+            <legend class="visually-hidden">Platform</legend>
+            {%- for v in product.variants -%}
+              <label class="twln-os__opt">
+                <input type="radio" name="twln-os" value="{{ v.id }}" data-price="{{ v.price | money }}"
+                       {% if v.id == current_variant.id %}checked{% endif %}{% unless v.available %} disabled{% endunless %}>
+                <span class="twln-os__box">{{ v.title }}</span>
+              </label>
+            {%- endfor -%}
+          </fieldset>
+          <button type="submit" name="add" class="twln-cart"{% unless current_variant.available %} disabled{% endunless %}>
+            <span>Add to cart</span>
+            <span class="twln-cart__price" data-price>{{ current_variant.price | money }}</span>
+          </button>
+        {%- endform -%}
+
+        <ul class="twln-facts">
+          <li>Instant download after checkout</li>
+          <li>Windows 10/11 · macOS 11+ (Apple Silicon &amp; Intel), signed and notarized</li>
+          <li>FL Studio, Ableton Live, Logic Pro, Studio One, Reaper, Bitwig, Cubase</li>
+        </ul>
+        <div class="twln-deal">{% render 'tw-product-deal', product: product %}</div>
+      </div>
+    </aside>
+  </div>
+
+  {%- comment -%} Try it: a small in-browser version of the plugin {%- endcomment -%}
+  <div class="twln-band">
+    <div class="twln-wrap">
+      <div class="twln-try" data-try>
+        <div class="twln-try__head">
+          <div>
+            <h2 class="twln-h">Try it right here</h2>
+            <p class="twln-sub">A tiny browser version of the plugin. Hit GENERATE, press ▶ on any line. Like one? Take the MIDI with you.</p>
+          </div>
+          <div class="twln-try__ctl">
+            <div class="twln-lcd" aria-live="polite"><small>Tempo</small><b data-bpm>150</b><span>BPM</span></div>
+            <div class="twln-lcd"><small>Key</small><b data-key>F MIN</b></div>
+            <button type="button" class="twln-gen" data-generate>Generate</button>
+          </div>
+        </div>
+        <ol class="twln-rows" data-rows aria-label="12 generated melodies"></ol>
+        <p class="twln-try__foot">The plugin does the same with your project's tempo and any key, 8 or 16 bars, re-roll per line and DRAG MIDI straight onto a track.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="twln-wrap twln-story">
+    <article class="twln-row">
+      <div class="twln-row__text">
+        <p class="twln-step">01</p>
+        <h2 class="twln-h">Generate</h2>
+        <p>Tempo follows your project automatically, or set any BPM from 60 to 200. Pick a root and minor or major, or switch on LUCKY for a new key every time. One click gives you 12 melodies, 8 or 16 bars long.</p>
+      </div>
+      {%- if imgs[2] -%}
+      <figure class="twln-row__media twln-shot">
+        <img src="{{ imgs[2] | image_url: width: 1200 }}" loading="lazy" width="1200" height="1200" alt="{{ imgs[2].alt | escape }}">
+      </figure>
+      {%- endif -%}
+    </article>
+
+    <article class="twln-row twln-row--flip">
+      <div class="twln-row__text">
+        <p class="twln-step">02</p>
+        <h2 class="twln-h">Preview. It beeps. On purpose.</h2>
+        <p>The preview is one plain beep, so you judge the notes and not a preset. Twelve different characters per set: stepwise, arpeggio, high hook, low motif, sparse, busy run, triplets, dotted, syncopated, call and answer, bounce, zigzag. Don't like one? Re-roll just that line.</p>
+      </div>
+      {%- if imgs[1] -%}
+      <figure class="twln-row__media twln-shot">
+        <img src="{{ imgs[1] | image_url: width: 1500 }}" loading="lazy" width="1500" height="1080" alt="{{ imgs[1].alt | escape }}">
+        <figcaption>The real plugin window</figcaption>
+      </figure>
+      {%- endif -%}
+    </article>
+
+    <article class="twln-row">
+      <div class="twln-row__text">
+        <p class="twln-step">03</p>
+        <h2 class="twln-h">Drag the MIDI. Give it your sound.</h2>
+        <p>Every line is a real .mid file at your tempo. Drag it onto a track in FL Studio, Ableton or any DAW, load your synth, piano, bells or 808 and the melody becomes yours. EXPORT ALL MIDI saves all 12 to a folder, with an optional _Chords.mid of simple triads for each one.</p>
+      </div>
+      {%- if imgs[5] -%}
+      <figure class="twln-row__media twln-shot">
+        <img src="{{ imgs[5] | image_url: width: 1200 }}" loading="lazy" width="1200" height="1200" alt="{{ imgs[5].alt | escape }}">
+      </figure>
+      {%- endif -%}
+    </article>
+  </div>
+
+  {%- if imgs[3] or imgs[4] -%}
+  <div class="twln-band">
+    <div class="twln-wrap twln-duo">
+      {%- if imgs[3] -%}<img src="{{ imgs[3] | image_url: width: 1000 }}" loading="lazy" width="1000" height="1000" alt="{{ imgs[3].alt | escape }}">{%- endif -%}
+      {%- if imgs[4] -%}<img src="{{ imgs[4] | image_url: width: 1000 }}" loading="lazy" width="1000" height="1000" alt="{{ imgs[4].alt | escape }}">{%- endif -%}
+    </div>
+  </div>
+  {%- endif -%}
+
+  <div class="twln-wrap twln-split">
+    <div>
+      <h2 class="twln-h">Small on purpose</h2>
+      <p>Lucky Notes does one thing: fast melody ideas that fit. There are no genre presets, no chord engine, no piano-roll editor and no built-in instruments. If you want deep composing tools, bigger MIDI suites cost around $79 to $99. If you want an idea in ten seconds, this is it.</p>
+      <ul class="twln-list">
+        <li>Notes always in key, chord tones on the strong beats</li>
+        <li>Loops cleanly at 8 or 16 bars</li>
+        <li>Light on CPU, tiny install</li>
+        <li>The MIDI you make is yours, royalty-free</li>
+      </ul>
+    </div>
+    <div>
+      <h2 class="twln-h">What you get</h2>
+      <details class="twln-q" open><summary>Windows</summary><p>Windows 10/11, 64-bit. VST3 plugin and standalone app with installer.</p></details>
+      <details class="twln-q"><summary>macOS</summary><p>macOS 11 or newer, Apple Silicon and Intel. VST3, AU and standalone, signed and notarized by Apple.</p></details>
+      <details class="twln-q"><summary>Does it make sound?</summary><p>Only a simple beep preview. Lucky Notes writes MIDI; the sound comes from whatever instrument you put the MIDI on in your DAW.</p></details>
+      <details class="twln-q"><summary>Can I use the melodies in my releases?</summary><p>Yes. Everything you generate is yours to use, sell and release.</p></details>
+      <details class="twln-q"><summary>Delivery</summary><p>Pick Windows or macOS above. The download link arrives right after checkout.</p></details>
+    </div>
+  </div>
+
+  <div class="twln-sticky" data-sticky aria-hidden="true">
+    <span class="twln-sticky__name">Lucky Notes</span>
+    <span class="twln-sticky__price" data-price>{{ current_variant.price | money }}</span>
+    <button type="button" class="twln-sticky__btn" data-sticky-buy tabindex="-1">Add to cart</button>
+  </div>
+</section>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=IBM+Plex+Mono:wght@400;600&display=swap">
+{{ 'tw-luckynotes.css' | asset_url | stylesheet_tag }}
+<script src="{{ 'tw-luckynotes.js' | asset_url }}" defer="defer"></script>
+
+{% schema %}
+{
+  "name": "TrapWin Lucky Notes page",
+  "tag": "div",
+  "class": "twln-section",
+  "settings": []
+}
+{% endschema %}
