@@ -1,0 +1,19 @@
+TrapWin Lucky Notes - END USER LICENSE AGREEMENT
+
+1. LICENSE. You may install and use TrapWin Lucky Notes on computers you own
+   or control for creating music, including commercial releases. The MIDI
+   melodies you generate with the plugin are yours; no royalties are due.
+
+2. RESTRICTIONS. You may not resell, rent, share, redistribute or publish the
+   plugin, its installer or license, and you may not reverse engineer it.
+
+3. NO WARRANTY. The plugin is provided "as is", without warranty of any kind.
+
+4. LIABILITY. The author is not liable for any damage to hardware, hearing,
+   data or anything else arising from the use of the plugin.
+
+5. TERMINATION. This license ends automatically if you break these terms.
+
+6. FONTS. The plugin embeds the fonts "Press Start 2P", "VT323" and
+   "IBM Plex Mono", licensed under the SIL Open Font License 1.1 (the license
+   texts are installed next to the plugin / in the "Font licenses" folder).

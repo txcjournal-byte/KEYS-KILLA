@@ -1,0 +1,243 @@
+name: lucky-notes
+
+# TrapWin Lucky Notes: builds + tests Windows (VST3 + Standalone) and macOS (universal VST3 + AU + Standalone,
+# Developer-ID signed + notarized when the signing secrets exist) and publishes everything to ONE fixed prerelease:
+#   https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/lucky-notes-test/LuckyNotes-Setup-Windows.exe
+#   https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/lucky-notes-test/LuckyNotes-Windows-VST3.zip
+#   https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/lucky-notes-test/LuckyNotes-Setup-Mac.pkg
+#   https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/lucky-notes-test/LuckyNotes-Mac.zip
+#   https://github.com/txcjournal-byte/KEYS-KILLA/releases/download/lucky-notes-test/LuckyNotes-UI.png  (shop screenshot)
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  RELEASE_TAG: lucky-notes-test
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: ln-win-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: ln-win-${{ hashFiles('CMakeLists.txt') }}-
+
+      - name: Configure
+        run: cmake -B build -A x64
+
+      - name: Build (VST3 + Standalone + tests + snapshot tool)
+        run: cmake --build build --config Release --parallel --target LuckyNotes_VST3 LuckyNotes_Standalone LuckyNotesTests LuckyNotesSnapshot
+
+      - name: Engine tests (melodies, MIDI round trip, preview render)
+        shell: pwsh
+        run: |
+          & build\LuckyNotesTests_artefacts\Release\LuckyNotesTests.exe
+          $code = $LASTEXITCODE
+          Write-Host ("test exit code: {0} (0x{1:X8})" -f $code, $code)
+          exit $code
+
+      - name: UI snapshot (PNG)
+        id: snapshot
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          & build\LuckyNotesSnapshot_artefacts\Release\LuckyNotesSnapshot.exe "out\LuckyNotes-UI.png" 1.5
+          $code = $LASTEXITCODE
+          Write-Host ("snapshot exit code: {0} (0x{1:X8})" -f $code, $code)
+          exit $code
+
+      - name: pluginval (strictness 10)
+        id: pluginval
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval -Force
+          & .\pluginval\pluginval.exe --strictness-level 10 --verbose --output-dir pluginval-logs --validate "build\LuckyNotes_artefacts\Release\VST3\Lucky Notes.vst3" 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { "[stderr] $($_.ToString())" } else { "$_" }
+          }
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host ("pluginval exit code: {0} (0x{1:X8})" -f $code, $code)
+            Get-Content "$env:TEMP\pluginval_crash.txt" -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+      - name: Installer (Inno Setup)
+        id: installer
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(LUCKY_NOTES VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          Remove-Item -Recurse -Force build\installer-luckynotes -ErrorAction SilentlyContinue
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\win\luckynotes.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType Directory -Force out, out\stage | Out-Null
+          Copy-Item (Get-ChildItem build\installer-luckynotes\LuckyNotes-*.exe | Select-Object -First 1).FullName out\LuckyNotes-Setup-Windows.exe -Force
+          Copy-Item -LiteralPath "build\LuckyNotes_artefacts\Release\VST3\Lucky Notes.vst3" -Destination out\stage -Recurse -Force
+          Get-ChildItem out\stage -Recurse -File -Include *.pdb,*.ilk,*.exp,*.lib | Remove-Item -Force
+          Copy-Item resources\fonts\OFL-*.txt out\stage\
+          Compress-Archive -Path "out\stage\*" -DestinationPath out\LuckyNotes-Windows-VST3.zip -Force
+          Get-ChildItem out | Format-Table Name, Length
+
+      - name: Upload artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuckyNotes-Windows
+          path: |
+            out/LuckyNotes-Setup-Windows.exe
+            out/LuckyNotes-Windows-VST3.zip
+            out/LuckyNotes-UI.png
+            build/LuckyNotes_artefacts/Release/Standalone/*.exe
+          if-no-files-found: warn
+
+      - name: Publish test build (fixed link, release lucky-notes-test)
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $notes = "TrapWin Lucky Notes - latest test build`n`nCommit: ${{ github.sha }}`nBranch: ${{ github.ref_name }}`nBuilt: $(Get-Date -Format u)"
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --prerelease --title "Lucky Notes - latest test build" --notes $notes --target ${{ github.sha }}
+            if ($LASTEXITCODE -ne 0) { gh release view $env:RELEASE_TAG *> $null; if ($LASTEXITCODE -ne 0) { exit 1 } }
+          } else { gh release edit $env:RELEASE_TAG --notes $notes }
+          $files = @("out\LuckyNotes-Setup-Windows.exe", "out\LuckyNotes-Windows-VST3.zip")
+          if (Test-Path out\LuckyNotes-UI.png) { $files += "out\LuckyNotes-UI.png" }
+          gh release upload $env:RELEASE_TAG @files --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: ln-mac-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: ln-mac-${{ hashFiles('CMakeLists.txt') }}-
+
+      - name: Configure (universal)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build (VST3 + AU + Standalone + tests + snapshot tool)
+        run: cmake --build build --config Release --parallel 4 --target LuckyNotes_VST3 LuckyNotes_AU LuckyNotes_Standalone LuckyNotesTests LuckyNotesSnapshot
+
+      - name: Engine tests (melodies, MIDI round trip, preview render)
+        id: tests
+        run: |
+          ./build/LuckyNotesTests_artefacts/Release/LuckyNotesTests
+          lipo -info "build/LuckyNotes_artefacts/Release/VST3/Lucky Notes.vst3/Contents/MacOS/Lucky Notes"
+          lipo -info "build/LuckyNotes_artefacts/Release/AU/Lucky Notes.component/Contents/MacOS/Lucky Notes"
+
+      - name: UI snapshot (PNG)
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p out
+          ./build/LuckyNotesSnapshot_artefacts/Release/LuckyNotesSnapshot "out/LuckyNotes-UI-Mac.png" 1.5
+
+      - name: auval (aumu Lkyn Trpw)
+        id: auval
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          rm -rf ~/Library/Audio/Plug-Ins/Components/"Lucky Notes.component"
+          cp -R "build/LuckyNotes_artefacts/Release/AU/Lucky Notes.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 5
+          auval -v aumu Lkyn Trpw
+
+      - name: pluginval (strictness 10)
+        id: pluginval
+        if: ${{ !cancelled() }}
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q -o pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/LuckyNotes_artefacts/Release/VST3/Lucky Notes.vst3"
+
+      - name: Mac signing setup (Developer ID certificates + notarization key, when the secrets exist)
+        if: ${{ !cancelled() }}
+        env:
+          MAC_CERT_APP_P12: ${{ secrets.MAC_CERT_APP_P12 }}
+          MAC_CERT_INSTALLER_P12: ${{ secrets.MAC_CERT_INSTALLER_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: installer/mac/setup_signing.sh
+
+      - name: Installer (pkg; signed + notarized when secrets exist)
+        id: pkg
+        if: ${{ !cancelled() }}
+        run: |
+          VERSION=$(sed -n 's/^project(LUCKY_NOTES VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt | head -n 1)
+          installer/mac/build_luckynotes_pkg.sh "$VERSION"
+
+      - name: Zip (VST3 + AU) + pkg
+        id: zip
+        if: ${{ !cancelled() }}
+        run: |
+          # take the bundles the pkg step staged (signed + stapled when possible), else the raw build output
+          if [ -d "build/pkgroot-luckynotes/Library/Audio/Plug-Ins/VST3/Lucky Notes.vst3" ]; then
+            VST3="build/pkgroot-luckynotes/Library/Audio/Plug-Ins/VST3/Lucky Notes.vst3"
+            AU="build/pkgroot-luckynotes/Library/Audio/Plug-Ins/Components/Lucky Notes.component"
+          else
+            VST3="build/LuckyNotes_artefacts/Release/VST3/Lucky Notes.vst3"
+            AU="build/LuckyNotes_artefacts/Release/AU/Lucky Notes.component"
+          fi
+          rm -rf build/ln-zip && mkdir -p build/ln-zip out
+          ditto "$VST3" "build/ln-zip/Lucky Notes.vst3"
+          ditto "$AU" "build/ln-zip/Lucky Notes.component"
+          cp resources/fonts/OFL-*.txt build/ln-zip/
+          (cd build/ln-zip && zip -qry ../../out/LuckyNotes-Mac.zip .)
+          cp build/installer-luckynotes/LuckyNotes-*-macOS.pkg out/LuckyNotes-Setup-Mac.pkg 2>/dev/null || echo "no pkg (installer step failed) - zip only"
+          codesign -dv --verbose=2 "$VST3" 2>&1 | grep -E "Authority|TeamIdentifier|Timestamp|flags" || true
+          ls -la out
+
+      - name: Upload artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuckyNotes-macOS
+          path: |
+            out/
+          if-no-files-found: warn
+
+      - name: Publish test build (fixed link, release lucky-notes-test)
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.zip.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --prerelease --title "Lucky Notes - latest test build" --notes "TrapWin Lucky Notes - latest test build" --target "${{ github.sha }}" \
+              || gh release view "$RELEASE_TAG" > /dev/null
+          fi
+          FILES=(out/LuckyNotes-Mac.zip)
+          [ -f out/LuckyNotes-Setup-Mac.pkg ] && FILES+=(out/LuckyNotes-Setup-Mac.pkg)
+          [ -f out/LuckyNotes-UI-Mac.png ] && FILES+=(out/LuckyNotes-UI-Mac.png)
+          gh release upload "$RELEASE_TAG" "${FILES[@]}" --clobber
+
+      - name: Mac signing cleanup
+        if: ${{ always() }}
+        run: |
+          if [ -n "${MAC_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$MAC_SIGN_KEYCHAIN" || true; fi
+          rm -f "${NOTARY_KEY_PATH:-/nonexistent}"
