@@ -19,7 +19,6 @@ struct LuckySettings
     int bars = 8;            // 8 | 16
     bool sync = true;        // follow the host tempo
     double manualBpm = 140.0;
-    int sound = 0;           // 0 MORSE (sine) | 1 8-BIT (square) | 2 TV TEST (triangle)
     uint32_t seed = 1;
     ln::Key resolvedKey { 9, true };  // the key of the current set (differs from root/minor in LUCKY mode)
     std::array<uint32_t, ln::kNumMelodies> rolls {};
@@ -63,7 +62,6 @@ public:
     void setBars (int bars);                // regenerates with the same seed
     void setSync (bool sync);
     void setManualBpm (double bpm);
-    void setSound (int sound);
     void generate();                        // new seed (and new key in LUCKY mode), rolls reset
     void reroll (int row);
 
@@ -127,7 +125,6 @@ private:
     std::atomic<bool> hostPlaying { false };
     std::atomic<double> manualBpmAtomic { 140.0 };
     std::atomic<bool> syncAtomic { true };
-    std::atomic<int> soundAtomic { 0 };
     std::atomic<int> stateVersion { 0 };
     std::atomic<double> uiScale { 1.0 };
 

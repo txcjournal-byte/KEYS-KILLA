@@ -21,7 +21,7 @@ bool LuckyNotesProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
 
 void LuckyNotesProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    engine.synth.setWave ((ln::Wave) soundAtomic.load());
+    engine.synth.setWave (ln::Wave::Sine); // one fixed, primitive preview sound
     engine.prepare (sampleRate);
     mono.assign ((size_t) std::max (samplesPerBlock, 1024), 0.0f);
     freeBeat = 0.0;
@@ -69,7 +69,6 @@ void LuckyNotesProcessor::render (juce::AudioBuffer<Sample>& buffer, juce::MidiB
     const int row = previewRow.load();
     const int req = previewRequest.load();
     if (req != audioRequestSeen) { audioRequestSeen = req; freeBeat = 0.0; engine.seq.resetPosition(); }
-    engine.synth.setWave ((ln::Wave) juce::jlimit (0, 2, soundAtomic.load()));
 
     const bool active = row >= 0 && engine.seq.hasPattern();
     const double hb = hostBpm.load();
@@ -146,7 +145,6 @@ void LuckyNotesProcessor::rebuild()
         set = std::move (fresh);
         manualBpmAtomic.store (settings.manualBpm);
         syncAtomic.store (settings.sync);
-        soundAtomic.store (settings.sound);
     }
     pushPattern();
     ++stateVersion;
@@ -217,16 +215,6 @@ void LuckyNotesProcessor::setManualBpm (double bpm)
     ++stateVersion;
 }
 
-void LuckyNotesProcessor::setSound (int sound)
-{
-    {
-        const std::lock_guard<std::mutex> g (lock);
-        settings.sound = juce::jlimit (0, 2, sound);
-    }
-    soundAtomic.store (juce::jlimit (0, 2, sound));
-    ++stateVersion;
-}
-
 void LuckyNotesProcessor::generate()
 {
     {
@@ -293,7 +281,6 @@ void LuckyNotesProcessor::getStateInformation (juce::MemoryBlock& destData)
     t.setProperty ("bars", s.bars, nullptr);
     t.setProperty ("sync", s.sync, nullptr);
     t.setProperty ("bpm", s.manualBpm, nullptr);
-    t.setProperty ("sound", s.sound, nullptr);
     t.setProperty ("seed", juce::String ((juce::int64) s.seed), nullptr);
     t.setProperty ("keyRoot", s.resolvedKey.root, nullptr);
     t.setProperty ("keyMinor", s.resolvedKey.minor, nullptr);
@@ -320,7 +307,7 @@ void LuckyNotesProcessor::setStateInformation (const void* data, int sizeInBytes
         s.bars = (int) t.getProperty ("bars", s.bars) >= 16 ? 16 : 8;
         s.sync = (bool) t.getProperty ("sync", s.sync);
         s.manualBpm = juce::jlimit (kMinBpm, kMaxBpm, (double) t.getProperty ("bpm", s.manualBpm));
-        s.sound = juce::jlimit (0, 2, (int) t.getProperty ("sound", s.sound));
+        // older versions saved a "sound" choice; the preview now always uses one fixed sound, so it is ignored
         s.seed = (uint32_t) t.getProperty ("seed", juce::String ((juce::int64) s.seed)).toString().getLargeIntValue();
         s.resolvedKey.root = juce::jlimit (0, 11, (int) t.getProperty ("keyRoot", s.root));
         s.resolvedKey.minor = (bool) t.getProperty ("keyMinor", s.minor);

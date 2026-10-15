@@ -475,14 +475,6 @@ public:
         addAndMakeVisible (bars8);
         addAndMakeVisible (bars16);
 
-        const char* soundTips[] = { "Pure sine beeps", "Classic square-wave chip beeps", "Soft triangle test tone" };
-        for (int i = 0; i < 3; ++i)
-        {
-            styleSeg (sound[i], soundTips[i]);
-            sound[i].onClick = [this, i] { proc.setSound (i); refresh(); };
-            addAndMakeVisible (sound[i]);
-        }
-
         generate.setTooltip ("12 new melodies in the chosen key, tempo and length");
         generate.onClick = [this]
         {
@@ -514,22 +506,20 @@ public:
 
     void resized() override
     {
-        tempo.setBounds (36, 154, 196, 62);
-        sync.setBounds (36, 224, 196, 28);
+        tempo.setBounds (36, 154, 226, 62);
+        sync.setBounds (36, 224, 226, 28);
 
-        key.setBounds (269, 154, 150, 62);
-        up.setBounds (425, 154, 60, 29);
-        down.setBounds (425, 187, 60, 29);
-        minorBtn.setBounds (269, 224, 52, 28);
-        majorBtn.setBounds (325, 224, 52, 28);
-        luckyBtn.setBounds (381, 224, 104, 28);
+        key.setBounds (299, 154, 172, 62);
+        up.setBounds (477, 154, 68, 29);
+        down.setBounds (477, 187, 68, 29);
+        minorBtn.setBounds (299, 224, 58, 28);
+        majorBtn.setBounds (361, 224, 58, 28);
+        luckyBtn.setBounds (423, 224, 122, 28);
 
-        bars8.setBounds (522, 154, 96, 46);
-        bars16.setBounds (522, 206, 96, 46);
+        bars8.setBounds (582, 154, 136, 46);
+        bars16.setBounds (582, 206, 136, 46);
 
-        for (int i = 0; i < 3; ++i) sound[i].setBounds (655, 154 + i * 33, 126, 29);
-
-        generate.setBounds (806, 132, 170, 130);
+        generate.setBounds (743, 132, 233, 130);
 
         for (int i = 0; i < ln::kNumMelodies; ++i)
             rows[(size_t) i]->setBounds (36, 304 + i * 30, 940, 29);
@@ -571,10 +561,9 @@ public:
         g.fillRect (24.0f, 114.0f, 952.0f, 1.0f);
 
         // control panels
-        drawPanel (g, { 24, 132, 220, 130 }, "TEMPO");
-        drawPanel (g, { 257, 132, 240, 130 }, "KEY");
-        drawPanel (g, { 510, 132, 120, 130 }, "LENGTH");
-        drawPanel (g, { 643, 132, 150, 130 }, "PREVIEW SOUND");
+        drawPanel (g, { 24, 132, 250, 130 }, "TEMPO");
+        drawPanel (g, { 287, 132, 270, 130 }, "KEY");
+        drawPanel (g, { 570, 132, 160, 130 }, "LENGTH");
 
         // melodies panel + column heads
         drawPanel (g, { 24, 276, 952, 392 }, {});
@@ -617,7 +606,6 @@ public:
         luckyBtn.setToggleState (s.lucky, juce::dontSendNotification);
         bars8.setToggleState (s.bars == 8, juce::dontSendNotification);
         bars16.setToggleState (s.bars == 16, juce::dontSendNotification);
-        for (int i = 0; i < 3; ++i) sound[i].setToggleState (s.sound == i, juce::dontSendNotification);
         if (set != nullptr && set != shownSet)
         {
             shownSet = set;
@@ -695,7 +683,6 @@ private:
     juce::TextButton sync { "SYNC TO PROJECT" };
     juce::TextButton minorBtn { "MIN" }, majorBtn { "MAJ" }, luckyBtn { "LUCKY" };
     juce::TextButton bars8 { "8 BARS" }, bars16 { "16 BARS" };
-    juce::TextButton sound[3] { juce::TextButton ("MORSE"), juce::TextButton ("8-BIT"), juce::TextButton ("TV TEST") };
     GenerateButton generate;
     IconButton up, down;
     std::array<std::unique_ptr<MelodyRow>, ln::kNumMelodies> rows;
