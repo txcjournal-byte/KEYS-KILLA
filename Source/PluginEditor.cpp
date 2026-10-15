@@ -1,3 +1,4 @@
+#include "LuckyNotesBinary.h"
 #include "PluginEditor.h"
 
 using namespace lnui;
@@ -542,9 +543,13 @@ public:
         g.fillRect (logo.removeFromBottom (4).withX (logo.getX()));
         drawPixelClover (g, juce::Rectangle<float> (24, 22, 72, 72).reduced (9), col::green, true);
 
-        g.setFont (pixelFont (9.0f));
-        g.setColour (col::dim);
-        g.drawText ("TRAPWIN", juce::Rectangle<float> (114, 26, 200, 12), juce::Justification::centredLeft, false);
+        // the real TrapWin chrome wordmark, small, above the product name
+        const auto brand = juce::ImageCache::getFromMemory (LuckyNotesBinary::trapwin_wordmark_png,
+                                                                         LuckyNotesBinary::trapwin_wordmark_pngSize);
+        g.setOpacity (1.0f);
+        if (brand.isValid())
+            g.drawImage (brand, juce::Rectangle<float> (114, 22, 16.0f * (float) brand.getWidth() / (float) brand.getHeight(), 16),
+                         juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yTop);
         drawGlowText (g, "LUCKY NOTES", { 112, 42, 560, 36 }, juce::Justification::centredLeft, col::green, pixelFont (30.0f), 1.3f);
         g.setFont (monoFont (13.0f));
         g.setColour (col::text);
