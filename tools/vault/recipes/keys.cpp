@@ -1,5 +1,40 @@
-// CHROME VAULT v2 - sound design for the categories "Piano" and "Keys & Organ" (VaultBankGen -recipe keys).
+// CHROME VAULT - sound design for the categories "Piano" and "Keys & Organ" (VaultBankGen -recipe keys).
 //
+// v3 DESIGN NOTE (every preset ships finished: FX chain, movement, 4 named sound macros - namespace v3 below)
+// --------------------------------------------------------------------------------------------------------
+// Research summary (felt / grand piano libraries, vintage electric piano and tonewheel organ instruments, their manuals):
+// * Commercial piano libraries sell one instrument heard through a finished chain: close / room / far perspectives,
+//   parallel-style compression that keeps the hammer, a hint of tape saturation ("glow"), a mud cut around 300 Hz,
+//   convolution room / hall / plate with pre-delay, and controls for hammer / tone, pedal (release), tape and ambience.
+//   Felt pianos add mechanical intimacy and a dark top; lo-fi variants band-limit, crush and wobble the pitch.
+// * Electric pianos: tine pianos live on the stereo (auto-pan) tremolo of the suitcase amp (about 4-6 Hz), chorus and
+//   phaser; reed pianos on a mono amplitude tremolo (about 5.5 Hz) and the preamp's bark, which comes in with
+//   velocity; the 80s FM piano always gets a chorus and an echo. Drive is the first stage of the chain.
+// * Tonewheel organs: preamp overdrive is part of the sound, the rotary speaker has slow / fast speeds (the mod wheel
+//   speeds it up); pipe organs: tremulant (a slow pitch + level wobble) on a stop, an expression (swell) pedal, large
+//   acoustics with pre-delay. Harpsichords: no compression, baroque hall, quills that can be softened.
+// * Clavinet-style funk keys: tight compression, an envelope-following wah, phaser, a little amp.
+// What this file does with it: each preset's chain is FAMILY (the instrument's finished sound) + TREATMENT (its role:
+// felt, lo-fi, tape, swell, chorus, rotary, echo pluck ...) + SPACE (reverb / delay from the v2 space tag), so a grand
+// gets comp + tape + EQ + room / hall, a lo-fi piano tape drive + crush + wobble LFO + room, a pad-layered piano a
+// slow brightness drift and a long hall, a drawbar organ drive + rotary chorus with a slow / fast rotor, a pipe organ
+// EQ + church with a tremulant and an expression macro. The 4 macros are named for the sound (Hammer, Pedal, Warmth,
+// Room / Bark, Tremolo, Tone, Plate / Rotor, Drive, Tone, Room / Expression, Tremulant, Tone, Nave / Quill, Release,
+// Width, Hall / Wah, Funk, Phase, Room / Strings, Pad, Choir ... for layer blends), each mapped to several targets
+// around the designed value (the knob's default = the sound as designed). Every macro is rendered at 0 and at 1 and
+// narrowed until both extremes pass the C5 comfort rules (2-5 kHz, > 6 / 8 kHz, fundamental, no clip, no louder than
+// +4 dB, no longer tail; a failing side is narrowed, the sound at the knob's default never changes); a macro that
+// barely changes the sound is reported. Arp / gate stay off except for a few presets where the pattern is the point
+// (music box / FM keys arpeggios - harpsichord / celeste ones when those echo presets are in the set - and gated FM /
+// digital piano and dreamwave pads), named plainly ("Music Box Arpeggio", "Gated FM Piano").
+// Distinctness: the family polish makes a voice's presets alike, so after the design every preset is checked against the
+// earlier ones (this file's MFCC fingerprint >= 2.6, the shared one >= 3.5 = the bank assembly's threshold); one that
+// came out too close is designed again without the family polish, then with its role pushed further, then in the
+// neighbouring colour, light, and finally with its v2 sound; still too close = dropped (the assembly would drop it).
+// The v2 stage below (voices, treatments, spaces, layers, distinctness, names, ids) is unchanged; only the few pattern
+// presets are renamed. KEYS_V2_CACHE=<dir> keeps the v2 stage's result between runs while the design is tuned.
+//
+// v2 notes
 // DESIGN NOTE (research summary - what professional keyboard libraries do, and what this recipe copies)
 // --------------------------------------------------------------------------------------------------------
 // * Acoustic pianos are sold as one instrument heard from several places: a close / player perspective (dry, direct,
@@ -1026,32 +1061,1141 @@ struct Done
 
 int envInt (const char* k, int def) { auto v = juce::SystemStats::getEnvironmentVariable (k, {}); return v.isEmpty() ? def : v.getIntValue(); }
 float envFloat (const char* k, float def) { auto v = juce::SystemStats::getEnvironmentVariable (k, {}); return v.isEmpty() ? def : (float) v.getDoubleValue(); }
+
+//==============================================================================
+// v3 SOUND DESIGN: every accepted preset gets a finished FX chain chosen for its role, movement where it adds life and 4
+// sound macros named for that sound (DESIGN NOTE v3 at the top). Built from the recipe tag of the v2 stage
+// ("voice/treatment/space" or "voice+layer"), so the same voice x treatment always gets the same kind of processing.
+namespace v3
+{
+using namespace recipe;
+using FT = vault::FxType;
+using R = fx::Reverb;
+
+struct Info
+{
+    juce::String voice, treat, space, layer;
+    Kind kind = kGrand;
+    int var = 0;              // a small per-preset variation (pre-delay, rates), from the preset id
+    juce::String noun;        // the voice's shortest noun (arp / gate names)
+};
+
+bool isPipeLike (Kind k) { return k == kPipe || k == kChamberOrgan; }
+bool isEp (Kind k) { return k == kTine || k == kReed || k == kFmEp; }
+bool isPianoLike (Kind k) { return k == kGrand || k == kUpright || k == kDigital; }
+
+Info parseInfo (const juce::String& recipeTag, const VaultPreset& p)
+{
+    static const auto V = voices();
+    Info in;
+    if (recipeTag.contains ("+")) { in.voice = recipeTag.upToFirstOccurrenceOf ("+", false, false); in.layer = recipeTag.fromFirstOccurrenceOf ("+", false, false); in.treat = "natural"; }
+    else
+    {
+        auto t = juce::StringArray::fromTokens (recipeTag, "/", "");
+        in.voice = t[0]; in.treat = t[1]; in.space = t[2];
+    }
+    for (auto& v : V)
+        if (in.voice == v.tag)
+        {
+            in.kind = v.kind;
+            in.noun = v.nouns[0];
+            for (auto& n : v.nouns) if (n.length() < in.noun.length()) in.noun = n;
+            if (in.layer.isNotEmpty())
+                for (auto& l : layers()) if (in.layer == l.tag) in.space = l.spaceTag;
+        }
+    in.var = (int) (p.id.hashCode64() & 0x7fffffff) % 997;
+    return in;
+}
+
+//------------------------------------------------------------------------------ the chain
+struct Chain
+{
+    std::optional<VaultFxSlot> transient, comp, drive, body, lofi, filter, chorus, phaser, flanger, eq, delay, reverb, reverse, width;
+    VaultFxSlot& eqSlot() { if (! eq) eq = fx::eq (0, 0, 0); return *eq; }
+    std::vector<VaultFxSlot> build() const
+    {
+        std::vector<VaultFxSlot> v;
+        for (auto* s : { &transient, &comp, &drive, &body, &lofi, &filter, &chorus, &phaser, &flanger, &eq, &delay, &reverb, &reverse, &width })
+            if (s->has_value()) v.push_back (**s);
+        for (auto t : { FT::transient, FT::flanger, FT::width, FT::compressor })   // at most 8 slots: the least important go first
+            if (v.size() > (size_t) vault::maxFxSlots)
+                for (auto it = v.begin(); it != v.end(); ++it) if (it->type == t) { v.erase (it); break; }
+        return v;
+    }
+};
+
+struct Mod
+{
+    std::optional<VaultLfo> l1, l2;
+    std::vector<VaultModDest> mw, vel, at;
+};
+
+// LFO 1 / 2 roles
+VaultLfo suitcase (float depth, float rate = 4.6f) { return lfo (VaultLfo::sine).rate (rate).depth (depth).to ("volume", 0.22f).to ("pan", 0.6f); }
+VaultLfo ampTrem (float depth, float rate = 5.5f) { return lfo (VaultLfo::sine).rate (rate).depth (depth).to ("volume", 0.4f); }
+VaultLfo tremulant (float depth) { return lfo (VaultLfo::sine).rate (6.2f).fade (0.25f).depth (depth).to ("pitch", 0.09f).to ("volume", 0.12f); }
+VaultLfo rotor (float rate, float depth = 1.0f) { return lfo (VaultLfo::sine).rate (rate).free().depth (depth).to ("pan", 0.38f).to ("volume", 0.07f); }
+VaultLfo wobble (float depth, float rate = 0.55f, float semis = 0.12f) { return lfo (VaultLfo::triangle).rate (rate).free().depth (depth).to ("pitch", semis); }
+VaultLfo drift (float depth, float rate = 0.2f) { return lfo (VaultLfo::sine).rate (rate).free().depth (depth).to ("cutoff", 0.8f).to ("pan", 0.4f); }
+VaultLfo bellows (float depth) { return lfo (VaultLfo::sine).rate (0.45f).free().depth (depth).to ("volume", 0.22f); }
+
+//------------------------------------------------------------------------------ spaces
+void spaceFx (Chain& c, const juce::String& sp, const Info& in)
+{
+    const float pre = 6.0f * (float) (in.var % 4);
+    auto rv = [] (R t, float size, float decay, float mix, float predelay, float damping)
+    { return fx::reverb (t, size, decay, mix).set ("predelay", predelay).set ("damping", damping); };
+    if (sp == "dry")         c.reverb = rv (R::room, 0.3f, 0.75f, 0.11f, 0.0f, 0.35f);
+    else if (sp == "room")   c.reverb = rv (R::room, 0.38f, 0.8f, 0.15f, 0.5f * pre, 0.25f);
+    else if (sp == "studio") c.reverb = rv (R::room, 0.6f, 1.05f, 0.18f, 4.0f + pre, 0.1f);
+    else if (sp == "hall")   c.reverb = rv (R::hall, 0.7f, 1.15f, 0.24f, 16.0f + pre, 0.1f);
+    else if (sp == "stage")  c.reverb = rv (R::hall, 0.85f, 1.25f, 0.32f, 28.0f + pre, 0.15f);
+    else if (sp == "plate")  c.reverb = rv (R::plate, 0.55f, 1.0f, 0.2f, 10.0f + pre, 0.2f);
+    else if (sp == "cloud")  c.reverb = rv (R::cloud, 0.66f, 1.15f, 0.3f, 18.0f + pre, 0.25f);
+    else if (sp == "church") c.reverb = rv (R::hall, 0.88f, 1.35f, 0.3f, 32.0f + pre, 0.2f).set ("lowCut", 120.0f);
+    else if (sp == "echo")
+    {
+        c.delay = fx::delay ("1/4", 0.32f, 0.14f, fx::Delay::tape).set ("hiCut", 4500.0f).set ("loCut", 180.0f).set ("flutter", 0.25f);
+        c.reverb = rv (R::plate, 0.42f, 0.9f, 0.13f, 8.0f, 0.3f);
+    }
+    else if (sp == "ping")
+    {
+        c.delay = fx::delay ("1/8D", 0.3f, 0.16f).set ("hiCut", 6000.0f).set ("loCut", 200.0f);
+        c.reverb = rv (R::hall, 0.5f, 0.9f, 0.14f, 10.0f + pre, 0.2f);
+    }
+    else c.reverb = rv (R::room, 0.42f, 0.9f, 0.16f, pre, 0.2f);
+}
+
+//------------------------------------------------------------------------------ the instrument family's finished sound
+void familyFx (Chain& c, Mod& m, float& finish, const Info& in)
+{
+    switch (in.kind)
+    {
+        case kGrand:     // gentle parallel comp, a whisper of tape, mud cut, a little width
+            c.comp = fx::comp (-24, 1.8f, 25, 200, 1.0f, 0.6f);
+            c.drive = fx::drive (fx::Drive::tape, 0.06f, 0.5f, 12000);
+            c.eq = fx::eq (0.5f, -1.0f, 0.5f, 0, 320);
+            c.width = fx::width (0.58f, 150);
+            finish = 0.12f;
+            break;
+        case kUpright:   // more tape, honky mids
+            c.comp = fx::comp (-22, 2.0f, 20, 180, 1.0f, 0.65f);
+            c.drive = fx::drive (fx::Drive::tape, 0.08f, 0.6f, 9000);
+            c.eq = fx::eq (1.0f, 0.8f, -1.0f, 0, 1200);
+            finish = 0.1f;
+            break;
+        case kDigital:   // the 90s workstation piano: compressed, a light chorus, wide
+            c.comp = fx::comp (-20, 2.5f, 10, 150, 1.0f);
+            c.eq = fx::eq (0.5f, 0, -1.0f);
+            c.width = fx::width (0.62f, 150);
+            finish = 0.18f;
+            break;
+        case kTine:      // suitcase: comp, tape warmth, stereo tremolo (subtle by default), a short dotted echo
+            c.comp = fx::comp (-20, 2.5f, 15, 120, 1.0f);
+            c.drive = fx::drive (fx::Drive::tape, 0.08f, 0.7f, 9000);
+            c.eq = fx::eq (1.5f, -0.5f, -1.5f, 0, 500);
+            c.delay = fx::delay ("1/8D", 0.22f, 0.07f).set ("hiCut", 5000.0f).set ("loCut", 200.0f);
+            m.l1 = suitcase (in.treat == "natural" ? 0.12f : 0.0f, 4.4f + 0.1f * (float) (in.var % 5));
+            m.vel.push_back ({ "fx.drive.amount", 0.15f });
+            finish = 0.12f;
+            break;
+        case kReed:      // reed piano: preamp bark, mid push, mono amp tremolo (off until the macro opens it)
+            c.comp = fx::comp (-20, 2.5f, 12, 120, 1.0f);
+            c.drive = fx::drive (fx::Drive::tube, 0.12f, 0.8f, 7000);
+            c.eq = fx::eq (1.0f, 1.5f, -2.0f, 0, 900);
+            m.l1 = ampTrem (0.0f);
+            m.vel.push_back ({ "fx.drive.amount", 0.2f });
+            finish = 0.1f;
+            break;
+        case kFmEp:      // 80s FM electric piano: always chorus, a quarter echo, a slow stereo drift
+            c.comp = fx::comp (-20, 2.0f, 10, 150, 0.5f);
+            c.chorus = fx::chorus (0.25f, 0.5f, 0.4f);
+            c.eq = fx::eq (0.5f, 0, -1.5f);
+            c.delay = fx::delay ("1/4", 0.22f, 0.08f).set ("hiCut", 5000.0f).set ("loCut", 200.0f);
+            c.width = fx::width (0.65f, 150);
+            m.l1 = lfo (VaultLfo::sine).rate (0.2f).free().to ("pan", 0.15f);
+            finish = 0.15f;
+            break;
+        case kToy:       // a toy piano on an old recorder: tape, darker top, a slow wobble
+            c.drive = fx::drive (fx::Drive::tape, 0.1f, 0.6f, 8000);
+            c.eq = fx::eq (1.5f, 0, -2.0f);
+            m.l2 = wobble (0.3f, 0.45f, 0.06f);
+            break;
+        case kMusicBox:  // a wound spring: slight drift, an echo, wide
+            c.eq = fx::eq (1.0f, 0, -1.5f);
+            c.delay = fx::delay ("1/8D", 0.3f, 0.12f).set ("hiCut", 5000.0f).set ("loCut", 250.0f);
+            c.width = fx::width (0.65f, 150);
+            m.l2 = wobble (0.3f, 0.35f, 0.05f);
+            break;
+        case kPipe:      // pipe organ: weight, a slightly softened top, a tremulant ready on its macro
+            c.eq = fx::eq (1.5f, -1.0f, -1.0f, 0, 400);
+            c.width = fx::width (0.62f, 150);
+            m.l1 = tremulant (0.0f);
+            finish = 0.05f;
+            break;
+        case kChamberOrgan:
+            c.eq = fx::eq (1.0f, 0, -1.5f);
+            m.l1 = tremulant (0.0f);
+            break;
+        case kDrawbar:   // tonewheel style: preamp drive, rotary speaker (chorus + pan / level wobble, slow)
+            c.drive = fx::drive (fx::Drive::tube, 0.08f, 0.8f, 6500).set ("cleanLow", 1.0f);
+            c.chorus = fx::chorus (0.0f, 0.8f, 0.6f);
+            c.eq = fx::eq (1.5f, 0, -1.5f);
+            c.width = fx::width (0.65f, 150);
+            m.l1 = rotor (0.8f, 0.0f);
+            m.mw.push_back ({ "lfo1.rate", 0.6f });   // mod wheel: rotor towards fast
+            finish = 0.1f;
+            break;
+        case kReedOrgan: // harmonium / accordion / calliope: gentle comp, reedy mids, breathing bellows
+            c.comp = fx::comp (-22, 2.0f, 20, 200, 1.0f);
+            c.eq = fx::eq (0.5f, 1.0f, -1.5f, 0, 800);
+            m.l1 = bellows (0.4f);
+            break;
+        case kHarpsi:    // harpsichord: no comp (it has no dynamics to tame), softened quills, wide baroque room
+            c.eq = fx::eq (-0.5f, 0, -1.5f);
+            c.width = fx::width (0.65f, 150);
+            finish = 0.05f;
+            break;
+        case kClav:      // funk keys: tight comp, envelope wah, a little amp
+            c.comp = fx::comp (-18, 3.0f, 5, 100, 1.5f);
+            c.drive = fx::drive (fx::Drive::tube, 0.06f, 1.0f, 8000);
+            c.filter = fx::filter (fx::Filter::lowPass, 12000, 0.2f, 0.0f);
+            c.eq = fx::eq (0.5f, 0, -1.0f);
+            finish = 0.15f;
+            break;
+        case kFmKeys:    // glassy FM keys: chorus, dotted echo, wide
+            c.eq = fx::eq (0, 0, -1.5f);
+            c.delay = fx::delay ("1/8D", 0.28f, 0.1f).set ("hiCut", 5500.0f).set ("loCut", 200.0f);
+            c.width = fx::width (0.65f, 150);
+            finish = 0.1f;
+            break;
+        default: break;
+    }
+}
+
+//------------------------------------------------------------------------------ treatments: the role on top of the family
+void treatmentFx (Chain& c, Mod& m, float& finish, const Info& in)
+{
+    const auto& t = in.treat;
+    const Kind k = in.kind;
+    static const juce::StringArray ownMotion { "phaser", "chorus", "lofi", "vinyl", "tape", "underwater", "rotary", "tremolo", "tremulant", "swell", "reverse", "echopluck" };
+    if (ownMotion.contains (t))
+    {
+        c.chorus.reset(); c.phaser.reset(); c.flanger.reset();
+        if (k == kDrawbar || k == kFmEp) m.l1.reset();
+        if (m.l1 && k == kTine) m.l1->depth = 0.0f;
+        if (k == kToy || k == kMusicBox) m.l2.reset();
+    }
+    if (t == "felt")
+    {
+        c.drive = fx::drive (fx::Drive::tape, 0.08f, 0.5f, 5000);
+        c.eqSlot().set ("low", 1.5f).set ("high", -2.0f);
+        if (c.comp) c.comp->set ("mix", 0.5f);
+        c.chorus.reset();
+    }
+    else if (t == "dark")
+    {
+        c.eqSlot().set ("low", 2.5f).set ("high", -3.0f);
+        if (! c.drive) c.drive = fx::drive (fx::Drive::tape, 0.12f, 0.6f, 5000);
+        else c.drive->set ("tone", 5000.0f);
+    }
+    else if (t == "intimate")
+    {
+        c.comp = fx::comp (-28, 2.2f, 30, 220, 2.0f, 0.5f);
+        c.width = fx::width (0.5f, 150);
+    }
+    else if (t == "lofi")
+    {
+        c.lofi = fx::lofi (0.2f, 0.3f);
+        c.drive = fx::drive (fx::Drive::tape, 0.18f, 1.0f, 6000);
+        c.eqSlot().set ("low", 1.5f).set ("high", -3.0f);
+        c.width = fx::width (0.35f, 150);
+        c.chorus.reset();
+        m.l2 = wobble (0.45f, 0.6f, 0.12f);
+        finish = 0.2f;
+    }
+    else if (t == "tape")
+    {
+        c.drive = fx::drive (fx::Drive::tape, 0.28f, 1.0f, 9000);
+        c.lofi = fx::lofi (0.0f, 0.16f);
+        c.eqSlot().set ("low", 1.0f).set ("high", -2.5f);
+        m.l2 = wobble (0.3f, 0.5f, 0.06f);
+        finish = 0.2f;
+    }
+    else if (t == "vinyl")
+    {
+        c.lofi = fx::lofi (0.08f, 0.45f);
+        c.drive = fx::drive (fx::Drive::tape, 0.12f, 1.0f, 7000);
+        c.eqSlot().set ("low", -1.0f).set ("high", -3.5f);
+        c.width = fx::width (0.4f, 150);
+        c.chorus.reset();
+        m.l2 = wobble (0.5f, 0.33f, 0.1f);
+    }
+    else if (t == "muted")
+    {
+        c.comp = fx::comp (-20, 3.0f, 3, 80, 1.5f);
+    }
+    else if (t == "swell")
+    {
+        c.chorus = fx::ensemble (0.3f, 0.4f, 0.5f);
+        if (c.reverb) { c.reverb->set ("mix", std::min (0.45f, c.reverb->get ("mix") * 1.2f)); c.reverb->set ("decay", c.reverb->get ("decay") * 1.2f); }
+        c.comp.reset();
+        if (! m.l2) m.l2 = drift (0.6f);
+    }
+    else if (t == "bright")
+    {
+        c.comp = fx::comp (-18, 3.0f, 8, 120, 2.0f);
+        finish = 0.35f;
+    }
+    else if (t == "chorus")
+    {
+        c.chorus = k == kFmEp || k == kFmKeys ? fx::ensemble (0.5f, 0.6f, 0.6f) : fx::chorus (0.42f, 0.42f, 0.55f);
+        c.width = fx::width (0.75f, 150);
+        c.eqSlot().set ("low", c.eqSlot().get ("low") - 1.0f);
+    }
+    else if (t == "phaser")
+    {
+        c.phaser = fx::phaser (0.45f, 0.3f, 0.9f, 0.5f);
+        if (! c.drive) c.drive = fx::drive (fx::Drive::tape, 0.12f, 1.0f, 9000);
+    }
+    else if (t == "drive")
+    {
+        c.drive = fx::drive (fx::Drive::tube, 0.32f, 1.0f, 6000).set ("cleanLow", 1.0f);
+        c.eqSlot().set ("mid", 1.5f).set ("midFreq", 1000.0f).set ("high", -2.0f);
+    }
+    else if (t == "tremolo")
+    {
+        if (k == kTine) m.l1 = suitcase (0.7f, 4.8f);
+        else if (k == kDrawbar) { m.l1 = rotor (5.8f); c.chorus = fx::chorus (0.35f, 5.0f, 0.6f); }
+        else m.l1 = ampTrem (0.7f, 5.2f);
+    }
+    else if (t == "tremulant")
+    {
+        m.l1 = tremulant (0.7f);
+    }
+    else if (t == "rotary")
+    {
+        c.chorus = fx::chorus (0.55f, 0.9f, 0.6f);
+        c.drive = fx::drive (fx::Drive::tape, 0.22f, 1.0f, 7000).set ("cleanLow", 1.0f);
+        c.width = fx::width (0.75f, 150);
+        m.l1 = rotor (0.9f);
+    }
+    else if (t == "bell")
+    {
+        if (! c.delay) c.delay = fx::delay ("1/4", 0.25f, 0.08f).set ("hiCut", 5000.0f).set ("loCut", 250.0f);
+    }
+    else if (t == "round")
+    {
+        c.eqSlot().set ("low", 1.5f).set ("high", -1.5f);
+    }
+    else if (t == "distant")
+    {
+        c.reverb = fx::reverb (R::hall, 0.8f, 1.1f, 0.45f).set ("predelay", 45.0f).set ("damping", 0.3f);
+        c.eqSlot().set ("low", -1.5f).set ("high", -2.0f);
+        c.width = fx::width (0.7f, 150);
+        c.comp.reset();
+    }
+    else if (t == "underwater")
+    {
+        c.filter = fx::filter (fx::Filter::lowPass, 900, 0.3f, 0, 0.25f, 0.12f);
+        c.chorus = fx::chorus (0.5f, 0.25f, 0.7f);
+        c.lofi = fx::lofi (0.0f, 0.18f);
+        c.width = fx::width (0.7f, 150);
+        c.drive.reset();
+        m.l2 = drift (0.6f, 0.15f);
+    }
+    else if (t == "wooden")
+    {
+        c.body = VaultFxSlot::make (FT::body).set ("model", 5.0f).set ("mix", 0.38f);
+    }
+    else if (t == "echopluck")
+    {
+        c.delay = fx::delay ("1/8D", 0.42f, 0.28f).set ("hiCut", 5000.0f).set ("loCut", 200.0f);
+        c.reverb = fx::reverb (R::plate, 0.4f, 0.9f, 0.14f).set ("predelay", 10.0f);
+    }
+    else if (t == "reverse")
+    {
+        c.reverse = fx::reverse (0.55f, "1/8");
+    }
+}
+
+// layer recipes: what the blend needs on top
+void layerFx (Chain& c, Mod& m, const Info& in, const VaultPreset& p)
+{
+    const auto& l = in.layer;
+    if (l.isEmpty()) return;
+    // pads / air / voices drift slowly in brightness so the bed breathes under the main instrument
+    for (size_t k = 1; k < p.parts.size(); ++k)
+    {
+        const auto& lab = p.parts[k].label;
+        if ((lab == "Warm Pad" || lab == "Air Pad" || lab == "Vocal Pad") && ! m.l2 && (l == "pad" || l == "air" || l == "vox"))
+            m.l2 = lfo (VaultLfo::sine).rate (0.16f + 0.02f * (float) (in.var % 4)).free().depth (0.7f)
+                       .to (juce::String ("layer" + juce::String ((int) k + 1) + ".cutoff").toRawUTF8(), 0.5f);
+    }
+    if (l == "strings" || l == "cellos" || l == "cinema" || l == "heaven" || l == "continuo" || l == "tremstr" || l == "feltstrings")
+    {
+        if (c.reverb) c.reverb->set ("predelay", 24.0f);
+    }
+    else if (l == "honky")
+    {
+        c.drive = fx::drive (fx::Drive::tape, 0.15f, 0.8f, 8000);
+    }
+    else if (l == "organpiano")
+    {
+        if (! m.l1) m.l1 = lfo (VaultLfo::sine).rate (0.8f).free().to ("layer2.pan", 0.4f);
+    }
+    else if (l == "glock" || l == "chimes" || l == "lullaby")
+    {
+        if (! c.delay) c.delay = fx::delay ("1/8D", 0.25f, 0.08f).set ("hiCut", 5000.0f).set ("loCut", 250.0f);
+    }
+    else if (l == "twinep" || l == "fmep" || l == "dreamep" || l == "loungenight")
+    {
+        if (! c.chorus) c.chorus = fx::chorus (0.3f, 0.45f, 0.5f);
+    }
+    else if (l == "ambient")
+    {
+        c.reverb = fx::reverb (R::cloud, 0.75f, 1.3f, 0.36f).set ("predelay", 30.0f);
+        c.comp.reset();
+    }
+}
+
+//------------------------------------------------------------------------------ macros
+// a target around the designed value v: the knob's default d gives v, the range is `span` wide (negative: turning up lowers
+// the value), narrowed so min / max stay inside lo..hi
+struct MT { juce::String target; float v, span, lo, hi; };
+VaultMacro makeMacro (const juce::String& name, float d, const std::vector<MT>& ts)
+{
+    VaultMacro m;
+    m.name = name;
+    for (auto& t : ts)
+    {
+        float span = t.span;
+        if (span > 0)
+        {
+            if (d > 0) span = std::min (span, std::max (0.0f, t.v - t.lo) / d);
+            if (d < 1) span = std::min (span, std::max (0.0f, t.hi - t.v) / (1 - d));
+        }
+        else if (span < 0)
+        {
+            if (d > 0) span = std::max (span, -std::max (0.0f, t.hi - t.v) / d);
+            if (d < 1) span = std::max (span, -std::max (0.0f, t.v - t.lo) / (1 - d));
+        }
+        if (std::abs (span) < 1.0e-4f) continue;
+        m.targets.push_back ({ t.target, t.v - d * span, t.v + (1 - d) * span, 0.0f });
+    }
+    return m;
+}
+
+struct MacroCtx
+{
+    VaultPreset& p;
+    Chain& c;
+    Mod& m;
+    const Info& in;
+    juce::StringArray used;
+};
+
+juce::String layerWord (const VaultPart& part, const VaultPart& main)
+{
+    const auto& l = part.label;
+    if (part.source == main.source && part.octave < main.octave) return "Octave";
+    if (part.source == main.source) return "Detune";
+    static const std::vector<std::pair<const char*, const char*>> w {
+        { "Violin Section", "Strings" }, { "Cello Section", "Cellos" }, { "Viola Section", "Shiver" }, { "Warm Pad", "Pad" }, { "Air Pad", "Air" },
+        { "Vocal Pad", "Voices" }, { "Classic Choir", "Choir" }, { "Bowed Vibraphone", "Halo" }, { "Vibraphone", "Vibes" }, { "Hand Chimes", "Chimes" },
+        { "Glockenspiel", "Sparkle" }, { "Concert Flute", "Flute" }, { "Tine Electric Piano", "Tines" }, { "Reed Electric Piano", "Reeds" },
+        { "Bell Tine Piano", "Bells" }, { "FM Electric Piano", "Satin" }, { "Drawbar Organ", "Organ" }, { "Concert Harp", "Harp" }, { "Marimba", "Marimba" },
+        { "Thumb Piano", "Thumb" }, { "French Horn", "Horns" }, { "Flemish Harpsichord", "Upper" } };
+    if (part.articulation == "pizzicato") return "Pizzicato";
+    if (l == "Pipe Organ" && part.articulation == "pedal") return "Bass Pipes";
+    if (l == "Chamber Organ" && part.articulation == "4 foot") return "Octave";
+    if (l == "Chamber Organ") return "Organ";
+    for (auto& [a, b] : w) if (l == a) return b;
+    return "Layer";
+}
+
+bool hasEnvLayer (const VaultPreset& p) { for (auto& part : p.parts) if (part.kind != VaultPartKind::model) return true; return false; }
+
+juce::String spaceWord (const Info& in)
+{
+    const auto& s = in.space;
+    if (in.treat == "distant") return "Distance";
+    if (s == "hall" || s == "stage") return "Hall";
+    if (s == "plate") return "Plate";
+    if (s == "cloud") return "Cloud";
+    if (s == "church") return isPipeLike (in.kind) || in.kind == kReedOrgan ? "Nave" : "Chapel";
+    if (s == "studio") return "Studio";
+    if (s == "echo" || s == "ping") return "Space";
+    return "Room";
+}
+
+// one macro by its role id; empty name = not applicable to this preset
+VaultMacro macroFor (const juce::String& id, MacroCtx& x, float& d)
+{
+    auto& c = x.c;
+    auto& p = x.p;
+    const auto& in = x.in;
+    auto fxv = [] (const std::optional<VaultFxSlot>& s, const char* par) { return s->get (par); };
+    auto layersWith = [&] (const char* what, float v, float span, float lo, float hi, std::vector<MT>& ts)
+    {
+        for (size_t k = 0; k < p.parts.size(); ++k)
+            if (p.parts[k].kind != VaultPartKind::model)
+                ts.push_back ({ "layer" + juce::String ((int) k + 1) + "." + what, v, span, lo, hi });
+    };
+    if (id == "space")
+    {
+        if (! c.reverb) return {};
+        d = juce::jlimit (0.15f, 0.45f, fxv (c.reverb, "mix") / 0.5f);   // a close sound starts low on its knob, a hall further up
+        std::vector<MT> ts { { "fx.reverb.mix", fxv (c.reverb, "mix"), 0.45f, 0.0f, 0.62f }, { "fx.reverb.size", fxv (c.reverb, "size"), 0.35f, 0.1f, 0.92f },
+                             { "fx.reverb.decay", fxv (c.reverb, "decay"), 0.7f, 0.4f, 1.7f } };
+        if (c.delay) ts.push_back ({ "fx.delay.mix", fxv (c.delay, "mix"), 0.25f, 0.0f, 0.4f });
+        return makeMacro (spaceWord (in), d, ts);
+    }
+    if (id == "echo")
+    {
+        if (! c.delay) c.delay = fx::delay ("1/8D", 0.3f, 0.0f).set ("hiCut", 5000.0f).set ("loCut", 200.0f);
+        d = fxv (c.delay, "mix") < 0.01f ? 0.0f : 0.35f;
+        return makeMacro ("Echo", d, { { "fx.delay.mix", fxv (c.delay, "mix"), 0.4f, 0.0f, 0.45f }, { "fx.delay.feedback", fxv (c.delay, "feedback"), 0.3f, 0.12f, 0.6f } });
+    }
+    if (id == "tone" || id == "hammer" || id == "lid" || id == "shine" || id == "quill" || id == "brightness")
+    {
+        d = 0.6f;
+        const char* name = id == "hammer" ? "Hammer" : id == "lid" ? "Lid" : id == "shine" ? "Shine" : id == "quill" ? "Quill" : "Tone";
+        return makeMacro (name, d, { { "cutoff", 0.0f, 2.2f, -3.0f, 1.2f }, { "fx.eq.high", c.eqSlot().get ("high"), 5.0f, -10.0f, 2.5f },
+                                     { "fx.eq.low", c.eqSlot().get ("low"), -2.5f, -3.0f, 4.0f } });
+    }
+    if (id == "felt")
+    {
+        d = 0.4f;
+        return makeMacro ("Felt", d, { { "cutoff", 0.0f, -2.4f, -3.0f, 1.0f }, { "fx.eq.high", c.eqSlot().get ("high"), -4.0f, -9.0f, 2.0f },
+                                       { "fx.eq.low", c.eqSlot().get ("low"), 2.0f, -3.0f, 4.0f } });
+    }
+    if (id == "tape")
+    {
+        if (! c.drive || (int) c.drive->get ("type") != (int) fx::Drive::tape) c.drive = fx::drive (fx::Drive::tape, 0.0f, 1.0f, 9000);
+        const float a = fxv (c.drive, "amount");
+        d = a < 0.01f ? 0.0f : 0.3f;
+        std::vector<MT> ts { { "fx.drive.amount", a, 0.5f, 0.0f, 0.6f }, { "fx.eq.high", c.eqSlot().get ("high"), -2.0f, -9.0f, 2.0f }, { "volume", 0.0f, -0.2f, -0.5f, 0.2f } };
+        if (c.lofi) ts.push_back ({ "fx.lofi.wow", fxv (c.lofi, "wow"), 0.3f, 0.0f, 0.45f });
+        return makeMacro ("Tape", d, ts);
+    }
+    if (id == "warmth")
+    {
+        if (! c.drive) c.drive = fx::drive (fx::Drive::tape, 0.0f, 1.0f, 9000);
+        d = 0.4f;
+        return makeMacro ("Warmth", d, { { "fx.drive.amount", fxv (c.drive, "amount"), 0.5f, 0.0f, 0.55f }, { "fx.eq.low", c.eqSlot().get ("low"), 4.0f, -3.0f, 5.5f },
+                                         { "fx.eq.high", c.eqSlot().get ("high"), -4.5f, -10.0f, 2.0f }, { "volume", 0.0f, -0.15f, -0.4f, 0.2f } });
+    }
+    if (id == "bark" || id == "drive" || id == "funk")
+    {
+        if (! c.drive) c.drive = fx::drive (fx::Drive::tube, 0.0f, 1.0f, 7000);
+        const float a = fxv (c.drive, "amount");
+        d = a < 0.01f ? 0.0f : 0.3f;
+        return makeMacro (id == "bark" ? "Bark" : id == "funk" ? "Funk" : "Drive", d,
+                          { { "fx.drive.amount", a, 0.6f, 0.0f, 0.75f }, { "fx.eq.mid", c.eqSlot().get ("mid"), 3.0f, -4.0f, 4.0f }, { "volume", 0.0f, -0.25f, -0.5f, 0.2f } });
+    }
+    if (id == "dust")
+    {
+        if (! c.lofi) c.lofi = fx::lofi (0.0f, 0.0f);
+        d = 0.4f;
+        return makeMacro ("Dust", d, { { "fx.lofi.crush", fxv (c.lofi, "crush"), 0.45f, 0.0f, 0.5f }, { "fx.lofi.wow", fxv (c.lofi, "wow"), 0.4f, 0.0f, 0.55f },
+                                       { "cutoff", 0.0f, -1.0f, -2.0f, 0.5f } });
+    }
+    auto lfoDepthMacro = [&] (int i, const char* name, std::vector<MT> extra = {}) -> VaultMacro
+    {
+        auto& l = i == 0 ? x.m.l1 : x.m.l2;
+        if (! l) return {};
+        d = l->depth;
+        std::vector<MT> ts { { "lfo" + juce::String (i + 1) + ".depth", l->depth, 1.0f, 0.0f, 1.0f } };
+        for (auto& e : extra) ts.push_back (e);
+        return makeMacro (name, d, ts);
+    };
+    auto isPitchLfo = [] (const std::optional<VaultLfo>& l) { if (! l) return false; for (auto& dd : l->dests) if (dd.target == "pitch") return true; return false; };
+    if (id == "wobble" || id == "windup")
+    {
+        if (! isPitchLfo (x.m.l2)) return {};
+        return lfoDepthMacro (1, id == "windup" ? "Wind-Up" : "Wobble");
+    }
+    if (id == "drift")
+    {
+        if (! x.m.l2 || isPitchLfo (x.m.l2)) return {};
+        return lfoDepthMacro (1, "Drift", { { "lfo2.rate", x.m.l2->rate, 0.8f, 0.05f, 1.0f } });
+    }
+    if (id == "tremolo")
+    {
+        if (! x.m.l1 || x.in.kind == kFmEp || x.in.kind == kDrawbar || x.in.kind == kReedOrgan || isPipeLike (x.in.kind)) return {};
+        return lfoDepthMacro (0, "Tremolo");
+    }
+    if (id == "rate")
+    {
+        if (! x.m.l1) return {};
+        d = 0.5f;
+        return makeMacro ("Rate", d, { { "lfo1.rate", x.m.l1->rate, 4.0f, 1.5f, 8.0f } });
+    }
+    if (id == "tremulant")
+    {
+        if (! x.m.l1 || ! isPitchLfo (x.m.l1)) return {};
+        return lfoDepthMacro (0, "Tremulant");
+    }
+    if (id == "bellows")
+    {
+        if (! x.m.l1 || x.in.kind != kReedOrgan || isPitchLfo (x.m.l1)) return {};
+        return lfoDepthMacro (0, "Bellows");
+    }
+    if (id == "rotor")
+    {
+        if (! x.m.l1 || (x.in.kind != kDrawbar && x.in.treat != "rotary")) return {};
+        if (! c.chorus) return {};
+        // slow (0) -> fast (1); the designed speed sits at its place on the way
+        const float r = x.m.l1->rate;
+        d = juce::jlimit (0.0f, 1.0f, (r - 0.8f) / 5.8f);
+        VaultMacro m;
+        m.name = "Rotor";
+        m.targets.push_back ({ "lfo1.rate", 0.8f, 6.6f, 0.0f });
+        m.targets.push_back ({ "fx.chorus.rate", 0.7f, 5.5f, 0.0f });
+        if (x.m.l1->depth < 0.01f)   // stopped at the default: the first part of the knob brings the slow rotor in
+        {
+            d = 0.0f;
+            m.targets.push_back ({ "lfo1.depth", 0.0f, 1.0f, -0.8f });
+            m.targets.push_back ({ "fx.chorus.mix", 0.0f, 0.5f, -0.8f });
+        }
+        else m.targets.push_back ({ "fx.chorus.mix", 0.25f, 0.5f, 0.0f });
+        return m;
+    }
+    if (id == "chorus" || id == "musette")
+    {
+        if (! c.chorus) c.chorus = fx::chorus (0.0f, 0.45f, 0.5f);
+        const float mix = fxv (c.chorus, "mix");
+        d = mix < 0.01f ? 0.0f : 0.4f;
+        std::vector<MT> ts { { "fx.chorus.mix", mix, 0.6f, 0.0f, 0.7f }, { "fx.chorus.depth", fxv (c.chorus, "depth"), 0.4f, 0.15f, 0.85f } };
+        if (c.width) ts.push_back ({ "fx.width.width", fxv (c.width, "width"), 0.3f, 0.3f, 0.9f });
+        return makeMacro (id == "musette" ? "Musette" : "Chorus", d, ts);
+    }
+    if (id == "phase")
+    {
+        if (! c.phaser) c.phaser = fx::phaser (0.0f, 0.3f, 0.9f, 0.5f);
+        const float mix = fxv (c.phaser, "mix");
+        d = mix < 0.01f ? 0.0f : 0.45f;
+        return makeMacro ("Phase", d, { { "fx.phaser.mix", mix, 0.6f, 0.0f, 0.75f }, { "fx.phaser.feedback", fxv (c.phaser, "feedback"), 0.4f, 0.1f, 0.75f } });
+    }
+    if (id == "pedal" || id == "release")
+    {
+        if (! hasEnvLayer (p)) return {};
+        d = 0.35f;
+        std::vector<MT> ts;
+        layersWith ("release", 0.0f, 4.5f, -2.0f, 2.6f, ts);
+        return makeMacro (id == "pedal" ? (isPianoLike (in.kind) ? "Pedal" : "Sustain") : "Release", d, ts);
+    }
+    if (id == "swell")
+    {
+        if (! hasEnvLayer (p)) return {};
+        d = 0.35f;
+        std::vector<MT> ts;
+        layersWith ("attack", 0.0f, 4.5f, -2.0f, 3.0f, ts);
+        layersWith ("release", 0.0f, 1.5f, -1.0f, 1.5f, ts);
+        if (ts.size() > 8) ts.resize (8);
+        return makeMacro ("Swell", d, ts);
+    }
+    if (id == "width")
+    {
+        if (! c.width) c.width = fx::width (0.5f, 150);
+        d = 0.5f;
+        return makeMacro ("Width", d, { { "fx.width.width", fxv (c.width, "width"), 0.6f, 0.15f, 1.0f } });
+    }
+    if (id == "wah")
+    {
+        if (! c.filter) return {};
+        d = 0.0f;   // off at the default: turning it up closes the filter and lets the playing open it (envelope wah)
+        return makeMacro ("Wah", d, { { "fx.filter.env", fxv (c.filter, "env"), 0.6f, 0.0f, 0.85f }, { "fx.filter.reso", fxv (c.filter, "reso"), 0.35f, 0.05f, 0.65f },
+                                      { "fx.filter.cutoff", fxv (c.filter, "cutoff"), -10800.0f, 800.0f, 12000.0f } });
+    }
+    if (id == "depth")
+    {
+        if (! c.filter) return {};
+        d = 0.5f;
+        return makeMacro ("Depth", d, { { "fx.filter.cutoff", fxv (c.filter, "cutoff"), -1200.0f, 300.0f, 2500.0f }, { "fx.chorus.mix", c.chorus ? fxv (c.chorus, "mix") : 0.0f, 0.4f, 0.0f, 0.7f } });
+    }
+    if (id == "body")
+    {
+        if (! c.body) return {};
+        d = 0.45f;
+        return makeMacro ("Body", d, { { "fx.body.mix", fxv (c.body, "mix"), 0.6f, 0.0f, 0.75f } });
+    }
+    if (id == "reverse")
+    {
+        if (! c.reverse) return {};
+        d = 0.5f;
+        return makeMacro ("Reverse", d, { { "fx.reverse.mix", fxv (c.reverse, "mix"), 0.7f, 0.0f, 0.8f } });
+    }
+    if (id == "glue")
+    {
+        if (! c.comp) return {};
+        d = 0.4f;
+        return makeMacro ("Glue", d, { { "finish", p.finish, 0.5f, 0.0f, 0.6f }, { "fx.comp.threshold", fxv (c.comp, "threshold"), -10.0f, -34.0f, -8.0f } });
+    }
+    if (id == "expression")
+    {
+        d = 1.0f;
+        return makeMacro ("Expression", d, { { "volume", 0.0f, 0.55f, -0.6f, 0.0f }, { "cutoff", 0.0f, 1.4f, -1.5f, 0.0f } });
+    }
+    if (id.startsWith ("blend"))
+    {
+        const int k = id.getLastCharacters (1).getIntValue();
+        if (k < 1 || k >= (int) p.parts.size()) return {};
+        const auto& part = p.parts[(size_t) k];
+        const auto word = layerWord (part, p.parts.front());
+        if (word == "Detune")
+        {
+            d = 0.5f;
+            return makeMacro ("Detune", d, { { "layer" + juce::String (k + 1) + ".tune", 0.0f, 0.3f, -0.2f, 0.2f } });
+        }
+        const bool up = 12 * part.octave + part.semi > 12 * p.parts.front().octave + p.parts.front().semi;
+        d = 0.5f;
+        return makeMacro (word, d, { { "layer" + juce::String (k + 1) + ".level", part.level, part.level * (up ? 1.3f : 2.0f), 0.0f, 2.0f } });
+    }
+    return {};
+}
+
+// the macro plan: role ids, best first (the first 4 applicable with distinct names win)
+juce::StringArray macroPlan (const Info& in, const VaultPreset& p)
+{
+    const auto& t = in.treat;
+    const Kind k = in.kind;
+    juce::StringArray a;
+    auto add = [&] (std::initializer_list<const char*> ids) { for (auto* s : ids) a.add (s); };
+    if (in.layer.isNotEmpty())
+    {
+        a.add (isPianoLike (k) ? "hammer" : k == kHarpsi ? "quill" : isPipeLike (k) ? "expression" : k == kDrawbar ? "rotor" : "tone");
+        a.add ("blend1");
+        if (p.parts.size() > 2) a.add ("blend2");
+        if (p.parts.size() > 3 && in.layer != "cinema" && in.layer != "heaven") a.add ("blend3");
+        a.add ("space");
+        add ({ "drift", "tremolo" });
+        a.add (isPianoLike (k) ? "pedal" : "warmth");
+        add ({ "chorus", "width", "tone" });
+        return a;
+    }
+    if (t == "lofi" || t == "vinyl") add ({ "dust", "wobble", "tone", "space" });
+    else if (t == "tape") add ({ "tape", "wobble", "tone", "space" });
+    else if (t == "swell") add ({ "swell", "drift", "tone", "space" });
+    else if (t == "underwater") add ({ "depth", "drift", "chorus", "space" });
+    else if (t == "wooden") add ({ "body", "tone", "pedal", "space" });
+    else if (t == "echopluck") add ({ "tone", "echo", "width", "space" });
+    else if (t == "reverse") add ({ "reverse", "tone", "pedal", "space" });
+    else if (t == "chorus") add ({ "chorus", "tremolo", "tone", "space" });
+    else if (t == "phaser") add ({ "phase", "bark", "tone", "space" });
+    else if (t == "drive") add ({ "drive", "tone", "tremolo", "rotor", "space" });
+    else if (t == "tremolo") add ({ "tremolo", "rotor", "rate", "bark", "space" });
+    else if (t == "tremulant") add ({ "tremulant", "expression", "tone", "space" });
+    else if (t == "rotary") add ({ "rotor", "drive", "tone", "space" });
+    else if (t == "distant") add ({ "tone", "pedal", "width", "space" });
+    else if (t == "felt") add ({ "felt", "pedal", "tape", "space" });
+    else if (t == "bright") add ({ "lid", "glue", "pedal", "space" });
+    else if (t == "muted") add ({ "tone", "warmth", "echo", "space" });
+    // natural / dark / intimate / round / bell: the family's own controls
+    if (isPianoLike (k)) add ({ k == kDigital ? "tone" : "hammer", "pedal", t == "dark" ? "tape" : "warmth", "space" });
+    else if (k == kTine || k == kReed) add ({ "bark", "tremolo", "tone", "space" });
+    else if (k == kFmEp) add ({ "shine", "chorus", "echo", "space" });
+    else if (isPipeLike (k)) add ({ "expression", "tremulant", "tone", "space" });
+    else if (k == kDrawbar) add ({ "rotor", "drive", "tone", "space" });
+    else if (k == kReedOrgan) add ({ "bellows", "tone", "musette", "space" });
+    else if (k == kHarpsi) add ({ "quill", "warmth", "width", "space" });
+    else if (k == kClav) add ({ "wah", "funk", "phase", "space" });
+    else if (k == kFmKeys) add ({ "shine", "chorus", "echo", "space" });
+    else if (k == kToy || k == kMusicBox) add ({ "tone", "windup", "echo", "space" });
+    add ({ "tone", "width", "chorus", "echo", "warmth" });
+    return a;
+}
+
+// absolute targets: the slot / LFO / layer value the macro gives at its default, written back so the FX page shows it
+void bakeMacros (VaultPreset& p)
+{
+    for (int i = 0; i < 4; ++i)
+        for (auto& t : p.macros[(size_t) i].targets)
+        {
+            const float v = t.min + (t.max - t.min) * p.macroDefaults[i];
+            const auto& s = t.target;
+            if (s.startsWith ("fx."))
+            {
+                const auto type = s.fromFirstOccurrenceOf (".", false, false).upToFirstOccurrenceOf (".", false, false);
+                const auto par = s.fromLastOccurrenceOf (".", false, false);
+                for (auto& f : p.fx) if (type == vault::fxTypeInfo (f.type).id) { f.set (par.toRawUTF8(), v); break; }
+            }
+            else if (s.startsWith ("lfo"))
+            {
+                const int k = s.substring (3, 4).getIntValue() - 1;
+                if (k >= 0 && k < 2) { if (s.endsWith ("depth")) p.mod.lfo[k].depth = v; else if (s.endsWith ("rate")) p.mod.lfo[k].rate = v; }
+            }
+            else if (s == "finish") p.finish = v;
+            else if (s.startsWith ("layer") && s.endsWith (".level"))
+            {
+                const int k = s.substring (5, 6).getIntValue() - 1;
+                if (k >= 0 && k < (int) p.parts.size()) p.parts[(size_t) k].level = v;
+            }
+        }
+}
+
+// the whole v3 design of one preset (on the v2-stage preset: parts calibrated, name / id set)
+// the family's polish that every preset of a voice would share (comp, tape, width, chorus, echo, default movement): it
+// makes the voice's presets alike, so a preset that came out too close to an earlier one is designed without it
+void stripFamily (Chain& c, Mod& m, float& finish, const Info& in)
+{
+    c.comp.reset(); c.drive.reset(); c.width.reset(); c.chorus.reset(); c.delay.reset();
+    if (in.kind == kClav && c.filter) c.filter = fx::filter (fx::Filter::lowPass, 12000, 0.2f, 0.0f);
+    for (auto* l : { &m.l1, &m.l2 }) if (l->has_value()) (*l)->depth = 0.0f;
+    m.vel.clear(); m.mw.clear();
+    finish = std::min (finish, 0.08f);
+}
+// the role's defining effects pushed further (a preset too close to an earlier one even without the family polish)
+void exaggerate (Chain& c, Mod& m)
+{
+    auto sc = [] (std::optional<VaultFxSlot>& s, const char* par, float k, float hi) { if (s) s->set (par, std::min (hi, s->get (par) * k)); };
+    sc (c.lofi, "crush", 1.5f, 0.5f); sc (c.lofi, "wow", 1.4f, 0.55f); sc (c.chorus, "mix", 1.4f, 0.8f); sc (c.phaser, "mix", 1.4f, 0.8f);
+    sc (c.flanger, "mix", 1.4f, 0.8f); sc (c.drive, "amount", 1.4f, 0.6f); sc (c.reverb, "mix", 1.3f, 0.55f); sc (c.delay, "mix", 1.4f, 0.45f);
+    sc (c.reverse, "mix", 1.3f, 0.8f); sc (c.body, "mix", 1.3f, 0.75f);
+    if (c.reverb) c.reverb->set ("size", std::min (0.9f, c.reverb->get ("size") + 0.1f));
+    if (c.width) c.width->set ("width", juce::jlimit (0.1f, 1.0f, 0.5f + (c.width->get ("width") - 0.5f) * 1.6f));
+    if (c.filter && (int) c.filter->get ("mode") == 0 && c.filter->get ("cutoff") < 5000.0f) c.filter->set ("cutoff", c.filter->get ("cutoff") * 0.75f);
+    for (auto* l : { &m.l1, &m.l2 }) if (l->has_value() && (*l)->depth > 0.0f) (*l)->depth = std::min (1.0f, (*l)->depth * 1.4f);
+}
+
+// level: 0 = the full design (family polish + role + space), 1 = without the family polish, 2 = that with the role pushed
+// further, 3 = the neighbouring colour (reverb type / size, a quarter echo), 4 = light (space, EQ, gentle dynamics only).
+// Levels 1-4 are only used for a preset that came out too close to an earlier one (or failed the gate).
+void design (VaultPreset& p, const Info& in, int level, int pattern)
+{
+    const bool light = level >= 4;
+    const int alt = level == 3 ? 1 : 0;
+    recipe::design (p);   // converts the v2 FX keys (removed from the parts); the chain is then replaced
+    p.mod = VaultMod(); p.arp = VaultArp(); p.gate = VaultGate();
+    Chain c;
+    Mod m;
+    float finish = 0;
+    familyFx (c, m, finish, in);
+    if (level >= 1) stripFamily (c, m, finish, in);
+    spaceFx (c, in.space, in);
+    treatmentFx (c, m, finish, in);
+    layerFx (c, m, in, p);
+    if (level == 2) exaggerate (c, m);
+    if (alt == 1)
+    {
+        if (c.reverb)
+        {
+            const int t = (int) c.reverb->get ("type");
+            const bool organ = isPipeLike (in.kind) || in.kind == kReedOrgan;
+            const int nt = t == (int) R::room ? (int) R::plate : t == (int) R::plate ? (int) R::room : t == (int) R::hall ? (organ ? (int) R::room : (int) R::cloud) : (int) R::hall;
+            c.reverb->set ("type", (float) nt).set ("size", juce::jlimit (0.2f, 0.85f, c.reverb->get ("size") + (nt == (int) R::room ? -0.15f : 0.1f)))
+                     .set ("mix", juce::jlimit (0.08f, 0.4f, c.reverb->get ("mix") * 1.2f));
+        }
+        if (in.treat == "natural" || in.treat == "dark" || in.treat == "round" || in.treat == "felt" || in.treat == "intimate")
+        {
+            c.chorus.reset();
+            if (in.kind == kDrawbar) m.l1.reset();
+        }
+        if (! c.delay) c.delay = fx::delay ("1/4", 0.25f, 0.09f).set ("hiCut", 4500.0f).set ("loCut", 250.0f);
+        if (c.width) c.width->set ("width", juce::jlimit (0.3f, 0.85f, c.width->get ("width") + 0.12f));
+    }
+    if (light)   // fallback when the full design cannot pass the gate: the space, EQ and gentle dynamics only
+    {
+        c.drive.reset(); c.lofi.reset(); c.transient.reset(); c.flanger.reset();
+        if (c.chorus) c.chorus->set ("mix", std::min (0.25f, c.chorus->get ("mix")));
+        if (c.reverb) c.reverb->set ("mix", c.reverb->get ("mix") * 0.8f);
+        finish = std::min (finish, 0.1f);
+    }
+    p.finish = finish;
+    // macros first (they may add the slot they need), then the chain
+    MacroCtx x { p, c, m, in, {} };
+    VaultMacro chosen[4];
+    float defs[4] { 0.5f, 0.5f, 0.5f, 0.5f };
+    int n = 0;
+    juce::StringArray ids;
+    for (auto& id : macroPlan (in, p))
+    {
+        if (n >= 4) break;
+        if (ids.contains (id)) continue;
+        float d = 0.5f;
+        auto mac = macroFor (id, x, d);
+        if (mac.name.isEmpty() || mac.targets.empty() || x.used.contains (mac.name)) continue;
+        ids.add (id); x.used.add (mac.name);
+        chosen[n] = mac; defs[n] = d; ++n;
+    }
+    // the space macro always sits on the fourth knob
+    for (int i = 0; i < n - 1; ++i)
+        if (ids[i] == "space") { std::swap (chosen[i], chosen[n - 1]); std::swap (defs[i], defs[n - 1]); ids.getReference (i).swapWith (ids.getReference (n - 1)); }
+    p.fx = c.build();
+    p.mod.lfo[0] = m.l1 ? *m.l1 : VaultLfo();
+    p.mod.lfo[1] = m.l2 ? *m.l2 : VaultLfo();
+    // mod wheel: vibrato-free sounds open the room, organs speed the rotor, EPs deepen the tremolo
+    if (m.mw.empty())
+    {
+        if (m.l1 && (in.kind == kTine || in.kind == kReed)) m.mw.push_back ({ "lfo1.depth", 0.8f });
+        else if (m.l1 && isPipeLike (in.kind)) m.mw.push_back ({ "lfo1.depth", 0.7f });
+        else if (c.reverb) m.mw.push_back ({ "fx.reverb.mix", 0.25f });
+    }
+    p.mod.modWheel = m.mw; p.mod.velocity = m.vel; p.mod.aftertouch = m.at;
+    recipe::Design dz (p);
+    dz.clearMacros();
+    for (int i = 0; i < n; ++i) dz.macro (i, chosen[i], defs[i]);
+    bakeMacros (p);
+    // arp / gate (a handful of presets: decided in recipe order by the caller, plain musical patterns)
+    if (pattern == 1)
+    {
+        const bool hps = in.kind == kHarpsi;
+        auto a = recipe::arp (hps ? VaultArp::upDown : VaultArp::up, hps ? "1/16" : in.kind == kFmKeys ? "1/8T" : "1/16", 2, hps ? 0.7f : 0.55f, 0.0f, true);
+        for (int s = 0; s < 16; ++s) a.vel[(size_t) s] = s % 4 == 0 ? 1.0f : 0.78f;
+        dz.arp (a);
+        for (auto& f : p.fx) if (f.type == FT::delay) f.set ("mix", std::min (0.14f, f.get ("mix")));
+        for (auto& mac : p.macros) for (auto& t : mac.targets) if (t.target == "fx.delay.mix") { t.min = std::min (t.min, 0.0f); t.max = std::min (t.max, 0.3f); }
+        bakeMacros (p);
+        for (auto& f : p.fx) if (f.type == FT::delay) f.set ("mix", std::min (0.14f, f.get ("mix")));
+    }
+    else if (pattern == 2)
+        dz.gate (recipe::gate (in.layer == "dreamep" ? "1/8" : "1/16", { 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0 }, 0.85f, 0.3f, 1.0f, true));
+}
+// which presets get a pattern (1 = arp, 2 = gate) and the plain name that says so
+int patternFor (const Info& in, juce::String& name)
+{
+    if (in.treat == "echopluck")
+    {
+        if (in.voice == "musicbox") { name = "Music Box Arpeggio"; return 1; }
+        if (in.voice == "fmkeys") { name = "FM Keys Arpeggio"; return 1; }
+        if (in.voice == "hpsBaroque") { name = "Harpsichord Arpeggio"; return 1; }
+        if (in.voice == "celeste") { name = "Celeste Arpeggio"; return 1; }
+    }
+    if (in.treat == "swell" && in.voice == "fmep") { name = "Gated FM Piano"; return 2; }
+    if (in.treat == "swell" && in.voice == "digital") { name = "Gated Digital Piano"; return 2; }
+    if (in.layer == "dreamep") { name = "Gated Dreamwave"; return 2; }
+    return 0;
+}
+
+//------------------------------------------------------------------------------ repairs on the v3 sound
+VaultFxSlot* slotOf (VaultPreset& p, FT t) { for (auto& f : p.fx) if (f.type == t) return &f; return nullptr; }
+// scale an FX parameter and every macro range on it
+void scaleParam (VaultPreset& p, FT t, const char* par, float k, float lo = -1.0e9f, float hi = 1.0e9f)
+{
+    if (auto* s = slotOf (p, t)) s->set (par, juce::jlimit (lo, hi, s->get (par) * k));
+    const auto id = juce::String ("fx.") + vault::fxTypeInfo (t).id + "." + par;
+    for (auto& m : p.macros) for (auto& x : m.targets) if (x.target == id) { x.min = juce::jlimit (lo, hi, x.min * k); x.max = juce::jlimit (lo, hi, x.max * k); }
+}
+void offsetParam (VaultPreset& p, FT t, const char* par, float dv, float lo, float hi)
+{
+    if (slotOf (p, t) == nullptr)
+    {
+        if (t != FT::eq) return;
+        recipe::design (p).addFx (fx::eq (0, 0, 0));
+    }
+    auto* s = slotOf (p, t);
+    s->set (par, juce::jlimit (lo, hi, s->get (par) + dv));
+    const auto id = juce::String ("fx.") + vault::fxTypeInfo (t).id + "." + par;
+    for (auto& m : p.macros) for (auto& x : m.targets) if (x.target == id) { x.min = juce::jlimit (lo, hi, x.min + dv); x.max = juce::jlimit (lo, hi, x.max + dv); }
+}
+void scaleLfoDest (VaultPreset& p, const char* target, float k)
+{
+    for (auto& l : p.mod.lfo) for (auto& d : l.dests) if (d.target == target) d.amount *= k;
+}
+
+bool repair (VaultPreset& p, const juce::String& fail, int attempt)
+{
+    auto& a = p.parts.front();
+    if (fail == "fundamental" || fail == "harsh-2-5k" || fail == "piercing-highs")
+    {
+        for (auto& part : p.parts) lowPass (part, std::min (currentLp (part), 8000.0f) * (fail == "fundamental" ? 0.6f : 0.7f));
+        if (fail == "fundamental") offsetParam (p, FT::eq, "low", 2.0f, -18, 6);
+        else offsetParam (p, FT::eq, "high", -2.0f, -9, 18);
+        scaleParam (p, FT::drive, "amount", 0.6f);
+        if (auto* d = slotOf (p, FT::drive)) d->set ("tone", std::min (d->get ("tone"), 6000.0f));
+        p.finish *= 0.5f;
+        return true;
+    }
+    if (fail == "velocity")
+    {
+        for (auto& part : p.parts) velSens (part, std::min (1.0f, getVelSens (part) + 0.25f));
+        if (auto* c = slotOf (p, FT::compressor)) { c->set ("ratio", std::max (1.2f, c->get ("ratio") * 0.6f)); c->set ("mix", c->get ("mix") * 0.7f); }
+        p.finish *= 0.6f;
+        return attempt < 3;
+    }
+    if (fail == "click-start")
+    {
+        for (auto& part : p.parts) if (part.kind == VaultPartKind::sample) part.set ("s.attack", std::max (0.004f, part.get ("s.attack", 0.0f)));
+        else if (part.kind == VaultPartKind::synth) part.set ("attack", std::max (0.006f, part.get ("attack", 0.002f)));
+        if (auto* c = slotOf (p, FT::compressor)) c->set ("attack", std::max (c->get ("attack"), 15.0f));
+        return attempt < 2;
+    }
+    if (fail == "click-end" && a.get ("s.releaseSamples", 1.0f) > 0.5f)
+    {
+        for (auto& part : p.parts) if (part.kind == VaultPartKind::sample) part.set ("s.releaseSamples", 0.0f);
+        return true;
+    }
+    if (fail == "click-spike" && slotOf (p, FT::lofi) != nullptr && attempt < 3)
+    {
+        scaleParam (p, FT::lofi, "crush", 0.4f); scaleParam (p, FT::lofi, "wow", 0.4f);
+        return true;
+    }
+    if (fail == "click-end" || fail == "click-spike")
+    {
+        for (auto& part : p.parts) if (part.kind == VaultPartKind::sample) part.set ("s.release", std::max (0.2f, part.get ("s.release", 0.0f)));
+        else if (part.kind == VaultPartKind::synth) part.set ("release", std::max (0.2f, part.get ("release", 0.3f)));
+        else part.set ("m.release", std::max (0.25f, part.get ("m.release", 0.3f)));
+        return attempt < 3;
+    }
+    if (fail == "tail")
+    {
+        scaleParam (p, FT::reverb, "mix", 0.8f); scaleParam (p, FT::reverb, "decay", 0.7f, 0.25f, 4.0f); scaleParam (p, FT::reverb, "size", 0.85f);
+        scaleParam (p, FT::delay, "feedback", 0.6f);
+        for (auto& part : p.parts)
+            if (part.kind == VaultPartKind::sample && part.get ("s.release", 0.0f) > 0.0f) part.set ("s.release", part.get ("s.release", 0.0f) * 0.6f);
+            else if (part.kind == VaultPartKind::model) part.set ("m.release", std::min (1.0f, part.get ("m.release", 0.5f)));
+        for (auto& part : p.parts) if (part.kind == VaultPartKind::sample && part.get ("s.release", 0.0f) <= 0.0f) part.set ("s.release", 2.5f);
+        return true;
+    }
+    if (fail == "octave-layer")
+    {
+        for (size_t k = 1; k < p.parts.size(); ++k) if (p.parts[k].octave > a.octave) p.parts[k].level *= 0.6f;
+        for (auto& m : p.macros) for (auto& t : m.targets) if (t.target.endsWith (".level")) { t.min *= 0.6f; t.max *= 0.6f; }
+        return true;
+    }
+    if (fail == "low-side" || fail == "mono-loss")
+    {
+        if (slotOf (p, FT::width) == nullptr) recipe::design (p).addFx (fx::width (0.5f, 200));
+        scaleParam (p, FT::width, "width", 0.7f, 0.0f, 1.0f);
+        slotOf (p, FT::width)->set ("monoBelow", 220.0f);
+        scaleParam (p, FT::chorus, "mix", 0.5f);
+        scaleLfoDest (p, "pan", 0.5f);
+        for (auto& part : p.parts) { part.pan *= 0.5f; if (part.kind == VaultPartKind::sample) part.set ("s.width", 0.6f); }
+        return true;
+    }
+    if (fail == "too-peaky" || fail == "clip")
+    {
+        p.finish = std::max (p.finish, 0.45f);
+        if (slotOf (p, FT::compressor) == nullptr) recipe::design (p).addFx (fx::comp (-14, 3, 1, 80));
+        return attempt < 3;
+    }
+    return false;
+}
+
+//------------------------------------------------------------------------------ macro check: every macro at 0 and at 1
+struct MacroCheck { int fixes = 0; juce::StringArray quiet, harsh, why; };
+// raw (not normalised) envelope distance between two renders, RMS dB, plus the modulation features
+float rawDistance (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+{
+    const std::vector<std::pair<double, double>> segs { { 0.0, 0.1 }, { 0.1, 0.5 }, { 0.5, 1.5 }, { 1.5, 2.5 }, { 2.5, 4.0 } };
+    float m1 = 0, m2 = 0;
+    const auto fa = mfccSegments (a, segs, 0.0f, false, m1), fb = mfccSegments (b, segs, 0.0f, false, m2);
+    double s = 0;
+    for (size_t i = 0; i < std::min (fa.size(), fb.size()); ++i) { const double d = fa[i] - fb[i]; s += d * d; }
+    return (float) std::sqrt (s / ((double) segs.size() * ownMel));
+}
+struct Probe { float loud = -120, peak127 = 0, share25 = 0, share6k = 0, share8k = 0, h1 = 0, tailEnd = -200, tailMax = -200; juce::AudioBuffer<float> c5; };
+Probe probe (const VaultPreset& p, const float* macros, double total)
+{
+    Probe r;
+    juce::MidiBuffer mb;
+    mb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 102), 0);
+    mb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (recipegate::holdSeconds * recipegate::sr));
+    r.c5 = VaultEngine::renderMidi (p, mb, (int) (total * recipegate::sr), recipegate::sr, macros);
+    const auto a = vaultqc::analyse (r.c5, recipegate::sr, recipegate::holdSeconds);
+    r.loud = a.loud;
+    const auto sp = recipegate::spectrum (r.c5, 0.05);
+    const double tot = std::max (1e-20, recipegate::bandPower (sp, 20, 20000));
+    r.share25 = (float) (recipegate::bandPower (sp, 2000, 5000) / tot);
+    r.share6k = (float) (recipegate::bandPower (sp, 6000, 20000) / tot);
+    r.share8k = (float) (recipegate::bandPower (sp, 8000, 20000) / tot);
+    const float f0 = recipegate::soundingHz (p, vault::homeNote);
+    const float h1 = recipegate::peakDb (sp, f0 * 0.97, f0 * 1.03);
+    float strongest = h1;
+    for (int k = 2; k <= 24 && k * f0 < 16000.0f; ++k) strongest = std::max (strongest, recipegate::peakDb (sp, k * f0 * 0.985, k * f0 * 1.015));
+    r.h1 = h1 - strongest;
+    // the last 100 ms against the loudest 10 ms frame (tail still ringing at the end of the render?)
+    const int fr = (int) (0.01 * recipegate::sr), nf = r.c5.getNumSamples() / fr;
+    for (int f = 0; f < nf; ++f)
+    {
+        double acc = 0;
+        for (int i = f * fr; i < (f + 1) * fr; ++i) acc += 0.5 * ((double) r.c5.getSample (0, i) * r.c5.getSample (0, i) + (double) r.c5.getSample (1, i) * r.c5.getSample (1, i));
+        const float e = vaultaudit::db (acc / fr + 1e-20);
+        r.tailMax = std::max (r.tailMax, e);
+        if (f >= nf - 10) r.tailEnd = std::max (r.tailEnd, e);
+    }
+    juce::MidiBuffer hb;
+    hb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 127), 0);
+    hb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (0.7 * recipegate::sr));
+    const auto hard = VaultEngine::renderMidi (p, hb, (int) (0.8 * recipegate::sr), recipegate::sr, macros);
+    r.peak127 = std::max (hard.getMagnitude (0, hard.getNumSamples()), r.c5.getMagnitude (0, r.c5.getNumSamples()));
+    return r;
+}
+// what is wrong with one macro extreme (empty = fine); lin = the preset's final gain. Relative to the sound as designed
+// (which passed the gate): a macro may not push it over a comfort limit it was under.
+juce::String judge (const Probe& x, const Probe& ref, float lin, bool moved)
+{
+    if (x.peak127 * lin >= 0.885f && x.peak127 > ref.peak127 * 1.06f) return "clip";
+    if (x.share25 > 0.10f && x.share25 > ref.share25 + 0.005f) return "harsh-2-5k";
+    if ((x.share6k > 0.03f && x.share6k > ref.share6k + 0.002f) || (x.share8k > 0.012f && x.share8k > ref.share8k + 0.001f)) return "piercing-highs";
+    if (x.h1 < -3.0f && x.h1 < ref.h1 - 0.5f) return "fundamental";
+    if (x.loud > ref.loud + 4.0f) return "louder";
+    if (moved && x.tailEnd > x.tailMax - 55.0f && x.tailEnd > ref.tailEnd + 3.0f) return "tail";
+    return {};
+}
+// a macro whose LFO wobbles the pitch by >= 5 cents at 1 is audible by construction (the envelope measures are blind to it)
+bool pitchWobble (const VaultPreset& p, const VaultMacro& m)
+{
+    for (auto& t : m.targets)
+        if (t.target.startsWith ("lfo") && t.target.endsWith ("depth"))
+        {
+            const int k = t.target.substring (3, 4).getIntValue() - 1;
+            if (k < 0 || k > 1) continue;
+            for (auto& d : p.mod.lfo[k].dests) if (d.target == "pitch" && std::abs (d.amount) * std::abs (t.max - t.min) >= 0.05f) return true;
+        }
+    return false;
+}
+MacroCheck checkMacros (VaultPreset& p, float lin)
+{
+    MacroCheck mc;
+    bool long_ = false;
+    for (auto& m : p.macros) for (auto& t : m.targets) if (t.target.contains ("reverb") || t.target.contains ("delay") || t.target.contains ("release")) long_ = true;
+    const double total = long_ ? 9.0 : 4.0;
+    const auto ref = probe (p, p.macroDefaults, total);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& mac = p.macros[(size_t) i];
+        if (mac.targets.empty()) continue;
+        Probe lo, hi;
+        for (int round = 0; round < 5; ++round)
+        {
+            float mv[4];
+            std::copy (std::begin (p.macroDefaults), std::end (p.macroDefaults), mv);
+            mv[i] = 0.0f; lo = probe (p, mv, total);
+            mv[i] = 1.0f; hi = probe (p, mv, total);
+            const auto badLo = judge (lo, ref, lin, long_), badHi = judge (hi, ref, lin, long_);
+            if (badLo.isEmpty() && badHi.isEmpty()) break;
+            if (round == 4) { mc.harsh.add (mac.name + " (" + (badLo.isNotEmpty() ? badLo : badHi) + ")"); break; }
+            // narrow the side that fails (round 4: take it away); the sound at the knob's default stays exactly as designed:
+            // every target keeps its value v at the default, the default moves to where v now sits on the shorter range
+            mc.why.add (mac.name + (badLo.isNotEmpty() ? " 0:" + badLo : juce::String()) + (badHi.isNotEmpty() ? " 1:" + badHi : juce::String()));
+            const float k = round == 3 ? 0.0f : 0.55f;
+            const float d = p.macroDefaults[i];
+            const float kl = badLo.isNotEmpty() ? k : 1.0f, kh = badHi.isNotEmpty() ? k : 1.0f;
+            const float nd = d * kl + (1 - d) * kh > 1.0e-6f ? d * kl / (d * kl + (1 - d) * kh) : d;
+            for (auto& t : mac.targets)
+            {
+                const float v = t.min + (t.max - t.min) * d;
+                const float newMin = v + (t.min - v) * kl, newMax = v + (t.max - v) * kh;
+                t.min = newMin; t.max = newMax;
+            }
+            p.macroDefaults[i] = nd;
+            ++mc.fixes;
+        }
+        const auto mlo = modulation (lo.c5), mhi = modulation (hi.c5);
+        float md = 0;
+        for (int k = 0; k < 3; ++k) md = std::max (md, std::abs (mlo[(size_t) k] - mhi[(size_t) k]));
+        if (rawDistance (lo.c5, hi.c5) < 1.0f && md < 0.5f && std::abs (lo.loud - hi.loud) < 1.0f && ! pitchWobble (p, mac)) mc.quiet.add (mac.name);
+    }
+    return mc;
+}
+} // namespace v3
 } // namespace
 
 //==============================================================================
-std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
+static std::vector<VaultPreset> buildV2 (const RecipeContext& ctx, std::vector<juce::String>& tags)
 {
-    if (envInt ("KEYS_CALIB", 0) != 0) { calibrationReport(); return {}; }
-    // KEYS_DEMO_BANK=<bank.cvb> KEYS_DEMO_DIR=<dir> KEYS_DEMO_IDS=<id,id,...>: C5 demos (2.5 s, note off at 1.8 s) of a gated bank
-    if (auto bankPath = juce::SystemStats::getEnvironmentVariable ("KEYS_DEMO_BANK", {}); bankPath.isNotEmpty())
-    {
-        std::vector<VaultPreset> bank;
-        if (! vault::loadBankFile (juce::File (bankPath), bank)) { std::printf ("keys: cannot read %s\n", bankPath.toRawUTF8()); return {}; }
-        juce::File dir (juce::SystemStats::getEnvironmentVariable ("KEYS_DEMO_DIR", {}));
-        dir.createDirectory();
-        for (auto& id : juce::StringArray::fromTokens (juce::SystemStats::getEnvironmentVariable ("KEYS_DEMO_IDS", {}), ",", ""))
-            for (auto& p : bank)
-                if (p.id == id)
-                {
-                    auto b = recipegate::render (p, vault::homeNote, 0.8f, 1.8, 2.5);
-                    const int fade = (int) (0.06 * recipegate::sr);
-                    for (int c = 0; c < 2; ++c) b.applyGainRamp (c, b.getNumSamples() - fade, fade, 1.0f, 0.0f);
-                    auto f = dir.getChildFile (juce::String (vault::categorySlug (p.category)) + " - " + p.name + " C5.wav");
-                    recipegate::writeWav (f, b);
-                    std::printf ("keys demo: %s (peak %.2f)\n", f.getFullPathName().toRawUTF8(), b.getMagnitude (0, b.getNumSamples()));
-                }
-        return {};
-    }
     const float ownMin = envFloat ("KEYS_OWN_MIN", 2.6f), sharedMin = envFloat ("KEYS_SHARED_MIN", 3.05f);
     const float ownMax25 = 0.08f, ownMax6k = 0.02f;
     const int threads = envInt ("KEYS_THREADS", (int) std::max (1u, std::thread::hardware_concurrency()));
@@ -1140,6 +2284,7 @@ std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
         p.id = juce::String ("cv.") + vault::categorySlug (p.category) + "." + juce::String (n).paddedLeft ('0', 4);
         p.gain = 1.0f;
         out.push_back (p);
+        tags.push_back (d.cand.recipe);
         d.cand.preset = p;
     }
 
@@ -1194,6 +2339,266 @@ std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
         }
         juce::File (rp).replaceWithText (s);
         std::printf ("keys: report %s\n", rp.toRawUTF8());
+    }
+    return out;
+}
+
+//==============================================================================
+std::vector<VaultPreset> build_keys (const RecipeContext& ctx)
+{
+    if (envInt ("KEYS_CALIB", 0) != 0) { calibrationReport(); return {}; }
+    // KEYS_DEMO_BANK=<bank.cvb> KEYS_DEMO_DIR=<dir> KEYS_DEMO_IDS=<id,id,...>: C5 demos (2.5 s, note off at 1.8 s) of a gated bank
+    if (auto bankPath = juce::SystemStats::getEnvironmentVariable ("KEYS_DEMO_BANK", {}); bankPath.isNotEmpty())
+    {
+        std::vector<VaultPreset> bank;
+        if (! vault::loadBankFile (juce::File (bankPath), bank)) { std::printf ("keys: cannot read %s\n", bankPath.toRawUTF8()); return {}; }
+        juce::File dir (juce::SystemStats::getEnvironmentVariable ("KEYS_DEMO_DIR", {}));
+        dir.createDirectory();
+        for (auto& id : juce::StringArray::fromTokens (juce::SystemStats::getEnvironmentVariable ("KEYS_DEMO_IDS", {}), ",", ""))
+            for (auto& p : bank)
+                if (p.id == id)
+                {
+                    auto b = recipegate::render (p, vault::homeNote, 0.8f, 1.8, 2.5);
+                    const int fade = (int) (0.06 * recipegate::sr);
+                    for (int c = 0; c < 2; ++c) b.applyGainRamp (c, b.getNumSamples() - fade, fade, 1.0f, 0.0f);
+                    auto f = dir.getChildFile (juce::String (vault::categorySlug (p.category)) + " - " + p.name + " C5.wav");
+                    recipegate::writeWav (f, b);
+                    std::printf ("keys demo: %s (peak %.2f)\n", f.getFullPathName().toRawUTF8(), b.getMagnitude (0, b.getNumSamples()));
+                }
+        return {};
+    }
+    // the v3 distinctness pass uses the bank assembly's threshold (VaultBankGen -dist / -wdist 3.5) on the shared fingerprint, so
+    // a designed preset that would be dropped there as a near-duplicate is re-coloured here instead
+    const float ownMin = envFloat ("KEYS_OWN_MIN", 2.6f), sharedMin = envFloat ("KEYS_V3_SHARED_MIN", 3.5f);
+    const float ownMax25 = 0.08f, ownMax6k = 0.02f;
+    const int threads = envInt ("KEYS_THREADS", (int) std::max (1u, std::thread::hardware_concurrency()));
+
+    // 1. the v2 stage: voices x treatments x spaces + layer recipes, gated, distinct, named (KEYS_V2_CACHE=<dir> keeps its
+    //    result between runs while the v3 design is tuned; delete the directory when the v2 stage or the library changes)
+    std::vector<VaultPreset> base;
+    std::vector<juce::String> tags;
+    juce::File cacheBank, cacheTags;
+    if (auto dir = juce::SystemStats::getEnvironmentVariable ("KEYS_V2_CACHE", {}); dir.isNotEmpty())
+    {
+        juce::File d (dir);
+        d.createDirectory();
+        cacheBank = d.getChildFile ("keys_v2.cvb"); cacheTags = d.getChildFile ("keys_v2_tags.tsv");
+    }
+    if (cacheBank.existsAsFile() && cacheTags.existsAsFile() && vault::loadBankFile (cacheBank, base))
+    {
+        std::map<juce::String, juce::String> tagOf;
+        juce::StringArray lines;
+        cacheTags.readLines (lines);
+        for (auto& l : lines) if (l.contains ("\t")) tagOf[l.upToFirstOccurrenceOf ("\t", false, false)] = l.fromFirstOccurrenceOf ("\t", false, false);
+        for (auto& p : base) tags.push_back (tagOf[p.id]);
+        std::printf ("keys: v2 stage from the cache (%d presets)\n", (int) base.size());
+    }
+    else
+    {
+        base = buildV2 (ctx, tags);
+        if (cacheBank != juce::File())
+        {
+            vault::saveBankFile (cacheBank, base);
+            juce::String t;
+            for (size_t i = 0; i < base.size(); ++i) t << base[i].id << "\t" << tags[i] << "\n";
+            cacheTags.replaceWithText (t);
+        }
+    }
+    if (envInt ("KEYS_V3", 1) == 0) return base;   // the v2 stage alone (comparison runs)
+    if (const int lim = envInt ("KEYS_V3_LIMIT", 0); lim > 0 && lim < (int) base.size()) { base.resize ((size_t) lim); tags.resize ((size_t) lim); }
+
+    // 2. the v3 design (finished FX chain, movement, 4 sound macros, a few arp / gate patterns), gated again
+    const int n = (int) base.size();
+    std::vector<v3::Info> info ((size_t) n);
+    std::vector<int> pattern ((size_t) n, 0);
+    {
+        std::set<juce::String> names, patternNames;
+        for (auto& p : base) names.insert (p.name.toLowerCase());
+        for (int i = 0; i < n; ++i)
+        {
+            info[(size_t) i] = v3::parseInfo (tags[(size_t) i], base[(size_t) i]);
+            juce::String nm;
+            const int pt = v3::patternFor (info[(size_t) i], nm);
+            if (pt != 0 && patternNames.insert (nm).second && names.insert (nm.toLowerCase()).second)
+            {
+                pattern[(size_t) i] = pt;
+                names.erase (base[(size_t) i].name.toLowerCase());
+                base[(size_t) i].name = nm;
+            }
+        }
+    }
+    struct Out
+    {
+        VaultPreset p;
+        recipegate::Result res;
+        std::vector<float> own;
+        int repairs = 0, level = 0;   // v3::design levels 0-4, 5 = the v2 sound (classic macros)
+        bool dropped = false;         // still a near-duplicate of an earlier preset after every colour
+        v3::MacroCheck mc;
+    };
+    std::vector<Out> res ((size_t) n);
+    // design + gate (+ repairs) + macro check + own fingerprint of preset i, starting at design level `from`
+    auto processOne = [&] (int i, int from)
+    {
+        auto& o = res[(size_t) i];
+        o = Out();
+        const auto& in = info[(size_t) i];
+        bool ok = false;
+        for (int level = from; level < 6 && ! ok; ++level)
+        {
+            VaultPreset q = base[(size_t) i];
+            if (level < 5) v3::design (q, in, level, pattern[(size_t) i]);
+            else recipe::design (q);
+            if (juce::String why; ! vault::validatePreset (q, &why)) { std::printf ("  keys v3 INVALID %s %s: %s\n", q.id.toRawUTF8(), q.name.toRawUTF8(), why.toRawUTF8()); continue; }
+            for (int attempt = 0; attempt < 6; ++attempt)
+            {
+                o.res = recipegate::Result();
+                o.res.preset = q;
+                recipegate::analyse (o.res);
+                if (o.res.fail.isEmpty() && o.res.share25 > ownMax25) o.res.fail = "harsh-2-5k";
+                if (o.res.fail.isEmpty() && o.res.share6k > ownMax6k) o.res.fail = "piercing-highs";
+                if (o.res.fail.isEmpty() || level == 5) break;
+                if (! v3::repair (q, o.res.fail, attempt)) break;
+                calibrate (q);
+                ++o.repairs;
+            }
+            if (o.res.fail.isEmpty() || level == 5) { ok = true; o.level = level; o.p = q; }
+        }
+        if (o.res.fail.isEmpty())
+        {
+            if (o.level < 5) o.mc = v3::checkMacros (o.p, o.res.preset.gain);
+            o.own = ownPrint (o.p);
+        }
+        o.p.gain = 1.0f;
+    };
+    auto runAll = [&] (const std::vector<int>& which, int from)
+    {
+        std::atomic<int> next { 0 }, count { 0 };
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t)
+            pool.emplace_back ([&]
+            {
+                for (int k; (k = next++) < (int) which.size();)
+                {
+                    processOne (which[(size_t) k], from);
+                    if (++count % 50 == 0) std::printf ("  keys v3 %d / %d\n", count.load(), (int) which.size());
+                }
+            });
+        for (auto& t : pool) t.join();
+    };
+    // the presets (in recipe order) that are too close to an earlier kept one
+    auto nearOnes = [&]
+    {
+        std::vector<int> kept, near;
+        for (int i = 0; i < n; ++i)
+        {
+            auto& o = res[(size_t) i];
+            if (o.res.fail.isNotEmpty() || o.dropped) continue;
+            bool close = false;
+            for (int j : kept)
+                if (ownDistance (o.own, res[(size_t) j].own) < ownMin || recipegate::distance (o.res.print, res[(size_t) j].res.print) < sharedMin)
+                {
+                    close = true;
+                    std::printf ("  keys v3 close: %s (level %d) ~ %s\n", o.p.name.toRawUTF8(), o.level, res[(size_t) j].p.name.toRawUTF8());
+                    break;
+                }
+            if (close) near.push_back (i); else kept.push_back (i);
+        }
+        return near;
+    };
+    {
+        std::vector<int> all ((size_t) n);
+        for (int i = 0; i < n; ++i) all[(size_t) i] = i;
+        runAll (all, 0);
+    }
+    // distinctness after the design: a preset that came out too close to an earlier one gets the neighbouring colour,
+    // then the light design, then its v2 sound; still too close = dropped (as the v2 stage would have dropped it)
+    for (int pass = 0; pass < 7; ++pass)
+    {
+        const auto near = nearOnes();
+        std::printf ("keys v3: %d presets too close to an earlier one\n", (int) near.size());
+        if (near.empty()) break;
+        std::map<int, std::vector<int>> byFrom;   // next design level -> presets
+        for (int i : near)
+        {
+            if (res[(size_t) i].level >= 5 || pass == 6) res[(size_t) i].dropped = true;
+            else byFrom[res[(size_t) i].level + 1].push_back (i);
+        }
+        for (auto& [from, list] : byFrom) runAll (list, from);
+    }
+
+    // 3. report: distinctness after the design, processing styles, macro checks
+    std::vector<VaultPreset> out;
+    std::map<juce::String, int> fails, styles, macroNames, levels;
+    int fixes = 0, patterns = 0;
+    juce::StringArray quiet, harsh;
+    std::map<int, std::pair<int, int>> slotsPerCat;   // category -> (presets, slots)
+    for (int i = 0; i < n; ++i)
+    {
+        auto& o = res[(size_t) i];
+        if (o.dropped) { ++fails["near-duplicate"]; std::printf ("  keys v3 DROPPED %s %s (near-duplicate)\n", o.p.id.toRawUTF8(), o.p.name.toRawUTF8()); continue; }
+        if (o.res.fail.isNotEmpty()) { ++fails[o.res.fail]; std::printf ("  keys v3 FAILED %s %s: %s\n", o.p.id.toRawUTF8(), o.p.name.toRawUTF8(), o.res.fail.toRawUTF8()); continue; }
+        static const char* levelNames[] { "full design", "without family polish", "role pushed further", "neighbouring colour", "light design", "v2 sound" };
+        ++levels[levelNames[juce::jlimit (0, 5, o.level)]];
+        fixes += o.mc.fixes;
+        for (auto& q : o.mc.quiet) quiet.add (o.p.name + ": " + q);
+        for (auto& h : o.mc.harsh) harsh.add (o.p.name + ": " + h);
+        juce::StringArray chain;
+        for (auto& f : o.p.fx) chain.add (vault::fxTypeInfo (f.type).id);
+        ++styles[vault::categoryNames()[o.p.category] + " | " + info[(size_t) i].treat + (info[(size_t) i].layer.isNotEmpty() ? "+" + info[(size_t) i].layer : juce::String()) + " | " + chain.joinIntoString (" > ")];
+        for (auto& m : o.p.macros) if (m.name.isNotEmpty()) ++macroNames[m.name];
+        if (o.p.arp.on || o.p.gate.on) { ++patterns; std::printf ("  keys pattern: %s %s (%s)\n", o.p.id.toRawUTF8(), o.p.name.toRawUTF8(), o.p.arp.on ? "arp" : "gate"); }
+        auto& sc = slotsPerCat[o.p.category]; ++sc.first; sc.second += (int) o.p.fx.size();
+        out.push_back (o.p);
+    }
+    float minOwn = 1e9f, minShared = 1e9f;
+    juce::String ownA, ownB, shA, shB;
+    int underOwn = 0, underShared = 0;
+    for (int x = 0; x < n; ++x)
+        for (int y = x + 1; y < n; ++y)
+        {
+            auto& a = res[(size_t) x]; auto& b = res[(size_t) y];
+            if (a.res.fail.isNotEmpty() || b.res.fail.isNotEmpty() || a.dropped || b.dropped) continue;
+            const float o = ownDistance (a.own, b.own), s = recipegate::distance (a.res.print, b.res.print);
+            if (o < ownMin) { ++underOwn; std::printf ("  keys v3 near (own %.2f): %s / %s\n", o, a.p.name.toRawUTF8(), b.p.name.toRawUTF8()); }
+            if (s < sharedMin) { ++underShared; std::printf ("  keys v3 near (shared %.2f): %s / %s\n", s, a.p.name.toRawUTF8(), b.p.name.toRawUTF8()); }
+            if (o < minOwn) { minOwn = o; ownA = a.p.name; ownB = b.p.name; }
+            if (s < minShared) { minShared = s; shA = a.p.name; shB = b.p.name; }
+        }
+    std::printf ("keys v3: %d of %d presets designed", (int) out.size(), n);
+    for (auto& [l, c] : levels) std::printf (", %s %d", l.toRawUTF8(), c);
+    std::printf ("; %d with an arp / gate pattern\n", patterns);
+    for (auto& [c, v] : slotsPerCat) std::printf ("  %-14s %d presets, %.2f FX slots on average\n", vault::categoryNames()[c].toRawUTF8(), v.first, (double) v.second / std::max (1, v.first));
+    std::printf ("keys v3: min pairwise own distance %.2f (%s / %s), shared %.2f (%s / %s); pairs under own %.2f: %d, under shared %.2f: %d\n",
+                 minOwn, ownA.toRawUTF8(), ownB.toRawUTF8(), minShared, shA.toRawUTF8(), shB.toRawUTF8(), ownMin, underOwn, sharedMin, underShared);
+    std::printf ("keys v3: macro ranges narrowed %d times; %d macro extremes still out of the comfort rules; %d macros barely audible\n", fixes, harsh.size(), quiet.size());
+    for (auto& h : harsh) std::printf ("  keys macro OUT %s\n", h.toRawUTF8());
+    for (auto& q : quiet) std::printf ("  keys macro QUIET %s\n", q.toRawUTF8());
+    for (auto& [f, c] : fails) std::printf ("  keys v3 rejected %-16s %d\n", f.toRawUTF8(), c);
+    if (envInt ("KEYS_STYLES", 0) != 0)
+        for (auto& [s, c] : styles) std::printf ("  style %3d  %s\n", c, s.toRawUTF8());
+    {
+        juce::String s;
+        for (auto& [m, c] : macroNames) s << m << " " << c << ", ";
+        std::printf ("keys v3 macro names: %s\n", s.toRawUTF8());
+    }
+    if (auto rp = juce::SystemStats::getEnvironmentVariable ("KEYS_REPORT3", {}); rp.isNotEmpty())
+    {
+        juce::String s ("id\tname\trecipe\tresult\tlevel\trepairs\tchain\tmacros\tlfo1\tlfo2\tH1\t2-5k%\t>6k%\t>8k%\ttail\tvel\tgainDb\tmacroFixes\tnarrowed\tquiet\n");
+        for (int i = 0; i < n; ++i)
+        {
+            auto& o = res[(size_t) i];
+            juce::StringArray chain, macs;
+            for (auto& f : o.p.fx) chain.add (vault::fxTypeInfo (f.type).id);
+            for (int m = 0; m < 4; ++m) if (o.p.macros[(size_t) m].name.isNotEmpty()) macs.add (o.p.macros[(size_t) m].name + "@" + juce::String (o.p.macroDefaults[m], 2));
+            auto lfoText = [] (const VaultLfo& l) { juce::StringArray d; for (auto& x : l.dests) d.add (x.target); return d.isEmpty() ? juce::String ("-") : juce::String (l.rate, 2) + "Hz x" + juce::String (l.depth, 2) + " " + d.joinIntoString ("+"); };
+            s << o.p.id << "\t" << o.p.name << "\t" << tags[(size_t) i] << "\t" << (o.dropped ? juce::String ("near-duplicate") : o.res.fail.isEmpty() ? juce::String ("ok") : o.res.fail) << "\t" << o.level << "\t" << o.repairs << "\t"
+              << chain.joinIntoString (">") << "\t" << macs.joinIntoString (", ") << "\t" << lfoText (o.p.mod.lfo[0]) << "\t" << lfoText (o.p.mod.lfo[1]) << "\t"
+              << juce::String (o.res.h1Db, 1) << "\t" << juce::String (100 * o.res.share25, 2) << "\t" << juce::String (100 * o.res.share6k, 2) << "\t" << juce::String (100 * o.res.share8k, 2) << "\t"
+              << juce::String (o.res.tail, 2) << "\t" << juce::String (o.res.velRange, 1) << "\t" << juce::String (o.res.gainDb, 1) << "\t" << o.mc.fixes << "\t" << o.mc.why.joinIntoString ("; ") << "\t" << o.mc.quiet.joinIntoString (", ") << "\n";
+        }
+        juce::File (rp).replaceWithText (s);
+        std::printf ("keys: v3 report %s\n", rp.toRawUTF8());
     }
     return out;
 }
