@@ -7,6 +7,20 @@
 #include "../Source/PluginProcessor.h"
 
 #include <cstdio>
+#include <set>
+
+// a host that reports 150 BPM (stopped), so the shot shows "HOST SYNC"
+struct FakeHost : juce::AudioPlayHead
+{
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        p.setBpm (150.0);
+        p.setIsPlaying (false);
+        p.setPpqPosition (0.0);
+        return p;
+    }
+};
 
 int main (int argc, char** argv)
 {
@@ -35,6 +49,8 @@ int main (int argc, char** argv)
         proc->setStateInformation (state.getData(), (int) state.getSize());
 
         // run the preview for a moment so the playhead sits inside the loop
+        FakeHost host;
+        proc->setPlayHead (&host);
         proc->setRateAndBufferSizeDetails (48000.0, 512);
         proc->prepareToPlay (48000.0, 512);
         proc->startPreview (2);
@@ -75,6 +91,7 @@ int main (int argc, char** argv)
         else std::printf ("wrote %s\n", out.getFullPathName().toRawUTF8());
 
         ed = nullptr;
+        proc->setPlayHead (nullptr);
         proc->releaseResources();
         proc = nullptr;
     }

@@ -165,6 +165,41 @@ static void testMelodies()
                         CHECK (i == 3 ? ! eq : eq, "re-roll row 3 affected row %d", i);
                     }
                 }
+    // musical sanity: strong beats (1 and 3) land on chord tones, leaps stay singable (except ZIGZAG / BOUNCE)
+    {
+        int strong = 0, strongChord = 0, bigLeaps = 0, intervals = 0;
+        for (uint32_t seed = 1; seed <= 40; ++seed)
+        {
+            SetSettings s;
+            s.key = { (int) (seed % 12), seed % 3 != 0 };
+            s.seed = seed * 7919u;
+            const auto set = generateSet (s);
+            for (const auto& m : set.melodies)
+            {
+                for (size_t i = 0; i < m.notes.size(); ++i)
+                {
+                    const auto& n = m.notes[i];
+                    if (std::abs (n.start / 2.0 - std::round (n.start / 2.0)) < 1e-9)
+                    {
+                        const int c = m.progression[(size_t) ((int) (n.start / 4.0) % 4)];
+                        bool tone = false;
+                        for (int t : { 0, 2, 4 }) tone = tone || floorMod (degreeToPitch (s.key, c + t) - n.pitch, 12) == 0;
+                        ++strong; strongChord += tone ? 1 : 0;
+                    }
+                    if (i > 0 && m.character != 10 && m.character != 11)
+                    {
+                        ++intervals;
+                        bigLeaps += std::abs (n.pitch - m.notes[i - 1].pitch) > 9 ? 1 : 0;
+                    }
+                }
+            }
+        }
+        const double ct = (double) strongChord / std::max (1, strong), lp = (double) bigLeaps / std::max (1, intervals);
+        std::printf ("   strong beats on chord tones: %.1f %%, leaps > major 6th: %.1f %%\n", ct * 100.0, lp * 100.0);
+        CHECK (ct >= 0.85, "only %.1f %% of strong beats on chord tones", ct * 100.0);
+        CHECK (lp <= 0.08, "%.1f %% big leaps", lp * 100.0);
+    }
+
     std::printf ("   %d sets checked; average notes per row:", sets);
     for (int i = 0; i < kNumMelodies; ++i) std::printf (" %s=%.1f", characterName (i), sumNotes[i] / sets);
     std::printf ("\n");

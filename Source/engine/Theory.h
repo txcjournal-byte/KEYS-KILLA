@@ -2,7 +2,9 @@
 // Basic types, seeded RNG and scale / chord helpers.
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <cstdint>
 #include <string>
 #include <vector>

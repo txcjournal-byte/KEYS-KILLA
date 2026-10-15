@@ -140,7 +140,12 @@ public:
         g.drawText (mode, r.reduced (8, 6).withHeight (9), juce::Justification::topLeft, false);
         if (! following)
         {
-            g.drawText (juce::String::fromUTF8 ("\xe2\x86\x95"), r.reduced (8, 6).withHeight (9), juce::Justification::topRight, false);
+            // small up/down arrows: "drag me"
+            juce::Path p;
+            const float x = r.getRight() - 12.0f, y = r.getY() + 6.0f;
+            p.addTriangle (x - 3.5f, y + 3.5f, x + 3.5f, y + 3.5f, x, y);
+            p.addTriangle (x - 3.5f, y + 5.5f, x + 3.5f, y + 5.5f, x, y + 9.0f);
+            g.fillPath (p);
         }
         auto body = r.reduced (8, 4).withTrimmedTop (10);
         auto unit = body.removeFromRight (34);
