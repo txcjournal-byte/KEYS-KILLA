@@ -29,3 +29,6 @@ MUST NOT BREAK (re-verify after fixes)
 - Arpeggiator: all modes, rate, Latch, steps, DAW tempo sync.
 - GATE, Favorites, Recent, arrows, Drag WAV.
 - Settings kept after closing the window and after saving/reopening the project.
+
+SOUND REQUEST (owner)
+17. STRINGS category: the owner wants real orchestral strings that are DARK, POWERFUL, DEEP and high quality (cinematic low strings, cello + contrabass + viola sections in octaves, warm hall, slow swells, marcato/spiccato power, sul-tasto dark pads). Rework the Strings (and the string-heavy Orchestral) presets so the majority are in this direction: low register emphasis (C2–C4 sweet spot), layered sections across octaves, strong but non-harsh attack, long hall reverb, no thin/bright solo-violin character as the default. Keep the C5 comfort and loudness rules. Render demos of 10 new string presets for the owner.
