@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#0A0E14;font-family:"Segoe UI",Inter,sans-serif;color:#E3E8F0;width:1400px}
+.sec{padding:26px 34px;border-bottom:1px solid #1C2432}
+h2{margin:0 0 4px;font-size:22px;letter-spacing:.06em}.d{color:#8593AB;font-size:14px;margin-bottom:18px}
+.row{display:flex;gap:30px;align-items:flex-end}
+.k{display:flex;flex-direction:column;align-items:center;gap:6px}.l{font-size:11px;font-weight:700;letter-spacing:.14em;color:#A9B6CC}.v{font-size:11px;color:#7F8CA4}
+.panel{background:linear-gradient(#131A24,#0E131B);border:1px solid #1E2734;border-radius:8px;padding:18px 24px;display:flex;gap:30px;align-items:flex-end}
+.keys{display:flex;position:relative;height:90px;width:620px;margin-left:40px}
+</style></head><body>
+<script>
+const D=Math.PI/180;
+function arcP(c,r,a0,a1){const p=a=>[c+r*Math.sin(a*D),c-r*Math.cos(a*D)];const[x1,y1]=p(a0),[x2,y2]=p(a1);return `M${x1} ${y1} A${r} ${r} 0 ${a1-a0>180?1:0} 1 ${x2} ${y2}`}
+function A(f,s=58){const c=s/2,a=-135+270*f;let t='';for(let i=0;i<=10;i++){const aa=-135+27*i,r1=c-2,r2=c-(i%5?5:7);t+=`<line x1="${c+r1*Math.sin(aa*D)}" y1="${c-r1*Math.cos(aa*D)}" x2="${c+r2*Math.sin(aa*D)}" y2="${c-r2*Math.cos(aa*D)}" stroke="#3A4558" stroke-width="1.2"/>`}
+return `<svg width="${s}" height="${s}"><defs><radialGradient id="m${s}" cx="45%" cy="35%" r="75%"><stop offset="0" stop-color="#5A6578"/><stop offset=".45" stop-color="#2B3341"/><stop offset="1" stop-color="#151A22"/></radialGradient><linearGradient id="e${s}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7C889C"/><stop offset="1" stop-color="#0D1118"/></linearGradient></defs>${t}
+<path d="${arcP(c,c-10,-135,135)}" stroke="#1B2330" stroke-width="2.5" fill="none" stroke-linecap="round"/><path d="${arcP(c,c-10,-135,a)}" stroke="#9FC3FF" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+<circle cx="${c}" cy="${c+1.5}" r="${c-14}" fill="#05070A" opacity=".7"/><circle cx="${c}" cy="${c}" r="${c-14}" fill="url(#e${s})"/><circle cx="${c}" cy="${c}" r="${c-15.5}" fill="url(#m${s})"/>
+<line x1="${c+(c-26)*Math.sin(a*D)*.15}" y1="${c-(c-26)*Math.cos(a*D)*.15}" x2="${c+(c-17)*Math.sin(a*D)}" y2="${c-(c-17)*Math.cos(a*D)}" stroke="#F2F5FA" stroke-width="2" stroke-linecap="round"/></svg>`}
+function B(f,s=58){const c=s/2,a=-135+270*f;return `<svg width="${s}" height="${s}"><path d="${arcP(c,c-4,-135,135)}" stroke="#1D2533" stroke-width="4" fill="none" stroke-linecap="round"/><path d="${arcP(c,c-4,-135,a)}" stroke="#9FC3FF" stroke-width="4" fill="none" stroke-linecap="round"/>
+<circle cx="${c}" cy="${c}" r="${c-11}" fill="#1A212C" stroke="#2A3445" stroke-width="1"/><circle cx="${c+(c-17)*Math.sin(a*D)}" cy="${c-(c-17)*Math.cos(a*D)}" r="2.6" fill="#E3E8F0"/></svg>`}
+function C(f,s=58){const c=s/2,a=-135+270*f;let t='';for(let i=0;i<24;i++){const aa=i*15;t+=`<line x1="${c+(c-9)*Math.sin(aa*D)}" y1="${c-(c-9)*Math.cos(aa*D)}" x2="${c+(c-12)*Math.sin(aa*D)}" y2="${c-(c-12)*Math.cos(aa*D)}" stroke="#0B0E13" stroke-width="1.6"/>`}
+return `<svg width="${s}" height="${s}"><defs><linearGradient id="cc${s}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#D9DFE8"/><stop offset=".5" stop-color="#8A95A6"/><stop offset="1" stop-color="#3C4555"/></linearGradient><radialGradient id="ct${s}" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#C7CED9"/><stop offset="1" stop-color="#5D6878"/></radialGradient></defs>
+<path d="${arcP(c,c-2,-135,a)}" stroke="#9FC3FF" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="${c}" cy="${c+2}" r="${c-6}" fill="#000" opacity=".55"/><circle cx="${c}" cy="${c}" r="${c-6}" fill="url(#cc${s})"/>${t}<circle cx="${c}" cy="${c}" r="${c-13}" fill="url(#ct${s})"/>
+<line x1="${c}" y1="${c}" x2="${c+(c-14)*Math.sin(a*D)}" y2="${c-(c-14)*Math.cos(a*D)}" stroke="#0A0E14" stroke-width="2.4" stroke-linecap="round"/></svg>`}
+const knobs=[['CUTOFF','8.2 kHz',.72],['RESO','12%',.12],['ATTACK','4 ms',.05],['RELEASE','1.2 s',.45],['REVERB','14% Plate',.14],['DELAY','22% 1/8D',.22],['DRIVE','off',0]];
+function keys(style){let h='<div class="keys">';const n=21;for(let i=0;i<n;i++){h+=`<div style="flex:1;margin-right:1px;border-radius:0 0 3px 3px;${style.w}${i==7?style.on:''}"></div>`}
+for(let i=0;i<n;i++){const k=i%7;if([0,1,3,4,5].includes(k))h+=`<div style="position:absolute;top:0;left:calc(${(i+1)/n*100}% - 1.1%);width:2.1%;height:56%;border-radius:0 0 2px 2px;${style.b}"></div>`}return h+'</div>'}
+const kA={w:'background:linear-gradient(#E8ECF2 0%,#D3D9E2 85%,#AEB7C4 100%);box-shadow:inset 0 -3px 0 #98A2B0;',b:'background:linear-gradient(#2A313C,#0B0E13 70%,#1C222B);box-shadow:0 2px 2px rgba(0,0,0,.6);',on:'background:linear-gradient(#BFD6FF,#8DB2F0);'};
+const kB={w:'background:#1A212C;border-top:2px solid #9FC3FF22;',b:'background:#06080C;',on:'background:#2F4E7E;'};
+const kC={w:'background:linear-gradient(#F4F1EA,#DCD6CA);box-shadow:inset 0 -4px 0 #B9B2A4;',b:'background:linear-gradient(#20242B,#050608);',on:'background:linear-gradient(#FFE6B0,#E7C27A);'};
+const sec=(t,d,f,ks)=>`<div class="sec"><h2>${t}</h2><div class="d">${d}</div><div class="row"><div class="panel">${knobs.map(k=>`<div class="k">${f(k[2])}<span class="l">${k[0]}</span><span class="v">${k[1]}</span></div>`).join('')}</div>${keys(ks)}</div></div>`;
+document.body.innerHTML=sec('A · MACHINED','Tmavý kovový knob se stupnicí a modrým prstencem hodnoty (styl studiových hardware jednotek). Realistická klaviatura.',A,kA)
++sec('B · MINIMAL FLAT','Plochý moderní styl: jen prstenec hodnoty a tečka (styl moderních synťáků). Tmavá klaviatura.',B,kB)
++sec('C · CHROME','Stříbrný rýhovaný knob jako chrom v logu TrapWin. Klaviatura se slonovinovými klávesami.',C,kC);
+</script></body></html>
