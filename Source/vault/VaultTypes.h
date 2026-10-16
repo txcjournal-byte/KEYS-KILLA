@@ -57,7 +57,7 @@ namespace vault
 enum class FxType : uint8_t { eq = 0, compressor, drive, lofi, chorus, phaser, flanger, filter, delay, reverb, width, reverse,
                               transient, body, ghost, stutter, halftime, numTypes };
 enum { numFxTypes = (int) FxType::numTypes, maxFxSlots = 8, maxFxParams = 10, maxSameFxType = 2,
-       numLfos = 2, maxLfoDests = 4, maxRoutings = 4, numSoundMacros = 4, maxMacroTargets = 8, numSteps = 16 };
+       numLfos = 2, maxLfoDests = 4, maxRoutings = 4, numSoundMacros = 4, maxMacroTargets = 8, numSteps = 32 };   // numSteps: arp / gate lanes (CVB v3 stored 16)
 } // namespace vault
 
 struct VaultFxSlot
@@ -119,19 +119,37 @@ struct VaultMacro
 
 struct VaultArp
 {
-    enum Mode : uint8_t { up, down, upDown, asPlayed, random, chord, numModes };
+    // note order (stored as numbers: append only). Up / Down / Up-Down / Down-Up / Up & Down (ends repeated) / Converge
+    // (outside in) / Diverge (inside out) / Thumb (lowest note between the others) / Pinky (highest note between) run over
+    // the held notes sorted by pitch; As Played in the order the keys went down; Random picks from them (never the same
+    // note twice in a row when there is a choice); Chord plays every held note on each step.
+    enum Mode : uint8_t { up, down, upDown, asPlayed, random, chord, downUp, upAndDown, converge, diverge, thumb, pinky, numModes };
+    // how OCTAVES (> 1) extend the notes: Up / Down = the order runs over the held notes copied 1..3 octaves up / down;
+    // Up-Down = each pass of the order one octave higher, then back down (0 1 2 1 ...); Alternate = every note followed by
+    // its octave copies (C C' E E' G G')
+    enum OctMode : uint8_t { octUp, octDown, octUpDown, octAlternate, numOctModes };
+    // the velocity of a step: played x the VELOCITY lane (the classic), the lane alone, the played velocity alone
+    enum VelMode : uint8_t { velPlayedPattern, velPattern, velPlayed, numVelModes };
+    // when the order starts again from its first note: never (it runs on through chord changes), on a new chord (keys
+    // pressed after all were up; also the free clock restarts from the key), on every new key, on every bar line
+    enum Retrig : uint8_t { retrigOff, retrigChord, retrigNote, retrigBar, numRetrigs };
+    enum LatchMode : uint8_t { latchReplace, latchAdd };   // latch: a new chord replaces the held one / adds to it
     enum StepType : uint8_t { rest = 0, play = 1, tie = 2 };
     bool on = false;
     uint8_t mode = up;
     uint8_t rate = 0;                                // vault::divisions() index, "1/16" by the constructor
     uint8_t octaves = 1;                             // 1..4
-    float gate = 0.8f;                               // note length, share of a step (0.05..1; ties extend over steps)
+    float gate = 0.8f;                               // note length, share of a step (0.01..1; x the LENGTH lane; ties extend over steps)
     float swing = 0;                                 // 0..1: every second step later by up to half a step (50 % -> 75 %)
     bool latch = false;
-    uint8_t steps = 16;                              // pattern length 1..16
-    std::array<float, vault::numSteps> vel;          // 0..1 x the played velocity
+    uint8_t steps = 16;                              // pattern length 1..32
+    std::array<float, vault::numSteps> vel;          // 0..1 (see velMode)
     std::array<uint8_t, vault::numSteps> type;       // StepType
     std::array<int8_t, vault::numSteps> oct;         // -2..2 octaves
+    // CVB v4
+    uint8_t octMode = octUp, velMode = velPlayedPattern, retrig = retrigChord, latchMode = latchReplace;
+    std::array<float, vault::numSteps> len;          // 0.05..1: the step's length x GATE (1 = GATE as set)
+    std::array<uint8_t, vault::numSteps> slide;      // 1 = the note lasts into the next note (legato: mono / legato layers glide)
     VaultArp();                                      // "Init": Up, 1/16, 1 octave, 80 %, every step on at velocity 1
     bool operator== (const VaultArp& o) const;
 };
@@ -140,8 +158,8 @@ struct VaultGate
 {
     bool on = false;
     uint8_t rate = 0;                                // vault::divisions() index, "1/16" by the constructor
-    uint8_t steps = 16;                              // 1..16
-    std::array<float, vault::numSteps> level;        // 0..1 per step (Init: on / off alternating)
+    uint8_t steps = 16;                              // 1..32
+    std::array<float, vault::numSteps> level;        // 0..1 per step (Init: on / off alternating); steps 1..32
     float depth = 1.0f;                              // 0..1: how far a closed step closes
     float smooth = 0.25f;                            // 0..1: edge time, share of a step
     float swing = 0;                                 // 0..1 like the arpeggiator
@@ -240,7 +258,7 @@ inline const std::vector<ParamInfo>& sampleParams()
         { "s.width",     0.0f,   2.0f,   1.0f,    "stereo width of the part (0 mono, 1 as recorded)" },
         { "s.releaseSamples", 0.0f, 1.0f, 1.0f,   "play the articulation's release samples (1) or not (0)" },
         { "s.polyphony", 1.0f,   64.0f,  64.0f,   "voices of this part (the oldest is faded out when exceeded)" },
-        { "s.oneShot",   -1.0f,  1.0f,   -1.0f,   "-1 = articulation default, 0 = note-off releases, 1 = plays to the end" },
+        { "s.oneShot",   -1.0f,  1.0f,   -1.0f,   "-1 = articulation default (a one-shot with s.attack >= 0.3 s releases), 0 = note-off releases, 1 = plays to the end" },
     };
     return t;
 }
@@ -357,7 +375,7 @@ bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& o
                       bool keepLegacy = false);
 bool saveBankFile (const juce::File& file, const std::vector<VaultPreset>& bank);
 bool loadBankFile (const juce::File& file, std::vector<VaultPreset>& out, juce::String* error = nullptr);
-constexpr int bankFormatVersion = 3;
+constexpr int bankFormatVersion = 4;   // 4: the v3 layout + the arp's octave / velocity / retrigger / latch modes, 32-step lanes, LENGTH + SLIDE lanes
 
 // checks one preset against the format rules (1..4 parts, category range, finite values, known keys per part kind,
 // sample parts name an instrument, model parts name a model, id / name not empty; v3: FX chain <= 8 slots, <= 2 of a type,

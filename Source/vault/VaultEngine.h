@@ -78,7 +78,10 @@ struct VaultCompiledPreset
     std::shared_ptr<vault::SampleLibrary> library;   // keeps the instrument handles alive
 };
 
-struct VaultTransport { double bpm = 120.0; double ppq = 0.0; bool playing = false; };   // host tempo / position
+// host tempo / position; barPpq = the start of the current bar (ppq), barBeats = the bar's length in quarter notes;
+// loopStart / loopEnd = the host's loop (ppq) while it loops (else 0 / 0)
+struct VaultTransport { double bpm = 120.0; double ppq = 0.0; bool playing = false; double barPpq = 0.0; double barBeats = 4.0;
+                        double loopStart = 0.0, loopEnd = 0.0; };
 
 class VaultEngine
 {
@@ -137,6 +140,14 @@ public:
 
     // ---- state for the UI / tests (audio thread values, read anywhere; approximate while playing)
     int arpStep() const { return arpStepUi.load (std::memory_order_relaxed); }       // -1 = not running
+    // any thread: the notes the arpeggiator plays from (latched ones included), in played order (key, velocity 0..1)
+    int arpHeldNotes (std::vector<std::pair<int, float>>& out) const;
+    // any thread (the on-screen keyboard): the notes the voices play now - the arpeggiator's notes while it runs (a
+    // latched pattern included), else the played keys - OR every note that started since the previous call, so a note
+    // shorter than a UI frame (1/64 at 170 BPM) still lights once. Bit k of mask[k >> 6] = MIDI note k. One reader
+    // (the editor's keyboard): the "started" bits are consumed by the call.
+    void soundingNotes (uint64_t mask[2]) const;
+    bool isNoteSounding (int note) const;                // the current bits only (does not consume)
     float lfoPhase (int i) const { return juce::isPositiveAndBelow (i, (int) vault::numLfos) ? lfoPhaseUi[i].load() : 0.0f; }
     float lfoOutput (int i) const { return juce::isPositiveAndBelow (i, (int) vault::numLfos) ? lfoValueUi[i].load() : 0.0f; }
     // the current sound's effective FX chain (after locks, default slots, macros, quick knobs, modulation)
@@ -258,6 +269,7 @@ private:
     void updateParams (Slot& s, double beatPos, double bpm, bool advance = true);   // advance = a block plays (free LFOs move)
     void renderLfos (Slot& s, int len, double beat0, double bps, int c0);
     void handleNote (bool on, int note, float vel);
+    void retriggerClock (double beat);               // "first note": LFO retrigger + the gate's free clock start (both slots)
     void handleOther (const juce::MidiMessage& m);
     void noteOnAll (Slot& s, int note, float vel);
     void noteOffAll (Slot& s, int note);
@@ -298,9 +310,14 @@ private:
     // the arpeggiator (MIDI before the voices) and the block's note / MIDI events
     vault::Arp arp;
     bool arpWasOn = false;
-    struct Ev { int sample; uint8_t type; int note; float vel; uint8_t b[3]; int len; };   // type 0 note on, 1 note off, 2 other
-    std::vector<Ev> evs;
+    struct Ev { int sample; uint8_t type; int note; float vel; uint8_t b[3]; int len; };   // type 0 note on, 1 note off, 2 other, 3 clock retrigger (arp: a new chord)
+    std::vector<Ev> evs, inEvs;
     std::vector<vault::Arp::Event> arpEvs;
+    uint32_t arpHeldVer = 0;
+    std::array<std::atomic<int>, 128> arpHeldUi {};   // note | velocity (1..127) << 8
+    std::atomic<int> arpHeldCount { 0 };
+    std::atomic<uint64_t> soundingUi[2] {};              // soundingNotes(): the voices' notes at the block end ...
+    mutable std::atomic<uint64_t> startedUi[2] {};       // ... and the notes started since the last read
 
     // mono below 120 Hz: 8th-order Butterworth high-pass (4 biquads) on the side signal
     struct Biquad2 { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;

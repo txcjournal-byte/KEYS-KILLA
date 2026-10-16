@@ -334,6 +334,7 @@ void VaultEngine::prepare (double sampleRate, int maxBlockSize, int numPartsToPr
     arp.reset(); arpWasOn = false;
     evs.clear(); evs.reserve (4096);
     arpEvs.resize ((size_t) vault::Arp::maxEvents);
+    inEvs.clear(); inEvs.reserve (2048);
     sampleClock = 0; noteLogCount = 0;
 }
 
@@ -590,6 +591,30 @@ float VaultEngine::getQuick (int index) const
 void VaultEngine::setVolume (float g) { volumeTarget.store (std::isfinite (g) ? juce::jlimit (0.0f, 2.0f, g) : 1.0f); }
 void VaultEngine::setFxOn (bool on) { fxOn.store (on); }
 void VaultEngine::setArpOn (bool on) { arpOn.store (on); }
+
+int VaultEngine::arpHeldNotes (std::vector<std::pair<int, float>>& out) const
+{
+    out.clear();
+    const int c = juce::jlimit (0, 128, arpHeldCount.load (std::memory_order_acquire));
+    for (int i = 0; i < c; ++i)
+    {
+        const int v = arpHeldUi[(size_t) i].load (std::memory_order_relaxed);
+        out.push_back ({ v & 0x7f, (float) ((v >> 8) & 0x7f) / 127.0f });
+    }
+    return c;
+}
+
+void VaultEngine::soundingNotes (uint64_t mask[2]) const
+{
+    for (int w = 0; w < 2; ++w)
+        mask[w] = soundingUi[w].load (std::memory_order_relaxed) | startedUi[w].exchange (0, std::memory_order_relaxed);
+}
+
+bool VaultEngine::isNoteSounding (int note) const
+{
+    return juce::isPositiveAndBelow (note, 128) && ((soundingUi[note >> 6].load (std::memory_order_relaxed) >> (note & 63)) & 1u) != 0;
+}
+
 void VaultEngine::setGateOn (bool on) { gateOn.store (on); }
 void VaultEngine::setLocks (bool fx, bool a, bool g) { lockFx.store (fx); lockArp.store (a); lockGate.store (g); }
 
@@ -696,6 +721,7 @@ void VaultEngine::serviceResources()
 void VaultEngine::allNotesOff (bool hard)
 {
     held.fill (0.0f);
+    for (auto& m : soundingUi) m.store (0, std::memory_order_relaxed);
     keysDown.fill (0.0f);
     arp.reset();
     for (auto& sl : slots)
@@ -718,17 +744,9 @@ void VaultEngine::handleNote (bool on, int n, float vel)
     {
         bool anyHeld = false;
         for (float h : held) anyHeld |= h > 0.0f;
-        if (! anyHeld)
-        {
-            // the first note: LFO retrigger (phase, delay, fade) and the gate's start while the host is stopped
-            const double beat = clockBeat;
-            for (auto* sl : { &s, &old })
-            {
-                sl->trigBeat = beat; sl->trigTime = (double) sampleClock / sr;
-                for (int i = 0; i < vault::numLfos; ++i)
-                    if (sl->prog->ctl.lfo[(size_t) i].retrig) sl->lfo[i].phase = sl->prog->ctl.lfo[(size_t) i].phase;
-            }
-        }
+        // the first note: LFO retrigger (phase, delay, fade) and the gate's start while the host is stopped. With the arp
+        // on, its notes have gaps - the keys decide instead (a new chord, type 3 events: the arp's free clock starts there too)
+        if (! anyHeld && ! arpWasOn) retriggerClock (clockBeat + (double) (eventClock - sampleClock) * clockBps);
         held[(size_t) n] = std::max (0.01f, vel);
         lastVelocity = held[(size_t) n];
         noteOnAll (s, n, held[(size_t) n]);            // new notes only on the current sound
@@ -741,6 +759,16 @@ void VaultEngine::handleNote (bool on, int n, float vel)
         noteOffAll (s, n);
         if (xfading) noteOffAll (old, n);
         logNote (n, 0.0f, false);
+    }
+}
+
+void VaultEngine::retriggerClock (double beat)
+{
+    for (auto* sl : { &slots[cur], &slots[1 - cur] })
+    {
+        sl->trigBeat = beat; sl->trigTime = (double) eventClock / sr;
+        for (int i = 0; i < vault::numLfos; ++i)
+            if (sl->prog->ctl.lfo[(size_t) i].retrig) sl->lfo[i].phase = sl->prog->ctl.lfo[(size_t) i].phase;
     }
 }
 
@@ -969,6 +997,8 @@ void VaultEngine::updateParams (Slot& s, double beatPos, double bpm, bool advanc
         kk::FxParams dummy;
         kk::buildVoiceParamsFrom ([vals] (int key) { return vals[key]; }, ctx, s.vp[k], dummy);
         auto& v = s.vp[k];
+        v.glideLegatoOnly = true;   // glide only between overlapping notes: a detached note (piano roll) starts on its own pitch
+        v.noteSeeded = true;        // every note starts its drift / unison phases the same way: C5 after B4 sounds as C5 alone
         // TONE: filter tilt (+-1.5 octaves of cutoff)
         v.cutoff = juce::jlimit (40.0f, 20000.0f, v.cutoff * std::exp2 (toneD * 1.5f));
         // MOTION: LFO depth (designed amount below 0.5, extra filter / pitch movement and drift above)
@@ -1114,31 +1144,66 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
             arpWasOn = arpNow;
         }
         int seg = 0;
+        vault::Arp::Clock clk;
+        clk.bps = bps; clk.hostPlaying = transport.playing;
+        clk.barStart = transport.barPpq; clk.barBeats = transport.barBeats > 0 ? transport.barBeats : 4.0;
+        if (transport.playing) { clk.loopStart = transport.loopStart; clk.loopEnd = transport.loopEnd; }
         auto runArp = [&] (int upTo)
         {
             if (! arpNow || upTo <= seg) return;
-            const int c = arp.process (upTo - seg, beat0 + bps * seg, bps, transport.playing, arpEvs.data());
+            clk.beat0 = beat0 + bps * seg;
+            const int c = arp.process (upTo - seg, clk, arpEvs.data());
             for (int i = 0; i < c; ++i) addEv (seg + arpEvs[(size_t) i].sample, arpEvs[(size_t) i].on ? 0 : 1, arpEvs[(size_t) i].note, arpEvs[(size_t) i].velocity);
             seg = upTo;
         };
+        // the block's MIDI (short messages); with the arp on, events on the same sample go offs -> others -> ons, so a
+        // chord change on a grid line (old chord's offs + new chord's ons in any order) is one clean new chord
+        inEvs.clear();
         for (const auto meta : midi)
         {
-            const int pos = juce::jlimit (0, n - 1, meta.samplePosition);
+            if (meta.numBytes > 3 || inEvs.size() >= inEvs.capacity()) continue;
             const auto m = meta.getMessage();
-            if (m.isNoteOn())
+            Ev e { juce::jlimit (0, n - 1, meta.samplePosition), 2, 0, 0.0f, { 0, 0, 0 }, meta.numBytes };
+            for (int b = 0; b < meta.numBytes; ++b) e.b[b] = meta.data[b];
+            if (m.isNoteOn()) { e.type = 0; e.note = m.getNoteNumber(); e.vel = m.getFloatVelocity(); }
+            else if (m.isNoteOff()) { e.type = 1; e.note = m.getNoteNumber(); }
+            inEvs.push_back (e);
+        }
+        if (arpNow)
+        {
+            auto rank = [] (const Ev& e) { return e.type == 1 ? 0 : e.type == 2 ? 1 : 2; };
+            for (size_t i = 1; i < inEvs.size(); ++i)   // insertion sort: stable, no allocation
             {
-                keysDown[(size_t) m.getNoteNumber()] = std::max (0.01f, m.getFloatVelocity());
-                if (arpNow) { runArp (pos); arp.keyDown (m.getNoteNumber(), keysDown[(size_t) m.getNoteNumber()]); lastVelocity = keysDown[(size_t) m.getNoteNumber()]; }
-                else addEv (pos, 0, m.getNoteNumber(), m.getFloatVelocity());
+                const Ev x = inEvs[i];
+                size_t j = i;
+                while (j > 0 && (inEvs[j - 1].sample > x.sample || (inEvs[j - 1].sample == x.sample && rank (inEvs[j - 1]) > rank (x)))) { inEvs[j] = inEvs[j - 1]; --j; }
+                inEvs[j] = x;
             }
-            else if (m.isNoteOff())
+        }
+        for (const auto& e : inEvs)
+        {
+            const int pos = e.sample;
+            if (e.type == 0)
             {
-                keysDown[(size_t) m.getNoteNumber()] = 0.0f;
-                if (arpNow) { runArp (pos); arp.keyUp (m.getNoteNumber()); }
-                else addEv (pos, 1, m.getNoteNumber(), 0.0f);
+                if (arpNow)
+                {
+                    bool anyDown = false;
+                    for (float k : keysDown) anyDown |= k > 0.0f;
+                    if (! anyDown) { runArp (pos); addEv (pos, 3, e.note, 0.0f); }   // a new chord: LFO retrigger / gate clock (free) at the key
+                }
+                keysDown[(size_t) e.note] = std::max (0.01f, e.vel);
+                if (arpNow) { runArp (pos); arp.keyDown (e.note, keysDown[(size_t) e.note]); lastVelocity = keysDown[(size_t) e.note]; }
+                else addEv (pos, 0, e.note, e.vel);
             }
-            else if (meta.numBytes <= 3 && evs.size() < evs.capacity())
+            else if (e.type == 1)
             {
+                keysDown[(size_t) e.note] = 0.0f;
+                if (arpNow) { runArp (pos); arp.keyUp (e.note); }
+                else addEv (pos, 1, e.note, 0.0f);
+            }
+            else if (evs.size() < evs.capacity())
+            {
+                const auto m = e.len == 3 ? juce::MidiMessage (e.b[0], e.b[1], e.b[2]) : e.len == 2 ? juce::MidiMessage (e.b[0], e.b[1]) : juce::MidiMessage (e.b[0]);
                 if (arpNow) runArp (pos);
                 if (arpNow && (m.isAllNotesOff() || m.isAllSoundOff()))
                 {
@@ -1146,19 +1211,28 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
                     for (int i = 0; i < c; ++i) addEv (pos, 1, arpEvs[(size_t) i].note, 0.0f);
                     arp.reset();
                 }
-                Ev e { pos, 2, 0, 0.0f, { 0, 0, 0 }, meta.numBytes };
-                for (int b = 0; b < meta.numBytes; ++b) e.b[b] = meta.data[b];
+                if (arpNow && m.isSustainPedalOn()) { arp.setPedal (true); continue; }   // the pedal holds the arp's keys, not its notes
+                if (arpNow && m.isSustainPedalOff()) arp.setPedal (false);
                 evs.push_back (e);
             }
         }
         runArp (n);
         arpStepUi.store (arpNow ? arp.stepIndex() : -1, std::memory_order_relaxed);
+        if (arp.heldVersion() != arpHeldVer)   // the arp's notes for the MIDI export (message thread reads)
+        {
+            arpHeldVer = arp.heldVersion();
+            int notes[128]; float vels[128];
+            const int c = arpNow ? arp.heldNotes (notes, vels, 128) : 0;
+            for (int i = 0; i < c; ++i) arpHeldUi[(size_t) i].store (notes[i] | (juce::jlimit (1, 127, juce::roundToInt (vels[i] * 127.0f)) << 8), std::memory_order_relaxed);
+            arpHeldCount.store (c, std::memory_order_release);
+        }
     }
     size_t evIt = 0;
     auto dispatch = [&] (const Ev& e)
     {
         if (e.type == 0) handleNote (true, e.note, e.vel);
         else if (e.type == 1) handleNote (false, e.note, 0.0f);
+        else if (e.type == 3) retriggerClock (clockBeat + (double) (eventClock - sampleClock) * clockBps);
         else
         {
             const auto m = e.len == 3 ? juce::MidiMessage (e.b[0], e.b[1], e.b[2]) : e.len == 2 ? juce::MidiMessage (e.b[0], e.b[1]) : juce::MidiMessage (e.b[0]);
@@ -1293,7 +1367,8 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
                 if (s.gateMix > 0.0f || to > 0.0f)
                 {
                     const double gb = transport.playing ? beat0 + bps * c0 : beat0 + bps * c0 - s.trigBeat;
-                    s.gate.process (s.busL.data(), s.busR.data(), len, pr.ctl.gate, gb, bps, E.gate[0], s.gateMix, to, E.gate[2]);
+                    s.gate.process (s.busL.data(), s.busR.data(), len, pr.ctl.gate, gb, bps, E.gate[0], s.gateMix, to, E.gate[2],
+                                    transport.playing ? transport.loopStart : 0.0, transport.playing ? transport.loopEnd : 0.0);
                 }
                 s.gateMix = to;
             }
@@ -1398,6 +1473,17 @@ void VaultEngine::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
     }
     while (evIt < evs.size()) dispatch (evs[evIt++]);
     for (int c = 2; c < nCh; ++c) buffer.clear (c, 0, n);
+    {
+        // the on-screen keyboard: what the voices play now (arp output while it runs) + every note started in this block
+        uint64_t now[2] {}, started[2] {};
+        for (int k = 0; k < 128; ++k) if (held[(size_t) k] > 0.0f) now[k >> 6] |= uint64_t (1) << (k & 63);
+        for (const auto& e : evs) if (e.type == 0 && juce::isPositiveAndBelow (e.note, 128)) started[e.note >> 6] |= uint64_t (1) << (e.note & 63);
+        for (int w = 0; w < 2; ++w)
+        {
+            soundingUi[w].store (now[w], std::memory_order_relaxed);
+            if (started[w] != 0) startedUi[w].fetch_or (started[w], std::memory_order_relaxed);
+        }
+    }
 }
 
 juce::AudioBuffer<float> VaultEngine::render (const VaultPreset& preset, int midiNote, float velocity, double seconds, double sampleRate)

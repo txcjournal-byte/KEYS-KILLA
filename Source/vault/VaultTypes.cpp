@@ -74,15 +74,20 @@ void writeV3 (juce::MemoryOutputStream& o, const VaultPreset& p)
     const auto& a = p.arp;
     o.writeByte (a.on ? 1 : 0); o.writeByte ((char) a.mode); o.writeByte ((char) a.rate); o.writeByte ((char) a.octaves);
     o.writeFloat (a.gate); o.writeFloat (a.swing); o.writeByte (a.latch ? 1 : 0); o.writeByte ((char) a.steps);
+    o.writeByte ((char) numSteps);   // v4: the lane length
     for (float v : a.vel) o.writeFloat (v);
     for (auto v : a.type) o.writeByte ((char) v);
     for (auto v : a.oct) o.writeByte ((char) v);
+    o.writeByte ((char) a.octMode); o.writeByte ((char) a.velMode); o.writeByte ((char) a.retrig); o.writeByte ((char) a.latchMode);
+    for (float v : a.len) o.writeFloat (v);
+    for (auto v : a.slide) o.writeByte ((char) v);
     const auto& g = p.gate;
     o.writeByte (g.on ? 1 : 0); o.writeByte ((char) g.rate); o.writeByte ((char) g.steps);
+    o.writeByte ((char) numSteps);
     for (float v : g.level) o.writeFloat (v);
     o.writeFloat (g.depth); o.writeFloat (g.smooth); o.writeFloat (g.swing); o.writeFloat (g.mix);
 }
-bool readV3 (juce::MemoryInputStream& in, VaultPreset& p)
+bool readV3 (juce::MemoryInputStream& in, VaultPreset& p, int version)
 {
     p.v3 = true;
     p.finish = in.readFloat();
@@ -110,15 +115,25 @@ bool readV3 (juce::MemoryInputStream& in, VaultPreset& p)
         m.targets.resize ((size_t) (uint8_t) in.readByte());
         for (auto& t : m.targets) { if (! readString (in, t.target)) return false; t.min = in.readFloat(); t.max = in.readFloat(); t.curve = in.readFloat(); }
     }
+    // lanes: v3 stored 16 steps, v4 stores its count; steps beyond what we keep are skipped, missing ones keep the defaults
+    auto lanes = [&] (int stored, auto&& readOne) { for (int i = 0; i < stored; ++i) readOne (i, i < numSteps); };
     auto& a = p.arp;
     a.on = in.readByte() != 0; a.mode = (uint8_t) in.readByte(); a.rate = (uint8_t) in.readByte(); a.octaves = (uint8_t) in.readByte();
     a.gate = in.readFloat(); a.swing = in.readFloat(); a.latch = in.readByte() != 0; a.steps = (uint8_t) in.readByte();
-    for (auto& v : a.vel) v = in.readFloat();
-    for (auto& v : a.type) v = (uint8_t) in.readByte();
-    for (auto& v : a.oct) v = (int8_t) in.readByte();
+    const int na = version >= 4 ? (uint8_t) in.readByte() : 16;
+    lanes (na, [&] (int i, bool keep) { const float v = in.readFloat(); if (keep) a.vel[(size_t) i] = v; });
+    lanes (na, [&] (int i, bool keep) { const auto v = (uint8_t) in.readByte(); if (keep) a.type[(size_t) i] = v; });
+    lanes (na, [&] (int i, bool keep) { const auto v = (int8_t) in.readByte(); if (keep) a.oct[(size_t) i] = v; });
+    if (version >= 4)
+    {
+        a.octMode = (uint8_t) in.readByte(); a.velMode = (uint8_t) in.readByte(); a.retrig = (uint8_t) in.readByte(); a.latchMode = (uint8_t) in.readByte();
+        lanes (na, [&] (int i, bool keep) { const float v = in.readFloat(); if (keep) a.len[(size_t) i] = v; });
+        lanes (na, [&] (int i, bool keep) { const auto v = (uint8_t) in.readByte(); if (keep) a.slide[(size_t) i] = v; });
+    }
     auto& g = p.gate;
     g.on = in.readByte() != 0; g.rate = (uint8_t) in.readByte(); g.steps = (uint8_t) in.readByte();
-    for (auto& v : g.level) v = in.readFloat();
+    const int ng = version >= 4 ? (uint8_t) in.readByte() : 16;
+    lanes (ng, [&] (int i, bool keep) { const float v = in.readFloat(); if (keep) g.level[(size_t) i] = v; });
     g.depth = in.readFloat(); g.smooth = in.readFloat(); g.swing = in.readFloat(); g.mix = in.readFloat();
     return ! in.isExhausted() || in.getPosition() == in.getTotalLength();
 }
@@ -273,7 +288,7 @@ bool deserializeBank (const void* data, size_t size, std::vector<VaultPreset>& o
             p.name = v1::cleanText (p.name);
             for (auto& part : p.parts) part.label = v1::cleanText (part.label);
         }
-        if (version >= 3) { if (! readV3 (in, p)) return fail ("bad v3 preset section"); }
+        if (version >= 3) { if (! readV3 (in, p, version)) return fail ("bad v3 preset section"); }
         else if (! keepLegacy) upgradeToV3 (p);   // v1 / v2: the FX of part 0 become the chain, the classic macros the sound macros
         out.push_back (std::move (p));
     }
@@ -436,10 +451,12 @@ bool validatePreset (const VaultPreset& p, juce::String* why)
     }
     const auto& a = p.arp;
     if (a.mode >= VaultArp::numModes || a.rate >= divisions().size() || a.octaves < 1 || a.octaves > 4 || a.steps < 1 || a.steps > numSteps
-        || ! std::isfinite (a.gate) || a.gate < 0.01f || a.gate > 1.0f || ! std::isfinite (a.swing) || a.swing < 0 || a.swing > 1)
+        || ! std::isfinite (a.gate) || a.gate < 0.01f || a.gate > 1.0f || ! std::isfinite (a.swing) || a.swing < 0 || a.swing > 1
+        || a.octMode >= VaultArp::numOctModes || a.velMode >= VaultArp::numVelModes || a.retrig >= VaultArp::numRetrigs || a.latchMode > VaultArp::latchAdd)
         return no ("arpeggiator setting out of range");
     for (int i = 0; i < numSteps; ++i)
-        if (! std::isfinite (a.vel[(size_t) i]) || a.vel[(size_t) i] < 0 || a.vel[(size_t) i] > 1 || a.type[(size_t) i] > VaultArp::tie || std::abs (a.oct[(size_t) i]) > 2)
+        if (! std::isfinite (a.vel[(size_t) i]) || a.vel[(size_t) i] < 0 || a.vel[(size_t) i] > 1 || a.type[(size_t) i] > VaultArp::tie || std::abs (a.oct[(size_t) i]) > 2
+            || ! std::isfinite (a.len[(size_t) i]) || a.len[(size_t) i] < 0.05f || a.len[(size_t) i] > 1 || a.slide[(size_t) i] > 1)
             return no ("arpeggiator step out of range");
     const auto& g = p.gate;
     if (g.rate >= divisions().size() || g.steps < 1 || g.steps > numSteps)
@@ -460,7 +477,7 @@ const std::vector<Division>& divisions()
         { "8 bars", 32.0 }, { "4 bars", 16.0 }, { "2 bars", 8.0 }, { "1/1", 4.0 }, { "1/2D", 3.0 }, { "1/2", 2.0 }, { "1/2T", 4.0 / 3.0 },
         { "1/4D", 1.5 }, { "1/4", 1.0 }, { "1/4T", 2.0 / 3.0 }, { "1/8D", 0.75 }, { "1/8", 0.5 }, { "1/8T", 1.0 / 3.0 },
         { "1/16D", 0.375 }, { "1/16", 0.25 }, { "1/16T", 1.0 / 6.0 }, { "1/32D", 0.1875 }, { "1/32", 0.125 }, { "1/32T", 1.0 / 12.0 },
-        { "1/64", 0.0625 } };
+        { "1/64", 0.0625 }, { "1/64D", 0.09375 }, { "1/64T", 1.0 / 24.0 } };   // append only: banks store the index
     return d;
 }
 int divisionIndex (const char* name)
@@ -750,12 +767,13 @@ bool VaultMod::operator== (const VaultMod& o) const
 VaultArp::VaultArp()
 {
     rate = (uint8_t) vault::divisionIndex ("1/16");
-    vel.fill (1.0f); type.fill (play); oct.fill (0);
+    vel.fill (1.0f); type.fill (play); oct.fill (0); len.fill (1.0f); slide.fill (0);
 }
 bool VaultArp::operator== (const VaultArp& o) const
 {
     return on == o.on && mode == o.mode && rate == o.rate && octaves == o.octaves && juce::exactlyEqual (gate, o.gate) && juce::exactlyEqual (swing, o.swing)
-        && latch == o.latch && steps == o.steps && vel == o.vel && type == o.type && oct == o.oct;
+        && latch == o.latch && steps == o.steps && vel == o.vel && type == o.type && oct == o.oct
+        && octMode == o.octMode && velMode == o.velMode && retrig == o.retrig && latchMode == o.latchMode && len == o.len && slide == o.slide;
 }
 VaultGate::VaultGate()
 {
