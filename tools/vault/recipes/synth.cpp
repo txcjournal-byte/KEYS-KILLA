@@ -621,10 +621,16 @@ std::vector<Voice> voices()
     add ("pump", catSynth, kSquare, Y ("Pump Synth", polyEnv (2600, 1.0f, 0.9f, 0.3f) + Values { { "wave", 0.35f }, { "unison", 3 }, { "lfoSync", 1 }, { "lfoDiv", 2 }, { "lfoShape", 0 },
                                                                        { "lfoAmp", 0.7f } }),
          { "Pumping Synth", "Sidechain Chords", "Breathing Synth" });
-    add ("seq5", catSynth, kSaw, Y ("Sequence Synth", polyEnv (2300, 1.0f, 0.85f, 0.3f) + Values { { "unison", 2 }, { "lfo2Sync", 1 }, { "lfo2Div", 3 }, { "lfo2Shape", 3 } }
-                                                         + MM (0, 4, 0, 7.0f / 24.0f) + Values { { "lfoSync", 1 }, { "lfoDiv", 4 }, { "lfoShape", 2 }, { "lfoFilter", 0.3f } }),
+    // the two-step sequences: the square LFO is +-1, so the pitch route swings +-half the interval around the oscillator's
+    // pitch - the oscillator is lifted by half the interval (semi / fine) so the steps are the played key and key + interval
+    // (without the lift a fifth sequence played two quarter-tone-off notes and the octave bounce a tritone away); the
+    // square starts at +1, so the routes are negative: the first step is the played key, the second the interval above
+    add ("seq5", catSynth, kSaw, Y ("Sequence Synth", polyEnv (2300, 1.0f, 0.85f, 0.3f) + Values { { "unison", 2 }, { "lfo2Sync", 1 }, { "lfo2Div", 3 }, { "lfo2Shape", 3 },
+                                                                                                  { "semi", 3 }, { "fine", 50 } }
+                                                         + MM (0, 4, 0, -7.0f / 24.0f) + Values { { "lfoSync", 1 }, { "lfoDiv", 4 }, { "lfoShape", 2 }, { "lfoFilter", 0.3f } }),
          { "Fifth Sequence", "Two Step Synth", "Fifth Bounce" });
-    add ("seqoct", catSynth, kSquare, Y ("Sequence Synth", polyEnv (2400, 1.0f, 0.85f, 0.3f) + Values { { "wave", 0.5f }, { "lfo2Sync", 1 }, { "lfo2Div", 4 }, { "lfo2Shape", 3 } }
+    add ("seqoct", catSynth, kSquare, Y ("Sequence Synth", polyEnv (2400, 1.0f, 0.85f, 0.3f) + Values { { "wave", 0.5f }, { "lfo2Sync", 1 }, { "lfo2Div", 4 }, { "lfo2Shape", 3 },
+                                                                                                     { "semi", 6 } }
                                                             + MM (0, 4, 0, -0.5f)),
          { "Octave Bounce", "Low Bounce", "Hop Synth" });
     add ("epsynth", catSynth, kModel, M ("ep.tine.mellow", "Tine Electric Piano", { { "m.tone", 0.45f } }), { "EP Synth", "Tine Synth", "Glow Keys" });

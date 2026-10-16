@@ -2,6 +2,10 @@
 //
 //   VaultLibBuild [-map tools/vault/library_map.json] [-out /path/Library] [-only id1,id2] [-threads N] [-dry]
 //   VaultLibBuild -qc [-out /path/Library] [-only ids] [-demo /dir]     measure a built library (qc_report.txt, qc.json)
+//   VaultLibBuild -retune [-out /path/Library] [-only ids] [-dry] [-emit Source/vault/LibraryTuningData.cpp]
+//                                      tune the zones of a built library against each other (tools/vault/Retune.h; also
+//                                      runs after every build for the instruments built); -emit writes the plugin's
+//                                      built-in patch for libraries installed before the pass
 //
 // Per source file: read, resample to 44.1 kHz (windowed sinc), remove DC, trim silence (with a short pre-roll and a fade-in
 // over it), cap the length (fade the tail), verify / correct the root note with YIN (octave-convention errors are fixed per
@@ -16,6 +20,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../../Source/vault/VaultLibrary.h"
 #include "../../Source/vault/VaultEngine.h"
+#include "Retune.h"
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -939,8 +944,8 @@ int main (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI init;   // message manager (juce::JSON, file APIs)
     juce::String mapPath = "tools/vault/library_map.json", outOverride, only;
     int threads = juce::jlimit (1, 8, (int) std::thread::hardware_concurrency());
-    bool dry = false, qcMode = false;
-    juce::String demoPath;
+    bool dry = false, qcMode = false, retuneMode = false;
+    juce::String demoPath, emitPath;
     for (int i = 1; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -950,6 +955,8 @@ int main (int argc, char** argv)
         else if (a == "-threads" && i + 1 < argc) threads = juce::jmax (1, juce::String (argv[++i]).getIntValue());
         else if (a == "-dry") dry = true;
         else if (a == "-qc") qcMode = true;
+        else if (a == "-retune") retuneMode = true;
+        else if (a == "-emit" && i + 1 < argc) emitPath = argv[++i];
         else if (a == "-demo" && i + 1 < argc) demoPath = argv[++i];
     }
     const auto cwd = juce::File::getCurrentWorkingDirectory();
@@ -965,6 +972,7 @@ int main (int argc, char** argv)
     defaults.read (map["defaults"]);
     const auto onlyIds = juce::StringArray::fromTokens (only, ",", "");
     if (qcMode) return runQc (outDir, onlyIds, demoPath.isNotEmpty() ? juce::File (demoPath) : juce::File());
+    if (retuneMode) return retune::run (outDir, onlyIds, dry, threads, emitPath.isNotEmpty() ? cwd.getChildFile (emitPath) : juce::File());
 
     // previous library.json: instruments not rebuilt this run are kept, and so are the credit lines of other maps
     // (a second map, e.g. library_map_vocals.json, adds its own "credits" line)
@@ -1457,5 +1465,9 @@ int main (int argc, char** argv)
     vault::SampleLibrary lib (outDir);
     std::printf ("library.json %s: %d instruments, loader %s %s\n", ok ? "written" : "NOT written", lib.numInstruments(),
                  lib.libraryFound() ? "OK" : "FAILED", lib.errorMessage().toRawUTF8());
-    return ok && lib.libraryFound() ? 0 : 1;
+    if (! ok || ! lib.libraryFound()) return 1;
+    // the zones of the instruments just built, tuned against each other (neighbouring keys one semitone apart)
+    juce::StringArray built;
+    for (auto& in : insts) built.add (in.id);
+    return built.isEmpty() ? 0 : retune::run (outDir, built, false, threads);
 }

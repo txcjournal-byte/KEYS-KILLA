@@ -274,6 +274,12 @@ const VoiceProfile profiles[] = {
     { "voice.pad",    "Vocal Pad",    VKind::pad,    0.30f, 0.20f, 1.2f,  2.5f,  0.8f, 12, 14, 0.9f, 0.5f, 2.0f, -14.8f, 8 },
 };
 
+// the keys a voice model sings (MIDI, FL Studio naming C5 = 60): below / above it stays silent, the way a sampled
+// instrument is silent outside its range. A glottal model at 35 Hz or a whisper at 4 kHz has no clear pitch left (owner
+// report item 0: every key that sounds plays its own pitch)
+int lowestNote (VKind k)  { return k == VKind::female ? 36 : k == VKind::pad ? 33 : 28; }
+int highestNote (VKind k) { return k == VKind::female ? 89 : 127; }
+
 const VoiceProfile* findProfile (const juce::String& id)
 {
     for (auto& p : profiles) if (id == p.id) return &p;
@@ -333,6 +339,7 @@ public:
 
     void noteOn (int midiNote, float velocity, float freqHz) override
     {
+        if (midiNote < lowestNote (prof.kind) || midiNote > highestNote (prof.kind)) { kill(); return; }   // outside the voice's range
         note = midiNote; vel = clampf (velocity, 0.0f, 1.0f);
         hz = std::max (8.0f, freqHz);
         rng.seed ((uint32_t) (midiNote * 7907 + (int) (vel * 127.0f) * 53 + (prof.kind == VKind::male ? 3 : 11)));
@@ -439,9 +446,9 @@ private:
         const float vibC = 60.0f * par[pVibrato] * vibEnv * std::sin (vibPhase);
         vibPhase += twoPi * par[pVibRate] * (float) blk / (float) sr;
         if (vibPhase > twoPi) vibPhase -= twoPi;
-        jitT += 0.2f * (rng.next() * 3.0f - jitT);          // low-passed random: ~3-4 cents jitter
+        jitT += 0.2f * (rng.next() * 1.5f - jitT);          // low-passed random: ~2 cents jitter
         jit += 0.05f * (jitT - jit);
-        drift += 0.002f * (rng.next() * 6.0f - drift);
+        drift += 0.002f * (rng.next() * 2.0f - drift);      // slow drift within +-2 cents (it was +-6: each key leaned its own way)
         const float cents = vibC + jit + drift + pitchFall;
         const float f0 = hz * centsToRatio (cents);
         level = Glottal::levelFor (f0, sr);
@@ -503,18 +510,42 @@ public:
 
     void noteOn (int midiNote, float velocity, float freqHz) override
     {
+        if (midiNote < lowestNote (prof.kind) || midiNote > highestNote (prof.kind)) { kill(); return; }   // outside the voice's range
         note = midiNote; vel = clampf (velocity, 0.0f, 1.0f);
         hz = std::max (8.0f, freqHz);
         rng.seed ((uint32_t) (midiNote * 15485863 + (int) (vel * 127.0f) * 97 + 1));
         numSingers = juce::jlimit (1, maxSingers, (int) std::lround (par[pVoices]));
         const int numFemale = (int) std::lround (par[pGender] * (float) numSingers);
-        const float sd = par[pDetune];
+        // (narrower up high: a wide spread above C6 is heard as two pitches and every key leans another way with the formants)
+        const float sd = par[pDetune] * highSpread();
         Singer tmp[maxSingers];
+        // the pitch scatter: the singers sit on the quantiles of a normal distribution (SD = m.detune), shuffled across the
+        // singers on every note - a symmetric spread, densest at the note itself. Random Gaussian draws left each key's
+        // section a few cents off in its own direction, often as two clusters either side of the note, and neighbouring
+        // keys of a choir / pad sound measured up to 30 cents more or less than a semitone (owner report item 0)
+        float scatter[maxSingers];
+        for (int s = 0; s < numSingers; ++s)
+        {
+            const double q = ((double) s + 0.5) / (double) numSingers;   // inverse normal CDF (Acklam's rational approximation)
+            const double a[] { -3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00 };
+            const double b[] { -5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01 };
+            const double c[] { -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00 };
+            const double d[] { 7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00 };
+            double z;
+            if (q < 0.02425) { const double r = std::sqrt (-2.0 * std::log (q)); z = (((((c[0] * r + c[1]) * r + c[2]) * r + c[3]) * r + c[4]) * r + c[5]) / ((((d[0] * r + d[1]) * r + d[2]) * r + d[3]) * r + 1.0); }
+            else if (q > 1.0 - 0.02425) { const double r = std::sqrt (-2.0 * std::log (1.0 - q)); z = -(((((c[0] * r + c[1]) * r + c[2]) * r + c[3]) * r + c[4]) * r + c[5]) / ((((d[0] * r + d[1]) * r + d[2]) * r + d[3]) * r + 1.0); }
+            else { const double r = q - 0.5, r2 = r * r; z = (((((a[0] * r2 + a[1]) * r2 + a[2]) * r2 + a[3]) * r2 + a[4]) * r2 + a[5]) * r / (((((b[0] * r2 + b[1]) * r2 + b[2]) * r2 + b[3]) * r2 + b[4]) * r2 + 1.0); }
+            scatter[s] = clampf ((float) z, -2.5f, 2.5f) * sd;
+        }
+        for (int s = numSingers - 1; s > 0; --s)   // shuffled (deterministic per note: the seed above)
+        {
+            const int j = juce::jlimit (0, s, (int) ((0.5f + 0.5f * rng.next()) * (float) (s + 1)));
+            std::swap (scatter[s], scatter[j]);
+        }
         for (int s = 0; s < numSingers; ++s)
         {
             auto& g = tmp[s];
-            // Gaussian pitch scatter (sum of 3 uniforms, SD 1), clamped to +-2.5 SD
-            g.cents = clampf (rng.next() + rng.next() + rng.next(), -2.5f, 2.5f) * sd;
+            g.cents = scatter[s];
             g.vibRate = 4.6f + 1.4f * (0.5f + 0.5f * rng.next());
             g.vibDepth = 0.5f + 0.5f * (0.5f + 0.5f * rng.next());
             g.vibPhase = pi * (1.0f + rng.next());
@@ -565,6 +596,9 @@ public:
     }
 
     void noteOff (float) override { if (! released) { released = true; env.rel = true; } }
+    // the section's pitch spread (scatter and vibrato) narrows above ~G4: up high the fundamental sits on the first formant,
+    // whose slope leans a wide cluster of partials sharp or flat - a different amount on every key
+    float highSpread() const { return clampf (400.0f / hz, 0.25f, 1.0f); }
     void setPitch (float f) override { hz = std::max (8.0f, f); }
 
     void render (float* left, float* right, int n) override
@@ -664,6 +698,11 @@ private:
         gate = 0.3f + 0.7f * G.te[rd0];      // many singers: the pulsed breath noise averages to the open-phase share
         level = Glottal::levelFor (hz * 1.06f, hsr);
         const float vibEnv = clampf ((t - 0.3f) / 0.6f, 0.0f, 1.0f);
+        // every singer moves on its own (scatter, jitter, vibrato at its own rate and phase), the section as a whole stays
+        // on the note: the level-weighted mean of the singers who are singing is taken out at every control block (else the
+        // centre wanders by +-10 cents with the random phases and every key of a choir sound is tuned differently)
+        float cs[maxSingers];
+        float meanC = 0.0f, wsum = 0.0f;
         for (int s = 0; s < numSingers; ++s)
         {
             auto& g = singer[s];
@@ -671,10 +710,13 @@ private:
             if (g.vibPhase > twoPi) g.vibPhase -= twoPi;
             g.jitT += 0.2f * (rng.next() * 3.0f - g.jitT);
             g.jit += 0.05f * (g.jitT - g.jit);
-            const float c = g.cents + g.jit + 60.0f * par[pVibrato] * g.vibDepth * vibEnv * std::sin (g.vibPhase);
-            inc[s] = hz * centsToRatio (c) / (float) hsr;
+            cs[s] = g.cents + g.jit + 60.0f * par[pVibrato] * highSpread() * g.vibDepth * vibEnv * std::sin (g.vibPhase);
             if (g.delay > 0) { g.delay -= hblk; ampEff[s] = 0.0f; } else ampEff[s] = g.amp;
+            const float w = ampEff[s] * ampEff[s];
+            meanC += cs[s] * w; wsum += w;
         }
+        meanC = wsum > 0.0f ? meanC / wsum : 0.0f;
+        for (int s = 0; s < numSingers; ++s) inc[s] = hz * centsToRatio (cs[s] - meanC) / (float) hsr;
         if (! first && (age % (hblk * 4)) != 0) return;   // formants: every 64 half-rate samples
         float vowel = par[pVowel];
         if (par[pMotion] > 0.0f)   // slow drift between the set vowel and its neighbour (pad)

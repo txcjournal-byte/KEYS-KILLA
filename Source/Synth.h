@@ -26,6 +26,10 @@ struct VoiceParams
     float lfoPitch = 0, lfoFilter = 0, lfoAmp = 0;
     int   wobTarget = 0; float wobble = 0;
     bool  mono = false, legato = true; float glide = 0, bendRange = 2;
+    bool  glideLegatoOnly = false;   // glide only into a note played while the previous one is still held (CHROME VAULT)
+    bool  noteSeeded = false;        // the voice's random variations (drift, unison / oscillator phases, ALIVE) start the same on
+                                     // every note, whichever voice plays it after whichever note: a key sounds the same after any
+                                     // other, and every key the same way (CHROME VAULT; KEYS KILLA keeps its free-running voices)
     float ghost = 0; int ghostOct = 0;
     float bend = 0; int bendMode = 0; float bendSemis = -12; bool tape = false;
     float punch = 0;
@@ -86,6 +90,7 @@ public:
     void start (int n, float v, const VoiceParams& p, float glideFromSemi, uint32_t stamp)
     {
         const bool wasActive = active;
+        if (p.noteSeeded) noise.seed (12345u);
         note = n; vel = v; held = true; sustained = false; age = stamp; polyAT = 0;
         targetSemi = (float) n;
         curSemi = (glideFromSemi >= 0 && p.glide > 0.0005f) ? glideFromSemi : (float) n;
@@ -610,7 +615,9 @@ public:
             if (stackSize < (int) stack.size()) stack[(size_t) stackSize++] = n;
             auto& v = voices[0];
             for (int i = 1; i < numVoices; ++i) if (voices[(size_t) i].active) voices[(size_t) i].release();
-            if (v.active && v.held && ! v.releasing() && p.legato) v.legatoTo (n);
+            const bool prevHeld = v.active && v.held && ! v.releasing();
+            if (prevHeld && p.legato) v.legatoTo (n);
+            else if (p.glideLegatoOnly) v.start (n, vel, p, prevHeld ? lastSemi : -1.0f, stamp);   // a detached note starts on its pitch
             else v.start (n, vel, p, v.active ? lastSemi : (p.glide > 0.0005f ? lastSemi : -1.0f), stamp);
             lastSemi = (float) n;
             return;
@@ -629,7 +636,9 @@ public:
             uint32_t oldest = UINT32_MAX;
             for (auto& v : voices) if (v.age < oldest) { oldest = v.age; target = &v; }
         }
-        target->start (n, vel, p, lastSemi, stamp);
+        bool anyHeld = false;
+        if (p.glideLegatoOnly) for (auto& v : voices) anyHeld |= v.active && v.held && ! v.releasing() && &v != target;
+        target->start (n, vel, p, p.glideLegatoOnly && ! anyHeld ? -1.0f : lastSemi, stamp);
         lastSemi = (float) n;
     }
 

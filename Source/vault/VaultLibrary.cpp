@@ -1,4 +1,6 @@
 #include "VaultLibrary.h"
+#include "LibraryTuning.h"
+#include <unordered_map>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
 #include <thread>
@@ -111,6 +113,47 @@ InstrumentHandle* SampleLibrary::find (const juce::String& id) const
     return it == byId.end() ? nullptr : it->second;
 }
 
+namespace
+{
+// the built-in tuning patch (LibraryTuning.h), indexed by file once
+const std::unordered_map<std::string, const ZoneTuneFix*>& tuneFixes()
+{
+    static const auto m = []
+    {
+        std::unordered_map<std::string, const ZoneTuneFix*> r;
+        int n = 0;
+        const auto* f = libraryTuneFixes (n);
+        for (int i = 0; i < n; ++i) r[f[i].file] = f + i;
+        return r;
+    }();
+    return m;
+}
+const std::unordered_map<std::string, const ZoneTunePin*>& tunePins()
+{
+    static const auto m = []
+    {
+        std::unordered_map<std::string, const ZoneTunePin*> r;
+        int n = 0;
+        const auto* f = libraryTunePins (n);
+        for (int i = 0; i < n; ++i) r[f[i].file] = f + i;
+        return r;
+    }();
+    return m;
+}
+const std::unordered_map<std::string, const ZoneRangeFix*>& rangeFixes()
+{
+    static const auto m = []
+    {
+        std::unordered_map<std::string, const ZoneRangeFix*> r;
+        int n = 0;
+        const auto* f = libraryRangeFixes (n);
+        for (int i = 0; i < n; ++i) r[f[i].file] = f + i;
+        return r;
+    }();
+    return m;
+}
+} // namespace
+
 bool SampleLibrary::parseIndex (const juce::File& jsonFile)
 {
     const auto root = juce::JSON::parse (jsonFile);
@@ -134,6 +177,7 @@ bool SampleLibrary::parseIndex (const juce::File& jsonFile)
                 a.release = (float) (double) av.getProperty ("release", 0.3);
                 a.releaseGainDb = (float) (double) av.getProperty ("releaseGainDb", 0.0);
                 a.releaseDecayDb = (float) (double) av.getProperty ("releaseDecayDb", 6.0);
+                const bool retuned = (bool) av.getProperty ("retuned", false);   // the library tuning pass ran on this one
                 if (const auto* zs = av["zones"].getArray())
                     for (auto& zv : *zs)
                     {
@@ -154,6 +198,22 @@ bool SampleLibrary::parseIndex (const juce::File& jsonFile)
                         z.frames = (int) zv.getProperty ("frames", 0);
                         z.channels = (int) zv.getProperty ("channels", 0);
                         z.releaseTrigger = (bool) zv.getProperty ("release", false);
+                        if (! retuned && ! z.releaseTrigger)
+                            if (const auto it = tuneFixes().find (z.file.toStdString()); it != tuneFixes().end()
+                                && it->second->oldRoot == z.root && std::abs (it->second->oldFine - z.fine) < 0.06f)
+                            { z.root = it->second->root; z.fine = it->second->fine; }
+                        if (! z.releaseTrigger)
+                            if (const auto it = tunePins().find (z.file.toStdString()); it != tunePins().end())
+                            { z.root = it->second->root; z.fine = it->second->fine; }
+                        if (const auto it = rangeFixes().find (z.file.toStdString()); it != rangeFixes().end() && ! z.releaseTrigger)
+                        {
+                            const auto& f = *it->second;
+                            if (z.lo == f.oldLo && z.hi == f.oldHi && z.vlo == f.oldVlo && z.vhi == f.oldVhi)
+                            {
+                                if (f.lo < 0) continue;   // taken out
+                                z.lo = f.lo; z.hi = f.hi; z.vlo = f.vlo; z.vhi = f.vhi;
+                            }
+                        }
                         if (z.file.isNotEmpty() && z.lo <= z.hi && z.vlo <= z.vhi) a.zones.push_back (z);
                     }
                 if (! a.zones.empty()) d.articulations.push_back (std::move (a));

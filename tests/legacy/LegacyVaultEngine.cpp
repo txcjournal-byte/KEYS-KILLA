@@ -494,6 +494,8 @@ void LegacyVaultEngine::updateParams (Slot& s, double beatPos, double bpm)
         const float* vals = pr.values[k];
         kk::FxParams dummy;
         kk::buildVoiceParamsFrom ([vals] (int key) { return vals[key]; }, ctx, s.vp[k], k == 0 ? fp : dummy);
+        s.vp[k].glideLegatoOnly = true;   // the v3 glide rule (owner report item 0: detached notes start on their own pitch) on both sides: the conversion check compares the FX
+        s.vp[k].noteSeeded = true;        // (the same per-note seeding as the v3 engine)
         anyBass |= vals[kk::vk::bassMode] > 0.5f;
         auto& v = s.vp[k];
         // TONE: filter tilt (+-1.5 octaves of cutoff)

@@ -139,7 +139,11 @@ void SamplerPart::startVoice (Voice& v, const SampleInstrumentData::Zone& z, int
     updatePitch (v);
     v.isRelease = isRelease;
     const float oneShotParam = p[spOneShot];
-    v.oneShot = isRelease || (oneShotParam < -0.5f ? a.oneShot : oneShotParam > 0.5f);
+    // a one-shot articulation (struck / plucked: it rings out after note-off) played with a designed swell (s.attack >= 0.3 s:
+    // the reversed / inhaled sounds) ends on note-off unless s.oneShot = 1 says so: a swell still rising after the key went
+    // up would keep the previous note sounding over the next one (piano roll: C5 after B4 sounded B4)
+    const bool articulationOneShot = a.oneShot && p[spAttack] < 0.3f;
+    v.oneShot = isRelease || (oneShotParam < -0.5f ? articulationOneShot : oneShotParam > 0.5f);
     if (z.looped) v.oneShot = false;
     v.held = ! isRelease; v.sustained = false;
     v.age = ++ageCounter; v.startedAt = clock;
