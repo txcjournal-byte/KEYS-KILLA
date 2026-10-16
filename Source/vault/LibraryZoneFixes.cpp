@@ -35,7 +35,7 @@ const ZoneTunePin pinList[] = {
     { "world.dantranh/vibrato_066_v2_r1.ogg", 66, -10.8f },   // -3 c: dan tranh vibrato: re-fit to the chain of neighbour steps anchored on the YIN-steady takes (047, 068, 078, 083)
     { "world.dantranh/vibrato_075_v2_r1.ogg", 75, -3.8f },   // -11 c: dan tranh vibrato: re-fit to the chain of neighbour steps anchored on the YIN-steady takes (047, 068, 078, 083)
     { "world.dantranh/vibrato_078_v2_r1.ogg", 78, -14.1f },   // -11 c: dan tranh vibrato: re-fit to the chain of neighbour steps anchored on the YIN-steady takes (047, 068, 078, 083)
-    { "world.dantranh/vibrato_080_v2_r1.ogg", 81, 44.6f },   // -42 c: boundary fit for cv.world.0365 (world.dantranh/vibrato)
+    { "world.dantranh/vibrato_080_v2_r1.ogg", 80, -19.4f },   // -6 c: dan tranh vibrato: back to the chain fit (the boundary fit for Muffled Dan Tranh Bends, now out of the bank, made the plain articulation's G6-G#6 step 65 cents)
     { "bells.chimes.chromatic/hit_070_v1_r1.ogg", 70, -3.4f },   // -9 c: boundary fit: the smallest move that lets every neighbour step of the take measure one semitone (pitch test, bells.chimes.chromatic/hit)
     { "world.mbira/pluck_081_v1_r1.ogg", 81, 44.9f },   // +52 c: boundary fit: the smallest move that lets every neighbour step of the take measure one semitone (pitch test, world.mbira/pluck)
     { "voice.male.low/ah_040_v1_r1.ogg", 40, -10.4f },   // -25 c: boundary fit: the smallest move that lets every neighbour step of the take measure one semitone (pitch test, voice.male.low/ah)
