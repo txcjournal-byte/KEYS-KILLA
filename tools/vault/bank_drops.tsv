@@ -1,0 +1,96 @@
+# presets that leave the factory bank (owner report item 0 integration, 2026-10-16): they fail the pitch test
+# (VaultTests -pitch) or the v2 bank gate with the retuned library; ids stay reserved
+cv.bass.0289	drop	# pitch: Hot Thumb Piano Bass: C#7->D7 yin 0c xc 20.3653c (0.44) peak 62.5351c track 0c frames 57.035
+cv.bass.0385	drop	# pitch: Deep Timpani Bass: F5->F#5 yin 0c xc 73.7329c (0.43) peak 768.453c track 0c frames 69.007
+cv.bell.0423	drop	# pitch: Faded Sunday Bells: A#6->B6 yin 126.139c xc 140.143c (0.77) peak 139.825c track 110.065c f
+cv.brass.0147	drop	# pitch: Reverse Soul Horn Section: D2->D#2 yin 0c xc 165.028c (0.56) peak 223.283c track 149.154c frames 
+cv.fx.0018	drop	# pitch: Reversed Choir: E3->F3 ~120c (reversed take: its pitch at the end)
+cv.fx.0020	drop	# pitch: Reversed Thumb Piano: D6->D#6 yin 0c xc -18.3538c (0.46) peak 145.927c track 98.8652c frames
+cv.fx.0098	drop	# pitch: Mirror Laser: D2->D#2 yin 0c xc 131.362c (0.62) peak 132.952c track 132.329c frames 
+cv.fx.0099	drop	# pitch: Mirror Wail: C#2->D2 yin 0c xc -58.8574c (0.82) peak 70.4312c track 58.3387c frames
+cv.fx.0100	drop	# pitch: Backward Bubbles: C2->C#2 SAME PITCH yin 0c xc 1.14417c (0.91) peak 141.124c track 114.1
+cv.fx.0122	drop	# pitch: Seismic Reversed Bell: C#4->D4 yin 0c xc -157.96c (0.77) peak 8.44792c track 79.9772c frames 
+cv.fx.0135	drop	# pitch: Hall Reversed Choir: E3->F3 ~124c (reversed take)
+cv.fx.0138	drop	# pitch: Quake Piano: D4->D#4 yin 0c xc 89.3766c (0.56) peak 2564.46c track 60.9623c frames 
+cv.fx.0156	drop	# pitch: Seismic Chimes: C#4->D4 yin 0c xc -157.96c (0.77) peak 8.44792c track 79.9845c frames 
+cv.fx.0163	drop	# pitch: Quake Bars: C#4->D4 yin 0c xc -157.96c (0.77) peak 8.44792c track 79.9717c frames 
+cv.fx.0177	drop	# pitch: Cloud Reversed Marimba: E3->F3 yin 0c xc 80.3649c (0.86) peak 76.71c track 77.4831c frames 0.2
+cv.fx.0179	drop	# pitch: Cloud Backward Tines: C#6->D6 yin 0c xc -150.236c (0.41) peak 66.5552c track 1953.35c frames
+cv.fx.0218	drop	# pitch: Pulsing Tension Riser: every key plays 90.2798 cents away from the played note (YIN, mod octa
+cv.orch.0206	drop	# pitch: Snappy Soft Timpani: F5->F#5 yin 0c xc 65.1047c (0.51) peak 2123.4c track 0c frames 0c f1 3
+cv.orch.0218	drop	# pitch: Midnight Timpani: E5->F5 yin 0c xc 60.4806c (0.55) peak 732.844c track 0c frames 0c f1 7
+cv.orch.0219	drop	# pitch: Shadow Soft Timpani: F5->F#5 yin 0c xc 71.4387c (0.44) peak 769.957c track 0c frames 72.232
+cv.orch.0221	drop	# pitch: Midnight Low Timpani: E6->F6 yin 0c xc 61.6848c (0.54) peak 74.7038c track 0c frames 0c f1 7
+cv.orch.0226	drop	# pitch: Backward Timpani: F#5->G5 yin 0c xc -264.069c (0.53) peak 812.463c track 0c frames 0c f1
+cv.orch.0230	drop	# pitch: Behind Glass Timpani: F#5->G5 yin 0c xc -267.274c (0.55) peak 802.193c track 0c frames 0c f1
+cv.orch.0231	drop	# pitch: Underwater Soft Timpani: F5->F#5 yin 0c xc 75.0801c (0.52) peak 786.137c track 0c frames 76.212
+cv.orch.0233	drop	# pitch: Behind Glass Low Timpani: C6->C#6 yin 0c xc 156.326c (0.56) peak 146.016c track 0c frames 0c f1 
+cv.orch.0246	drop	# pitch: Aurora Timpani: E4->F4 yin 0c xc 46.1226c (0.50) peak 180.689c track 0c frames -40.752
+cv.orch.0260	drop	# pitch: Woodwind Arpeggio: G5->G#5 yin 0c xc 138.85c (0.47) peak 148.995c track 115.764c frames 1
+cv.pad.0060	drop	# pitch: Dusky Tremor Pad: A#4->B4 yin -1086.03c xc 129.289c (0.36) peak 1372.53c track -1087.99c
+cv.pad.0173	drop	# pitch: Deep Sea Cello Dusk: C#6->D6 yin 110.608c xc 111.093c (0.75) peak 135.034c track 110.404c f
+cv.pad.0174	drop	# pitch: Sunken Tremor Pad: D#4->E4 yin 127.645c xc 85.7989c (0.38) peak 1339.9c track 121.687c fr
+cv.piano.0206	drop	# pitch: Mirror Tine Piano: G#2->A2 yin 0c xc 130.706c (0.72) peak 129.013c track 124.197c frames 
+cv.pluck.0175	drop	# pitch: Short Celesta Pluck: C2->C#2 SAME PITCH yin 0c xc 3.19194c (0.74) peak 89.1048c track 0c fr
+cv.str.0350	drop	# pitch: Backward Tenor Cello Pizzicato: G4->G#4 yin 0c xc 86.3378c (0.54) peak -1112.1c track 111.24c frames 1
+cv.synth.0203	drop	# pitch: Reversed Stack FM Poly: D2->D#2 yin 0c xc 295.713c (0.57) peak 303.68c track 171.38c frames 11
+cv.vox.1008	drop	# pitch: Clipped High Breathy Chop: every key plays 42.5309 cents away from the played note (YIN, mod octa
+cv.world.0003	drop	# pitch: Dan Tranh Bends: C4->C#4 yin 0c xc 148.918c (0.27) peak -1744.88c track 112.887c frames
+cv.world.0004	drop	# pitch: High Dan Tranh Bends: G5->G#5 yin 0c xc 65.2954c (0.82) peak 64.8291c track 63.0076c frames 
+cv.world.0059	drop	# pitch: Thumb Piano Trio: A#7->B7 yin 0c xc 85.839c (0.73) peak 81.978c track 0c frames 0c f1 81
+cv.world.0125	drop	# pitch: Felt Dan Tranh: E4->F4 yin 0c xc 111.345c (0.55) peak -381.449c track 146.655c frames 
+cv.world.0126	drop	# pitch: Velvet High Dan Tranh: E3->F3 yin 0c xc 111.344c (0.55) peak -381.45c track 146.655c frames 1
+cv.world.0176	drop	# pitch: Hushed Dan Tranh Duet: E4->F4 yin 0c xc 131.73c (0.53) peak 2033.51c track 116.603c frames 13
+cv.world.0191	drop	# pitch: Midnight Dan Tranh Bends: G6->G#6 yin 0c xc 65.1253c (0.81) peak 65.2976c track 63.1849c frames 
+cv.world.0255	drop	# pitch: Faded Dan Tranh Bends: G6->G#6 yin 0c xc 58.014c (0.72) peak 56.9729c track 65.3459c frames 6
+cv.world.0256	drop	# pitch: Dusty High Dan Tranh Bends: G5->G#5 yin 0c xc 57.536c (0.72) peak 56.5345c track 64.8307c frames 6
+cv.world.0283	drop	# pitch: Dusty Zither and Flute: E4->F4 yin 0c xc 125.401c (0.58) peak -372.945c track 143.585c frames 
+cv.world.0303	drop	# pitch: Dusty Thumb Piano Trio: A#7->B7 yin 0c xc 83.4545c (0.75) peak 83.8125c track 0c frames 0c f1 
+cv.world.0315	drop	# pitch: Stopped Dan Tranh Bends: G6->G#6 yin 67.3796c xc 58.6466c (0.72) peak 58.1888c track 67.3796c f
+cv.world.0316	drop	# pitch: Muted High Dan Tranh Bends: G5->G#5 yin 62.687c xc 61.078c (0.81) peak 1952.04c track 62.687c fram
+cv.world.0338	drop	# pitch: Blooming Dan Tranh: E4->F4 yin 0c xc 127.751c (0.65) peak 128.508c track 134.105c frames 1
+cv.world.0339	drop	# pitch: Bowed High Dan Tranh: E3->F3 yin 0c xc 128.181c (0.64) peak 128.535c track 130.828c frames 1
+cv.world.0341	drop	# pitch: Bowed High Dan Tranh Bends: G5->G#5 yin 0c xc 65.9224c (0.56) peak 154.299c track 63.8377c frames 
+cv.world.0354	drop	# pitch: Bowed Mbira: F#6->G6 yin 0c xc -49.0184c (0.90) peak -48.7454c track 36.4981c frame
+cv.world.0365	drop	# pitch: Muffled Dan Tranh Bends: C4->C#4 yin 0c xc 230.554c (0.24) peak -616.455c track 118.04c frames 
+cv.world.0511	drop	# pitch: Doubled Dan Tranh Bends: G7->G#7 yin 0c xc 65.2131c (0.82) peak 65.0587c track 62.845c frames 6
+cv.world.0549	drop	# pitch: Halo Low Dan Tranh Bends: G7->G#7 yin 66.1449c xc 65.2226c (0.82) peak 65.8075c track 62.9728c f
+cv.world.0698	drop	# pitch: Seasick Low Dan Tranh: E5->F5 yin 0c xc 129.692c (0.56) peak -368.372c track 142.926c frames 
+cv.world.0722	drop	# pitch: Dan Tranh Arpeggio: D4->D#4 SAME PITCH yin 0c xc -0.0221538c (0.58) peak 1267.18c track 0c
+cv.bell.0545	drop	# gate: Rewind Concert Chimes: harsh-2-5k
+cv.brass.0018	drop	# gate: Low Buzzing Trombone: fundamental (-3.1 dB under the strongest harmonic)
+cv.brass.0252	drop	# gate: Tight Low Trombone Stabs: listening phrase 2.8 dB over the limiter
+cv.brass.0274	drop	# gate: Midnight Low Buzzing Trombone: fundamental (-3.7 dB under the strongest harmonic)
+cv.fx.0019	drop	# gate: Reversed Bell: harsh-2-5k
+cv.fx.0134	drop	# gate: Hall Reversed Piano: mono-loss
+cv.fx.0186	drop	# gate: Sunken Backward Folk: velocity
+cv.keys.0124	drop	# gate: Double Manual Keys: fundamental (-3.2 dB under the strongest harmonic)
+cv.keys.0137	drop	# gate: Ping FM Clav: fundamental (-3.8 dB under the strongest harmonic)
+cv.keys.0153	drop	# gate: Funk Keys & Pizzicato: fundamental (-3.5 dB under the strongest harmonic)
+cv.keys.0180	drop	# gate: Backwards Lower Manual: harsh-2-5k
+cv.lead.0040	drop	# gate: Noir Square Lead: velocity
+cv.lead.0066	drop	# gate: Muted Trumpet Lead: harsh-2-5k
+cv.lead.0083	drop	# gate: Harmon Chip Lead: harsh-2-5k
+cv.orch.0019	drop	# gate: Classic Orchestra Stab: fundamental (-3.1 dB under the strongest harmonic)
+cv.orch.0029	drop	# gate: Warm Horn and Bassoon: fundamental (-5.4 dB under the strongest harmonic)
+cv.orch.0181	drop	# gate: Rising Warm Horn & Bassoon: fundamental (-5.4 dB under the strongest harmonic)
+cv.orch.0193	drop	# gate: Sordino Warm Horn & Bassoon: fundamental (-5.1 dB under the strongest harmonic)
+cv.orch.0198	drop	# gate: Punch Woodwind Quartet: fundamental (-3.2 dB under the strongest harmonic)
+cv.orch.0251	drop	# gate: Frozen Orchestral Tutti: fundamental (-3.6 dB under the strongest harmonic)
+cv.orch.1001	drop	# gate: Horns over Low Strings: fundamental (-3.7 dB under the strongest harmonic)
+cv.pad.0038	drop	# gate: Monk Pad: velocity
+cv.pad.0082	drop	# gate: Angel Bell Pad: velocity
+cv.pad.0140	drop	# gate: Heroic Cathedral Pad: mono-loss
+cv.pad.0160	drop	# gate: Vocal Aah Choir: velocity
+cv.pad.0162	drop	# gate: Cathedral Pad & Choir: mono-loss
+cv.pad.0169	drop	# gate: Orchestral Monk Pad: velocity
+cv.pad.0179	drop	# gate: Angel Cathedral Pad: mono-loss
+cv.pad.0196	drop	# gate: Grounded Cathedral Pad: mono-loss
+cv.pad.0212	drop	# gate: Four Foot Pad & Voices: velocity
+cv.piano.0123	drop	# gate: Silk Hybrid Upright: fundamental (-3.9 dB under the strongest harmonic)
+cv.piano.0193	drop	# gate: Reversed Concert Grand: mono-loss
+cv.synth.0042	drop	# gate: Horn Stab Synth Keys: fundamental (-3.0 dB under the strongest harmonic)
+cv.vox.0068	drop	# gate: Choir Stab: fundamental (-3.0 dB under the strongest harmonic)
+cv.vox.1140	drop	# gate: Straight Choir Ee: velocity
+cv.wind.0793	drop	# gate: Windswept Oboe: fundamental (-3.3 dB under the strongest harmonic)
+cv.wind.0846	drop	# gate: Twin Chromatic Harmonica: fundamental (-3.4 dB under the strongest harmonic)

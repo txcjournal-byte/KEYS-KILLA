@@ -1775,6 +1775,122 @@ int main (int argc, char** argv)
         }
         return 0;
     }
+    // -pitchfix <in.cvb> <out.cvb>: the two-step sequence fix of tools/vault/recipes/synth.cpp (owner report item 0) applied
+    // to an assembled bank without re-running the recipes: a synth layer whose square LFO 2 swings the pitch +-a (the mod
+    // route LFO 2 -> pitch, amount a, x 12 semitones) is lifted by |a| x 12 semitones (semi / fine) and the route made
+    // negative, so the steps are the played key and key + interval, starting on the played key (before: a fifth sequence
+    // played two notes a quarter tone off the key, the octave bounce a tritone away)
+    if (argc > 3 && juce::String (argv[1]) == "-pitchfix")
+    {
+        std::vector<VaultPreset> b;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b)) return 1;
+        int fixed = 0;
+        for (auto& p : b)
+            for (auto& part : p.parts)
+            {
+                if (part.kind != VaultPartKind::synth || (int) part.get ("lfo2Shape", 0) != 3) continue;
+                for (int s = 1; s <= 8; ++s)
+                {
+                    const juce::String n (s);
+                    const float a = part.get ("mmAmt" + n, 0.0f);
+                    if ((int) part.get ("mmSrc" + n, 0) != 4 || (int) part.get ("mmDst" + n, 0) != 0 || a == 0.0f) continue;
+                    const float lift = std::abs (a) * 12.0f;
+                    const int semi = (int) std::floor (lift);
+                    const float fine = std::round ((lift - (float) semi) * 100.0f);
+                    if (a < 0.0f && (int) part.get ("semi", 0) == semi && std::abs (part.get ("fine", 0.0f) - fine) < 0.5f) continue;   // already fixed
+                    if (a > 0.0f || (int) part.get ("semi", 0) == 0)
+                    {
+                        part.set ("semi", (float) ((int) part.get ("semi", 0) + semi));
+                        part.set ("fine", part.get ("fine", 0.0f) + fine);
+                        part.set ("mmAmt" + n, -std::abs (a));
+                        std::printf ("%s %s: route %d %.4f -> %.4f, semi +%d fine +%.0f\n", p.id.toRawUTF8(), p.name.toRawUTF8(), s, a, -std::abs (a), semi, fine);
+                        ++fixed;
+                    }
+                }
+            }
+        const bool ok = vault::saveBankFile (cwd.getChildFile (argv[3]), b);
+        std::printf ("%d sequence layers fixed, %s %s\n", fixed, argv[3], ok ? "written" : "NOT written");
+        return ok ? 0 : 1;
+    }
+    // -retrim <in.cvb> <out.cvb> [ids.txt]: every preset (or the listed ids) through the v2 gate with the current engine and
+    // library; a trim more than 0.25 dB off the measured loudness is set to it (the library tuning pass / engine fixes moved
+    // some presets' level). Gate failures are listed, not changed.
+    if (argc > 3 && juce::String (argv[1]) == "-retrim")
+    {
+        std::vector<VaultPreset> b;
+        juce::String err;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b, &err)) { std::printf ("cannot load: %s\n", err.toRawUTF8()); return 1; }
+        std::set<juce::String> only;
+        if (argc > 4) { juce::StringArray ids; cwd.getChildFile (argv[4]).readLines (ids); for (auto& id : ids) if (id.trim().isNotEmpty()) only.insert (id.trim()); }
+        std::vector<int> todo;
+        for (int i = 0; i < (int) b.size(); ++i) if (only.empty() || only.count (b[(size_t) i].id) > 0) todo.push_back (i);
+        std::vector<recipegate::Result> res (todo.size());
+        parallelFor ((int) todo.size(), threads, [&] (int k) { res[(size_t) k].preset = b[(size_t) todo[(size_t) k]]; recipegate::analyse (res[(size_t) k]); });
+        int changed = 0, failed = 0;
+        for (size_t k = 0; k < todo.size(); ++k)
+        {
+            auto& p = b[(size_t) todo[k]];
+            const auto& r = res[k];
+            juce::String why = r.fail;
+            if (why.isEmpty() && r.quietBy > 1.5f) why = "loudness " + juce::String (r.quietBy, 2) + " dB under the target";
+            if (why.isEmpty() && r.share8k > recipegate::maxShare8k) why = "> 8 kHz share " + juce::String (100 * r.share8k, 2) + " %";
+            if (why.isEmpty() && r.centroid > recipegate::centroidCeiling (p.category)) why = "centroid " + juce::String ((int) r.centroid) + " Hz";
+            if (why.isEmpty() && r.chordOver > recipegate::maxChordOver + 0.5f) why = "listening phrase " + juce::String (r.chordOver, 1) + " dB over the limiter";
+            if (why == "fundamental") why << " (" << juce::String (r.h1Db, 1) << " dB under the strongest harmonic)";
+            if (why.isNotEmpty()) { ++failed; std::printf ("gate: %s %s: %s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), why.toRawUTF8()); continue; }
+            const float was = juce::Decibels::gainToDecibels (p.gain);
+            if (std::abs (r.gainDb - was) > 0.25f)
+            {
+                std::printf ("trim: %s %s: %+.2f -> %+.2f dB\n", p.id.toRawUTF8(), p.name.toRawUTF8(), was, r.gainDb);
+                p.gain = juce::Decibels::decibelsToGain (r.gainDb);
+                ++changed;
+            }
+        }
+        const bool ok = vault::saveBankFile (cwd.getChildFile (argv[3]), b);
+        std::printf ("%d presets checked: %d trims set, %d fail the gate; %s %s\n", (int) todo.size(), changed, failed, argv[3], ok ? "written" : "NOT written");
+        return ok ? 0 : 1;
+    }
+    // -patch <in.cvb> <out.cvb> <rules.tsv>: targeted fixes of a finished bank without re-running the recipes (the pitch test's
+    // fixes, owner report item 0). One rule per line, tab-separated, '#' comments:
+    //   <preset id>  set   <layer 1..4 | *>  <key>  <value>     a layer value (e.g. s.oneShot 0); * = every sample layer
+    //   <preset id>  drop                                       the preset leaves the bank (its id is never reused)
+    if (argc > 4 && juce::String (argv[1]) == "-patch")
+    {
+        std::vector<VaultPreset> b;
+        juce::String err;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b, &err)) { std::printf ("cannot load: %s\n", err.toRawUTF8()); return 1; }
+        juce::StringArray lines;
+        cwd.getChildFile (argv[4]).readLines (lines);
+        std::set<juce::String> drop;
+        int sets = 0, bad = 0;
+        for (auto& l : lines)
+        {
+            if (l.trim().isEmpty() || l.trim().startsWithChar ('#')) continue;
+            const auto f = juce::StringArray::fromTokens (l, "\t", "");
+            auto it = std::find_if (b.begin(), b.end(), [&] (const VaultPreset& p) { return p.id == f[0].trim(); });
+            if (it == b.end()) { std::printf ("unknown preset: %s\n", l.toRawUTF8()); ++bad; continue; }
+            if (f[1] == "drop") { drop.insert (it->id); continue; }
+            if (f[1] == "set" && f.size() >= 5)
+            {
+                const auto layer = f[2].trim();
+                for (int k = 0; k < (int) it->parts.size(); ++k)
+                {
+                    auto& part = it->parts[(size_t) k];
+                    if (layer == "*" ? part.kind != VaultPartKind::sample : layer.getIntValue() != k + 1) continue;
+                    part.set (f[3].trim(), (float) f[4].getDoubleValue());
+                    ++sets;
+                }
+                continue;
+            }
+            std::printf ("bad rule: %s\n", l.toRawUTF8());
+            ++bad;
+        }
+        b.erase (std::remove_if (b.begin(), b.end(), [&] (const VaultPreset& p) { return drop.count (p.id) > 0; }), b.end());
+        const bool ok = bad == 0 && vault::saveBankFile (cwd.getChildFile (argv[3]), b);
+        std::printf ("%d values set, %d presets dropped, %d bad rules, %d presets -> %s %s\n", sets, (int) drop.size(), bad, (int) b.size(), argv[3],
+                     ok ? "written" : "NOT written");
+        return ok ? 0 : 1;
+    }
     if (argc > 2 && juce::String (argv[1]) == "-macrocheck")   // -macrocheck <bank.cvb> [fails.tsv] [threads] [fixed.cvb]: every sound macro at 0 and 1
     {
         // the assembly's macro check (recipegate::checkPresetMacros) on a finished bank, without re-running the recipes;

@@ -197,10 +197,21 @@ inline void analyse (Result& r)
         for (int i = 1; i < (int) sp.pow.size(); ++i) num += i * sp.binHz * sp.pow[(size_t) i];
         r.centroid = (float) (num / std::max (1e-20, tot));
         const float f0 = soundingHz (p, vault::homeNote);
+        auto h1Under = [f0] (const Spectrum& x)
+        {
+            const float h = peakDb (x, f0 * 0.97, f0 * 1.03);
+            float top = h;
+            for (int k = 2; k <= 24 && k * f0 < 16000.0f; ++k) top = std::max (top, peakDb (x, k * f0 * 0.985, k * f0 * 1.015));
+            return h - top;
+        };
         const float h1 = peakDb (sp, f0 * 0.97, f0 * 1.03);
         float strongest = h1;
         for (int k = 2; k <= 24 && k * f0 < 16000.0f; ++k) strongest = std::max (strongest, peakDb (sp, k * f0 * 0.985, k * f0 * 1.015));
-        r.h1Db = h1 - strongest;
+        // the fundamental in the best of three windows (0.05 / 0.4 / 0.75 s): layers a few cents apart beat, and one
+        // 0.7 s window can catch the fundamental in a beat's trough (the library tuning pass moved such layers by a
+        // few cents and flipped this measure on held brass / piano / tutti layers); a missing fundamental (an
+        // octave-up layer on top, a thin wave) is missing in all three
+        r.h1Db = std::max ({ h1 - strongest, h1Under (spectrum (c5, 0.4)), h1Under (spectrum (c5, 0.75)) });
         for (int k = 1; k <= 12; ++k)   // harmonic profile (fingerprint): saw vs square, pickup / pluck position, octave courses
             r.harm[(size_t) (k - 1)] = k * f0 < 16000.0f ? std::max (-50.0f, peakDb (sp, k * f0 * (k == 1 ? 0.97 : 0.985), k * f0 * (k == 1 ? 1.03 : 1.015)) - strongest) : -50.0f;
     }

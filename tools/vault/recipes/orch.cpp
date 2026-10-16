@@ -1,5 +1,30 @@
 // CHROME VAULT recipes: STRINGS + BRASS + ORCHESTRAL (sound designer "orch"). Run: VaultBankGen -recipe orch (RecipeGate.h).
 //
+// DARK STRINGS NOTE (owner's FL Studio test report #1, item 17: strings "dark, powerful, deep")
+//  * New: the cinematic low strings (addCinematic, finished by v3::designCinematic / v3::cinematicMacros) - viola, cello
+//    and contrabass sections from the library stacked in octaves (key C5 sounds C4 / C3 / C2), cellos in octaves, open
+//    fifths, the contrabass vibrato section, as sustains, slow swells, sul tasto / con sordino pads, marcato (with a
+//    spiccato layer on the stroke), spiccato / pizzicato ostinatos and tremolo; Orchestral: horns, trombones + tuba,
+//    choir, bassoon, timpani and harp with the low sections. Each: section glue, tape power with clean lows, a warm dark
+//    EQ, a long damped hall with the strings' long pre-delay, slow movement, 4 named macros (Bow / Bite / Tone / Snap /
+//    Pluck, Hall, Swell / Bloom / Drift / Tension / Power / Weight, Basses / Depth / Echo). Ids cv.str.1001+ and
+//    cv.orch.1001+; they lead their category in the browser (the Strings default is "Cinematic Low Octaves") and win
+//    every near-duplicate pair against the older generated variants, which drop out.
+//    Also two-style strokes (accent into tremolo, tremolo settling into a sustain, spiccato over a bowed bass bed), fifths
+//    as tremolo and sul tasto, brass stabs over the low strings, timpani with pizzicato basses, choir over cello tremolo.
+//    The sections' top is rolled off gently (sample low-pass 2.2 kHz x 4^tone, tape top 6.5 kHz - 2.5 kHz x darkness, a
+//    -2 .. -5 dB high shelf): dark, but the bow still speaks (C5: centroid 100-460 Hz, 2-5 kHz <= 2.4 %, nothing above 6 kHz).
+//  * The violin-led sounds keep only their plain, Distant, Swelling, Muted, Muffled and Flautando roles, and the high solo
+//    violin register is gone (no crushed / taped / reversed / stabbed thin violins); the bases stay in the list so the
+//    other sounds keep their names and ids. After the selection, a Strings sound that is only violins / solo violin /
+//    high violas / the synth string machine (or is led by the violins an octave up) ships in its plain form only (53
+//    processed variants left out), so most of the category is the low sections.
+//  * Environment (development): ORCH_SPLIT=<bank>,<dir> writes the other recipes' presets of a finished bank as -cache
+//    files (re-assemble around a rebuilt orch); ORCH_DEMO=<bank>|<dir>|<names> renders the owner's demos (low chord
+//    progression + swell, WAV + OGG + demos.tsv); ORCH_DUMP=<file> saves the designed presets before the self gate;
+//    ORCH_MERGE=<shipped>,<assembled>,<out> swaps only this recipe's presets (Strings / Brass / Orchestral) in a
+//    shipped bank.
+//
 // v3 DESIGN NOTE - every preset ships finished (namespace v3 below)
 //  * Research: orchestral libraries are recorded in a hall and mixed lightly - subtractive EQ (low-mid build-up / box at
 //    250-400 Hz, no 3 kHz boosts on brass: "edgy"), much lighter compression than pop (an LA-2A-style glue on the string
@@ -194,6 +219,9 @@ std::vector<VaultPart> section (const char* id, const char* art, const char* lab
     return v;
 }
 
+// the cinematic low strings (owner's request, report item 17): how a preset is played and finished (v3::designCinematic)
+enum Look { lNone = 0, lEpic, lSwell, lTasto, lMarcato, lSpicc, lPizz, lTrem };
+
 struct Base
 {
     juce::String noun;
@@ -201,6 +229,8 @@ struct Base
     std::vector<VaultPart> parts;
     int pattern = 0;   // v3: the few rhythm presets (arp / gate on), appended after the selection
     juce::String sub;  // v3: the processing family (v3::subFamily)
+    int look = lNone;  // cinematic low strings: the playing / finishing style
+    float tone = 0.5f, hall = 0.5f;   // 0 darkest .. 1 most open; 0 close .. 1 cathedral
 };
 
 struct Treat
@@ -457,6 +487,147 @@ void addOrchestral (std::vector<Base>& b)
 }
 
 //==============================================================================
+// CINEMATIC LOW STRINGS (owner's FL Studio test report #1, item 17: "dark, powerful, deep"). Hand-voiced presets from the
+// real section recordings - viola, cello and contrabass sections stacked in octaves (violas at the key, cellos an octave
+// and basses two octaves under it: key C5 sounds C4 / C3 / C2, so chords played around C4..C5 sit in the C2..C4 sweet
+// spot), cellos doubled in octaves, open fifths, the contrabass vibrato section under the cellos. Every style changes how
+// the sections are played, not just an effect: sustain (glue, long warm hall, slow bow-pressure breathing), slow swells
+// (0.6 - 2.4 s bow crescendo), sul tasto / con sordino pads (the bow's attack skipped, low-passed under ~1.5 kHz), marcato
+// (accent + decay, a spiccato layer on the stroke, tape power with clean lows, transient), spiccato / pizzicato
+// ostinatos, tremolo tension; Orchestral: horns, trombones + tuba, choir, bassoon, timpani or harp with the low sections.
+// Soft notes are darker (velocity -> cutoff, as real dynamics), the top is shelved off, the low mids boxed out, lows kept
+// mono. They lead their category's list (the first Strings preset is the dark octave stack, not a solo violin) and win
+// any near-duplicate pair against the older generated variants. Finished by v3::designCinematic (chain, movement, 4
+// named macros). Variants that measured as near-duplicates of an earlier one (a hybrid synth layer or a sub sine under
+// the stack, tape colour, a close perspective, a second marcato) were taken out: only what the gate hears as its own.
+void addCinematic (std::vector<Base>& b)
+{
+    // tone 0..1: per-part low-pass from dark (sul tasto) to open; basses darker than the upper sections
+    auto cut = [] (float tone, float scale = 1.0f) { return juce::jlimit (400.0f, 9000.0f, scale * 2200.0f * std::pow (2.0f, 2.0f * tone)); };
+    struct Env { float attack = 0.08f, decay = 0.0f, sustain = 1.0f, release = 1.2f, start = 0.0f, velSens = 0.3f; bool shortS = false; float cutMul = 1.0f; };
+    auto kvOf = [&] (const Env& e, float tone, float scale)
+    {
+        KV kv { { "s.width", 0.55f }, { "s.velCutoff", 0.4f }, { "s.velSens", e.velSens }, { "s.cutoff", cut (tone, scale * e.cutMul) } };
+        if (! e.shortS) { kv.push_back ({ "s.attack", e.attack }); kv.push_back ({ "s.release", e.release }); }
+        if (e.decay > 0.0f) { kv.push_back ({ "s.decay", e.decay }); kv.push_back ({ "s.sustain", e.sustain }); }
+        if (e.start > 0.0f) kv.push_back ({ "s.start", e.start });
+        return kv;
+    };
+    struct P { const char* id; const char* label; const char* art; int o; float level, pan; int semi = 0; KV extra = {}; Env* env = nullptr; float scale = 1.0f; };
+    // section shorthands
+    auto Vn = [] (const char* art, int o, float l, float pan = -0.35f) { return P { "strings.violins.ensemble", "Violin Section", art, o, l, pan, 0, {}, nullptr, 0.8f }; };
+    auto Va = [] (const char* art, int o, float l, float pan = -0.25f) { return P { "strings.violas.ensemble", "Viola Section", art, o, l, pan }; };
+    auto Vc = [] (const char* art, int o, float l, float pan = 0.25f) { return P { "strings.cellos.ensemble", "Cello Section", art, o, l, pan }; };
+    auto Cb = [] (const char* art, int o, float l, float pan = 0.08f) { return P { "strings.contrabass", "Contrabass", art, o, l, pan, 0, {}, nullptr, 0.75f }; };
+    auto X = [] (const char* id, const char* label, const char* art, int o, float l, float pan) { return P { id, label, art, o, l, pan }; };
+    auto fifth = [] (P p) { p.semi = 7; return p; };
+    auto with = [] (P p, KV kv) { for (auto& x : kv) p.extra.push_back (x); return p; };
+
+    auto add = [&] (const char* noun, int cat, int kind, int look, float tone, float hall, Env env, std::vector<P> ps)
+    {
+        Base x { noun, cat, cat == vault::catStrings ? fStr : fOrc, kind, {} };
+        x.look = look; x.tone = tone; x.hall = hall; x.sub = "cinematic";
+        for (auto& q : ps)
+        {
+            const Env& e = q.env != nullptr ? *q.env : env;
+            auto part = lvl (S (q.id, q.art, q.label, q.o, kvOf (e, tone, q.scale)), q.level, q.pan);
+            part.semi = q.semi;
+            for (auto& [k, v] : q.extra) part.set (k, v);
+            x.parts.push_back (part);
+        }
+        b.push_back (std::move (x));
+    };
+    const int S_ = vault::catStrings, O_ = vault::catOrchestral;
+    Env sus;                                                        // bowed sustain: a soft bow start, long release
+    Env swell { 1.8f, 0, 1, 2.2f };                                 // bow crescendo
+    Env slowSwell { 2.4f, 0, 1, 2.6f };
+    Env cello14 { 1.4f, 0, 1, 2.0f };
+    Env tasto { 0.45f, 0, 1, 1.8f, 120.0f, 0.45f, false, 0.45f };                 // sul tasto: the bow's bite skipped, softer touch
+    Env sordino { 0.2f, 0, 1, 1.5f, 40.0f, 0.4f, false, 0.7f };
+    Env marc { 0.0f, 0.45f, 0.3f, 0.6f };                           // marcato: accent, then the bow eases off
+    Env marcHard { 0.0f, 0.35f, 0.22f, 0.55f };
+    Env sfz { 0.0f, 0.35f, 0.0f, 0.6f };                            // sforzando stroke
+    Env shortE; shortE.shortS = true;
+    Env trem { 0.2f, 0, 1, 1.0f };
+    Env tremSwell { 1.0f, 0, 1, 1.6f };
+    Env breath { 0.9f, 0, 1, 1.8f };
+    Env under { 1.0f, 0, 1, 1.6f };                                // the bowed bed under a pizzicato
+
+    // -------- Strings: sustains (the octave stack first: the category's default sound)
+    add ("Cinematic Low Octaves", S_, kSus, lEpic, 0.45f, 0.65f, sus, { Va ("sustain", 0, 0.55f), Vc ("sustain", -1, 0.85f), Cb ("sustain", -2, 0.9f) });
+    add ("Dark Cello Choir", S_, kSus, lEpic, 0.35f, 0.6f, sus, { with (Vc ("sustain", 0, 0.7f, -0.35f), { { "s.vibrato", 9.0f }, { "s.vibRate", 4.6f } }),
+                                                                 with (Vc ("sustain", -1, 0.85f, 0.35f), { { "s.tune", -6.0f }, { "s.start", 20.0f } }) });
+    add ("Requiem Strings", S_, kSus, lEpic, 0.4f, 0.75f, sus, { Vn ("sustain", 0, 0.3f), Va ("sustain", 0, 0.6f, 0.1f), Vc ("sustain", -1, 0.8f), Cb ("sustain", -2, 0.7f) });
+    add ("Abyss Low Strings", S_, kSus, lEpic, 0.2f, 0.7f, sus, { Vc ("sustain", -1, 0.7f, -0.25f), Cb ("sustain", -1, 0.85f, 0.2f), Cb ("sustain", -2, 0.8f, 0.0f) });
+    add ("Power Fifths Low", S_, kSus, lEpic, 0.55f, 0.6f, sus, { Vc ("sustain", -1, 0.85f), fifth (Va ("sustain", -1, 0.55f)), Cb ("vibrato", -2, 0.8f) });
+    add ("Tenor Cello Lament", S_, kSus, lEpic, 0.5f, 0.55f, sus, { with (Vc ("sustain", 0, 0.85f, 0.1f), { { "s.vibrato", 14.0f }, { "s.vibRate", 4.8f } }),
+                                                                   Va ("sustain", -1, 0.45f), Cb ("sustain", -2, 0.45f) });
+    add ("Shimmering Low Strings", S_, kSus, lEpic, 0.6f, 0.65f, sus, { Va ("tremolo", 0, 1.0f), Vc ("sustain", -1, 0.7f), Cb ("sustain", -2, 0.65f) });
+    add ("Expressive Bass Section", S_, kSus, lEpic, 0.45f, 0.55f, sus, { Cb ("vibrato", -1, 0.95f, 0.1f), Vc ("sustain", -1, 0.4f, 0.3f) });
+    add ("Contrabass Choir", S_, kSus, lEpic, 0.3f, 0.55f, sus, { Cb ("sustain", -1, 0.85f, -0.15f), with (Cb ("vibrato", -2, 0.7f, 0.15f), { { "s.tune", -5.0f } }) });
+    // swells
+    add ("Rising Dark Octaves", S_, kSus, lSwell, 0.4f, 0.75f, swell, { Va ("sustain", 0, 0.55f), Vc ("sustain", -1, 0.85f), Cb ("sustain", -2, 0.9f) });
+    add ("Slow Cello Swell", S_, kSus, lSwell, 0.45f, 0.7f, cello14, { Vc ("sustain", 0, 0.65f, -0.3f), Vc ("sustain", -1, 0.85f, 0.3f) });
+    add ("Abyss Swell", S_, kSus, lSwell, 0.25f, 0.85f, slowSwell, { Vc ("sustain", -1, 0.8f), Cb ("sustain", -2, 0.95f) });
+    add ("Shadow Ensemble", S_, kSus, lSwell, 0.25f, 0.7f, breath, { Vn ("tremolo", 0, 0.28f), Va ("sustain", 0, 0.55f, 0.1f), Vc ("sustain", -1, 0.8f), Cb ("sustain", -2, 0.65f) });
+    // sul tasto / con sordino pads
+    add ("Sul Tasto Cellos", S_, kSus, lTasto, 0.15f, 0.75f, tasto, { Vc ("sustain", 0, 0.6f, -0.3f), Vc ("sustain", -1, 0.85f, 0.3f) });
+    add ("Velvet Abyss Pad", S_, kSus, lTasto, 0.0f, 0.9f, tasto, { Vc ("sustain", -1, 0.8f), Cb ("sustain", -2, 0.9f) });
+    add ("Con Sordino Lows", S_, kSus, lTasto, 0.2f, 0.4f, sordino, { with (Va ("sustain", 0, 0.7f), { { "s.reso", 0.5f } }), with (Vc ("sustain", -1, 0.8f), { { "s.reso", 0.5f } }),
+                                                                      Cb ("tremolo", -2, 0.55f) });
+    add ("Hushed Viola Pad", S_, kSus, lTasto, 0.2f, 0.8f, tasto, { Va ("sustain", 0, 0.75f), Vc ("sustain", -1, 0.6f) });
+    // marcato power
+    { Env sp = shortE;   // the marcato stroke: a spiccato layer on the accent of the bowed notes
+      add ("Marcato Low Octaves", S_, kSus, lMarcato, 0.55f, 0.55f, marc, { Vc ("sustain", -1, 0.8f), P { "strings.cellos.ensemble", "Cello Section", "spiccato", -1, 0.75f, -0.25f, 0, {}, &sp },
+                                                                           Cb ("sustain", -2, 0.85f) }); }
+    add ("Heavy Bow Strikes", S_, kSus, lMarcato, 0.5f, 0.6f, sfz, { Vc ("sustain", -1, 0.85f), Cb ("sustain", -2, 0.9f) });
+    // spiccato / pizzicato ostinatos
+    add ("Low Spiccato Octaves", S_, kShort, lSpicc, 0.55f, 0.45f, shortE, { Va ("spiccato", 0, 0.5f), Vc ("spiccato", -1, 0.85f), Cb ("spiccato", -2, 0.85f) });
+    add ("Cello Bass Spiccato", S_, kShort, lSpicc, 0.5f, 0.4f, shortE, { Vc ("spiccato", -1, 0.85f), Cb ("spiccato", -2, 0.9f) });
+    add ("Chase Spiccato Cellos", S_, kShort, lSpicc, 0.6f, 0.3f, shortE, { Vc ("spiccato", 0, 0.7f, -0.3f), Vc ("spiccato", -1, 0.85f, 0.3f) });
+    add ("Low Pizzicato Octaves", S_, kShort, lPizz, 0.5f, 0.5f, shortE, { Va ("pizzicato", 0, 0.45f), Vc ("pizzicato", -1, 0.85f), Cb ("pizzicato", -2, 0.9f) });
+    add ("Deep Pizzicato Basses", S_, kShort, lPizz, 0.4f, 0.45f, shortE, { Vc ("pizzicato", -1, 0.55f, -0.3f), Cb ("pizzicato", -1, 0.9f, 0.2f), Cb ("pizzicato", -2, 0.6f) });
+    { Env pz = shortE;
+      add ("Pizz and Bowed Lows", S_, kSus, lPizz, 0.5f, 0.55f, under, { P { "strings.cellos.ensemble", "Cello Section", "pizzicato", -1, 1.2f, 0.25f, 0, {}, &pz },
+                                                                           Vc ("sustain", -1, 0.3f, -0.3f), Cb ("sustain", -2, 0.35f) }); }
+    // tremolo tension
+    add ("Low Tremolo Tension", S_, kTrem, lTrem, 0.45f, 0.6f, trem, { Va ("tremolo", 0, 0.5f), Vc ("tremolo", -1, 0.85f), Cb ("tremolo", -2, 0.85f) });
+    add ("Dark Tremolo Cellos", S_, kTrem, lTrem, 0.15f, 0.65f, Env { 0.4f, 0, 1, 1.4f, 0, 0.3f, false, 0.7f }, { Vc ("tremolo", 0, 0.65f, -0.3f), Vc ("tremolo", -1, 0.85f, 0.3f) });
+    add ("Tremolo Abyss", S_, kTrem, lTrem, 0.15f, 0.8f, tremSwell, { Vc ("tremolo", -1, 0.8f), Cb ("tremolo", -2, 0.9f) });
+    // spaces and colours of the octave stack (each also played differently)
+    add ("Cathedral Low Strings", S_, kSus, lSwell, 0.3f, 1.0f, Env { 0.6f, 0, 1, 2.4f }, { Va ("sustain", 0, 0.5f), Vc ("tremolo", -1, 0.6f), Cb ("vibrato", -2, 0.85f) });
+    add ("Cello Tremolo Swell", S_, kTrem, lTrem, 0.35f, 0.75f, Env { 1.6f, 0, 1, 2.0f }, { Vc ("tremolo", 0, 0.65f, -0.3f), Vc ("tremolo", -1, 0.85f, 0.3f) });
+    add ("Low Strings Sforzando", S_, kSus, lMarcato, 0.6f, 0.6f, Env { 0.0f, 0.15f, 0.07f, 0.9f }, { Va ("sustain", 0, 0.55f), Vc ("sustain", -1, 0.85f), Cb ("vibrato", -2, 0.8f) });
+    // two playing styles in one stroke (the layers have their own envelopes): accent then crescendo, tremolo settling
+    // into a sustain, a spiccato stroke over a bowed bass bed; fifths as tremolo, spiccato and sul tasto
+    {
+        Env stab { 0.0f, 0.3f, 0.0f, 0.5f }, grow { 2.0f, 0, 1, 2.2f }, fade { 0.05f, 1.6f, 0.15f, 1.2f }, rise { 1.2f, 0, 1, 1.8f }, bed { 0.3f, 0, 1, 1.4f };
+        Env sp = shortE;
+        add ("Sforzando into Tremolo", S_, kTrem, lTrem, 0.45f, 0.7f, grow, { P { "strings.cellos.ensemble", "Cello Section", "sustain", -1, 1.0f, -0.25f, 0, {}, &stab },
+                                                                             Vc ("tremolo", -1, 0.75f, 0.3f), Cb ("tremolo", -2, 0.85f) });
+        add ("Tremolo into Sustain", S_, kSus, lSwell, 0.4f, 0.7f, rise, { P { "strings.cellos.ensemble", "Cello Section", "tremolo", -1, 0.85f, -0.3f, 0, {}, &fade },
+                                                                           Vc ("sustain", -1, 0.7f, 0.3f), Cb ("sustain", -2, 0.75f) });
+        add ("Spiccato over Bowed Basses", S_, kSus, lMarcato, 0.5f, 0.55f, bed, { P { "strings.cellos.ensemble", "Cello Section", "spiccato", -1, 0.95f, -0.25f, 0, {}, &sp },
+                                                                                    Cb ("sustain", -2, 0.8f, 0.15f) });
+        add ("Dark Fifths Tremolo", S_, kTrem, lTrem, 0.3f, 0.7f, tremSwell, { Vc ("tremolo", -1, 0.85f), fifth (Va ("tremolo", -1, 0.55f)), Cb ("tremolo", -2, 0.75f) });
+        add ("Sul Tasto Fifths", S_, kSus, lTasto, 0.1f, 0.85f, tasto, { Vc ("sustain", -1, 0.85f), fifth (Va ("sustain", -1, 0.6f)) });
+    }
+
+    // -------- Orchestral: the string-heavy low orchestra
+    add ("Horns over Low Strings", O_, kSus, lEpic, 0.45f, 0.7f, sus, { X ("brass.horn", "French Horn", "sustain", 0, 0.75f, -0.2f), Vc ("sustain", -1, 0.8f), Cb ("sustain", -2, 0.7f) });
+    add ("Timpani Roll and Low Strings", O_, kTrem, lTrem, 0.45f, 0.65f, sus, { X ("perc.timpani", "Timpani", "roll", -1, 1.4f, 0.0f), Vc ("sustain", -1, 0.6f), Cb ("sustain", -2, 0.6f) });
+    add ("Choir over Low Strings", O_, kSus, lSwell, 0.35f, 0.8f, swell, { X ("voice.choir.classic", "Choir", "oohs", 0, 0.9f, 0.2f), Vc ("sustain", -1, 0.75f), Cb ("sustain", -2, 0.6f) });
+    add ("Bassoon and Low Strings", O_, kSus, lEpic, 0.45f, 0.6f, sus, { Vc ("sustain", -1, 0.8f), X ("winds.bassoon", "Bassoon", "sustain", -1, 0.6f, -0.15f), Cb ("sustain", -2, 0.65f) });
+    add ("Spiccato and Timpani", O_, kShort, lSpicc, 0.5f, 0.5f, shortE, { Vc ("spiccato", -1, 0.85f), Cb ("spiccato", -2, 0.85f), X ("perc.timpani", "Timpani", "hit", -1, 0.9f, 0.0f) });
+    add ("Dark Pizzicato and Harp", O_, kShort, lPizz, 0.45f, 0.55f, shortE, { Vc ("pizzicato", -1, 0.85f), X ("pluck.harp.concert", "Concert Harp", "pluck", -1, 0.5f, -0.2f), Cb ("pizzicato", -2, 0.7f) });
+    { Env st = shortE;   // short brass strokes over the bowed low sections
+      add ("Brass Stabs over Low Strings", O_, kSus, lMarcato, 0.45f, 0.6f, Env { 0.15f, 0, 1, 1.4f }, { P { "brass.trombone", "Tenor Trombone", "staccato", 0, 0.8f, -0.25f, 0, {}, &st },
+                                                                                                     P { "brass.tuba", "Tuba", "staccato", -1, 0.6f, 0.2f, 0, {}, &st }, Vc ("sustain", -1, 0.7f), Cb ("sustain", -2, 0.7f) }); }
+    add ("Timpani and Pizzicato Basses", O_, kShort, lPizz, 0.4f, 0.55f, shortE, { X ("perc.timpani", "Timpani", "hit", -1, 0.8f, 0.0f), Vc ("pizzicato", -1, 0.7f, -0.25f), Cb ("pizzicato", -2, 0.85f, 0.2f) });
+    add ("Choir and Cello Tremolo", O_, kTrem, lTrem, 0.3f, 0.8f, tremSwell, { X ("voice.choir.classic", "Choir", "aahs", 0, 0.8f, -0.2f), Vc ("tremolo", -1, 0.8f, 0.25f), Cb ("tremolo", -2, 0.7f) });
+}
+
+//==============================================================================
 struct Names
 {
     std::set<juce::String> used;
@@ -676,6 +847,8 @@ struct Role
 {
     juce::String noun, sub, treat = "plain";
     int kind = kSus, pattern = 0;
+    int look = lNone;                                // cinematic low strings (designCinematic)
+    float tone = 0.5f, hall = 0.5f;
 };
 
 bool isSine (const VaultPart& p) { return p.label == "Warm Sine"; }
@@ -1335,6 +1508,144 @@ void designMacros (VaultPreset& p, const Role& r, const Plan& pl)
     juce::ignoreUnused (synth0, r);
 }
 
+//------------------------------------------------------------------------------ the cinematic low strings (addCinematic)
+// One finished sound per preset, voiced by its look (how the sections are played), its tone (dark .. open) and its hall
+// (close .. cathedral): section-bus glue, tape power with clean lows, a warm dark EQ (low shelf, 330 Hz box cut, top
+// shelved off), a long hall with the strings' long pre-delay and a damped tail, lows mono; slow movement on every preset;
+// four macros named for what they do to these sections.
+Plan designCinematic (VaultPreset& p, const Role& r)
+{
+    design (p);   // the fitted v2 EQ / width arrive as slots
+    Chain c (p.fx);
+    const float dk = 1.0f - r.tone, h = r.hall;
+    const bool sh = r.look == lSpicc || r.look == lPizz;
+    const bool pad = r.look == lSwell || r.look == lTasto;
+    p.mod = {};
+    Plan pl;
+    pl.shortS = r.kind == kShort;
+    // 1. dynamics: section-bus glue; accents get a transient and faster glue
+    if (sh) { c.put (fx::transient (r.look == lSpicc ? 0.14f : 0.1f)); c.put (fx::comp (-22, 2.5f, 6, 110, 1.5f, 0.6f)); }
+    else if (r.look == lMarcato) { c.put (fx::transient (0.16f)); c.put (fx::comp (-24, 2.5f, 12, 180, 1.5f, 0.6f)); }
+    else c.put (fx::comp (-26, 1.8f, 35, 320, 1.0f, 0.5f));
+    // 2. power: tape saturation on the upper band only (the lows stay clean), its top rolled off
+    {
+        const float amt = r.look == lMarcato ? 0.2f : 0.07f;
+        c.put (fx::drive (fx::Drive::tape, amt, 0.6f, 6500.0f - 2500.0f * dk).set ("cleanLow", 1.0f));
+    }
+    // 3. the warm dark EQ (kept at least as warm / dark as the C5 fit made it)
+    {
+        auto& e = c.at (FT::eq);
+        e.set ("low", juce::jlimit (-18.0f, 12.0f, std::max (e.get ("low"), 2.0f + 1.5f * dk)));
+        e.set ("mid", -2.0f).set ("midFreq", 330.0f).set ("midQ", 0.9f);
+        e.set ("high", std::min (e.get ("high"), -2.0f - 3.0f * dk)).set ("highFreq", std::min (e.get ("highFreq"), 5000.0f));
+    }
+    // 4. the warm long hall: strings sit nearest the audience - the longest pre-delay, a damped (dark) tail, lows cut
+    {
+        const float mix = sh ? 0.17f + 0.12f * h : 0.2f + 0.16f * h;
+        auto room = rv (h < 0.2f ? R::room : R::hall, 0.8f + 0.15f * h, 1.25f + 0.6f * h, mix, 26.0f + 24.0f * h, 0.3f + 0.35f * dk, 200.0f);
+        c.put (room);
+    }
+    // the echo the ostinatos' macro opens: its low cut under the cellos' and basses' range, so the repeats are heard
+    if (sh && ! c.has (FT::delay)) c.put (fx::delay ("1/8D", 0.3f, 0.0f).set ("hiCut", 3500.0f).set ("loCut", 90.0f));
+    c.put (fx::width (pad ? 0.7f : 0.62f, 160));
+    // 5. movement: a delayed bowed vibrato (mod wheel / macro), slow bow-pressure breathing, drift on pads, tension surges
+    if (! sh) p.mod.lfo[0] = vibrato (5.0f, 16.0f);
+    switch (r.look)
+    {
+        case lSwell:  p.mod.lfo[1] = breathing (0.6f, 0.06f, 0.5f, 0.12f); break;
+        case lTasto:  p.mod.lfo[1] = drift (0.6f, 0.05f, 0.35f, 0.15f); break;
+        case lTrem:   p.mod.lfo[1] = lfo (VaultLfo::sine).rate (0.11f).free().depth (0.6f).to ("cutoff", 0.6f).to ("volume", 0.1f); break;
+        case lSpicc: case lPizz: p.mod.lfo[1] = drift (0.35f, 0.13f, 0.2f, 0.1f); break;
+        default:      p.mod.lfo[1] = breathing (0.5f, 0.08f, 0.35f, 0.08f); break;
+    }
+    p.fx = c.build();
+    p.finish = 0.07f;
+    for (int i = 0; i < 4; ++i) { p.macros[(size_t) i] = {}; p.macroDefaults[i] = 0.5f; }
+    return pl;
+}
+void cinematicMacros (VaultPreset& p, const Role& r)
+{
+    Chain c (p.fx);
+    // the lowest bowed layer (the basses' knob)
+    int low = -1;
+    for (int k = 0; k < (int) p.parts.size(); ++k)
+    {
+        const auto& pt = p.parts[(size_t) k];
+        if (isSine (pt)) continue;
+        if (pt.kind != VaultPartKind::sample) continue;
+        if (low < 0 || pt.octave * 12 + pt.semi < p.parts[(size_t) low].octave * 12 + p.parts[(size_t) low].semi) low = k;
+    }
+    const bool sh = r.look == lSpicc || r.look == lPizz;
+    // 1. the bow / the attack
+    if (sh)
+    {
+        M m (r.look == lPizz ? "Pluck" : "Snap", 0.3f);
+        m.fxp (c, FT::transient, "attack", 0.6f).rel ("cutoff", 1.2f);
+        setMacro (p, 0, m);
+    }
+    else if (r.look == lTasto)
+    {
+        M m ("Tone", 0.4f); m.rel ("cutoff", 2.0f).fxp (c, FT::eq, "tilt", 4.0f); setMacro (p, 0, m);
+    }
+    else
+    {
+        M m (r.look == lMarcato ? "Bite" : "Bow", 0.5f);
+        m.rel ("cutoff", 1.6f).fxp (c, FT::eq, "tilt", 3.0f).fxp (c, FT::drive, "amount", 0.3f)
+         .toMax ("fx.drive.output", c.get (FT::drive, "output"), c.get (FT::drive, "output") - 2.0f);
+        if (r.look == lMarcato) m.fxp (c, FT::transient, "attack", 0.5f);
+        setMacro (p, 0, m);
+    }
+    // 2. the hall
+    {
+        M m (c.get (FT::reverb, "type") == (float) R::room ? "Room" : "Hall", 0.4f);
+        m.fxp (c, FT::reverb, "mix", 0.45f).fxp (c, FT::reverb, "decay", 1.2f).fxp (c, FT::reverb, "predelay", 30.0f);
+        setMacro (p, 1, m);
+    }
+    // 3. the style's own gesture
+    {
+        M m ("Swell", 0.0f);
+        if (sh) { m = M ("Weight", 0.5f); m.fxp (c, FT::eq, "low", 8.0f).fxp (c, FT::eq, "mid", 3.0f); }
+        else if (r.look == lMarcato) { m = M ("Power", 0.3f); m.fxp (c, FT::drive, "amount", 0.45f).toMax ("fx.drive.output", c.get (FT::drive, "output"), c.get (FT::drive, "output") - 4.0f)
+                                                               .fxp (c, FT::compressor, "threshold", 10.0f); }
+        else if (r.look == lSwell) { m = M ("Bloom", 0.5f); m.rel ("quick.attack", 0.5f).rel ("quick.release", 0.3f); }
+        else if (r.look == lTasto)
+        {
+            const float rate = p.mod.lfo[1].rate, dep = p.mod.lfo[1].depth;
+            m = M ("Drift", 0.0f); m.abs ("lfo2.depth", dep, 1.0f - dep, 0, 1).abs ("lfo2.rate", rate, std::max (0.0f, 0.6f - rate), 0.02f, 2.0f).fxp (c, FT::width, "width", 0.25f);
+        }
+        else if (r.look == lTrem)
+        {
+            const float rate = p.mod.lfo[1].rate, dep = p.mod.lfo[1].depth;
+            m = M ("Tension", 0.0f); m.abs ("lfo2.depth", dep, 1.0f - dep, 0, 1).abs ("lfo2.rate", rate, std::max (0.0f, 1.8f - rate), 0.02f, 2.0f);
+        }
+        else m.rel ("quick.attack", 0.42f).rel ("quick.release", 0.22f);
+        setMacro (p, 2, m);
+    }
+    // 4. the low end (the basses / the lowest section's level), or the echo on the ostinatos
+    if (sh)
+    {
+        M m ("Echo", 0.0f); m.fxp (c, FT::delay, "mix", 0.4f).fxp (c, FT::delay, "feedback", 0.3f); setMacro (p, 3, m);
+    }
+    else if (low > 0)
+    {
+        const float l = p.parts[(size_t) low].level;
+        M m (p.parts[(size_t) low].source == "strings.contrabass" ? "Basses" : "Depth", 0.5f);
+        m.abs (("layer" + juce::String (low + 1) + ".level").toRawUTF8(), l, std::min (2.0f * l, 2.0f), 0.0f, 2.0f);
+        setMacro (p, 3, m);
+    }
+    else
+    {
+        M m ("Depth", 0.5f); m.fxp (c, FT::eq, "low", 8.0f).fxp (c, FT::eq, "mid", 3.0f); setMacro (p, 3, m);
+    }
+    // performance: mod wheel = vibrato (sustains) / more hall (ostinatos), aftertouch = expression swell, velocity = bow
+    // pressure (level against the glue + a brighter bow)
+    if (! p.mod.lfo[0].dests.empty()) p.mod.modWheel.push_back ({ "lfo1.depth", 0.8f });
+    else p.mod.modWheel.push_back ({ "fx.reverb.mix", 0.25f });
+    if (! sh) p.mod.aftertouch.push_back ({ "volume", 0.25f });
+    p.mod.velocity.push_back ({ "volume", sh ? 0.85f : 0.45f });
+    p.mod.velocity.push_back ({ "cutoff", 0.35f });
+}
+
 //------------------------------------------------------------------------------ macro extremes against the comfort rules
 juce::String judge (const Probe& x, const Probe& ref, float lin, bool longTail)
 {
@@ -1728,10 +2039,148 @@ void addPatterns (std::vector<Base>& b)
     add ("Woodwind Arpeggio", vault::catOrchestral, fOrc, kShort, { X ("winds.clarinet", "staccato", "Clarinet", 0, 0.75f, -0.2f, sh),
                                                                     X ("winds.flute.concert", "staccato", "Concert Flute", 0, 0.45f, 0.25f, sh) }, 5);
 }
+
+// development: the other recipes' presets of a finished bank as their -cache files, so `VaultBankGen -recipe all -cache <dir>
+// -rebuild orch` re-assembles the bank around a rebuilt orch without rebuilding the other recipes (ORCH_SPLIT=<bank>,<dir>)
+bool splitBank (const juce::String& spec)
+{
+    const auto bankPath = spec.upToFirstOccurrenceOf (",", false, false), dirPath = spec.fromFirstOccurrenceOf (",", false, false);
+    std::vector<VaultPreset> bank;
+    if (! vault::loadBankFile (juce::File (bankPath), bank)) { std::printf ("orch split: cannot load %s\n", bankPath.toRawUTF8()); return false; }
+    const juce::File dir (dirPath);
+    dir.createDirectory();
+    const std::map<juce::String, juce::String> recipeOf { { "piano", "keys" }, { "keys", "keys" }, { "gtr", "strings" }, { "bass", "strings" }, { "wind", "winds" },
+                                                          { "world", "winds" }, { "bell", "perc-voc" }, { "vox", "perc-voc" }, { "pluck", "synth" }, { "lead", "synth" },
+                                                          { "pad", "synth" }, { "synth", "synth" }, { "fx", "synth" },
+                                                          { "str", "orch" }, { "brass", "orch" }, { "orch", "orch" } };   // orch.cvb: with -rebuild orch it is rebuilt anyway
+    std::map<juce::String, std::vector<VaultPreset>> out;
+    for (auto& p : bank)
+    {
+        const auto slug = p.id.fromFirstOccurrenceOf ("cv.", false, false).upToFirstOccurrenceOf (".", false, false);
+        if (auto it = recipeOf.find (slug); it != recipeOf.end()) out[it->second].push_back (p);
+    }
+    for (auto& [name, v] : out)
+    {
+        vault::saveBankFile (dir.getChildFile (name + ".cvb"), v);
+        std::printf ("orch split: %s.cvb %d presets\n", name.toRawUTF8(), (int) v.size());
+    }
+    return true;
+}
+
+// development: replace only this recipe's presets in a shipped bank (ORCH_MERGE=<shipped.cvb>,<assembled.cvb>,<out.cvb>):
+// Strings / Brass / Orchestral (ids cv.str / cv.brass / cv.orch) come from a bank the full assembly wrote around a rebuilt
+// orch (-cache with the ORCH_SPLIT files, -rebuild orch), every other recipe's preset stays exactly as shipped
+bool mergeBank (const juce::String& spec)
+{
+    const auto f = juce::StringArray::fromTokens (spec, ",", "");
+    if (f.size() < 3) return false;
+    std::vector<VaultPreset> shipped, made, out;
+    if (! vault::loadBankFile (juce::File (f[0]), shipped) || ! vault::loadBankFile (juce::File (f[1]), made)) { std::printf ("orch merge: cannot load\n"); return false; }
+    auto ours = [] (const VaultPreset& p) { return p.id.startsWith ("cv.str.") || p.id.startsWith ("cv.brass.") || p.id.startsWith ("cv.orch."); };
+    std::set<int> done;
+    for (auto& p : shipped)
+    {
+        if (! ours (p)) { out.push_back (p); continue; }
+        if (! done.insert (p.category).second) continue;
+        for (auto& q : made) if (ours (q) && q.category == p.category) out.push_back (q);
+    }
+    for (auto& q : made)   // a category the shipped bank had no orch preset in
+        if (ours (q) && done.count (q.category) == 0) out.push_back (q);
+    vault::saveBankFile (juce::File (f[2]), out);
+    std::printf ("orch merge: %d shipped + %d assembled -> %d presets\n", (int) shipped.size(), (int) made.size(), (int) out.size());
+    return true;
+}
+
+// development: the owner's demos of the cinematic strings (ORCH_DEMO=<bank>|<dir>|<name or id,...>): a low-register
+// chord progression (C minor - A flat - F minor - G, keys C4..F5 so the stack sounds C2..F4), then the tonic held as a
+// swell (expression from soft to full through aftertouch, vibrato brought in on the mod wheel); short articulations play
+// the chords as an eighth-note ostinato that crescendos. 24-bit WAV + OGG per preset, at the preset's bank gain.
+bool renderDemos (const juce::String& spec)
+{
+    const auto parts = juce::StringArray::fromTokens (spec, "|", "");
+    if (parts.size() < 3) return false;
+    std::vector<VaultPreset> bank;
+    if (! vault::loadBankFile (juce::File (parts[0]), bank)) { std::printf ("orch demo: cannot load %s\n", parts[0].toRawUTF8()); return false; }
+    const juce::File dir (parts[1]);
+    dir.createDirectory();
+    const double sr = recipegate::sr;
+    const std::vector<std::vector<int>> chords { { 48, 55, 60, 63 }, { 51, 56, 60, 63 }, { 53, 56, 60, 65 }, { 50, 55, 59, 62 } };
+    int n = 0;
+    for (auto& want : juce::StringArray::fromTokens (parts[2], ",", ""))
+        for (auto& p : bank)
+        {
+            if (p.id != want && p.name != want) continue;
+            bool shortS = true;   // a sound that has died away after a second plays the ostinato
+            {
+                const auto t = recipegate::render (p, vault::homeNote, 0.8f, 2.0, 2.0);
+                const int a = (int) (0.1 * sr), b0 = (int) (1.6 * sr);
+                shortS = t.getRMSLevel (0, b0, (int) (0.3 * sr)) < 0.12f * t.getRMSLevel (0, a, (int) (0.3 * sr));
+            }
+            juce::MidiBuffer mb;
+            auto at = [&] (double s) { return (int) std::round (s * sr); };
+            const double chordLen = 2.4, swellStart = 4 * chordLen, swellLen = 4.4;
+            for (int c = 0; c < 4; ++c)
+            {
+                const double t0 = c * chordLen;
+                if (shortS)
+                    for (int e = 0; e < 8; ++e)
+                    {
+                        const double s = t0 + e * 0.3;
+                        const int v = (e % 4 == 0 ? 112 : e % 2 == 0 ? 92 : 80) - (c == 0 ? 6 : 0);
+                        for (int k : chords[(size_t) c]) { mb.addEvent (juce::MidiMessage::noteOn (1, k, (juce::uint8) v), at (s)); mb.addEvent (juce::MidiMessage::noteOff (1, k), at (s + 0.2)); }
+                    }
+                else
+                    for (int k : chords[(size_t) c])
+                    {
+                        mb.addEvent (juce::MidiMessage::noteOn (1, k, (juce::uint8) (c == 0 ? 92 : 100)), at (t0));
+                        mb.addEvent (juce::MidiMessage::noteOff (1, k), at (t0 + chordLen - 0.05));
+                    }
+            }
+            const std::vector<int> tonic { 48, 55, 60, 63 };
+            if (shortS)
+                for (int e = 0; e < 14; ++e)
+                {
+                    const double s = swellStart + e * 0.3;
+                    const int v = juce::jlimit (30, 127, 40 + e * 6);
+                    for (int k : tonic) { mb.addEvent (juce::MidiMessage::noteOn (1, k, (juce::uint8) v), at (s)); mb.addEvent (juce::MidiMessage::noteOff (1, k), at (s + 0.2)); }
+                }
+            else
+            {
+                for (int k : tonic) { mb.addEvent (juce::MidiMessage::noteOn (1, k, (juce::uint8) 64), at (swellStart)); mb.addEvent (juce::MidiMessage::noteOff (1, k), at (swellStart + swellLen)); }
+                for (int s = 0; s <= 40; ++s)   // expression: soft -> full, vibrato in from halfway
+                {
+                    const double t = swellStart + swellLen * 0.85 * s / 40.0;
+                    mb.addEvent (juce::MidiMessage::channelPressureChange (1, juce::jlimit (0, 127, s * 127 / 40)), at (t));
+                    mb.addEvent (juce::MidiMessage::controllerEvent (1, 1, juce::jlimit (0, 127, std::max (0, s - 20) * 4)), at (t));
+                }
+            }
+            mb.addEvent (juce::MidiMessage::channelPressureChange (1, 0), at (swellStart + swellLen + 0.5));
+            mb.addEvent (juce::MidiMessage::controllerEvent (1, 1, 0), at (swellStart + swellLen + 0.5));
+            const auto buf = VaultEngine::renderMidi (p, mb, at (swellStart + swellLen + 1.2), sr);
+            const auto base = juce::String (++n).paddedLeft ('0', 2) + "_" + p.name.replaceCharacters (" &/", "__-");
+            recipegate::writeWav (dir.getChildFile (base + ".wav"), buf);
+            recipegate::writeOgg (dir.getChildFile (base + ".ogg"), buf, 5);
+            {   // demos.tsv: what the listening page shows (file, id, name, layers, FX chain, macros)
+                juce::StringArray lab, fxs, mac;
+                for (auto& pt : p.parts) lab.add (pt.label + (pt.octave != 0 ? juce::String::formatted (" (%+d oct)", pt.octave) : juce::String())
+                                                  + (pt.semi != 0 ? juce::String::formatted (" +%d st", pt.semi) : juce::String()));
+                for (auto& f : p.fx) if (f.on) fxs.add (vault::fxTypeInfo (f.type).name);
+                for (auto& m : p.macros) if (m.name.isNotEmpty()) mac.add (m.name);
+                dir.getChildFile ("demos.tsv").appendText (base + ".wav\t" + p.id + "\t" + p.name + "\t" + lab.joinIntoString (" + ") + "\t"
+                                                           + fxs.joinIntoString (" > ") + "\t" + mac.joinIntoString (", ") + "\n");
+            }
+            std::printf ("orch demo: %s %s (%s) peak %.3f\n", base.toRawUTF8(), p.id.toRawUTF8(), shortS ? "ostinato" : "sustained", buf.getMagnitude (0, buf.getNumSamples()));
+            break;
+        }
+    return true;
+}
 } // namespace
 
 std::vector<VaultPreset> build_orch (const RecipeContext& ctx)
 {
+    if (const auto s = juce::SystemStats::getEnvironmentVariable ("ORCH_SPLIT", {}); s.isNotEmpty()) { splitBank (s); return {}; }
+    if (const auto s = juce::SystemStats::getEnvironmentVariable ("ORCH_DEMO", {}); s.isNotEmpty()) { renderDemos (s); return {}; }
+    if (const auto s = juce::SystemStats::getEnvironmentVariable ("ORCH_MERGE", {}); s.isNotEmpty()) { mergeBank (s); return {}; }
     std::vector<VaultPreset> sel;
     std::vector<v3::Role> roles;
     const auto cachePath = juce::SystemStats::getEnvironmentVariable ("ORCH_V2CACHE", {});   // development: the v2 selection, saved once
@@ -1800,6 +2249,15 @@ std::vector<VaultPreset> build_orch (const RecipeContext& ctx)
             if (b.pattern != 0) continue;
             const auto& tr = treats[(size_t) t];
             if ((tr.kinds & b.kind) == 0 || (tr.fams & b.fam) == 0) continue;
+            // owner's report item 17: the strings lean dark and deep. Violin-led sounds keep only their plain and their
+            // soft / far / dark roles (no crushed, taped, reversed, stabbed, doubled ... violins), and the thin high solo
+            // violin register is gone (the base stays in the list so every other sound keeps its name)
+            if (const auto& s0 = b.parts.front().source; s0.startsWith ("strings.violin"))
+            {
+                if (s0 == "strings.violin.solo" && b.parts.front().octave > 0) continue;
+                static const juce::StringArray soft { "", "Distant", "Swelling", "Muted", "Muffled", "Flautando" };
+                if (! soft.contains (tr.prefixes[0])) continue;
+            }
             if (tr.structural != 0 && b.parts.size() >= (size_t) vault::maxParts) continue;
             // no contradictions: a vibrato articulation is not given designed vibrato, a swell / fall is not swelled again
             if (tr.prefixes[0] == "Singing" && (b.noun.containsIgnoreCase ("Vibrato") || b.noun.containsIgnoreCase ("Crooning"))) continue;
@@ -1892,6 +2350,78 @@ std::vector<VaultPreset> build_orch (const RecipeContext& ctx)
     }
 
     assignShippedIds (sel, roles);
+    // 3b. the cinematic low strings (report item 17): fitted plain like every sound, then placed first in their category
+    //     (the browser's order: the category opens on them) so they also win every near-duplicate pair in step 5. Ids
+    //     from a reserved range per category (<slug>.1001 + the place in addCinematic), stable whatever the gate drops.
+    {
+        std::vector<Base> cb;
+        addCinematic (cb);
+        std::vector<int> place (cb.size());
+        {
+            int k[vault::numCategories] {};
+            for (size_t i = 0; i < cb.size(); ++i) place[i] = k[cb[i].cat]++;
+        }
+        std::vector<VaultPreset> made (cb.size());
+        std::vector<char> keep (cb.size(), 0);
+        std::vector<juce::String> why (cb.size());
+        const auto t0 = treatments().front();
+        parallel ((int) cb.size(), [&] (int i)
+        {
+            const auto& b = cb[(size_t) i];
+            for (auto& pt : b.parts)
+                if (pt.kind == VaultPartKind::sample && ! ctx.hasArticulation (pt.source, pt.articulation)) { why[(size_t) i] = "not in the library"; return; }
+            auto& p = made[(size_t) i];
+            p.category = b.cat;
+            p.name = b.noun;
+            p.parts = applyTreat (b, t0);
+            p.gain = 1.0f;
+            p.id = juce::String ("cv.") + vault::categorySlug (b.cat) + "." + juce::String (1001 + place[(size_t) i]);
+            keep[(size_t) i] = fit (p, b.kind == kShort, &why[(size_t) i]) ? 1 : 0;
+        });
+        // the Strings category leans dark and deep (report item 17): an older sound that is only violins / the solo
+        // violin / high violas, or is led by the violins an octave up, or is the synth string machine, stays in its plain
+        // form only - its processed variants (swelling, distant, muted, underwater, stabbed ... violins) are left out, so
+        // most of the category is the low sections (and the plain violins are still there to be found)
+        auto thinHigh = [] (const VaultPreset& p, const v3::Role& r)
+        {
+            if (p.category != vault::catStrings || r.look != lNone || r.treat == "plain" || p.parts.empty()) return false;
+            auto high = [] (const VaultPart& pt) { return pt.source.startsWith ("strings.violin") || (pt.source == "strings.violas.ensemble" && pt.octave > 0); };
+            bool allHigh = true;
+            for (auto& pt : p.parts)
+            {
+                if (v3::isSine (pt)) continue;
+                if (pt.kind == VaultPartKind::sample ? ! high (pt) : pt.label != "String Machine") allHigh = false;
+            }
+            const auto& lead = p.parts.front();
+            return allHigh || (lead.source.startsWith ("strings.violin") && lead.octave > 0);
+        };
+        int thin = 0;
+        std::vector<VaultPreset> s2;
+        std::vector<v3::Role> r2;
+        int added = 0;
+        for (int c = 0; c < vault::numCategories; ++c)
+        {
+            for (size_t i = 0; i < cb.size(); ++i)
+            {
+                if (cb[i].cat != c) continue;
+                if (keep[i] == 0) { std::printf ("orch: cinematic %s dropped (%s)\n", cb[i].noun.toRawUTF8(), why[i].toRawUTF8()); continue; }
+                v3::Role r { cb[i].noun, "cinematic", "plain", cb[i].kind, 0 };
+                r.look = cb[i].look; r.tone = cb[i].tone; r.hall = cb[i].hall;
+                s2.push_back (made[i]); r2.push_back (r); ++added;
+            }
+            for (size_t i = 0; i < sel.size(); ++i)
+                if (sel[i].category == c)
+                {
+                    bool clash = false;   // an older sound with a cinematic name gives the name up
+                    for (size_t j = 0; j < cb.size(); ++j) clash |= keep[j] != 0 && nameKey (cb[j].noun) == nameKey (sel[i].name);
+                    if (clash) continue;
+                    if (thinHigh (sel[i], roles[i])) { ++thin; continue; }
+                    s2.push_back (sel[i]); r2.push_back (roles[i]);
+                }
+        }
+        sel.swap (s2); roles.swap (r2);
+        std::printf ("orch: %d cinematic low string presets lead their categories; %d thin / high string variants left out\n", added, thin);
+    }
     // ORCH_ONLY=<id or name,...>: just these presets (demos, listening)
     if (const auto only = juce::StringArray::fromTokens (juce::SystemStats::getEnvironmentVariable ("ORCH_ONLY", {}), ",", ""); ! only.isEmpty())
     {
@@ -1905,15 +2435,24 @@ std::vector<VaultPreset> build_orch (const RecipeContext& ctx)
     parallel ((int) sel.size(), [&] (int i)
     {
         auto& p = sel[(size_t) i];
-        const auto plan = v3::designChain (p, roles[(size_t) i]);
+        const auto& r = roles[(size_t) i];
+        if (r.look != lNone)
+        {
+            v3::designCinematic (p, r);
+            fitLog[(size_t) i] = v3::comfort (p);
+            v3::cinematicMacros (p, r);
+            return;
+        }
+        const auto plan = v3::designChain (p, r);
         fitLog[(size_t) i] = v3::comfort (p);
-        v3::designMacros (p, roles[(size_t) i], plan);
+        v3::designMacros (p, r, plan);
     });
     {
         int nf = 0, nbad = 0;
         for (auto& l : fitLog) { if (l.isNotEmpty()) ++nf; if (l.endsWith ("!")) ++nbad; }
         std::printf ("orch: v3 designed %d presets; comfort refit %d (%d at the EQ limit)\n", (int) sel.size(), nf, nbad);
     }
+    if (const auto dump = juce::SystemStats::getEnvironmentVariable ("ORCH_DUMP", {}); dump.isNotEmpty()) vault::saveBankFile (juce::File (dump), sel);   // development
     if (v3::envInt ("ORCH_SELFGATE", 1) == 0) return sel;
 
     // 5. the bank gate's own selection on the finished sounds (same analysis, same order, the shared 3.5), plus the
@@ -1932,8 +2471,10 @@ std::vector<VaultPreset> build_orch (const RecipeContext& ctx)
         if (r.fail.isEmpty() && r.share8k > recipegate::maxShare8k) r.fail = "air-8k";
         if (r.fail.isEmpty() && r.centroid > recipegate::centroidCeiling (r.preset.category)) r.fail = "centroid";
         float d = 1.0e9f;
-        for (int j : acc) d = std::min (d, recipegate::distance (r.print, res[(size_t) j].print));
-        if (r.fail.isEmpty() && d < 3.5f) r.fail = "near-duplicate";
+        juce::String nearest;
+        for (int j : acc)
+            if (const float dj = recipegate::distance (r.print, res[(size_t) j].print); dj < d) { d = dj; nearest = res[(size_t) j].preset.name; }
+        if (r.fail.isEmpty() && d < 3.5f) r.fail = "near-duplicate: " + nearest + " " + juce::String (d, 2);
         if (r.fail.isEmpty()) { acc.push_back (i); minPair = std::min (minPair, d); } else ++fails[r.fail.upToFirstOccurrenceOf (":", false, false)];
     }
     std::printf ("orch: %d of %d pass the gate (min distance %.2f)\n", (int) acc.size(), (int) res.size(), minPair);
