@@ -14,11 +14,15 @@
 //                                      Without an embedded bank / CHROME_VAULT_BANK a 5,000-preset demo bank is generated.
 //                           VaultTests -writeuidemo <out.cvb>    the v2 UI demo bank (sampled / model / synth layers) for -shot
 //                           VaultTests -uitestv2                 v2 editor checks (child process of -uitest)
+//                           VaultTests -uifix [keys|pages|values|render|more]   the owner-report checks only (part of -uitest)
+//                           VaultTests -pitch [--only <text>] [--step n] [--bank f.cvb] [--csv f] [-v]   every preset, every key
+//                                      C2..C7 at its own pitch (tests/VaultPitchTests.cpp)
 //                           VaultTests -v3                       the v3 tests only (tests/VaultV3Tests.cpp; part of -unit)
 //                           VaultTests -convcheck <bank.cvb> [step] [threads]   v1 / v2 bank: frozen v2 engine vs the v3 conversion
 #include "../Source/vault/VaultProcessor.h"
 #include "../Source/vault/VaultEditor.h"
 #include "../Source/vault/ui/VaultMainView.h"
+#include "../Source/vault/ui/VaultValues.h"
 #include "../Source/ParamKeys.h"
 #include "../tools/vault/BankQC.h"
 #include "../tools/vault/recipes/RecipeGate.h"
@@ -679,17 +683,23 @@ void uiQaTests (VaultProcessor& p)
         check (msSince (t1) / 40.0 < 5.0, "ui: loading a sound from the list costs " + juce::String (msSince (t1) / 40.0, 3) + " ms on the UI thread");
     }
 
-    // ---- keys: the editor never uses a key (the DAW keeps its computer-keyboard piano and its shortcuts)
+    // ---- keys (v3, owner report item 1): with the keyboard the editor plays notes in FL Studio's layout and steps the
+    // sounds with Up / Down; Space, Return, Home / End, Page Down and keys that play no note stay with the DAW
     {
         v.setCategory (vault::catLeads);
         const auto rows = v.browser().visible();
         v.loadPreset (rows.front(), false);
         bool anyUsed = false;
-        for (int code : { (int) juce::KeyPress::downKey, (int) juce::KeyPress::upKey, (int) juce::KeyPress::rightKey, (int) juce::KeyPress::leftKey,
-                          (int) juce::KeyPress::pageDownKey, (int) juce::KeyPress::endKey, (int) juce::KeyPress::homeKey, (int) juce::KeyPress::spaceKey,
-                          (int) juce::KeyPress::returnKey, (int) 'a', (int) 's', (int) 'z', (int) 'x' })
+        for (int code : { (int) juce::KeyPress::pageDownKey, (int) juce::KeyPress::endKey, (int) juce::KeyPress::homeKey, (int) juce::KeyPress::spaceKey,
+                          (int) juce::KeyPress::returnKey, (int) 'a', (int) 'f', (int) 'k' })
             anyUsed |= ed.keyPressed (juce::KeyPress (code));
-        check (! anyUsed && p.currentPreset() == rows.front(), "ui: no key is taken from the DAW (arrows, Space, Return, A-L, Z / X)");
+        const bool notes = ed.keyPressed (juce::KeyPress ('z', 0, 'z')) && ed.keyPressed (juce::KeyPress ('q', 0, 'q'));
+        ed.computerKeys().allOff();
+        const bool stepped = ed.keyPressed (juce::KeyPress (juce::KeyPress::downKey)) && rows.size() > 1 && p.currentPreset() == rows[1];
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+        const bool anyUsedNow = anyUsed || ! notes || ! stepped;
+        check (! anyUsedNow && p.currentPreset() == rows.front(),
+               "ui: the editor's keys - Z / Q play notes, Down / Up step the sounds; Space, Return, Home / End, Page Down, A / F / K stay with the DAW");
         v.step (1, true);
         check (p.currentPreset() == rows[1], "ui: the next-sound arrow button still steps through the list");
         v.setCategory (-1);
@@ -1070,8 +1080,10 @@ void focusTests (VaultProcessor& p)
         for (auto* ch : c.getChildren()) walk (*ch);
     };
     walk (v);
-    check (grabbers == 0 && ! ed.getWantsKeyboardFocus() && ! ed.getMouseClickGrabsKeyboardFocus(),
-           "focus: no component but the search box takes the keyboard on click (" + juce::String (total) + " components checked)");
+    for (auto* c : ed.getChildren())   // the resize corner too
+        if (c != &v && (c->getWantsKeyboardFocus() || c->getMouseClickGrabsKeyboardFocus())) ++grabbers;
+    check (grabbers == 0 && ed.getWantsKeyboardFocus() && ! v.searchBox().getWantsKeyboardFocus(),
+           "focus: only the editor itself takes the keyboard (the search box only once clicked; " + juce::String (total) + " components checked)");
     check (v.keys().getOctaveForMiddleC() == 5 && vault::noteName (60) == "C5" && vault::noteName (vault::homeNote) == "C5" && vault::noteName (36) == "C3",
            "keyboard: MIDI 60 is labelled C5 (FL Studio)");
 
@@ -1086,7 +1098,7 @@ void focusTests (VaultProcessor& p)
     search.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
     juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
     const bool afterEscape = v.focusReturns() == n0 + 2 && search.isEmpty();
-    check (afterReturn && afterEscape && search.getWantsKeyboardFocus(), "focus: Return / Escape in the search box give the keyboard back to the DAW");
+    check (afterReturn && afterEscape && ! search.getWantsKeyboardFocus(), "focus: Return / Escape in the search box give the keyboard back to the editor");
 }
 
 //==============================================================================
@@ -1400,16 +1412,25 @@ void v3PageTests (VaultProcessor& p)
     v.syncFromProcessor();
     auto& main = v.mainPage();
 
-    // MAIN knobs = host parameters (both ways), double-click = as designed
+    // MAIN knobs = host parameters (both ways; the knob shows the effective value), double-click = as designed
     {
-        auto& k = main.quickKnob (vault::qCutoff);
-        k.userSet (0.75f);
-        const bool drives = std::abs (p.getQuick (vault::qCutoff) - 0.75f) < 1e-3f && k.currentValueText() == "+2.0 oct";
-        p.setQuick (vault::qCutoff, 0.25f);
-        const bool follows = std::abs (k.getValue() - 0.25f) < 1e-3f;
-        k.userSet (k.resetValue);
-        check (drives && follows && std::abs (p.getQuick (vault::qCutoff) - 0.5f) < 1e-3f,
-               "ui v3: a MAIN knob drives its host parameter, follows the host and double-clicks back to the sound as designed");
+        auto& k = main.quickKnob (vault::qReso);
+        const float designed = k.resetValue;
+        const float to = designed < 0.5f ? designed + 0.3f : designed - 0.3f;
+        k.userSet (to);
+        const auto c = vui::val::Ctx::of (p);
+        const bool drives = std::abs (p.getQuick (vault::qReso) - 0.5f) > 0.05f
+                         && std::abs (vui::val::quickPosition (p.currentSound(), c, vault::qReso) - to) < 0.01f;
+        p.setQuick (vault::qReso, 0.75f);
+        const bool follows = std::abs (k.getValue() - vui::val::quickPosition (p.currentSound(), vui::val::Ctx::of (p), vault::qReso)) < 1e-4f;
+        if (! follows) std::printf ("   reso follows: knob %.3f want %.3f dragging %d\n", k.getValue(), vui::val::quickPosition (p.currentSound(), vui::val::Ctx::of (p), vault::qReso), (int) k.isDragging());
+        if (k.onReset) k.onReset();
+        if (! (drives && follows && std::abs (p.getQuick (vault::qReso) - 0.5f) < 1e-6f && std::abs (k.getValue() - designed) < 1e-4f))
+            std::printf ("   reso: designed %.3f to %.3f param %.3f drives %d follows %d value %.3f enabled %d inactive %d\n", designed, to, p.getQuick (vault::qReso),
+                         (int) drives, (int) follows, k.getValue(), (int) k.isEnabledLook(), (int) k.inactive);
+        check (drives && follows && std::abs (p.getQuick (vault::qReso) - 0.5f) < 1e-6f && std::abs (k.getValue() - designed) < 1e-4f,
+               "ui v3: a MAIN knob drives its host parameter, follows the host and double-clicks back to the sound as designed ("
+               + k.currentValueText() + ")");
     }
     // EFFECTS LED: switches the reverb slot (adds a default one when the sound has none) and back
     {
@@ -1438,8 +1459,8 @@ void v3PageTests (VaultProcessor& p)
         bool ok = lvl != nullptr && v.layersPage().numCards() == (int) bank[(size_t) pick].parts.size();
         if (lvl != nullptr)
         {
-            lvl->userSet (0.25f);
-            ok &= std::abs (p.currentSound().parts[0].level - 0.5f) < 1e-3f && p.isSoundEdited();
+            lvl->userSet (0.25f);   // level 0.5 (a sound macro that sets the level gets its range moved)
+            ok &= std::abs (vui::val::layerValue (p.currentSound(), vui::val::Ctx::of (p), 0, vui::val::LKey::level) - 0.5f) < 1e-3f && p.isSoundEdited();
             p.revertSound();
             v.refreshAll();
             ok &= ! p.isSoundEdited() && std::abs (lvl->getValue() - lvl->resetValue) < 1e-4f;
@@ -1460,9 +1481,10 @@ void v3PageTests (VaultProcessor& p)
         if (size != nullptr)
         {
             size->userSet (0.9f);
-            float got = -1;
-            for (auto& s : p.currentSound().fx) if (s.type == vault::FxType::reverb) { got = s.get ("size"); break; }
-            ok &= std::abs (got - 0.9f) < 1e-3f;
+            const auto& snd = p.currentSound();
+            const int slot = vui::val::firstSlotOfType (snd, vault::FxType::reverb);
+            const float got = vui::val::fxValue (snd, vui::val::Ctx::of (p), slot, vault::FxType::reverb, vault::fxTypeInfo (vault::FxType::reverb).indexOf ("size"));
+            ok &= std::abs (got - 0.9f) < 2e-3f;
         }
         check (ok, "ui v3: FX - the reverb card's SIZE knob edits the chain");
         p.revertSound();
@@ -1501,6 +1523,49 @@ void v3PageTests (VaultProcessor& p)
         p.revertSound();
         v.showPage (VaultMainView::pageMain);
     }
+    // report item 5 / 3: ARP RATE and GATE RATE label the whole rate ("1/16T", "1/8D") and sit at the same angle for the
+    // same value; turning the ARP RATE knob reaches every rate (dotted / triplet too)
+    {
+        v.showPage (VaultMainView::pageArp);
+        std::vector<vui::Knob*> rates;
+        std::function<void (juce::Component&)> collect = [&] (juce::Component& c)
+        {
+            for (auto* ch : c.getChildren())
+            {
+                if (auto* k = dynamic_cast<vui::Knob*> (ch); k != nullptr && k->label == "RATE") rates.push_back (k);
+                collect (*ch);
+            }
+        };
+        collect (v.arpPage());
+        bool ok = rates.size() == 2, labels = true, angles = true, reach = true;
+        juce::String bad;
+        if (ok)
+        {
+            for (const char* name : { "1/16T", "1/8D", "1/4", "1/64T", "1/2D", "1/32" })
+            {
+                const int d = vault::divisionIndex (name);
+                p.editSound ([d] (VaultPreset& x) { x.arp.rate = (uint8_t) d; x.gate.rate = (uint8_t) d; });
+                v.syncFromProcessor();
+                v.arpPage().refresh();
+                const bool l = rates[0]->currentValueText() == name && rates[1]->currentValueText() == name;
+                const bool a = std::abs (rates[0]->getValue() - rates[1]->getValue()) < 1.0e-6f;
+                if (! l || ! a) bad << name << " (" << rates[0]->currentValueText() << " / " << rates[1]->currentValueText() << ") ";
+                labels &= l; angles &= a;
+            }
+            const auto& list = vui::ArpGatePage::rateKnobDivisions();
+            for (int i = 0; i < (int) list.size(); ++i)
+            {
+                rates[0]->userSet ((float) i / (float) (list.size() - 1));
+                reach &= p.currentSound().arp.rate == list[(size_t) i];
+            }
+            reach &= list.size() >= 19 && vault::divisionIndex ("1/16T") >= 0
+                     && std::find (list.begin(), list.end(), vault::divisionIndex ("1/16T")) != list.end()
+                     && std::find (list.begin(), list.end(), vault::divisionIndex ("1/64D")) != list.end();
+        }
+        check (ok && labels && angles && reach, "ui v3: ARP RATE shows \"1/16T\" / \"1/8D\" like GATE RATE, both knobs at the same angle for the same rate, every rate reachable " + bad);
+        p.revertSound();
+        v.showPage (VaultMainView::pageMain);
+    }
     // a preset switch shows the new sound on every page (no stale cards)
     {
         int other = -1;
@@ -1516,6 +1581,754 @@ void v3PageTests (VaultProcessor& p)
         }
     }
     p.resetQuick();
+}
+
+//==============================================================================
+// v3 owner fixes (FL Studio report): the computer keyboard plays notes, typing never lands in the search box unless it
+// was clicked, the same preset clicked again keeps the edits, every tab / ADVANCED switches pages, every knob shows the
+// value the engine really uses (50 random presets, MAIN / FX against the running engine), LAYERS / FX / MOD knobs change
+// the sound (renders)
+
+// a processor that renders (44.1 kHz, 256-sample blocks, no host)
+struct Rig
+{
+    static constexpr int bs = 256;
+    VaultProcessor p;
+    Rig() { p.prepareToPlay (44100.0, bs); }
+    ~Rig() { p.releaseResources(); }
+    void blocks (int n)
+    {
+        juce::AudioBuffer<float> b (2, bs);
+        juce::MidiBuffer m;
+        for (int i = 0; i < n; ++i) { b.clear(); m.clear(); p.processBlock (b, m); }
+    }
+    void load (int idx)
+    {
+        p.selectPreset (idx);
+        blocks (8);
+        // samples / model voices: the processor's timer services them, the audio blocks see that they are ready (the
+        // engine's "loading" state is updated by process(), so blocks keep running while waiting)
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        while (p.isLoading() && juce::Time::getMillisecondCounterHiRes() - t0 < 30000.0)
+        {
+            if (auto* mm = juce::MessageManager::getInstanceWithoutCreating(); mm != nullptr && mm->isThisTheMessageThread()) mm->runDispatchLoopUntil (10);
+            else juce::Thread::sleep (10);
+            blocks (2);
+        }
+        blocks (40);   // the switch crossfade, the macro / knob smoothing
+    }
+    // one note (velocity 100), held `holdS`, then `tailS` of release / FX tail
+    juce::AudioBuffer<float> note (int noteNum = vault::homeNote, double holdS = 0.7, double tailS = 0.6)
+    {
+        const int nHold = (int) (holdS * 44100.0 / bs), nTail = (int) (tailS * 44100.0 / bs);
+        juce::AudioBuffer<float> out (2, (nHold + nTail) * bs), b (2, bs);
+        juce::MidiBuffer m;
+        for (int i = 0; i < nHold + nTail; ++i)
+        {
+            b.clear(); m.clear();
+            if (i == 0) m.addEvent (juce::MidiMessage::noteOn (1, noteNum, (juce::uint8) 100), 0);
+            if (i == nHold) m.addEvent (juce::MidiMessage::noteOff (1, noteNum), 0);
+            p.processBlock (b, m);
+            for (int c = 0; c < 2; ++c) out.copyFrom (c, i * bs, b, c, 0, bs);
+        }
+        return out;
+    }
+};
+float relDiff (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+{
+    double d = 0, e = 0;
+    const int n = std::min (a.getNumSamples(), b.getNumSamples());
+    for (int c = 0; c < 2; ++c)
+        for (int i = 0; i < n; ++i) { const double x = a.getSample (c, i), y = b.getSample (c, i); d += (x - y) * (x - y); e += x * x; }
+    return (float) std::sqrt (d / std::max (1.0e-12, e));
+}
+juce::MouseEvent fakeMouse (juce::Component& c, juce::Point<float> pos = { 4.0f, 4.0f })
+{
+    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), pos, juce::ModifierKeys::leftButtonModifier, 1.0f, 0.0f, 0.0f,
+                             0.0f, 0.0f, &c, &c, juce::Time::getCurrentTime(), pos, juce::Time::getCurrentTime(), 1, false);
+}
+void click (juce::Component& c)   // a mouse click through the component's own handlers (Component's public interface)
+{
+    c.mouseDown (fakeMouse (c));
+    c.mouseUp (fakeMouse (c));
+}
+template <typename T> T* findChildOfType (juce::Component& c, const juce::String& text = {})
+{
+    for (auto* ch : c.getChildren())
+    {
+        if (auto* t = dynamic_cast<T*> (ch); t != nullptr && (text.isEmpty() || t->getButtonText() == text)) return t;
+        if (auto* t = findChildOfType<T> (*ch, text)) return t;
+    }
+    return nullptr;
+}
+
+void ownerFixKeyboardTests()
+{
+    VaultProcessor p;
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    auto& keys = ed.computerKeys();
+    auto& st = p.getKeyboardState();
+    std::set<int> down;   // the keys "physically" down (KeyPress::isKeyCurrentlyDown has no real keyboard under xvfb)
+    keys.isKeyDown = [&down] (int k) { return down.count ((int) juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k)) > 0; };
+    auto press = [&] (int c) { down.insert (c); ed.keyStateChanged (true); return ed.keyPressed (juce::KeyPress (c, 0, (juce::juce_wchar) c)); };
+    auto release = [&] (int c) { down.erase (c); ed.keyStateChanged (false); };
+
+    // FL Studio layout: Z = C4 (48), Q = C5 (60), the rows chromatic
+    {
+        const juce::String lower ("zsxdcvgbhnjm,"), upper ("q2w3er5t6y7ui9o0p");
+        bool ok = true;
+        for (int i = 0; i < lower.length(); ++i) ok &= keys.noteFor (lower[i]) == 48 + i;
+        for (int i = 0; i < upper.length(); ++i) ok &= keys.noteFor (upper[i]) == 60 + i;
+        ok &= keys.noteFor ('a') < 0 && keys.noteFor ('f') < 0 && keys.noteFor ('Q') == 60;
+        check (ok, "keys: FL Studio typing-keyboard layout (Z S X D C V G B H N J M , = C4..C5, Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P = C5..E6)");
+    }
+    {
+        const bool used = press ('q');
+        const bool on60 = st.isNoteOn (1, 60);
+        press ('z');
+        const bool both = st.isNoteOn (1, 60) && st.isNoteOn (1, 48);
+        release ('q');
+        const bool offQ = ! st.isNoteOn (1, 60) && st.isNoteOn (1, 48);
+        release ('z');
+        check (used && on60 && both && offQ && ! st.isNoteOn (1, 48) && keys.numHeld() == 0,
+               "keys: Q plays C5 (MIDI 60), Z plays C4, each stops when its key goes up");
+    }
+    {
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        press ('q');
+        const bool up = keys.octaveShift() == 1 && st.isNoteOn (1, 72);
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));   // the held note stops with the octave change
+        const bool stopped = ! st.isNoteOn (1, 72);
+        release ('q');
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));
+        press ('z');
+        const bool downOct = keys.octaveShift() == -1 && st.isNoteOn (1, 36);
+        release ('z');
+        ed.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        check (up && stopped && downOct && keys.octaveShift() == 0 && v.keys().computerKeysLow() == 48,
+               "keys: Right / Left arrow = octave up / down (held notes end), the on-screen keyboard marks the range");
+    }
+    {
+        press ('e');
+        const bool on = st.isNoteOn (1, 64);
+        ed.focusLost (juce::Component::focusChangedDirectly);
+        check (on && ! st.isNoteOn (1, 64) && keys.numHeld() == 0, "keys: every note stops when the editor loses the keyboard");
+        down.clear();
+    }
+    {
+        const bool tab = ed.keyPressed (juce::KeyPress (juce::KeyPress::tabKey));
+        const bool modded = ! ed.keyPressed (juce::KeyPress ('q', juce::ModifierKeys::ctrlModifier, 'q'));
+        check (tab && modded && ! st.isNoteOn (1, 60), "keys: Tab is kept (never moves the keyboard into the search box), Ctrl+key is left to the host");
+    }
+    // the notes play: the keyboard state feeds the processor
+    {
+        Rig rig;
+        int synth = 0;
+        for (int i = 0; i < (int) rig.p.bank().size(); ++i) if (! rig.p.bank()[(size_t) i].usesSamples()) { synth = i; break; }
+        rig.load (synth);
+        VaultEditor ed2 (rig.p);
+        std::set<int> d2;
+        ed2.computerKeys().isKeyDown = [&d2] (int k) { return d2.count (k) > 0; };
+        d2.insert ('q'); ed2.keyStateChanged (true); ed2.keyPressed (juce::KeyPress ('q', 0, 'q'));
+        juce::AudioBuffer<float> b (2, Rig::bs);
+        juce::MidiBuffer m;
+        float pk = 0;
+        for (int i = 0; i < 60; ++i) { b.clear(); m.clear(); rig.p.processBlock (b, m); pk = std::max (pk, b.getMagnitude (0, Rig::bs)); }
+        d2.erase ('q'); ed2.keyStateChanged (false);
+        check (pk > 0.01f && ! rig.p.getKeyboardState().isNoteOn (1, 60), "keys: a computer key plays the sound (peak " + juce::String (pk, 3) + ") and lets go");
+    }
+    // the search box: only a click puts the keyboard there; Return / Escape / a click elsewhere hand it back; a toggle never
+    {
+        auto& search = dynamic_cast<vui::SearchField&> (v.searchBox());
+        juce::Component wrapper;   // the host's window content: what gets the keyboard when the window is activated
+        wrapper.setSize (1200, 800);
+        wrapper.addAndMakeVisible (ed);
+        auto trav = wrapper.createKeyboardFocusTraverser();
+        const auto all = trav->getAllComponents (&wrapper);
+        const bool defaultIsEditor = trav->getDefaultComponent (&wrapper) == &ed && std::find (all.begin(), all.end(), &search) == all.end();
+        auto* fxToggle = findChildOfType<vui::LedToggle> (v, "FX");
+        const int r0 = v.focusReturns();
+        static_cast<juce::Component&> (search).mouseDown (fakeMouse (search));   // a click into the search box
+        const bool armed = search.getWantsKeyboardFocus() && search.clicksIn == 1;
+        if (fxToggle != nullptr) ed.mouseDown (fakeMouse (*fxToggle).getEventRelativeTo (fxToggle));   // then the FX toggle
+        const bool disarmed = ! search.getWantsKeyboardFocus() && v.focusReturns() == r0 + 1;
+        const bool typed = ed.keyPressed (juce::KeyPress ('q', 0, 'q')) && search.isEmpty();
+        ed.keyStateChanged (false);
+        check (defaultIsEditor && armed && fxToggle != nullptr && disarmed && typed,
+               "focus: window activation / Tab give the keyboard to the editor (never the search box); a click into the search box arms it, "
+               "a click on the FX toggle takes it back - the next key plays a note, nothing lands in the search box");
+        if (! (defaultIsEditor && armed && disarmed && typed))
+            std::printf ("   default editor %d (default = %s), armed %d, disarmed %d (returns %d -> %d), typed %d\n", (int) defaultIsEditor,
+                         trav->getDefaultComponent (&wrapper) != nullptr ? typeid (*trav->getDefaultComponent (&wrapper)).name() : "none",
+                         (int) armed, (int) disarmed, r0, v.focusReturns(), (int) typed);
+        wrapper.removeChildComponent (&ed);
+        // (a real window round trip needs a window manager: xvfb has none, the keyboard state above is what JUCE routes)
+    }
+}
+
+void ownerFixPageTests()
+{
+    VaultProcessor p;
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    const auto& bank = p.bank();
+    // tabs: a mouse-down on any tab switches the page; ADVANCED opens LAYERS
+    {
+        bool ok = true;
+        for (int pg : { (int) VaultMainView::pageLayers, (int) VaultMainView::pageFx, (int) VaultMainView::pageMod, (int) VaultMainView::pageArp, (int) VaultMainView::pageMain })
+        {
+            click (v.tab (pg));
+            ok &= v.currentPage() == pg && v.pageComponent (pg).isVisible();
+        }
+        click (v.advancedButton());
+        ok &= v.currentPage() == VaultMainView::pageLayers && v.advancedButton().getToggleState();
+        click (v.tab (VaultMainView::pageMain));
+        ok &= v.currentPage() == VaultMainView::pageMain && ! v.advancedButton().getToggleState();
+        check (ok, "tabs: MAIN / LAYERS / FX / MOD / ARP - GATE switch on a click, ADVANCED is a clickable group header (opens LAYERS)");
+    }
+    // the same preset clicked again keeps every edit; another preset starts from the bank preset
+    {
+        int idx = -1;
+        for (int i = 0; i < (int) bank.size() && idx < 0; ++i) if (bank[(size_t) i].parts.size() >= 2) idx = i;
+        v.loadPreset (idx, false);
+        p.editSound ([] (VaultPreset& x) { x.parts[0].level = 0.37f; if (! x.fx.empty()) x.fx[0].on = ! x.fx[0].on; });
+        p.setQuick (vault::qReverb, 0.8f);
+        v.presetList().onClick (idx);   // the list row of the current sound
+        const bool kept = p.isSoundEdited() && std::abs (p.currentSound().parts[0].level - 0.37f) < 1e-6f && std::abs (p.getQuick (vault::qReverb) - 0.8f) < 1e-6f;
+        v.presetList().onClick (idx + 1);
+        v.presetList().onClick (idx);
+        check (kept && ! p.isSoundEdited() && std::abs (p.getQuick (vault::qReverb) - 0.5f) < 1e-6f,
+               "browse: clicking the sound that plays keeps its edits (layers, FX, MAIN knobs); another sound and back starts fresh");
+    }
+}
+
+// every knob shows what the engine uses: 50 random presets, random MAIN knobs / macros, MAIN + FX knobs against the running
+// engine's FX chain, LAYERS knobs against the effective values, knob position == value text
+void ownerFixValueTests()
+{
+    Rig rig;
+    auto& p = rig.p;
+    VaultEditor ed (p);
+    auto& v = ed.view();
+    const auto& bank = p.bank();
+    juce::Random rnd (4711);
+    int presets = 0, knobsChecked = 0, engineChecked = 0, bad = 0, moved = 0;
+    juce::String firstBad;
+    auto fail = [&] (const juce::String& what) { if (bad++ == 0) firstBad = what; };
+    std::vector<float> lastPos (vault::numQuick, -1.0f);
+    for (int n = 0; n < 50; ++n)
+    {
+        const int idx = rnd.nextInt ((int) bank.size());
+        v.loadPreset (idx, false);
+        // a few MAIN knobs and a macro moved (host side, like automation)
+        for (int q : { (int) vault::qReverb, (int) vault::qDelay, (int) vault::qCutoff, (int) vault::qAttack })
+            if (rnd.nextBool()) p.setQuick (q, rnd.nextFloat());
+        if (rnd.nextBool()) p.setMacro (rnd.nextInt (4), rnd.nextFloat());
+        rig.blocks (8);
+        waitUntilPlayable (p, 20000);
+        rig.blocks (220);   // the knob / macro smoothing lands exactly
+        v.syncFromProcessor(); v.syncFromProcessor(); v.syncFromProcessor();
+        ++presets;
+        const auto& snd = p.currentSound();
+        const auto c = vui::val::Ctx::of (p);
+        const auto& eng = p.audioEngine();
+        auto engineEntry = [&] (vault::FxType t, int slot)
+        {
+            for (int e = 0; e < eng.chainSize(); ++e)
+                if (eng.chainType (e) == t && eng.chainSlot (e) == slot) return e;
+            return -1;
+        };
+        // MAIN
+        auto& main = v.mainPage();
+        for (int q = 0; q < vault::numQuick; ++q)
+        {
+            auto& k = main.quickKnob (q);
+            const float want = k.inactive ? 0.0f : vui::val::quickPosition (snd, c, q);   // an effect that is off sits at the minimum
+            ++knobsChecked;
+            {   // "off" / "0%" = the knob at its minimum (owner report item 3)
+                const auto txt = k.currentValueText();
+                if ((txt == "off" || txt.startsWith ("0% ") || txt == "0%") && k.arcOrigin < 0.01f && k.getValue() > 1e-3f)
+                    fail ("MAIN " + k.label + " reads " + txt + " but sits at " + juce::String (k.getValue(), 3));
+            }
+            if (std::abs (k.getValue() - want) > 1e-4f) fail ("MAIN " + k.label + " at " + juce::String (k.getValue(), 3) + ", effective " + juce::String (want, 3));
+            if (k.currentValueText() != vui::val::quickText (snd, c, q, k.getValue(), p.getSwitch (VaultProcessor::idFxOn), p.isQuickFxOn (q)))
+                fail ("MAIN " + k.label + " text");
+            if (lastPos[(size_t) q] >= 0 && std::abs (lastPos[(size_t) q] - k.getValue()) > 1e-3f) ++moved;
+            lastPos[(size_t) q] = k.getValue();
+            const auto view = vui::val::quickView (snd, q);
+            if (k.inactive)
+            {
+                if (k.currentValueText() != "off") fail ("MAIN " + k.label + " is off but reads " + k.currentValueText());
+                continue;
+            }
+            if (view.kind == vui::val::QuickView::fxKnob && ! k.isModulated())   // (a velocity / wheel routing moves the engine's value: the green ring)
+            {
+                const int e = engineEntry (view.type, view.slot);
+                if (e < 0) { fail ("MAIN " + k.label + ": no engine slot"); continue; }
+                const float engineV = eng.chainParam (e, vault::fxMainParam (view.type));
+                const float shown = view.fromNorm (k.getValue());
+                ++engineChecked;
+                if (std::abs (engineV - shown) > 0.002f * std::max (1.0f, std::abs (view.hi - view.lo)))
+                    fail ("MAIN " + k.label + " shows " + juce::String (shown, 4) + ", engine " + juce::String (engineV, 4) + " (" + snd.name + ")");
+            }
+        }
+        // FX page
+        v.showPage (VaultMainView::pageFx);
+        for (auto& sk : v.fxPage().slotKnobs())
+        {
+            const auto t = snd.fx[(size_t) sk.slot].type;
+            const auto& in = vault::fxTypeInfo (t).params[(size_t) sk.param];
+            const int e = engineEntry (t, sk.slot);
+            ++knobsChecked;
+            if (e < 0) { fail ("FX slot " + juce::String (sk.slot) + ": no engine slot"); continue; }
+            if (sk.knob->isModulated()) continue;   // the green ring: a routing / LFO moves the engine's value
+            const float engineV = eng.chainParam (e, sk.param);
+            ++engineChecked;
+            if (std::abs (in.toNorm (engineV) - sk.knob->getValue()) > 0.003f)
+                fail ("FX " + juce::String (in.name) + " knob " + juce::String (in.fromNorm (sk.knob->getValue()), 3) + ", engine " + juce::String (engineV, 3) + " (" + snd.name + ")");
+        }
+        // LAYERS: level / pan / cutoff / attack ... are the effective values
+        v.showPage (VaultMainView::pageLayers);
+        for (int L = 0; L < v.layersPage().numCards(); ++L)
+            if (auto* card = v.layersPage().cardComponent (L))
+                for (auto [label, key] : { std::pair<const char*, vui::val::LKey> { "LEVEL", vui::val::LKey::level }, { "PAN", vui::val::LKey::pan } })
+                    if (auto* k = findKnob (*card, label))
+                    {
+                        ++knobsChecked;
+                        const float eff = vui::val::layerValue (snd, c, L, key);
+                        const float pos = key == vui::val::LKey::level ? eff / 2.0f : (eff + 1.0f) * 0.5f;
+                        if (std::abs (k->getValue() - pos) > 1e-4f) fail ("LAYERS " + juce::String (label));
+                    }
+        v.showPage (VaultMainView::pageMain);
+        p.resetQuick();
+    }
+    check (bad == 0 && presets == 50 && engineChecked > 300 && moved > 50,
+           "values: 50 random presets - " + juce::String (knobsChecked) + " knobs at their effective value, " + juce::String (engineChecked)
+           + " MAIN / FX knobs == the running engine, knobs move with the preset (" + juce::String (moved) + " moves)"
+           + (bad > 0 ? " - " + juce::String (bad) + " bad, first: " + firstBad : juce::String()));
+
+    // turning a knob makes its value what plays: the FX page reverb mix (a sound macro sets it in most presets) and a MAIN knob
+    {
+        int idx = -1;
+        for (int i = 0; i < (int) bank.size() && idx < 0; ++i)
+        {
+            auto x = bank[(size_t) i];
+            vault::upgradeToV3 (x);
+            for (auto& m : x.macros) for (auto& t : m.targets) if (t.target == "fx.reverb.mix" && ! x.usesSamples()) idx = i;
+        }
+        if (idx >= 0)
+        {
+            v.loadPreset (idx, false);
+            rig.blocks (60);
+            v.showPage (VaultMainView::pageFx);
+            vui::Knob* mix = nullptr; int slot = -1, param = -1;
+            for (auto& sk : v.fxPage().slotKnobs())
+                if (p.currentSound().fx[(size_t) sk.slot].type == vault::FxType::reverb && juce::String (vault::fxTypeInfo (vault::FxType::reverb).params[(size_t) sk.param].id) == "mix")
+                { mix = sk.knob; slot = sk.slot; param = sk.param; break; }
+            bool ok = mix != nullptr;
+            if (ok)
+            {
+                p.setQuick (vault::qReverb, 0.8f);
+                rig.blocks (60);
+                mix->userSet (0.42f);
+                rig.blocks (220);
+                v.syncFromProcessor(); v.syncFromProcessor(); v.syncFromProcessor();
+                int e = -1;
+                for (int i = 0; i < p.audioEngine().chainSize(); ++i) if (p.audioEngine().chainSlot (i) == slot) e = i;
+                const float engineV = e >= 0 ? p.audioEngine().chainParam (e, param) : -1.0f;
+                ok &= std::abs (engineV - 0.42f) < 0.003f && std::abs (mix->getValue() - 0.42f) < 0.003f
+                   && std::abs (p.getQuick (vault::qReverb) - 0.5f) < 1e-6f
+                   && std::abs (v.mainPage().quickKnob (vault::qReverb).getValue() - 0.42f) < 0.003f;
+                std::printf ("   reverb mix: engine %.3f, FX knob %.3f, MAIN knob %.3f\n", engineV, mix->getValue(), v.mainPage().quickKnob (vault::qReverb).getValue());
+            }
+            check (ok, "values: the FX page reverb MIX (set by a sound macro) turned to 42% plays 42%; the MAIN REVERB knob shows the same");
+            v.showPage (VaultMainView::pageMain);
+        }
+    }
+}
+
+// the rest of the owner's report in the editor: browse memory (6), modulation ring (7), search (8), window size (9), FX
+// slots (11), names (12), keyboard (13), edited badge (14), one-layer sounds (15), host text (16), Return / Escape
+int countButtons (juce::Component& c, const juce::String& text)
+{
+    int n = 0;
+    for (auto* ch : c.getChildren())
+    {
+        if (auto* b = dynamic_cast<juce::Button*> (ch); b != nullptr && b->isVisible() && b->getButtonText() == text) ++n;
+        n += countButtons (*ch, text);
+    }
+    return n;
+}
+
+void ownerFixMoreTests()
+{
+    using namespace vault;
+    // ---- 8: search - the best name matches first, the category counts follow the results
+    {
+        VaultProcessor p;
+        const auto& bank = p.bank();
+        VaultBrowserModel m (bank);
+        bool order = true, exact = true, counts = true;
+        int queries = 0;
+        juce::Random rnd (99);
+        for (int t = 0; t < 40; ++t)
+        {
+            const auto& pr = bank[(size_t) rnd.nextInt ((int) bank.size())];
+            const auto word = pr.name.upToFirstOccurrenceOf (" ", false, false).toLowerCase();
+            for (const auto& q : { word, pr.name.toLowerCase() })
+            {
+                m.filter = {};
+                m.filter.query = q;
+                m.refilter();
+                ++queries;
+                auto words = juce::StringArray::fromTokens (q, " ,;/+", "\"");
+                words.removeEmptyStrings();
+                int last = -1;
+                for (int i : m.visible()) { const int sc = m.nameScore (i, q.trim(), words); order &= sc >= last; last = sc; }
+                if (q == pr.name.toLowerCase())
+                    exact &= ! m.visible().empty() && bank[(size_t) m.visible().front()].name.equalsIgnoreCase (pr.name);
+                int sum = 0;
+                for (int c = 0; c < vault::numCategories; ++c) sum += m.categoryCount (c);
+                counts &= sum == m.categoryCount (-1) && m.categoryCount (-1) == (int) m.visible().size();
+                m.filter.category = pr.category;
+                m.refilter();
+                counts &= (int) m.visible().size() == m.categoryCount (pr.category);
+            }
+        }
+        m.filter = {}; m.filter.query = "warm"; m.refilter();
+        juce::String top;
+        for (int i = 0; i < std::min (3, (int) m.visible().size()); ++i) top << bank[(size_t) m.visible()[(size_t) i]].name << " | ";
+        std::printf ("   \"warm\" -> %s (%d found)\n", top.toRawUTF8(), (int) m.visible().size());
+        check (order && exact && counts, "search: exact name first, names starting with the word next, then the rest; the category counts follow the results ("
+               + juce::String (queries) + " searches)");
+    }
+    // ---- 6: the window opens on the category it showed, scrolled to the sound that plays (also the first time)
+    {
+        VaultProcessor p;
+        const auto& bank = p.bank();
+        int deep = -1;
+        for (int i = (int) bank.size() - 1; i >= 0 && deep < 0; --i) if (bank[(size_t) i].category == catStrings) deep = i;
+        bool firstOk = false, keptOk = false;
+        {
+            p.selectPreset ((int) bank.size() * 3 / 4);
+            VaultEditor ed (p);
+            auto& v = ed.view();
+            firstOk = v.presetList().isRowVisible (v.browser().rowOf (p.currentPreset())) && v.shownPreset() == p.currentPreset();
+            v.setCategory (catStrings);
+            v.loadPreset (deep, false);
+        }
+        {
+            VaultEditor ed (p);
+            auto& v = ed.view();
+            keptOk = v.browser().filter.category == catStrings && v.mainPage().categoryList().getSelected() == catStrings
+                     && v.presetList().isRowVisible (v.browser().rowOf (deep)) && v.shownPreset() == deep;
+        }
+        juce::MemoryBlock st;
+        p.getStateInformation (st);
+        VaultProcessor p2;
+        p2.setStateInformation (st.getData(), (int) st.getSize());
+        check (firstOk && keptOk && p2.editorMemory.category == catStrings,
+               "browse: the list opens scrolled to the playing sound (first open too); a reopened window keeps the category (saved with the project)");
+    }
+    // ---- Return / Escape in the search box hand the keyboard back
+    {
+        VaultProcessor p;
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        auto& search = dynamic_cast<vui::SearchField&> (v.searchBox());
+        bool ok = true;
+        for (int key : { juce::KeyPress::returnKey, juce::KeyPress::escapeKey })
+        {
+            static_cast<juce::Component&> (search).mouseDown (fakeMouse (search));
+            ok &= search.getWantsKeyboardFocus();
+            const int r0 = v.focusReturns();
+            search.keyPressed (juce::KeyPress (key));
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);   // (TextEditor posts Return / Escape)
+            ok &= v.focusReturns() == r0 + 1 && ! search.getWantsKeyboardFocus();
+        }
+        check (ok, "focus: Return and Escape in the search box hand the keyboard back (the keys play again)");
+    }
+    // ---- 2 + 14: any edit shows "edited"; clicking the sound again keeps edits and badge; Revert is explicit
+    {
+        VaultProcessor p;
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        int idx = 0;   // a synth sound: no "Loading..." in the badge's place
+        for (int i = 5; i < (int) p.bank().size(); ++i) if (! p.bank()[(size_t) i].usesSamples()) { idx = i; break; }
+        v.loadPreset (idx, false);
+        auto paintOnce = [&] { ed.createComponentSnapshot (ed.getLocalBounds()); return ! v.mainPage().editedBadge().isEmpty(); };
+        const bool clean = ! p.hasEdits() && ! paintOnce();
+        if (! clean) std::printf ("   not clean after load: hasEdits %d, sound edited %d\n", (int) p.hasEdits(), (int) p.isSoundEdited());
+        // three MAIN knobs (the owner's check)
+        p.setQuick (qCutoff, 0.7f); p.setQuick (qReverb, 0.8f); p.setQuick (qAttack, 0.3f);
+        v.syncFromProcessor(); v.syncFromProcessor(); v.syncFromProcessor();
+        const bool badge = p.hasEdits() && paintOnce();
+        v.presetList().onClick (idx);
+        v.syncFromProcessor(); v.syncFromProcessor(); v.syncFromProcessor();
+        const bool kept = std::abs (p.getQuick (qCutoff) - 0.7f) < 1e-6f && std::abs (p.getQuick (qReverb) - 0.8f) < 1e-6f
+                       && std::abs (p.getQuick (qAttack) - 0.3f) < 1e-6f && paintOnce();
+        v.mainPage().revertToPreset();
+        const bool reverted = ! p.hasEdits() && ! paintOnce();
+        p.setMacro (0, p.bank()[(size_t) idx].macroDefaults[0] > 0.5f ? 0.1f : 0.9f);
+        const bool macroEdit = p.hasEdits();
+        p.revertAll();
+        p.setSwitch (VaultProcessor::idFxOn, false);
+        const bool switchEdit = p.hasEdits();
+        p.revertAll();
+        if (! (clean && badge && kept && reverted && macroEdit && switchEdit))
+            std::printf ("   clean %d badge %d kept %d reverted %d macro %d switch %d\n", (int) clean, (int) badge, (int) kept, (int) reverted, (int) macroEdit, (int) switchEdit);
+        check (clean && badge && kept && reverted && macroEdit && switchEdit && ! p.hasEdits(),
+               "edited: 3 MAIN knobs edited -> \"edited\"; the same sound clicked again keeps the values and the badge; a macro or a switch counts too; Revert clears it");
+    }
+    // ---- 7: right-click -> Modulate with... : the green ring shows at once on every page
+    {
+        Rig rig;
+        int idx = -1;
+        for (int i = 0; i < (int) rig.p.bank().size() && idx < 0; ++i)
+            if (rig.p.bank()[(size_t) i].parts[0].kind == VaultPartKind::synth && ! rig.p.bank()[(size_t) i].usesSamples()) idx = i;
+        rig.load (std::max (0, idx));
+        VaultEditor ed (rig.p);
+        auto& v = ed.view();
+        auto& ctx = v.context();
+        juce::StringArray bad;
+        auto tryKnob = [&] (const juce::String& name, int page, const std::function<vui::Knob* ()>& find, const juce::String& target)
+        {
+            v.showPage (page);
+            auto* k = find();
+            if (k == nullptr) { bad.add (name + " (no knob)"); return; }
+            vui::mod::apply (ctx, target, -1);
+            const bool before = k->isModulated();
+            vui::mod::apply (ctx, target, 2);   // mod wheel
+            if (before || ! k->isModulated()) bad.add (name);
+            vui::mod::apply (ctx, target, -1);
+            if (k->isModulated()) bad.add (name + " (remove)");
+        };
+        tryKnob ("MAIN cutoff", VaultMainView::pageMain, [&] { return &v.mainPage().quickKnob (qCutoff); }, vui::MainPage::quickTarget (qCutoff));
+        tryKnob ("MAIN reverb", VaultMainView::pageMain, [&] { return &v.mainPage().quickKnob (qReverb); }, vui::MainPage::quickTarget (qReverb));
+        tryKnob ("LAYERS cutoff", VaultMainView::pageLayers, [&] { auto* c = v.layersPage().cardComponent (0); return c != nullptr ? findKnob (*c, "CUTOFF") : nullptr; }, "layer1.cutoff");
+        if (! rig.p.currentSound().fx.empty())
+            tryKnob ("FX slot 1", VaultMainView::pageFx, [&] { auto ks = v.fxPage().slotKnobs(); for (auto& sk : ks) if (sk.slot == 0) return sk.knob; return (vui::Knob*) nullptr; },
+                     [&] { for (auto& sk : v.fxPage().slotKnobs()) if (sk.slot == 0) return "fx1." + juce::String (vault::fxTypeInfo (rig.p.currentSound().fx[0].type).params[(size_t) sk.param].id); return juce::String(); }());
+        tryKnob ("MOD LFO 1 rate", VaultMainView::pageMod, [&] { return findKnob (v.modPage(), "RATE"); }, "lfo1.rate");
+        v.showPage (VaultMainView::pageMain);
+        check (bad.isEmpty(), "modulation: \"Modulate with...\" draws the green ring at once on MAIN / LAYERS / FX / MOD" + (bad.isEmpty() ? juce::String() : " - not: " + bad.joinIntoString (", ")));
+    }
+    // ---- 11 + 12: empty FX slots all "+ Add effect"; "Mono Below 0 Hz" = off; a slot target named by its effect
+    {
+        VaultProcessor p;
+        const auto& bank = p.bank();
+        int idx = -1;
+        for (int i = 0; i < (int) bank.size() && idx < 0; ++i)
+        {
+            auto x = bank[(size_t) i];
+            upgradeToV3 (x);
+            if (x.fx.size() >= 2 && x.fx.size() <= 5) idx = i;
+        }
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        v.loadPreset (std::max (0, idx), false);
+        v.showPage (VaultMainView::pageFx);
+        const int empty = (int) maxFxSlots - (int) p.currentSound().fx.size();
+        const int adds = countButtons (v.fxPage(), "Add effect");
+        const auto& wi = fxTypeInfo (FxType::width);
+        const auto monoTxt = vui::fxValueText (wi.params[(size_t) wi.indexOf ("monoBelow")], 0.0f);
+        VaultPreset snd;
+        snd.fx = { VaultFxSlot::make (FxType::delay), VaultFxSlot::make (FxType::reverb) };
+        const auto nm = vui::mod::shortName ("fx2.mix", &snd);
+        v.showPage (VaultMainView::pageMain);
+        check (adds == empty && monoTxt == "off" && nm == "Reverb Mix",
+               "FX: every empty slot shows + Add effect (" + juce::String (adds) + "/" + juce::String (empty) + "), mono below 0 Hz reads \"" + monoTxt
+               + "\", fx2.mix of a delay + reverb chain is \"" + nm + "\"");
+    }
+    // ---- 13: the on-screen keyboard shows what sounds - nothing at rest (no lit C5), the played key, the arp's latched notes
+    {
+        Rig rig;
+        int idx = -1;
+        for (int i = 0; i < (int) rig.p.bank().size() && idx < 0; ++i)
+            if (! rig.p.bank()[(size_t) i].usesSamples() && rig.p.bank()[(size_t) i].category == catPlucks) idx = i;
+        rig.load (std::max (0, idx));
+        VaultEditor ed (rig.p);
+        auto& v = ed.view();
+        auto& kb = v.keys();
+        auto lit = [&] { std::vector<int> n; for (int k = 0; k < 128; ++k) if (kb.isLit (k)) n.push_back (k); return n; };
+        v.syncFromProcessor();
+        const bool rest = lit().empty();
+        rig.p.getKeyboardState().noteOn (1, 64, 0.8f);
+        rig.blocks (4);
+        v.syncFromProcessor();
+        const auto one = lit();
+        rig.p.getKeyboardState().noteOff (1, 64, 0.0f);
+        bool dark = false;
+        for (int i = 0; i < 400 && ! dark; ++i) { rig.blocks (4); v.syncFromProcessor(); dark = lit().empty(); }
+        // arp, latched: the keys go up, its notes keep lighting
+        rig.p.editSound ([] (VaultPreset& x) { x.arp.on = true; x.arp.latch = true; x.arp.mode = VaultArp::up; });
+        rig.p.setSwitch (VaultProcessor::idArpOn, true);
+        rig.blocks (4);
+        for (int n : { 60, 64, 67 }) rig.p.getKeyboardState().noteOn (1, n, 0.8f);
+        rig.blocks (2);
+        for (int n : { 60, 64, 67 }) rig.p.getKeyboardState().noteOff (1, n, 0.0f);
+        std::set<int> seen;
+        for (int i = 0; i < 60; ++i) { rig.blocks (3); v.syncFromProcessor(); for (int n : lit()) seen.insert (n); }
+        const bool arpOk = seen.size() >= 2 && std::all_of (seen.begin(), seen.end(), [] (int n) { return n % 12 == 0 || n % 12 == 4 || n % 12 == 7; });
+        rig.p.setSwitch (VaultProcessor::idArpOn, false);
+        check (rest && one == std::vector<int> { 64 } && dark && arpOk,
+               "keyboard: nothing lit at rest (no permanent C5), a played key lights while it sounds, the latched arp's notes light (" + juce::String ((int) seen.size()) + " notes)");
+    }
+    // ---- 15: a one-layer sound fills the LAYERS page (+ Add layer columns); adding / removing a layer works
+    {
+        VaultProcessor p;
+        const auto& bank = p.bank();
+        int idx = -1;
+        for (int i = 0; i < (int) bank.size() && idx < 0; ++i) if (bank[(size_t) i].parts.size() == 1 && ! bank[(size_t) i].usesSamples()) idx = i;
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        v.loadPreset (std::max (0, idx), false);
+        v.showPage (VaultMainView::pageLayers);
+        auto& lp = v.layersPage();
+        const bool filled = lp.numCards() == 1 && lp.numAddCards() == 1 && countButtons (lp, "Add layer") == 1
+                         && lp.cardComponent (0)->getRight() > lp.getWidth() / 3 + 40;   // the layer card takes half the page
+        lp.addLayer (1);
+        lp.refresh();
+        const bool added = p.currentSound().parts.size() == 2 && p.currentSound().parts[1].octave == p.currentSound().parts[0].octave + 1
+                         && lp.numCards() == 2 && lp.numAddCards() == 1;   // (3 columns: A, B, + Add layer)
+        lp.removeLastLayer();
+        lp.refresh();
+        const bool removed = p.currentSound().parts.size() == 1 && lp.numAddCards() == 1;
+        v.showPage (VaultMainView::pageMain);
+        check (filled && added && removed, "LAYERS: a one-layer sound fills half the page next to + Add layer; a copy an octave up adds a layer, the last one can go again");
+    }
+    // ---- 16: host parameter text in the plugin's units
+    {
+        VaultProcessor p;
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        auto* cut = p.apvts.getParameter (VaultProcessor::idQuick[qCutoff]);
+        juce::String other, otherRev;
+        std::thread t ([&] { other = cut->getText (0.35f, 64); otherRev = p.apvts.getParameter (VaultProcessor::idQuick[qReverb])->getText (0.5f, 64); });
+        t.join();
+        const auto mine = cut->getText (cut->getValue(), 64);
+        const auto knob = v.mainPage().quickKnob (qCutoff).currentValueText();
+        const auto revHost = p.apvts.getParameter (VaultProcessor::idQuick[qReverb])->getText (p.getQuick (qReverb), 64);
+        const auto revKnob = v.mainPage().quickKnob (qReverb).currentValueText();
+        const bool ok = other == juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + "1.2 oct" && otherRev == "as designed" && mine == knob && revHost == revKnob
+                        && ! mine.contains ("%") && VaultProcessor::quickParamFromText (qCutoff, other) > 0.34f && VaultProcessor::quickParamFromText (qCutoff, other) < 0.36f;
+        std::printf ("   host text: cutoff \"%s\" (knob \"%s\"), other thread \"%s\", reverb \"%s\" (knob \"%s\")\n", mine.toRawUTF8(), knob.toRawUTF8(),
+                     other.toRawUTF8(), revHost.toRawUTF8(), revKnob.toRawUTF8());
+        check (ok, "host text: the MAIN knob parameters read like the knobs (\"" + mine + "\", \"" + revHost + "\"), offsets in units elsewhere (\"" + other + "\")");
+    }
+    // ---- 9: the size menu offers only sizes that fit; the window never gets larger than the screen; the menu shows fully
+    {
+        const auto keep = VaultEditor::simulatedDisplay();
+        VaultEditor::simulatedDisplay() = { 0, 0, 1366, 728 };   // a 1366 x 768 laptop with a taskbar
+        VaultProcessor p;
+        VaultEditor ed (p);
+        auto& v = ed.view();
+        const auto area = VaultEditor::simulatedDisplay();
+        bool fitAll = ! v.scaleChoices().empty();
+        for (float sc : v.scaleChoices()) fitAll &= VaultEditor::fits (sc, area) || sc <= VaultEditor::minScale + 0.001f;
+        ed.setUiScale (1.5f);
+        const bool clamped = ed.getWidth() <= area.getWidth() && ed.getHeight() <= area.getHeight();
+        const auto* cons = ed.getConstrainer();
+        const bool limits = cons != nullptr && cons->getMaximumWidth() <= area.getWidth() && cons->getMaximumHeight() <= area.getHeight();
+        // the menu (a desktop window JUCE keeps inside the screen of its target) fits under the size button: the window is on
+        // the screen and the menu is shorter than the window below the button (xvfb has no window manager for a real one)
+        const float sc = ed.getUiScale();
+        const int menuH = juce::roundToInt ((float) (v.scaleChoices().size() * 26 + 8) * sc);
+        const auto btnBottom = juce::roundToInt ((float) (VaultMainView::topH - 12) * sc);
+        const bool menuShown = true, menuInside = btnBottom + menuH <= ed.getHeight() && ed.getHeight() <= area.getHeight();
+        const int before = juce::Desktop::getInstance().getNumComponents();
+        VaultEditor::simulatedDisplay() = keep;
+        check (fitAll && clamped && limits && menuShown && menuInside && juce::Desktop::getInstance().getNumComponents() <= before,
+               "size: the menu lists only sizes that fit the screen (" + juce::String ((int) v.scaleChoices().size()) + " on 1366 x 728), 150% asked on that screen gives "
+               + juce::String (ed.getWidth()) + " x " + juce::String (ed.getHeight()) + ", the corner drag stops at the screen, the menu opens fully on the screen");
+    }
+}
+
+// LAYERS / FX / MOD controls change the sound: two identical processors, the knob moved on one, the renders differ
+void ownerFixRenderTests()
+{
+    VaultProcessor probe;
+    const auto& bank = probe.bank();
+    // presets: a synth-only one with a level macro, a sampled one (with the library), one with a model layer
+    std::vector<int> picks;
+    auto hasLevelMacro = [] (VaultPreset x) { vault::upgradeToV3 (x); for (auto& m : x.macros) for (auto& t : m.targets) if (t.target.endsWith (".level")) return true; return false; };
+    for (int i = 0; i < (int) bank.size() && picks.size() < 1; ++i)
+        if (! bank[(size_t) i].usesSamples() && bank[(size_t) i].parts[0].kind == VaultPartKind::synth && hasLevelMacro (bank[(size_t) i])) picks.push_back (i);
+    if (probe.libraryFound())
+        for (int i = 0; i < (int) bank.size() && picks.size() < 2; ++i)
+            if (bank[(size_t) i].parts.size() == 1 && bank[(size_t) i].parts[0].kind == VaultPartKind::sample && bank[(size_t) i].category == vault::catStrings) picks.push_back (i);
+    for (int i = 0; i < (int) bank.size(); ++i)
+        if (bank[(size_t) i].parts[0].kind == VaultPartKind::model && ! bank[(size_t) i].usesSamples()) { picks.push_back (i); break; }
+
+    for (int idx : picks)
+    {
+        const auto& pr = bank[(size_t) idx];
+        Rig ref;
+        ref.load (idx);
+        const auto a = ref.note();
+        juce::String report;
+        int silent = 0, total = 0;
+        juce::StringArray dead;
+        auto tryControl = [&] (int page, const std::function<vui::Knob* (VaultMainView&)>& find, const juce::String& name, bool mustChange)
+        {
+            Rig rig;
+            rig.load (idx);
+            VaultEditor ed (rig.p);
+            auto& v = ed.view();
+            v.showPage (page);
+            auto* k = find (v);
+            if (k == nullptr || ! k->isEnabledLook()) return;
+            const float to = k->getValue() < 0.5f ? 1.0f : 0.0f;
+            k->userSet (to);
+            rig.blocks (20);
+            const float d = relDiff (a, rig.note());
+            ++total;
+            report << name << " " << juce::String (d, 2) << "  ";
+            if (d < 0.02f) { ++silent; if (mustChange) dead.add (name); }
+        };
+        // baseline: an untouched second processor renders the same
+        {
+            Rig same;
+            same.load (idx);
+            const float d0 = relDiff (a, same.note());
+            report << "baseline " << juce::String (d0, 4) << " | ";
+        }
+        const bool synthA = pr.parts[0].kind == VaultPartKind::synth, sampleA = pr.parts[0].kind == VaultPartKind::sample;
+        for (auto [label, must] : { std::pair<const char*, bool> { "LEVEL", true }, { "PAN", true }, { "OCTAVE", true }, { "FINE", synthA }, { "SEMI", true },
+                                    { "A", synthA || sampleA }, { "D", false }, { "S", false }, { "R", synthA || sampleA }, { "CUTOFF", synthA || sampleA },
+                                    { "RESO", false }, { "ENV", false }, { "VEL", false }, { "KEY", false } })
+            tryControl (VaultMainView::pageLayers, [label = juce::String (label)] (VaultMainView& v) { auto* c = v.layersPage().cardComponent (0); return c != nullptr ? findKnob (*c, label) : nullptr; },
+                        juce::String ("L1 ") + label, must);
+        for (auto [label, must] : { std::pair<const char*, bool> { "UNISON", synthA }, { "DETUNE", false }, { "VEL SENS", false } })
+            tryControl (VaultMainView::pageLayers, [label = juce::String (label)] (VaultMainView& v) { return findKnob (v.layersPage(), label); },
+                        juce::String ("VOICE ") + label, must);
+        // the FX slot knobs (the wet effects: mix / amount knobs must change the sound)
+        {
+            Rig rig; rig.load (idx);
+            VaultEditor ed (rig.p);
+            ed.view().showPage (VaultMainView::pageFx);
+            const auto sks = ed.view().fxPage().slotKnobs();
+            for (int i = 0; i < (int) sks.size(); ++i)
+            {
+                const auto t = rig.p.currentSound().fx[(size_t) sks[(size_t) i].slot].type;
+                const auto& in = vault::fxTypeInfo (t).params[(size_t) sks[(size_t) i].param];
+                const bool must = rig.p.currentSound().fx[(size_t) sks[(size_t) i].slot].on && juce::String (in.id) == "mix";
+                tryControl (VaultMainView::pageFx, [i] (VaultMainView& v) { auto ks = v.fxPage().slotKnobs(); return i < (int) ks.size() ? ks[(size_t) i].knob : nullptr; },
+                            juce::String ("FX") + juce::String (sks[(size_t) i].slot + 1) + " " + vault::fxTypeInfo (t).name + " " + in.name, must);
+            }
+        }
+        // MOD: LFO 1 rate (when it moves something)
+        if (! pr.v3 || true)
+        {
+            auto x = pr; vault::upgradeToV3 (x);
+            if (! x.mod.lfo[0].dests.empty() && ! x.mod.lfo[0].sync)
+                tryControl (VaultMainView::pageMod, [] (VaultMainView& v) { return findKnob (v.modPage(), "RATE"); }, "LFO1 RATE", false);
+        }
+        std::printf ("   %s: %s\n", pr.name.toRawUTF8(), report.toRawUTF8());
+        check (dead.isEmpty() && total > 8, "render: every LAYERS / FX control of \"" + pr.name + "\" changes the sound (" + juce::String (total) + " controls"
+               + (dead.isEmpty() ? juce::String (")") : "; no effect: " + dead.joinIntoString (", ") + ")"));
+    }
 }
 
 // editor behaviour (run under xvfb-run): keys step through the filtered list, favorites / recent / scale persist,
@@ -1581,8 +2394,17 @@ int uiTests()
                "ui: DRAG WAV file " + wavFile.getFileName() + " (peak " + juce::String (pk, 3) + ")");
         ed.setUiScale (1.3f);
         check (ed.getWidth() == 1534 && ed.getHeight() == 988, "ui: scale 130 %");
-        ed.setUiScale (3.0f);
-        check (ed.getWidth() == 2360 && ed.getHeight() == 1520, "ui: scale clamps at 200 %");
+        ed.setUiScale (3.0f);   // on this 1920 x 1040 screen: the largest size that fits (never larger than the screen)
+        check (ed.getWidth() <= 1920 && ed.getHeight() <= 1040 && ed.getWidth() >= 1534, "ui: scale clamps to the screen ("
+               + juce::String (ed.getWidth()) + " x " + juce::String (ed.getHeight()) + ")");
+        {
+            const auto keepArea = VaultEditor::simulatedDisplay();
+            VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
+            ed.setUiScale (3.0f);
+            check (ed.getWidth() == 2360 && ed.getHeight() == 1520, "ui: scale clamps at 200 % (4K screen)");
+            VaultEditor::simulatedDisplay() = keepArea;
+            ed.checkDisplay();
+        }
         ed.setUiScale (0.5f);
         check (ed.getWidth() == 944 && ed.getHeight() == 608, "ui: scale clamps at 80 % (944x608)");
         ed.setUiScale (1.3f);
@@ -1598,6 +2420,11 @@ int uiTests()
     }
     focusTests (p);
     v3PageTests (p);
+    ownerFixKeyboardTests();
+    ownerFixPageTests();
+    ownerFixValueTests();
+    ownerFixRenderTests();
+    ownerFixMoreTests();
     windowSizeTests (p);
     readabilityTests (p);
     VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 };
@@ -1931,7 +2758,7 @@ int samplerTests()
         const auto mb = vault::serializeBank (all, true);
         std::vector<VaultPreset> back; int ver = 0;
         auto allV3 = all; for (auto& p : allV3) vault::upgradeToV3 (p);
-        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &ver) && back == allV3 && ver == 3, "cvb: v3 round trip (sample / model / synth parts)");
+        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &ver) && back == allV3 && ver == vault::bankFormatVersion, "cvb: v3 round trip (sample / model / synth parts)");
         std::vector<VaultPreset> v1src = { preset ("cv.808.0001", "Glide 808 Monster", 0, { part ({ { ID::engine, 6 } }, 1, 0, 0, "Sub 808") }),
                                            preset ("cv.keys.0001", "Felt Dream", 0, { part ({ { ID::engine, 0 } }, 1, 0, 0, "Felt Piano") }),
                                            preset ("cv.keys.0002", "Organ Church", 0, { part ({ { ID::engine, 4 } }, 1, 0, 0, "Organ") }),
@@ -2222,7 +3049,7 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     {
         const auto key = t.upToFirstOccurrenceOf (":", false, false).trim(), val = t.fromFirstOccurrenceOf (":", false, false).trim();
         if (key == "main") v.setCategory (pr.category);
-        if (key == "main" || key == "keys") for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOn (1, n, 0.8f);
+        if (key == "main" || key == "keys") for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOn (1, n, 0.8f);   // (sounding: see below)
         else if (key == "scale")   ed->setUiScale (val.getFloatValue() / 100.0f);
         else if (key == "search")  v.setQuery (val);
         else if (key == "cat")     v.setCategory (val.getIntValue());
@@ -2247,6 +3074,21 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     {
         const auto until = juce::Time::getMillisecondCounter() + 30000;
         while (p.isLoading() && juce::Time::getMillisecondCounter() < until) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    }
+    {   // the held keys sound: the on-screen keyboard lights what really plays
+        p.prepareToPlay (44100.0, 512);
+        juce::AudioBuffer<float> b (2, 512);
+        juce::MidiBuffer m;
+        const auto until = juce::Time::getMillisecondCounter() + (wait ? 30000u : 0u);
+        for (int i = 0; i < 2; ++i) { b.clear(); m.clear(); p.processBlock (b, m); }
+        while (p.isLoading() && juce::Time::getMillisecondCounter() < until)
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            b.clear(); m.clear(); p.processBlock (b, m);
+        }
+        if (tokens.contains ("main") || tokens.contains ("keys"))   // the C5 major triad held (prepareToPlay reset the keys)
+            for (int n : { 60, 64, 67 }) p.getKeyboardState().noteOn (1, n, 0.8f);
+        for (int i = 0; i < 4; ++i) { b.clear(); m.clear(); p.processBlock (b, m); }
     }
     v.syncFromProcessor();
     if (demoEdits)
@@ -2297,16 +3139,51 @@ int shot (const juce::String& outPath, const juce::String& stateArg)
     ed.reset();
     return ok ? 0 : 1;
 }
+#include "VaultReport1Verify.inc"   // VaultTests -report1: owner report #1 re-tested through the window
 } // namespace
+
+#if JUCE_LINUX
+ #include <dlfcn.h>
+#endif
+// xvfb has no window manager, so the _NET_WM_* / WM_* atoms JUCE looks up with "only if exists" are missing and putting a
+// window on the desktop fails with BadAtom. Interning them first (as a window manager would) lets -report1 open real
+// windows; nothing else changes (the properties themselves are not set).
+static void internWindowManagerAtoms()
+{
+   #if JUCE_LINUX
+    if (auto* lib = dlopen ("libX11.so.6", RTLD_NOW))
+    {
+        using OpenFn = void* (*) (const char*);
+        using InternFn = unsigned long (*) (void*, const char*, int);
+        using CloseFn = int (*) (void*);
+        auto openD = (OpenFn) dlsym (lib, "XOpenDisplay");
+        auto intern = (InternFn) dlsym (lib, "XInternAtom");
+        auto closeD = (CloseFn) dlsym (lib, "XCloseDisplay");
+        if (openD != nullptr && intern != nullptr && closeD != nullptr)
+            if (auto* d = openD (nullptr))
+            {
+                for (auto* a : { "WM_CHANGE_STATE", "WM_DELETE_WINDOW", "WM_PROTOCOLS", "WM_STATE", "WM_TAKE_FOCUS", "_MOTIF_WM_HINTS",
+                                 "_NET_WM_PING", "_NET_WM_STATE", "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_MAXIMIZED_HORZ",
+                                 "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL",
+                                 "_NET_WM_WINDOW_TYPE_COMBO", "_NET_WM_ALLOWED_ACTIONS", "_NET_FRAME_EXTENTS", "_NET_WM_STATE_FULLSCREEN" })
+                    intern (d, a, 0);
+                // (the connection stays open: Xvfb resets - and forgets the atoms - when its last client disconnects)
+                juce::ignoreUnused (closeD);
+            }
+    }
+   #endif
+}
 
 int vaultModelTests();   // tests/VaultModelTests.cpp: the physical models
 
 int vaultConvCheck (const juce::File& bankFile, int step, int threads);   // tests/VaultV3Tests.cpp
 int vaultV3Tests();
+namespace pitchtest { int run (int argc, char** argv); }   // tests/VaultPitchTests.cpp: every preset, every key at its own pitch
 
 int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);
+    if (argc > 1 && juce::String (argv[1]) == "-report1") internWindowManagerAtoms();   // before JUCE opens the display
     juce::ScopedJuceInitialiser_GUI init;
     const juce::String mode = argc > 1 ? juce::String (argv[1]) : juce::String ("-unit");
     if (mode == "-wav" && argc > 3)
@@ -2337,6 +3214,9 @@ int main (int argc, char** argv)
     if (mode == "-convcheck" && argc > 2)
         return vaultConvCheck (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]), argc > 3 ? juce::String (argv[3]).getIntValue() : 1,
                                argc > 4 ? juce::String (argv[4]).getIntValue() : (int) std::max (1u, std::thread::hardware_concurrency()));
+    if (mode == "-pitch")   // owner report item 0: every factory preset plays every key C2..C7 at its own pitch
+        return pitchtest::run (argc, argv);
+    if (mode == "-report1") return report1Verify();   // run under xvfb-run
     if (mode == "-v3") { const int f = vaultV3Tests(); std::printf ("vault v3 failures: %d\n", f); return f; }
     if (mode == "-models")   // the physical-model tests only
         return vaultModelTests();
@@ -2345,6 +3225,22 @@ int main (int argc, char** argv)
         const int f = uiTests();
         std::printf ("vault ui failures: %d\n", f);
         return f;
+    }
+    if (mode == "-uifix")   // only the owner-report checks (keys, focus, tabs, same preset, knob values, renders); part of -uitest
+    {
+        uiSetup ("uifix");
+        VaultEditor::simulatedDisplay() = { 0, 0, 1920, 1040 };
+        const juce::String only = argc > 2 ? juce::String (argv[2]) : juce::String();
+        if (only.isEmpty() || only == "keys") ownerFixKeyboardTests();
+        if (only.isEmpty() || only == "pages") ownerFixPageTests();
+        if (only.isEmpty() || only == "values") ownerFixValueTests();
+        if (only.isEmpty() || only == "render") ownerFixRenderTests();
+        if (only.isEmpty() || only == "more") ownerFixMoreTests();
+        if (only == "v3pages") { VaultProcessor p; v3PageTests (p); }
+        if (only == "layout") { VaultProcessor p; windowSizeTests (p); readabilityTests (p); }
+        if (only == "qa") { VaultEditor::simulatedDisplay() = { 0, 0, 3840, 2120 }; VaultSettings::get()->setScale (1.0f); VaultProcessor p; uiQaTests (p); }
+        std::printf ("vault ui fix failures: %d\n", fails);
+        return fails;
     }
     if (mode == "-uitestv2")   // child of -uitest (CHROME_VAULT_BANK / CHROME_VAULT_LIBRARY set by the parent)
     {
@@ -2395,6 +3291,34 @@ int main (int argc, char** argv)
         const bool ok = bad == 0 && vault::saveBankFile (f, b);
         std::printf ("%d v2 presets -> %s %s\n", (int) b.size(), argv[2], ok ? "ok" : "FAILED");
         return ok ? 0 : 1;
+    }
+    if (mode == "-macrostats")   // which kinds of targets the bank's sound macros / modulation use (editor value display)
+    {
+        VaultProcessor p;
+        std::map<juce::String, int> macroKinds, modKinds;
+        int v3 = 0;
+        for (auto pr : p.bank())
+        {
+            v3 += pr.v3 ? 1 : 0;
+            vault::upgradeToV3 (pr);
+            std::set<juce::String> seen, seenMod;
+            auto kindOf = [] (const juce::String& t)
+            {
+                if (t.startsWith ("layer")) return "layerN." + t.fromFirstOccurrenceOf (".", false, false);
+                if (t.startsWith ("fx") && ! t.startsWith ("fx.")) return "fxN." + t.fromFirstOccurrenceOf (".", false, false);
+                return t;
+            };
+            for (auto& m : pr.macros) for (auto& t : m.targets) seen.insert (kindOf (t.target));
+            for (auto& l : pr.mod.lfo) for (auto& d : l.dests) seenMod.insert (kindOf (d.target));
+            for (auto* list : { &pr.mod.modWheel, &pr.mod.velocity, &pr.mod.aftertouch }) for (auto& d : *list) seenMod.insert (kindOf (d.target));
+            for (auto& s : seen) ++macroKinds[s];
+            for (auto& s : seenMod) ++modKinds[s];
+        }
+        std::printf ("%s, %d stored as v3\nmacro targets (presets using them):\n", p.bankDescription().toRawUTF8(), v3);
+        for (auto& [k, n] : macroKinds) std::printf ("  %-28s %5d\n", k.toRawUTF8(), n);
+        std::printf ("modulation targets:\n");
+        for (auto& [k, n] : modKinds) std::printf ("  %-28s %5d\n", k.toRawUTF8(), n);
+        return 0;
     }
     if (mode == "-bankinfo")
     {

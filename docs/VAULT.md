@@ -61,18 +61,22 @@ struct VaultLfo     { uint8_t shape (sine, triangle, square, saw, sampleHold); f
 struct VaultMod     { VaultLfo lfo[2]; std::vector<VaultModDest> modWheel, velocity, aftertouch; };              // <= 4 routings each
 struct VaultMacroTarget { juce::String target; float min, max, curve (-1..1); };
 struct VaultMacro   { juce::String name; std::vector<VaultMacroTarget> targets; };                            // <= 8 targets
-struct VaultArp     { bool on; uint8_t mode (up, down, upDown, asPlayed, random, chord), rate (division), octaves (1..4);
-                      float gate (0.01..1), swing (0..1); bool latch; uint8_t steps (1..16);
-                      std::array<float,16> vel; std::array<uint8_t,16> type (rest / play / tie); std::array<int8_t,16> oct (-2..2); };
-struct VaultGate    { bool on; uint8_t rate, steps; std::array<float,16> level; float depth, smooth, swing, mix; };
+struct VaultArp     { bool on; uint8_t mode (up, down, upDown, asPlayed, random, chord, downUp, upAndDown, converge, diverge,
+                      thumb, pinky), rate (division), octaves (1..4); float gate (0.01..1), swing (0..1); bool latch; uint8_t steps (1..32);
+                      std::array<float,32> vel; std::array<uint8_t,32> type (rest / play / tie); std::array<int8_t,32> oct (-2..2);
+                      uint8_t octMode (octUp, octDown, octUpDown, octAlternate), velMode (velPlayedPattern, velPattern, velPlayed),
+                      retrig (retrigOff, retrigChord, retrigNote, retrigBar), latchMode (latchReplace, latchAdd);
+                      std::array<float,32> len (0.05..1, x gate); std::array<uint8_t,32> slide (0 / 1); };   // vault::numSteps = 32
+struct VaultGate    { bool on; uint8_t rate, steps (1..32); std::array<float,32> level; float depth, smooth, swing, mix; };
 struct VaultPreset  { ...v2 fields...; bool v3; std::vector<VaultFxSlot> fx (<= 8, <= 2 per type); float finish;
                       VaultMod mod; std::array<VaultMacro, 4> macros; VaultArp arp; VaultGate gate; };   // macroDefaults = the macro values
 ```
 
 `v3 = false` marks a v1 / v2 style preset (FX from part 0's EVOLVE FX keys, classic macros). `vault::upgradeToV3 (p)`
 converts it; `VaultEngine::compile` and `serializeBank` do that by themselves, `deserializeBank` returns v1 / v2 files
-converted (`keepLegacy = true` keeps them as stored). Arp / gate default to "Init" (Up, 1/16, 1 octave, 80 %, all steps on;
-gate 1/16 on / off) and stay off unless a preset really needs them.
+converted (`keepLegacy = true` keeps them as stored). Arp / gate default to "Init" (Up, 1/16, 1 octave, 80 %, all steps on,
+lengths 100 %, no slides, octave mode Up, velocity played x steps, retrigger New chord, latch replaces; gate 1/16 on / off)
+and stay off unless a preset really needs them.
 
 ### FX types (`vault::fxTypeInfo`, parameters in order; `fx.<type>.<param>` targets)
 
@@ -141,23 +145,49 @@ counted from that beat) or free (synced: aligned to the host's bar grid). The va
 
 0..1, 0.5 = as designed (vibrato / tremolo: 0 = off): cutoff (+-4 octaves on every layer: synth filter, sample filter,
 model tone low-pass), resonance (+-1), attack / release (x1/16..x16 plus up to 2 / 4 s), filter env amount (+-1, synth
-layers), glide (+-1, synth layers), vibrato (built-in 5.5 Hz, up to +-60 cents, no LFO needed), tremolo (built-in
+layers), glide (+-1, synth layers; legato only: a note glides only from a note still held, a detached note - the
+piano roll - starts on its own pitch; `kk::VoiceParams::glideLegatoOnly`, owner report item 0; every synth note also
+starts its drift / unison / ALIVE random generator from the same seed, `kk::VoiceParams::noteSeeded` - a note's random
+detune no longer depends on how many notes came before it; KEYS KILLA leaves both off), vibrato (built-in 5.5 Hz, up to +-60 cents, no LFO needed), tremolo (built-in
 4.5 Hz), reverb / delay / chorus / drive / width (the first slot of that type: below 0.5 scales the designed amount down to
 0, above it moves it up to 0.7 / 0.6 / 1 / 0.8 / 1), EQ tilt (+-9 dB), pan (output balance). Volume stays the `volume`
 parameter (dB). The EFFECTS LEDs (`setQuickFxOn`) switch the slot; with no slot, switching on adds one.
 
 ### Arpeggiator and gate (`Source/vault/VaultMod.h`)
 
-* Arp (before the voices, global): Up, Down, Up-Down (ends not repeated), As Played, Random, Chord; rate = any division
-  (straight / dotted / triplet); 1-4 octaves; gate 1..100 % of a step (ties extend over the following tie steps); swing
-  (every second step up to half a step later, 50 % -> 75 %); latch (a new chord after all keys were up replaces the
-  held one); 16-step lanes: velocity (x the played velocity), rest / play / tie, octave -2..+2; pattern length 1-16.
-  Host playing: steps on the host grid (a new chord starts on the next step line, lanes aligned to the song position);
-  stopped: free-running from the first key. A jump of the host position re-aligns. `vault::arpPatternToMidi` /
-  `VaultProcessor::writeArpMidiFile` render the pattern (held keys, else the C5 triad) as a 960 PPQ MIDI file for drag.
-* Gate (per sound slot, on the layer mix before the FX so tails fill the gaps): 16 steps (levels 0..1), rate, depth,
-  smooth (edge time, share of a step), swing, mix; host grid when playing, else counted from the first note. Its switch
-  fades over 10 ms.
+Research (what Ableton's Arpeggiator, Logic's Arpeggiator, Omnisphere, Nexus, Serum 2, Pigments, Kontakt Play Series and
+Steinberg's arps do) and the decisions it led to:
+
+| Topic | Common practice | CHROME VAULT |
+| --- | --- | --- |
+| Note order | Up / Down / Up-Down / Down-Up / Up & Down / Converge / Diverge / Thumb / Pinky / As Played / Random / Chord | all 12 (`VaultArp::Mode`, append-only numbers) |
+| Octaves | 1-4, range up (Logic), per-pass transpose (Ableton) | 1-4 + mode Up / Down (over the whole range), Up-Down (one octave per pass up and back), Alternate (each note then its octaves); no repeated pitch when held notes are an octave apart |
+| Pattern | 16-32 steps with per-step velocity, length, tie, octave / transpose, slide (Omnisphere, Serum 2, Nexus) | 1-32 steps: VELOCITY, LENGTH (x GATE), ON / TIE / rest, SLIDE, OCTAVE (-2..+2) |
+| Velocity | played vs pattern amount (Omnisphere's Velocity knob, Logic's Note Vel) | Played x Steps (default), Steps only, Played only; a step at 0 is silent |
+| Retrigger | Off / Note / Beat (Ableton), Restart on new chord (Steinberg), "a chord = 0 -> 1 keys" | Off (runs on), New chord (default), Every note, Every bar (host time signature) |
+| Latch | Reset / Add / Transpose (Logic), Hold + add / remove (Ableton) | Off / On (a new chord replaces) / Add (new keys join); the sustain pedal holds the keys (not the notes) |
+| Sync | host tempo + song position; free (ms) when stopped | host playing: steps, swing and lanes on the song grid (ppq 0 = bar 1, so loops repeat exactly), sample-accurate inside the block; stopped: from the first key (key sync) |
+| Swing | 50 % (straight) .. 75 % | 50-75 % on every 2nd step (`swing` 0..1), shown as 50-75 % |
+| Chord changes | restart or carry on; legato notes do not restart | the engine orders offs -> pedal / CC -> ons on one sample (a grid-line chord change is a clean new chord whatever order the host sends); without a restart the order carries on after the last played note (Up: the next one above it); notes keep their own length, nothing doubles |
+| Late chords | quantize to the next step | a chord up to min (45 % of a step, 1/16 beat) after a step line plays at once (that step), later ones wait for the next line; in Chord mode keys that come a moment after the step join it |
+| MIDI export | drag the pattern | `arpPatternToMidi` renders with the same `vault::Arp` on the host grid from bar 1 - the file is what the engine plays (test: equal ticks, notes, velocities) |
+
+* Clock (`vault::StepGrid`, shared by the arp and the gate): step k starts at origin + k x step, odd steps later by swing x
+  step / 2. Host playing: origin = ppq 0; a jump of the song position (loop, relocation, start) re-aligns and restarts the
+  pattern - a step line that passed a moment ago plays at once unless a step played just before the jump (no double). A loop
+  that wraps inside a block (hosts that do not split blocks; `VaultTransport::loopStart / loopEnd` from
+  `getLoopPoints()`) is split on the sample: the part after the loop end plays from the loop start. Transport stop: the
+  pattern carries on in the same rhythm on the free clock. Sounding notes keep their lengths across every jump.
+* Rate: every division incl. dotted / triplet from 1/1 to 1/64 (`1/64D`, `1/64T` were appended to `vault::divisions()`);
+  a rate change while playing lets the due step come, then uses the new length.
+* Notes end: after their LENGTH x GATE share (ties extend over the following tie steps; SLIDE holds the note into the next
+  one so mono / legato layers glide); all keys up: the pattern stops on the next step line and nothing rings past it;
+  arp off, preset switch, all-notes-off, transport stop and plugin bypass (`processBlockBypassed` ends every note once)
+  leave nothing hanging. `VaultEngine::arpHeldNotes` gives the arp's notes (latched ones too, in played order) for the export.
+* Gate (per sound slot, on the layer mix before the FX so tails fill the gaps): 1-32 steps (levels 0..1), rate, depth,
+  smooth (edge time, share of a step), swing, mix; the same clock (host grid / first note, the loop wrap too; with the arp
+  on and the host stopped the keys start it - a new chord - not the arp's notes, so arp and gate share one free clock and
+  the LFO retrigger follows the keys too). Its switch fades over 10 ms.
 
 ### Locks ("keep while browsing")
 
@@ -174,6 +204,11 @@ void updateSound (const VaultCompiledPreset&);   // an edit of the current sound
 void setMacro (int, float); void setQuick (int, float); void setFxOn (bool); void setArpOn (bool); void setGateOn (bool);
 void setLocks (bool fx, bool arp, bool gate);    // any thread
 int arpStep() const; float lfoPhase (int) const; float lfoOutput (int) const;   // UI (approximate)
+int arpHeldNotes (std::vector<std::pair<int, float>>&) const;   // any thread: the arp's keys (latched too), played order
+void soundingNotes (uint64_t mask[2]) const;     // any thread, one reader (the on-screen keyboard): the notes the voices
+                                                 // play now (arp output while it runs, latched patterns too; else the keys)
+                                                 // | every note started since the last call (bit k of mask[k >> 6] = note k)
+bool isNoteSounding (int note) const;            // the current bits only
 int chainSize() const; vault::FxType chainType (int); int chainSlot (int); float chainParam (int, int); float chainOnGain (int);
 int readNoteLog (NoteLog*, int) const;           // tests: the notes the voices got (arp output)
 
@@ -191,10 +226,13 @@ juce::MidiFile arpPatternMidi (double bars = 2) const; juce::File writeArpMidiFi
 
 Parameters (automatable; IDs never change): `presetIndex`, `macro1`..`macro4` (the 4 sound macros, named per preset in
 the UI), `volume` (dB), `qCutoff qReso qAttack qRelease qEnvAmt qGlide qVibrato qTremolo qReverb qDelay qChorus qDrive
-qWidth qEqTilt qPan` (0..1), `fxOn`, `arpOn`, `gateOn` (bool). `selectPreset` sets the macros to the preset's values, the
+qWidth qEqTilt qPan` (0..1), `fxOn`, `arpOn`, `gateOn` (bool). The host shows the MAIN knob parameters in the plugin's
+units (`quickParamText`): on the message thread the very text the knob shows ("14% Plate", "2.4 kHz", "off"), on any other
+thread the offset in its own units ("−1.2 oct", "×2.00 time", "+30%", "24 ct", "as designed"; `quickParamFromText` reads
+them back). `selectPreset` sets the macros to the preset's values, the
 arp / gate switches to the preset's (unless locked) and the MAIN knobs back to neutral (the FX ones stay while the FX are
 locked). Plugin state version 2 adds the knobs, switches, locks and - when it differs from the bank preset - the whole
-current sound (one-preset CVB v3, base64); version 1 states load with everything as designed.
+current sound (one-preset CVB, base64); version 1 states load with everything as designed.
 
 ### CVB v3 (bank format version 3)
 
@@ -204,6 +242,11 @@ uint8 retrig, float depth, dests`); modWheel / velocity / aftertouch dests (`uin
 4 x macro (`z-string name, uint8 n, n x (target, float min, max, curve)`); arp (`uint8 on, mode, rate, octaves, float gate,
 swing, uint8 latch, steps, 16 x float vel, 16 x uint8 type, 16 x int8 oct`); gate (`uint8 on, rate, steps, 16 x float level,
 float depth, smooth, swing, mix`). Versions 1 and 2 are still read (converted). Parameter tables only grow at the end.
+
+**CVB v4** (written now; `bankFormatVersion = 4`): the v3 layout with 32-step lanes - arp: `... uint8 steps, uint8 laneCount
+(32), laneCount x float vel, x uint8 type, x int8 oct, uint8 octMode, velMode, retrig, latchMode, laneCount x float len,
+laneCount x uint8 slide`; gate: `uint8 on, rate, steps, uint8 laneCount, laneCount x float level, ...`. v3 files (the
+shipped factory bank) read with 16 lanes and the new fields at their defaults.
 
 ### The v2 -> v3 conversion (`Source/vault/VaultConvert.cpp`, `VaultBankGen -convert in.cvb out.cvb`)
 
@@ -436,7 +479,7 @@ Style and Character tags no longer exist (types, bank format, browser, UI, tests
 | `s.width` | 0..2 | 1 | stereo width of the part (0 mono, 1 as recorded) |
 | `s.releaseSamples` | 0/1 | 1 | play the articulation's release samples |
 | `s.polyphony` | 1..64 | 64 | voices of the part |
-| `s.oneShot` | -1/0/1 | -1 | -1 articulation default, 0 note-off releases, 1 plays to the end |
+| `s.oneShot` | -1/0/1 | -1 | -1 articulation default (a one-shot articulation with an attack of 0.3 s or more - a swell - releases on note-off), 0 note-off releases, 1 plays to the end |
 
 Preset-level keys (part 0 of any kind, set by the bank gate, designers leave them out): `cv.peak` (-60..0 dB, threshold of
 the peak control before the trim, 0 = off) and `cv.peakvel` (0..4, the threshold follows the last note-on velocity:
@@ -595,6 +638,43 @@ loop end; encoded OggVorbis q 0.6. The builder finally reads its own output with
 key gaps / stretch, size; `-demo <dir>`: a 2 s C5 note of every instrument as `<id>.wav`) and writes `qc_report.txt` +
 `qc.json` next to `library.json`; `make_instruments_doc.py` turns them into `docs/VAULT_INSTRUMENTS.md`.
 
+`-retune [-only ids] [-dry] [-emit Source/vault/LibraryTuningData.cpp]` (tools/vault/Retune.h; also runs after every
+build for the instruments built) tunes the zones AGAINST EACH OTHER (owner report item 0: "B4 sounds like C5"). The
+builder tunes every file on its own; where two zones meet on the keyboard their own errors add up (a Kawai A#0 the builder
+could not measure was 75 cents flat - next to its neighbour it played almost the same pitch; a male-voice take 85 cents
+flat; piano bass samples 15 cents sharp next to 15 flat made 70-cent semitones). The pass measures what the pitch test
+measures: every pair of zones that meets (zone i at key k next to zone j at key k + 1, or both at key k in another
+velocity layer / round robin) is PLAYED at those keys (resampled from the zone start the way the sampler plays it) and
+compared with the pitch test's own measurements (`vaultpitch::compareNotes`: YIN, the log-spectrum cross-correlation on
+each note's window and on the same window, the strongest partial, the YIN tracks, the fundamental partial); the interval
+most of them agree on counts (`Interval::consensus`), measured early (from the attack) and late (from 0.4 s, a sustained
+sample is tuned on its average, not on its first moments). Bars / tines (`pitchCheck: spectrum`) use the fundamental
+partial: their upper modes are inharmonic and differ from bar to bar (a vibraphone's third mode moves 10.8x -> 10.4x
+between two bars and pulls a whole-spectrum comparison 50 cents off). YIN at the zone's root anchors the absolute pitch
+for `pitchCheck: yin` articulations (the median YIN deviation is taken out every round, and no zone moves more than 10
+cents away from its own YIN pitch at any key it was measured at, unless three or more comparisons agree: an unsteady
+neighbour cannot pull a zone out of tune, an attack that misleads YIN cannot keep one there),
+the builder's tuning (the mean change is 0) for the others; a robust least-squares fit gives every zone's deviation
+(prior: the tuning as built; a zone that meets only one other zone moves half way); measure -> fit -> apply runs three
+rounds (the zones are re-measured at their new tuning). The pass always starts from the root / fine in library.json
+(never the loader's patched values), so runs do not drift. `fine` (and `root` past +-50 cents) is corrected and the
+articulation gets `"retuned": true`.
+`retune_report.txt` lists the moves; `RETUNE_DEBUG=<instrument/articulation>` prints every pair of every round.
+`-emit` writes the plugin's built-in tuning patch (`Source/vault/LibraryTuning.h`, generated `LibraryTuningData.cpp`):
+a library.json from before the pass (no `retuned` flag) is corrected at load time (`SampleLibrary::parseIndex`, only zones
+that still hold the old root / fine), so an installed library plays in tune with the new plugin and no new download.
+Run it on the ORIGINAL library.json (`library.before-retune.json`): the patch is keyed on the values the owner has
+installed.
+
+Hand fixes after the pass (`Source/vault/LibraryZoneFixes.cpp`, applied by the loader to EVERY library.json, each with
+its reason): `ZoneRangeFix` takes a zone out or changes its key / velocity range, keyed on the file and its range as built
+(a contrabass spiccato C3 take that holds a loud E3 over the C - the keys played a C-E dyad - is out, its soft take covers
+the loud velocities; the loud horn staccato covers the low keys that played the soft take 20 cents off); `ZoneTunePin`
+sets a zone's root / fine, keyed on the file (a vintage-trombone buzz take labelled D5 that sounds D#5; takes whose pitch
+sits 15-60 cents off their neighbours: contrabass tremolo, tenor sax, ocarina, mbira, dan tranh vibrato, ...). They were
+found with `VaultTests -pitch --library` and the bank run, and fitted as "the smallest move that lets every neighbour
+step of the take measure one semitone" in the dry articulation AND the presets that failed on it.
+
 ### The full library (`/home/user/cv-library`)
 
 Every musically useful pitched instrument and articulation of both sources is mapped: **64 instruments, 146
@@ -638,6 +718,15 @@ Built-in physical models (ids for `VaultPart::source`; parameters, articulations
 `guitar.jazz` `bass.finger` `bass.pick` `bass.slap` `bass.fretless` `ep.tine.mellow` `ep.tine.bell` `ep.reed` `ep.clav`
 `keys.toy` `voice.female` `voice.male` `voice.choir` `voice.pad`. Articulations are parameters (`m.artic`: strings 0 pluck /
 1 palm mute / 2 harmonic; voices 0 sung / 1 "ha" / 2 breathy / 3 whisper), vowels `m.vowel` (0 ah, 1 oh, 2 oo, 3 ee).
+
+Voice models and pitch (owner report item 0): a voice model sings a range, like a sampled instrument (`lowestNote` /
+`highestNote` in VoiceModels.cpp, MIDI with C5 = 60: female 36..89, male and choir 28..127, vocal pad 33..127; outside it the
+voice stays silent - a glottal model at 35 Hz or a whisper at 4 kHz has no clear pitch left). The choir / pad section's
+pitch scatter (`m.detune`, SD in cents) puts the singers on the quantiles of a normal distribution, shuffled per note (a
+symmetric spread, densest at the note; random Gaussian draws left every key a few cents off in its own direction, often
+as two clusters), and the spread and vibrato narrow above ~G4 (400 Hz / f0, at least x0.25: up there the fundamental sits
+on the first formant, whose slope leans a wide cluster sharp or flat). The solo voices' slow drift is +-2 cents (was
++-6) and the jitter ~2 cents.
 
 ## API for preset generators / tools (`Source/vault/VaultEngine.h`)
 
@@ -687,54 +776,147 @@ The bank keeps the shared library alive (`Bank::library`), presets are compiled 
 ## Editor UI (`VaultEditor`) - v3
 
 The approved v3 mockup in JUCE: pick a category, pick a sound, it already sounds finished; tweak it on the MAIN page;
-everything else is in the ADVANCED tabs. Base size 1180 x 760, scaled 80-200 % as before (sizes, settings file,
-keyboard-focus rules, C5 naming, library-missing card and loading state unchanged from v2; details below).
+everything else is in the ADVANCED tabs. Base size 1180 x 760, scaled 80-200 % as before (sizes, settings file, C5
+naming, library-missing card and loading state unchanged from v2; details below). The keyboard rules changed in v3 (see
+**Computer keyboard and focus** below: the v2 rule "the editor never uses a key" is gone).
 
-* **Top bar**: chrome logo | MAIN | ADVANCED: LAYERS, FX, MOD, ARP · GATE | quick toggles FX / ARP / GATE (LED; the host
-  switches `fxOn`, `arpOn`, `gateOn`; a small lock when the section is kept while browsing) | size menu (`100%`, sizes that
-  do not fit the screen greyed out) | settings (preview on click, reset the MAIN knobs, revert the sound, library / bank info).
+* **Top bar**: chrome logo | MAIN | ADVANCED › LAYERS, FX, MOD, ARP · GATE (every tab switches on the mouse-down; ADVANCED
+  is a clickable group header that opens LAYERS and is lit, with a thin line under the group, while an ADVANCED page
+  shows) | quick toggles FX / ARP / GATE (LED; the host
+  switches `fxOn`, `arpOn`, `gateOn`; a small lock when the section is kept while browsing) | size menu (`100%`; it lists
+  only the sizes whose window fits the screen the editor is on - `scaleChoices()` -, opens as a desktop menu at the button's
+  screen area, so JUCE keeps it on the screen; `setUiScale` never makes the window larger than the screen and the corner
+  drag stops at the screen: `limitToDisplay`, re-checked about once a second when the window moves to another screen) |
+  settings (preview on click, reset the MAIN knobs, revert the sound, library / bank info).
 * **MAIN** (Nexus-style): the centre "screen" - ◀ search ▶, Favorites, Recent; All Sounds + 16 categories with counts;
-  the list (name, "3 layers", heart; a `juce::ListBox`); the current sound: name ("edited" when changed, a spinner +
+  the list (name, "3 layers", heart; a `juce::ListBox`). Search: every word must match; the best name matches come first
+  (the exact name, names starting with the search, a name word starting with it, names containing it, then matches in
+  instruments / category / labels - `VaultBrowserModel::nameScore`), the category counts follow the results (All Sounds =
+  every result) and the field shows how many it found ("24 sounds" / "none"). The category is kept in
+  `VaultProcessor::editorMemory` (saved with the project as `uiCategory`): a reopened window shows the same list, scrolled
+  so the playing sound is in the middle and highlighted (also on the very first open). The current sound: name ("edited"
+  after ANY change - the sound, a MAIN knob off "as designed", a macro moved, a switch: `hasEdits()`; a click on the badge
+  offers "Revert to the preset" = `revertAll()`; clicking the same sound again keeps everything), a spinner +
   "Loading…" while its samples load), its composition ("Bells & Mallets · Tubular Bells + Vibraphone + Sine Bass"),
   More like this (same category + main instrument), Drag WAV (the current sound with its edits, C5, 2 s), heart. Status
   messages replace the composition line for 4 s. Library missing / instrument missing: the calm card over the bottom of
   the list (title, "Its synth layers still play.", the folder looked in).
-  Left: FILTER · AMP (cutoff, reso, attack, release, env amount, glide - offsets of the designed sound, bipolar, a tick
-  marks "as designed") + MOTION (vibrato, tremolo; 0 = off). Right: EFFECTS (reverb, delay, chorus, drive, width, eq
-  tilt; the value is the effective amount + type, e.g. "35% Hall", "22% 1/8D"; the LED / a click on the name switches the
-  chain slot on / off, adding a default slot when the sound has none) + OUTPUT (volume, pan). Under the screen: the 4
-  SOUND MACROS named per preset (`macroName()`; an unused macro shows "—" and is disabled).
-* **LAYERS**: one card per layer (3 columns, 4 for 4 layers): power (mutes / restores the level), "A · Instrument", kind
+  Left: FILTER · AMP (cutoff, reso, attack, release, env amount, glide) + MOTION (vibrato, tremolo; 0 = off). Right:
+  EFFECTS (reverb, delay, chorus, drive, width, eq tilt; the LED / a click on the name switches the chain slot on / off,
+  adding a default slot when the sound has none; an effect that is off reads "off" and sits at the minimum - turning it
+  switches its slot on again; with every FX bypassed the knobs are disabled) + OUTPUT (volume, pan). Under the screen: the 4 SOUND MACROS named per
+  preset (`macroName()`; an unused macro shows "—" and is disabled).
+  **Every MAIN knob shows the effective value of what it moves** (`vui::val::quickPosition / quickText`,
+  `Source/vault/ui/VaultValues.h`), not the host parameter: the reverb knob of a sound whose reverb mix is 14 % sits at
+  14 % and reads "14% Plate" (sound macros - most factory presets set the reverb / delay mix with one - and the MAIN knob
+  included), CUTOFF / RESO / ATTACK / RELEASE / ENV AMT / GLIDE show the effective value of the first layer they act on
+  (synth / sampled first; "2.4 kHz", "0.3 s", "natural" for a sample's own envelope; ENV AMT / GLIDE are "—" without a
+  synth layer), vibrato / tremolo / pan their amount. A small ice tick on the scale marks "as designed"; double-click
+  goes back there (the parameter to neutral). Turning a knob solves the host parameter (still the offset of
+  `vault::quickInfo`, 0.5 = as designed) for the position. The knobs follow preset loads, host automation and macro moves.
+  Clicking the sound that is already loaded (list row, Return in the search) keeps every edit - it only scrolls to it and
+  auditions it; another sound starts from its bank preset as before.
+* **LAYERS**: one card per layer (3 columns, 4 for 4 layers): power (level really 0 - a sound macro that sets the level
+  gets its range to 0 too - / back as it was), "A · Instrument", kind
   pill; LEVEL / PAN / OCTAVE / FINE; AMP ENVELOPE (graph + A D S R; sampled layers: 0 = the sample's own); FILTER
   (LP 12 / LP 24 / HP / BP for synth layers, LP / HP / BP for sampled ones) + CUTOFF / RESO / ENV (sampled: VEL) / KEY. A
   modelled layer shows its model's first 8 parameters instead. VOICE row: POLY / MONO / LEGATO, GLIDE, UNISON, DETUNE (synth
-  layers), VEL SENS, BEND (synth + sampled), Reset to preset (`revertSound()` + `resetQuick()`).
+  layers), VEL SENS, BEND (synth + sampled), Reset to preset (`revertAll()`). Fewer than 3 layers: one "+ Add layer"
+  column next to them, sharing the page (one layer = half the page; a copy of layer A - as it is, an octave up or down;
+  `LayersPage::addLayer`), right-click on the last
+  card removes it (`removeLastLayer`, its macro / modulation targets go with it). LEVEL, PAN, CUTOFF, RESO,
+  ENV (synth), A, R and GLIDE show the effective value (`vui::val::layerValue`: the synth patch's EVOLVE macros, the sound
+  macros - `layer<n>.level` is set by a macro in a quarter of the factory bank -, the MAIN knobs); turning one makes that
+  the value (`setLayerValue`: an absolute macro target gets its min / max moved so the macro keeps working around the new
+  value; otherwise the stored value is solved, the MAIN knobs stay). Double-click = the bank preset's stored value and
+  macro ranges.
 * **FX**: the 8 slots in a 4 x 2 grid. Card: drag grip (drop on another card = move there), power, type, ▾ menu
   (variant - Hall / Plate / ..., Tape / Tube ..., Ping-pong / Straight / Tape ... -, change type, move, reset, remove), its
-  3 main knobs (`FxPage::mainParams`). An empty slot: + Add effect (<= 2 of a type). FX preset menu (as designed, none,
+  3 main knobs (`FxPage::mainParams`, 44 px) and under them up to 3 more of its continuous parameters (36 px; the cards fill
+  the page in two rows), every value always shown ("off" for a Mono Below of 0 Hz). Every empty slot: + Add effect (it goes
+  after the last effect; <= 2 of a type). FX preset menu (as designed, none,
   Warm Room, Wide Hall, Tape Echo, Lo-Fi Room, Shimmer Space, Punchy, Dreamy Chorus - all moderate), Bypass all (`fxOn`),
-  Keep while browsing (`setLock (Section::fx)`).
-* **MOD**: 2 LFO cards - power (depth 0 / back), shape segments, the wave (with the live phase while notes play), RATE
+  Keep while browsing (`setLock (Section::fx)`). The slot knobs show the value the engine uses (`vui::val::fxValue`: sound
+  macros - `fx.reverb.mix` / `.decay` are macro targets in 90 % of the factory bank -, classic macros, the MAIN knob of the
+  first slot of a type); turning one sets it (`setFxValue`: a macro target's range is moved, the MAIN knob of that slot
+  is folded in - set to neutral - so MAIN and FX show the same number). Double-click = the bank preset's value.
+* **MOD**: 2 LFO cards - power (depth really 0 - also the sound macros that set `lfo<n>.depth` - / back), shape segments, the wave (with the live phase while notes play), RATE
   (divisions when synced, 0.05-20 Hz free), DELAY, FADE, PHASE, SYNC / HZ, RETRIG / FREE, DESTINATIONS chips ("● Cutoff ·
   +1.00 oct": drag up / down for the amount, double-click removes, right-click invert / remove) + Add (target menu). MOD
-  WHEEL · VELOCITY · AFTERTOUCH: one bipolar knob per routing ("Wheel +40%"), + Wheel / + Velocity / + Aftertouch.
+  WHEEL · VELOCITY · AFTERTOUCH: one bipolar knob per routing, grouped under MOD WHEEL / VELOCITY / AFTERTOUCH captions,
+  the amount always shown ("+1.20 oct"), + Wheel / + Velocity / + Aftertouch. Targets are named by what they move: a slot
+  target `fx<n>.<param>` reads "Reverb Mix" (the effect in that slot; "Reverb 2 Mix" for a second one - `mod::longName`).
   **Right-click any knob** (MAIN, LAYERS, FX, MOD rate, ARP gate, gate depth / smooth / mix) -> "Modulate with…" LFO 1,
   LFO 2, Mod Wheel, Velocity, Aftertouch (add with a default amount or remove), Remove all modulation. A modulated knob
-  draws its value arc green and a thin green ring for the summed amount (`vui::mod::show`).
-* **ARP · GATE**: ARPEGGIATOR - power (`arpOn`), Pattern menu (Init, the sound's own pattern, all on, accent on the beats,
-  velocity ramps, random velocities / octaves, shift, reverse - no genre names), Latch, Keep while browsing, Up / Down /
-  Up/Down / As Played / Random / Chord, RATE (1/1..1/32) + Straight / Triplet / Dotted, OCTAVES, GATE, SWING, STEPS, Drag
-  MIDI (2 bars, `writeArpMidiFile`), lanes VELOCITY (draw), ON / TIE (click on / off, right-click tie), OCTAVE (click up,
-  right-click down); the running step is outlined. GATE - power (`gateOn`), Pattern menu (Init, the sound's own, all
-  open, off-beats, invert, random, shift), Keep while browsing, RATE (every division), DEPTH, SMOOTH, SWING, MIX, 16 steps
-  (click toggles, drag draws levels).
-* **Knob** (`vui::Knob`): dark body, thin track, ice value arc, white pointer, LABEL and value under it; drag up / right
-  (shift = fine), mouse wheel, double-click = the bank preset's value, right-click = menu; never takes the keyboard.
+  draws its value arc green and a thin green ring for the summed amount (`vui::mod::show`); the menu's choice runs
+  `vui::mod::apply`, which edits the sound and refreshes the open page at once.
+* **ARP · GATE**: ARPEGGIATOR - power (`arpOn`), Pattern menu (Init, the sound's own pattern, Start from: Accented 16ths,
+  Offbeat 8ths, Gated 8ths, Octave Bounce, 3-3-2 Pulse, Slide Steps - rhythm only, no genre names; all on, accent on the
+  beats, velocity ramps, random velocities / octaves, lengths back to full, no slides, shift, reverse, double the length),
+  Latch (Off / On / Add), Keep while browsing, Drag MIDI (whole bars, >= 2, one full pattern; `writeArpMidiFile`). RATE
+  (every rate, labelled like the gate's: "1/16T", "1/8D"; `ArpGatePage::rateKnobDivisions` - ARP RATE and GATE RATE step
+  through the same list, so one rate sits at the same angle on both) + Straight / Triplet / Dotted (from 1/2 on), OCTAVES, GATE, SWING (50-75 %), STEPS (1-32); Order, Octaves (mode), Velocity
+  (source), Retrigger dropdowns. 32-step lanes in groups of 4: VELOCITY (draw), LENGTH (draw), ON / TIE (click on / off,
+  right-click tie), SLIDE (click), OCTAVE (click up, right-click down); steps past STEPS are dimmed, the running step is
+  outlined. GATE - power (`gateOn`), Pattern menu (Init, the sound's own, all open, off-beats, quarter pulses, invert,
+  random, shift, double the length), Keep while browsing, RATE (every division), STEPS (1-32), DEPTH, SMOOTH, SWING, MIX,
+  32 steps (click toggles, drag draws levels).
+* **Look - style A "Machined"** (owner approved, `docs/qa/design/README.md`, `knob-options.html` function `A`):
+  **Knob** (`vui::Knob`, `drawKnobBody`): the reference geometry at 58 px scaled to the knob (u = size / 58) - 11 scale
+  ticks (#3A4558, every 5th longer), a dark track (#1B2330) with a 2.5 px ice value ring (#9FC3FF; green when modulated,
+  grey when its effect is off), a soft drop shadow, a bevelled edge (#7C889C -> #0D1118) round the machined cap (radial
+  #5A6578 -> #2B3341 -> #151A22 from the upper left), a white pointer (#F2F5FA); the ice "as designed" tick (`markValue`)
+  and the green modulation arc sit on the scale. LABEL in letter-spaced small caps (#A9B6CC) under it, the value under that
+  (dimmer; never clipped - narrowed to the knob's width) always on MAIN / FX / MOD routings (`valueAlways`), elsewhere on
+  hover / drag. Sizes: 50 MAIN, 46 macros, 38 / 34 LAYERS, 44 / 36 FX, 36 LFO, 44 routings, 40 ARP.
+  **Surfaces** (`VaultControls.h`): `drawPanel` (an anodised plate: dark gradient, lit top edge, outline, soft shadow),
+  `drawButtonFace` (raised dark-metal keys for pills, dropdowns, toggles, tabs, ◀ ▶, gear; an ice-lit edge when on),
+  `drawWell` (recessed tracks: segment switches, the search field), `drawLed` (green LED with glow; power buttons are round
+  push buttons with the LED in the middle, the top-bar toggles carry one); the chosen tab is a raised key with an ice LED
+  strip; the top bar is a brushed faceplate with a bevelled edge.
+  **On-screen keyboard** (`vui::VaultKeyboard`): realistic white keys (#E8ECF2 -> #D3D9E2 -> #AEB7C4, a darker 3 px bottom
+  lip #98A2B0, 1 px gaps), black keys with depth, a front bevel and a shadow on the white keys, a felt-strip shadow at
+  the top. The keys that SOUND are ice blue (#BFD6FF -> #8DB2F0) - `VaultEngine::soundingNotes` polled 30x per second:
+  the arp's notes while it runs, latched ones too, else the played keys; a held key the arp is not playing gets a thin ice
+  edge; nothing is lit at rest (no permanent C5). Drag up / right (shift = fine), mouse wheel, double-click = the bank
+  preset's value (`onReset` where that is more than a position), right-click = menu; never takes the keyboard.
   Labels that do not fit use a short form (OCT, ATK ...). Host parameters through `vui::KnobAttachment`
   (`juce::ParameterAttachment`: gestures, host automation moves the knob); sound edits through `VaultProcessor::editSound`.
   The pages read `currentSound()`; ~10x per second the view compares the sound / switches / locks with what it showed
   and refreshes only when something changed elsewhere (host, state restore).
-* Checks (`xvfb-run -a VaultTests -uitest`): everything from v2, plus every page at 80 / 100 %: smallest text, no two
+* **Computer keyboard and focus** (`vui::ComputerKeys`, `VaultEditor::keyPressed / keyStateChanged`): the editor takes the
+  keyboard when the user clicks into the plugin (never on open - until then the DAW's own typing keyboard works), and then
+  the computer keyboard plays the sound in FL Studio's layout: lower row Z S X D C V G B H N J M , L . ; / = C4..E5
+  (Z = MIDI 48), upper row Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P [ = ] = C5..G6 (Q = C5 = MIDI 60), velocity 100, note-off when
+  the key goes up (polled with `KeyPress::isKeyCurrentlyDown` on every key event, so the physical key counts, whatever the
+  keyboard layout types), Left / Right arrow = octave down / up (-3..+3, held notes end), Up / Down = previous / next sound,
+  Tab is swallowed. The notes go into `getKeyboardState()`: they play and light the on-screen keyboard, which marks the
+  computer-key range with a thin ice line and "C4 Z" / "C5 Q" on its C keys (tooltip and a status line on the first
+  focus / an octave change explain the keys). Every note stops when the editor loses the keyboard. No child component
+  keeps the keyboard (`setWantsKeyboardFocus (false)` + `setMouseClickGrabsKeyboardFocus (false)` everywhere, the resize
+  corner included; after any click the editor's mouse listener gives it back to the editor). The search box
+  (`vui::SearchField`) does not even want the keyboard until it is clicked - so window activation, focus traversal and Tab
+  can never land there -, then letters type into it (and play nothing); Return, Escape or a click anywhere else hand the
+  keyboard back to the editor and disarm the box.
+* Owner report 1 re-verification (`xvfb-run -a VaultTests -report1`, tests/VaultReport1Verify.inc): the editor on a real
+  desktop window, driven through its peer (mouse clicks and key presses as the OS delivers them, the window focused),
+  items 1-16 of docs/qa/FL_TEST_REPORT_1.md and the MUST NOT BREAK list (FX on / off / drag / MAIN sync, MOD LFO, the
+  arp's 12 orders at 140 BPM host tempo, GATE, Favorites / Recent / arrows / drag WAV, settings after reopening the
+  window and after a saved project). Under xvfb the WM atoms are interned on a kept-open display first (Xvfb resets
+  its atoms when the last client disconnects, and JUCE's peer then failed with BadAtom).
+* Checks (`xvfb-run -a VaultTests -uitest`; the owner-report part alone: `-uifix [keys|pages|values|render|more]`; `more`:
+  search ranking + counts over 80 searches, the list opening on the playing sound and the kept category (state too),
+  Return / Escape handing the keyboard back, 3 MAIN knobs edited -> "edited" kept by a second click and cleared by Revert,
+  the green ring at once on MAIN / LAYERS / FX / MOD, empty FX slots, "off" / "Reverb Mix" texts, the keyboard lighting
+  only what sounds (latched arp included), + Add layer, host parameter text on and off the message thread, the size menu
+  on a 1366 x 728 screen; every knob reading "off" / "0%" sits at its minimum): the
+  computer keys (layout, note-on / off, octave, focus loss, a key playing the processor), focus (window activation picks
+  the editor, a click into the search box arms it, a click on the FX toggle takes it back and the next key plays a note
+  instead of typing), every tab / ADVANCED switching on a click, the same preset clicked again keeping its edits, 50 random
+  presets with random MAIN knobs / macros: every MAIN / FX knob == the running engine's FX chain, LAYERS level / pan == the
+  effective values, knob position == text, knobs moving with the preset; the FX reverb MIX of a macro-driven sound turned
+  to 42 % plays 42 % and the MAIN knob shows it; renders (two identical processors, one knob moved): every LAYERS / VOICE /
+  FX mix control of a synth, a sampled and a modelled sound changes the sound. Everything from v2, plus every page at 80 / 100 %: smallest text, no two
   controls overlapping, nothing outside its parent, every knob label fitting its knob - with a 3-layer and a 4-layer sound.
   Snapshots: `VaultTests -shot out.png "main,rich,demo,page:fx,scale:80"` (`page:main|layers|fx|mod|arp`, `rich` = the
   3-layer sound with the longest FX chain, `four` = a 4-layer sound with modelled layers, `demo` = LFO / wheel / velocity
@@ -767,7 +949,7 @@ keyboard-focus rules, C5 naming, library-missing card and loading state unchange
   latest CHROME VAULT installer".
 * Preview on click, DRAG WAV (file "<name> C5.wav") and thumbnails: MIDI 60 for every category.
 * Keyboard: `setOctaveForMiddleC (5)`, labels C3 C4 **C5** (bold, blue, dot) C6.
-* **Keyboard focus**: the editor never uses a key. Nothing takes the keyboard on click except the search box
+* **Keyboard focus** (v2 only - v3 replaced it, see "Computer keyboard and focus" above): the editor never uses a key. Nothing takes the keyboard on click except the search box
   (`setWantsKeyboardFocus (false)` + `setMouseClickGrabsKeyboardFocus (false)` on every component, list rows included as
   the list creates them; the editor itself too); Return, Escape (also clears the text) and a click anywhere else hand the
   keyboard back (`giveFocusBack()`: `giveAwayKeyboardFocus` + `unfocusAllComponents`), so the DAW's computer-keyboard piano
@@ -835,6 +1017,49 @@ CHROME_VAULT_BANK=/tmp/demo_v2.cvb CHROME_VAULT_LIBRARY=/home/user/cv-library bu
 pluginval --strictness-level 8 --skip-gui-tests --validate "build-vault/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3"
 ```
 
+`VaultTests -pitch [--only <text>] [--step n] [--bank f.cvb] [--lo k --hi k] [--csv f] [--wav dir] [--nofx]
+[--results file] [--dump] [--library] [--ids file] [--vel n] [--threads n] [-v]` (owner report item 0,
+tests/VaultPitchTests.cpp, needs the library) renders EVERY preset of the bank on every key MIDI 24..96 (FL Studio
+C2..C8, so both C2..C7 namings are covered; fresh engine per key, the sound as designed incl. FX / arp / gate, 1.2 s at
+44.1 kHz, velocity 102 = the loudest velocity layer, round robin 1; `--vel` changes it) and measures each key with
+`tools/vault/PitchAnalysis.h` (window from 20 ms after the attack while within 20 dB of the peak, up to 0.74 s; YIN; a
+5-cent log-frequency spectrum; the strongest partial; the fundamental partial). Neighbouring keys must be one semitone
+apart within +-10 cents by any of: YIN, the spectrum cross-correlation (every partial moves: bells, noisy / layered / FX
+sounds; on each key's window and on the same window), the strongest partial, the fundamental partial (tuned bars), the
+YIN tracks frame by frame, or - when none agree - short frames on the same window (`frameShift`: risers and pitch
+envelopes, whose long-window spectra are smeared and weighted differently by the key-tracked filter). ~0 cents is
+reported as SAME PITCH. A layered sound that fails as a whole is checked layer by layer (each layer solo): a layer that
+enters at its instrument's range edge (a duet a third apart below the violin's lowest note) or the strongest partial
+changing layers is not a wrong pitch, a layer that plays a wrong pitch fails on its own. A pair that fails on a short
+note (window < 0.3 s, or a layer below 65 Hz) is measured again with the layers held (sample decay -> sustain 1, synth
+sustain 1 unless the mod matrix routes to pitch: a pluck's 150 ms says little about its pitch, a held one shows it); a
+gated preset is measured again with the gate open (a TRANCE GATE chops the window). The preset's common YIN tuning must
+be the played key's pitch class (within 30 cents, mod octave). The piano roll: C5 right after B4 (touching notes) must
+play C5's own pitch (compared with C5 after the same time of silence: glide, per-note random pitch and voice reuse must
+not carry B4 into C5; a long-tailed B4 is subtracted - its tail alone, rendered the same way - before C5 is measured).
+The instruments a preset uses are pinned while it is measured (the library's memory budget would otherwise evict a
+layer half way and make keys silent). Not checked, reported: silent keys (outside an instrument's range), keys where
+every sounding layer is below 32.7 Hz, unpitched pairs (noise). `--results f` appends one line per preset and resumes a
+run (skips the presets already in the file); `--dump` lists every preset's layers and values; `--library` measures every
+library articulation as a plain one-layer preset ("lib.<instrument>/<articulation>"); `--ids f` only the listed preset
+ids; `--wav dir` writes each failing pair (and the B4 / C5 sequence) as WAV. About 55 minutes for the bank on 4 cores;
+exit code = failing presets.
+
+Result (2026-10-16, final library fixes, final bank): all 3,151 factory presets pass (192,883 key pairs; 36 pairs passed
+layer by layer, 117 short-note pairs passed held; silent keys outside an instrument's range: 26,811 on 1,137 presets) and
+all 154 library articulations pass (`--library`). Before the integration pass: 3,058 of 3,245 (the run then also evicted instruments half way). What it
+took: the library tuning pass (LibraryTuningData.cpp) plus the hand fixes (LibraryZoneFixes.cpp: 6 zone ranges, 62
+tuning pins), the swell rule for one-shot articulations (`s.oneShot`), glide only between overlapping notes and
+note-seeded synth randomness (Synth.h), the voice models' sung range / scatter / drift (VoiceModels.cpp), and 94
+presets taken out of the bank (`tools/vault/bank_drops.tsv`, applied with `VaultBankGen -patch`, ids reserved): 57
+whose pitch cannot be one semitone per key - dan tranh bends and tremolo-picked dan tranh (the recordings bend within
+the note), timpani variants (inharmonic, the pitch the drum settles on moves with the strike), reversed / mirrored /
+pitch-swept FX at the keyboard's ends (Mirror Laser, Backward Bubbles, Pulsing Tension Riser, Seismic / Quake bells),
+thumb piano / mbira variants, a few chops whose take is tuned between notes (Clipped High Breathy Chop, 42 cents) - and
+37 that fail the v2 bank gate with the retuned library (layers a few cents apart moved: 17 with a weak fundamental at
+C5, 8 velocity, 6 mono-loss, 5 harsh 2-5 kHz, 1 listening-phrase peak). A bank regenerated with `-recipe all` must be
+patched with the same file.
+
 VaultTests (v2 additions): sampler zone selection (key range, velocity layer, nearest layer), round-robin rotation,
 pitch at C5 from zones 3 semitones away (+-5 cents, YIN) at 44.1 and 48 kHz, loop seamlessness on a deliberately
 non-periodic loop (max sample jump around 4 wraps <= 1.08x the steady signal), release fade (-60 dB in the release time,
@@ -859,7 +1084,8 @@ sound library" card); both at 80 / 100 % with the 14 px minimum text.
 
 ## The v3 factory bank (`resources/vault/factory.cvb`, `VaultBankGen -recipe all`)
 
-3,380 presets in 16 categories. Every preset is a finished sound from its designer recipe: an FX chain (5.0 slots on
+3,151 presets in 16 categories (3,380 before the dark-strings rework, 3,245 after it; 94 left with the pitch / gate
+pass of owner report item 0, `tools/vault/bank_drops.tsv`, and 444 loudness trims re-measured with `-retrim`). Every preset is a finished sound from its designer recipe: an FX chain (5.0 slots on
 average, at most 8; the v2-converted bank had 1.75), movement (LFOs on 2,237 presets, mod wheel / velocity / aftertouch
 routings) and sound macros named for that sound (four on 3,370 presets, fewer on 10 Plucks / FX); arp and gate are off
 except on 31 plain-named rhythm presets (20 arp, 11 gate: "... Arpeggio", "Gated ...", "... Eighths"). `VaultBankGen
@@ -871,6 +1097,9 @@ CHROME_VAULT_LIBRARY=/home/user/cv-library build-vault/VaultBankGen_artefacts/Re
     -macros /tmp/cv-macrofails.tsv -cache /tmp/cv-cache -threads 4 -out resources/vault/factory.cvb -report /tmp/cv-full-report.md
 python3 tools/vault/bank_report_doc.py /tmp/cv-full-report.md docs/VAULT_BANK_REPORT.md
 VaultBankGen -macrocheck <bank.cvb> [fails.tsv] [threads] [fixed.cvb]   # the macro check alone on a finished bank
+VaultBankGen -pitchfix <in.cvb> <out.cvb>                              # the two-step sequence pitch fix of synth.cpp on a finished bank
+VaultBankGen -patch <in.cvb> <out.cvb> <rules.tsv>                     # hand edits: "<id>\tset\t<layer|*>\t<key>\t<value>" or "<id>\tdrop"
+VaultBankGen -retrim <in.cvb> <out.cvb> [ids.txt]                      # re-run the gate's loudness trim (cv gain) with the current engine / library
 VaultBankGen -listen3 <bank.cvb> <dir> ["id|id|..."]                    # listening clips: phrase + macro-1 sweep (OGG) + picks.tsv
 python3 tools/vault/listen3_page.py <dir> index.html                    # the owner's listening page (Czech, votes, summary)
 ```
@@ -905,10 +1134,10 @@ slightly (slow drift / motion LFOs, reverb amounts on long sounds, pitch wobble 
 | Keys & Organ | 210 | | Vocals & Choir | 191 |
 | Guitars | 172 | | Plucks | 271 |
 | Bass | 200 | | Leads | 184 |
-| Strings | 256 | | Pads | 215 |
-| Brass | 212 | | Synth | 252 |
+| Strings | 158 | | Pads | 215 |
+| Brass | 192 | | Synth | 252 |
 | Flutes & Woodwinds | 242 | | World | 212 |
-| Orchestral | 157 | | FX & Atmos | 217 |
+| Orchestral | 140 | | FX & Atmos | 217 |
 
 **Ids against the previous (v2-converted) bank**: 3,164 of its 3,377 presets keep id and name; 208 ids are gone (90
 Guitars, 24 Bass, 20 World, 16 Flutes & Woodwinds, 11 Leads, the rest <= 9 per category: the v3 chains made them too
@@ -921,6 +1150,27 @@ Piano, cv.keys.0091 Echo FM Keys -> FM Keys Arpeggio, cv.keys.0110 Echo Music Bo
 gate preset, then the most different FX chain + macro set + instrument) and renders the listening phrase (C5 E5 G5 C6,
 then the C5 triad, 4 s) and sound macro 1 swept 0 -> 1 over 6 s; `tools/vault/listen3_page.py` embeds them as base64 OGG
 in one page (about 8 MB) with votes kept in the browser and a summary to copy.
+
+**Dark strings (owner's FL Studio test report #1, item 17; `tools/vault/recipes/orch.cpp` addCinematic /
+v3::designCinematic)**: the Strings category now opens on 36 hand-voiced cinematic low-string presets (ids
+`cv.str.1001`+, the default is "Cinematic Low Octaves"), the string-heavy Orchestral on 8 more (`cv.orch.1001`+): the
+library's viola, cello and contrabass sections stacked in octaves (key C5 sounds C4 / C3 / C2), cellos in octaves, open
+fifths, the contrabass vibrato section, as sustains, slow swells, sul tasto / con sordino pads, marcato and sforzando
+strokes, spiccato / pizzicato ostinatos, tremolo, and two-style strokes (accent into tremolo, tremolo into sustain,
+spiccato over a bowed bass bed); horns, brass stabs, choir, bassoon, timpani and harp over the low sections. Each has
+section glue, tape power with clean lows, a warm EQ with the top gently shelved, a long damped hall with a long pre-delay,
+slow movement (bow-pressure breathing, drift, tension surges, delayed vibrato on the mod wheel) and 4 named macros (Bow /
+Bite / Tone / Snap / Pluck, Hall, Swell / Bloom / Drift / Tension / Power / Weight, Basses / Depth / Echo). The processed
+variants of thin / high sounds (violins only, solo violin, high violas, the synth string machine) are left out; their plain
+forms stay. Strings: 158 presets (was 256), 123 of them with cellos / basses / the octave stack; median C5 centroid ~206 Hz (the cinematic ones),
+2-5 kHz <= 2.4 %. The bank on disk was assembled by swapping only the orch recipe's presets (Strings / Brass / Orchestral,
+rebuilt and gated against the current, retuned library: Brass 192, its trumpet / trombone sounds refitted) in the previous
+bank (`ORCH_SPLIT` -> `-recipe all -cache <dir> -rebuild orch` -> `ORCH_MERGE=<shipped>,<assembled>,<out>`), so every
+other recipe's preset is byte-identical to before: 3,245 presets. The integration pass then re-gated the whole bank
+against the retuned library (`-retrim`: 444 trims re-measured; the fundamental now read in the best of three windows, so
+layers that merely beat no longer fail it) and took out the 37 that still fail plus the 57 that fail the pitch test
+(`-patch tools/vault/bank_drops.tsv`): 3,151 presets. Owner's demos: `ORCH_DEMO=<bank>|<dir>|<names>` (low chord
+progression C minor - A flat - F minor - G, then a swell; WAV + OGG + demos.tsv).
 
 ## The v2 factory bank (previous; kept for reference) (`resources/vault/factory.cvb`, `VaultBankGen -recipe all`)
 
@@ -956,7 +1206,8 @@ only changed presets are measured again (key: a hash of the preset + `gateVersio
 tail is 60 dB down, plus C4 / C6 and C5 at velocity 0.35 / 1.0): NaN, silence, DC, clicks (note start / end / anywhere),
 clipping (velocity-1.0 peak under the safety limiter), mono-sum loss <= 3 dB, no side energy under 120 Hz, tail <= 10 s
 (Pads / FX & Atmos 16 s); C5 comfort: the sounding fundamental within 3 dB of the strongest harmonic (not Bells & Mallets /
-FX & Atmos), 2-5 kHz <= 10 % of the power, > 6 kHz <= 3 %, octave-up parts >= 12 dB under part 0, velocity 0.35 -> 1.0
+FX & Atmos; in the best of three 0.7 s windows from 0.05 / 0.4 / 0.75 s - layers a few cents apart beat, and a single
+window could catch the fundamental in a beat's trough), 2-5 kHz <= 10 % of the power, > 6 kHz <= 3 %, octave-up parts >= 12 dB under part 0, velocity 0.35 -> 1.0
 opens >= 3 dB; names / labels clean (no brands, no "808").
 
 **Loudness**: K-weighted loudest 400 ms at C5 set by `VaultPreset::gain` to the category target of `BankQC.h` minus 6 dB

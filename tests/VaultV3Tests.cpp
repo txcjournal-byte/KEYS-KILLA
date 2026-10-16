@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <thread>
 #include <map>
+#include <set>
 
 namespace v3test
 {
@@ -316,7 +317,7 @@ void formatTests()
     {
         const auto mb = vault::serializeBank ({ rich, base() }, gz);
         back.clear();
-        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &version) && back.size() == 2 && back[0] == rich && version == 3,
+        check (vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &version) && back.size() == 2 && back[0] == rich && version == vault::bankFormatVersion,
                juce::String ("CVB v3 round trip, every new field (") + (gz ? "gzip" : "raw") + ")");
     }
     // v2 files: still read; the legacy preset comes back converted, or as stored with keepLegacy
@@ -716,6 +717,542 @@ void arpGateTests()
         const auto g = r4.run (1.0, chord ({ 60 }, 0.0, 0.95), true, 120.0);
         // with swing 1, step 1 (closed) starts at 1.5 steps: 1.1..1.4 steps still open
         check (rms (g, (int) (1.1 * step), (int) (1.4 * step)) > openMin * 0.5f && rms (g, (int) (1.6 * step), (int) (1.9 * step)) < openMin * 0.05f, "gate swing moves every 2nd step");
+        // arp + gate with the host stopped: one free clock from the key (the arp's notes have gaps - they must not restart
+        // the gate's pattern on every step): gate 1/16 open, open, closed, closed under a 1/16 arp
+        auto ag = base();
+        ag.arp = recipe::arp (VaultArp::up, "1/16", 1, 0.9f, 0.0f, true);
+        ag.gate = recipe::gate ("1/16", { 1, 1, 0, 0 }, 1.0f, 0.0f, 1.0f, true);
+        Rig r5; r5.eng->setArpOn (true); r5.eng->setGateOn (true); r5.load (ag);
+        const int key = (int) (0.3013 * srT);
+        const auto a5 = r5.run (2.6, chord ({ 60 }, 0.3013, 2.5), false, 120.0);
+        float aOpen = 1, aClosed = 0;
+        for (int k = 4; k < 16; ++k)
+        {
+            const float v = rms (a5, key + k * step + step / 5, key + (k + 1) * step - step / 5);
+            if (k % 4 < 2) aOpen = std::min (aOpen, v); else aClosed = std::max (aClosed, v);
+        }
+        check (aOpen > 0.02f && aClosed < aOpen * 0.05f, "arp + gate, host stopped: both on one clock from the key - the gate pattern runs on under the arp's notes (open "
+               + juce::String (aOpen, 3) + ", closed " + juce::String (aClosed, 4) + ")");
+    }
+}
+
+// the arpeggiator alone, block by block like the engine runs it: keys split the blocks at their sample
+struct ArpSim
+{
+    struct Key { int64_t at; int note; float vel; bool on; bool pedal = false; };
+    struct E { int64_t sample; int note; float vel; bool on; };
+    vault::Arp arp;
+    double sr = srT, bpm = 120.0;
+    int block = 256;
+    std::vector<vault::Arp::Event> ev = std::vector<vault::Arp::Event> ((size_t) vault::Arp::maxEvents);
+    std::vector<E> out;
+    int64_t pos = 0;
+    double barBeats = 4.0, loopStart = 0.0, loopEnd = 0.0;
+    // clock (block start sample) -> { beat at that sample, host playing }
+    std::function<std::pair<double, bool> (int64_t)> clock = [this] (int64_t p) { return std::make_pair ((double) p * bpm / 60.0 / sr, true); };
+    explicit ArpSim (const VaultArp& a) { arp.setSettings (a); arp.reset(); }
+    double bps() const { return bpm / 60.0 / sr; }
+    void run (int64_t samples, std::vector<Key> keys = {})
+    {
+        std::stable_sort (keys.begin(), keys.end(), [] (const Key& x, const Key& y) { return x.at < y.at; });
+        size_t ki = 0;
+        const int64_t end = pos + samples;
+        while (pos < end)
+        {
+            const int len = (int) std::min<int64_t> (block, end - pos);
+            const auto [b0, host] = clock (pos);
+            int seg = 0;
+            auto proc = [&] (int upTo)
+            {
+                if (upTo <= seg) return;
+                vault::Arp::Clock c; c.beat0 = b0 + bps() * seg; c.bps = bps(); c.hostPlaying = host; c.barStart = 0.0; c.barBeats = barBeats;
+                if (host) { c.loopStart = loopStart; c.loopEnd = loopEnd; }
+                const int n = arp.process (upTo - seg, c, ev.data());
+                for (int i = 0; i < n; ++i) out.push_back ({ pos + seg + ev[(size_t) i].sample, ev[(size_t) i].note, ev[(size_t) i].velocity, ev[(size_t) i].on });
+                seg = upTo;
+            };
+            while (ki < keys.size() && keys[ki].at < pos + len)
+            {
+                const auto& k = keys[ki++];
+                proc ((int) std::max<int64_t> (0, k.at - pos));
+                if (k.pedal) arp.setPedal (k.on);
+                else if (k.on) arp.keyDown (k.note, k.vel);
+                else arp.keyUp (k.note);
+            }
+            proc (len);
+            pos += len;
+        }
+    }
+    std::vector<E> ons (int64_t from = 0, int64_t to = INT64_MAX) const { std::vector<E> o; for (auto& e : out) if (e.on && e.sample >= from && e.sample < to) o.push_back (e); return o; }
+    // notes still sounding (an on without its off)
+    int hanging() const
+    {
+        int s[128] {};
+        for (auto& e : out) s[e.note] += e.on ? 1 : -1;
+        int h = 0;
+        for (int v : s) h += v != 0 ? 1 : 0;
+        return h;
+    }
+    bool balanced() const   // never two ons of a note without an off between, never an off of a silent note
+    {
+        bool on[128] {};
+        for (auto& e : out) { if (e.on == on[e.note]) return false; on[e.note] = e.on; }
+        return true;
+    }
+};
+std::vector<ArpSim::Key> keysOf (std::initializer_list<int> notes, int64_t on, int64_t off, float vel = 0.8f)
+{
+    std::vector<ArpSim::Key> k;
+    for (int n : notes) { k.push_back ({ on, n, vel, true }); if (off > on) k.push_back ({ off, n, 0.0f, false }); }
+    return k;
+}
+
+void arpProTests()
+{
+    std::printf ("-- arpeggiator: timing, chord changes, transport, latch, export\n");
+    // ---- note orders and octave modes (one cycle)
+    {
+        auto order = [] (int mode, int octs, int octMode, std::vector<int> played)
+        {
+            VaultArp a; a.mode = (uint8_t) mode; a.octaves = (uint8_t) octs; a.octMode = (uint8_t) octMode;
+            std::vector<int> o (4096);
+            o.resize ((size_t) vault::Arp::orderOf (a, played.data(), (int) played.size(), o.data(), (int) o.size()));
+            return o;
+        };
+        using V = std::vector<int>;
+        const V ceg { 64, 60, 67 };   // played E C G
+        bool ok = order (VaultArp::up, 1, 0, ceg) == V { 60, 64, 67 } && order (VaultArp::down, 1, 0, ceg) == V { 67, 64, 60 }
+               && order (VaultArp::upDown, 1, 0, ceg) == V { 60, 64, 67, 64 } && order (VaultArp::downUp, 1, 0, ceg) == V { 67, 64, 60, 64 }
+               && order (VaultArp::upAndDown, 1, 0, ceg) == V { 60, 64, 67, 67, 64, 60 } && order (VaultArp::asPlayed, 1, 0, ceg) == V { 64, 60, 67 }
+               && order (VaultArp::converge, 1, 0, { 60, 64, 67, 71 }) == V { 60, 71, 64, 67 } && order (VaultArp::diverge, 1, 0, { 60, 64, 67, 71 }) == V { 67, 64, 71, 60 }
+               && order (VaultArp::thumb, 1, 0, ceg) == V { 60, 64, 60, 67 } && order (VaultArp::pinky, 1, 0, ceg) == V { 60, 67, 64, 67 };
+        check (ok, "arp note orders: Up, Down, Up-Down, Down-Up, Up & Down, As Played, Converge, Diverge, Thumb, Pinky");
+        const bool oct = order (VaultArp::up, 2, VaultArp::octUp, ceg) == V { 60, 64, 67, 72, 76, 79 }
+                      && order (VaultArp::up, 2, VaultArp::octDown, ceg) == V { 48, 52, 55, 60, 64, 67 }
+                      && order (VaultArp::down, 2, VaultArp::octUp, ceg) == V { 79, 76, 72, 67, 64, 60 }
+                      && order (VaultArp::up, 3, VaultArp::octUpDown, ceg) == V { 60, 64, 67, 72, 76, 79, 84, 88, 91, 72, 76, 79 }
+                      && order (VaultArp::up, 2, VaultArp::octAlternate, ceg) == V { 60, 72, 64, 76, 67, 79 }
+                      && order (VaultArp::asPlayed, 2, VaultArp::octUp, ceg) == V { 64, 60, 67, 76, 72, 79 }
+                      && order (VaultArp::up, 2, VaultArp::octUp, { 60, 72 }) == V { 60, 72, 84 };   // no repeated pitch
+        check (oct, "arp octave modes: Up, Down, Up-Down passes, Alternate, As Played passes, no doubled pitches");
+        // every key down, 4 octaves, every order / octave mode: the sequence fits, nothing hangs
+        bool big = true;
+        for (int mode = 0; mode < VaultArp::numModes; ++mode)
+            for (int om = 0; om < VaultArp::numOctModes; ++om)
+            {
+                VaultArp a = recipe::arp ((VaultArp::Mode) mode, "1/64", 4, 0.5f);
+                a.octMode = (uint8_t) om;
+                ArpSim s (a);
+                std::vector<ArpSim::Key> k;
+                for (int n = 0; n < 128; ++n) { k.push_back ({ n, n, 0.8f, true }); k.push_back ({ 20000 + n, n, 0.0f, false }); }
+                s.run (30000, k);
+                big &= ! s.ons().empty() && s.balanced() && s.hanging() == 0;
+            }
+        check (big, "arp: all 128 keys x 4 octaves in every order / octave mode - fits, no hanging notes");
+    }
+    // ---- timing on the host grid at 90 / 140 / 170 BPM: straight, triplet, dotted, 1/32, 1/64T, swing 0 / 62.5 / 75 %
+    {
+        int worst = 0, runs = 0, bad = 0;
+        juce::String badWhat;
+        for (double bpm : { 90.0, 140.0, 170.0 })
+            for (const char* rate : { "1/16", "1/8T", "1/16D", "1/4", "1/32", "1/64T" })
+                for (float swing : { 0.0f, 0.5f, 1.0f })
+                {
+                    VaultArp a = recipe::arp (VaultArp::up, rate, 1, 0.5f, swing);
+                    ArpSim s (a); s.bpm = bpm; s.block = 333;   // odd block size: steps fall anywhere in a block
+                    s.run ((int64_t) (2.6 * srT), keysOf ({ 60 }, 0, (int64_t) (1.9 * srT)));   // + time for the last note to end
+                    const double L = vault::divisionBeats (vault::divisionIndex (rate));
+                    const auto on = s.ons();
+                    int expectN = 0;
+                    for (int64_t k = 0;; ++k) { const double b = vault::StepGrid::start (k, 0, L, swing); if (b / s.bps() >= 1.9 * srT) break; ++expectN; }
+                    bool ok = (int) on.size() == expectN;
+                    for (size_t k = 0; k < on.size(); ++k)
+                    {
+                        const double want = vault::StepGrid::start ((int64_t) k, 0, L, swing) / s.bps();
+                        const int err = (int) std::abs ((double) on[k].sample - std::floor (want + 1e-6));
+                        worst = std::max (worst, err); ok &= err <= 1;
+                    }
+                    ok &= s.balanced() && s.hanging() == 0;
+                    ++runs;
+                    if (! ok) { ++bad; badWhat << " " << rate << "@" << (int) bpm << "/sw" << swing << " (" << (int) on.size() << " vs " << expectN << ")"; }
+                }
+        check (bad == 0 && worst <= 1, "arp timing on the host grid, " + juce::String (runs) + " runs (90/140/170 BPM, straight / triplet / dotted, swing 0-75 %): worst "
+                                         + juce::String (worst) + " samples" + badWhat);
+    }
+    // ---- the same through the engine (block 256), 1/8T + swing at 170 BPM
+    {
+        auto p = base(); p.arp = recipe::arp (VaultArp::up, "1/8T", 1, 0.5f, 0.6f, true);
+        Rig r; r.eng->setArpOn (true); r.load (p);
+        r.run (2.0, chord ({ 60 }, 0.0, 1.9), true, 170.0);
+        std::vector<VaultEngine::NoteLog> log (512);
+        log.resize ((size_t) r.eng->readNoteLog (log.data(), 512));
+        const double bps = 170.0 / 60.0 / srT, L = 1.0 / 3.0;
+        int k = 0, worst = 0; bool ok = true;
+        for (auto& e : log) if (e.on) { const int err = (int) std::abs ((double) e.sample - std::floor (vault::StepGrid::start (k++, 0, L, 0.6f) / bps + 1e-6)); worst = std::max (worst, err); ok &= err <= 1; }
+        check (ok && k > 10, "engine arp: 1/8T swing 65 % at 170 BPM on the grid (worst " + juce::String (worst) + " samples, " + juce::String (k) + " notes)");
+    }
+    // ---- free clock (host stopped): from the key, dotted rate at 90 BPM
+    {
+        VaultArp a = recipe::arp (VaultArp::up, "1/16D", 1, 0.5f);
+        ArpSim s (a); s.bpm = 90.0;
+        s.clock = [&] (int64_t p) { return std::make_pair (3.3 + (double) p * s.bps(), false); };
+        const int64_t key = 12345;
+        s.run ((int64_t) (2.0 * srT), keysOf ({ 60, 64 }, key, (int64_t) (1.8 * srT)));
+        const auto on = s.ons();
+        const double step = 0.375 / s.bps();
+        int worst = 0;
+        for (size_t k = 0; k < on.size(); ++k) worst = std::max (worst, (int) std::abs ((double) (on[k].sample - key) - std::floor (k * step + 1e-6)));
+        check (on.size() == 7 && on[0].sample == key && worst <= 1 && s.hanging() == 0, "arp free clock: starts on the key, 1/16 dotted at 90 BPM (worst " + juce::String (worst) + ")");
+    }
+    // ---- chord change on a grid line through the engine, the new chord's ons BEFORE the old chord's offs (as some hosts
+    //      send them): the engine orders offs -> ons on one sample, so it is a clean new chord
+    for (int retrig : { (int) VaultArp::retrigChord, (int) VaultArp::retrigOff })
+    {
+        auto p = base(); p.arp = recipe::arp (VaultArp::up, "1/16", 1, 0.9f, 0.0f, true);
+        p.arp.retrig = (uint8_t) retrig;
+        Rig r; r.eng->setArpOn (true); r.load (p);
+        const int64_t change = (int64_t) (1.0 * srT);   // beat 2 at 120 BPM: a step line
+        std::vector<std::pair<int64_t, juce::MidiMessage>> ev;
+        for (int n : { 60, 64, 67 }) ev.push_back ({ 0, juce::MidiMessage::noteOn (1, n, (juce::uint8) 100) });
+        for (int n : { 65, 69, 72 }) ev.push_back ({ change, juce::MidiMessage::noteOn (1, n, (juce::uint8) 100) });
+        for (int n : { 60, 64, 67 }) ev.push_back ({ change, juce::MidiMessage::noteOff (1, n) });
+        for (int n : { 65, 69, 72 }) ev.push_back ({ (int64_t) (2.0 * srT), juce::MidiMessage::noteOff (1, n) });
+        r.run (2.3, ev, true, 120.0);
+        std::vector<VaultEngine::NoteLog> log (512);
+        log.resize ((size_t) r.eng->readNoteLog (log.data(), 512));
+        std::vector<VaultEngine::NoteLog> on;
+        int bal[128] {}; bool twice = false;
+        for (auto& e : log) { if (e.on) on.push_back (e); bal[e.note] += e.on ? 1 : -1; twice |= bal[e.note] > 1 || bal[e.note] < 0; }
+        int hang = 0; for (int x : bal) hang += x != 0 ? 1 : 0;
+        const double step = 0.125 * srT;
+        bool oneEach = true, noOld = true;
+        for (size_t i = 0; i < on.size(); ++i)
+        {
+            oneEach &= std::abs ((double) on[i].sample - std::floor ((double) i * step + 1e-6)) <= 1;   // one note per step line: none missing, no double
+            if (on[i].sample >= change) noOld &= on[i].note == 65 || on[i].note == 69 || on[i].note == 72;
+        }
+        int firstNew = -1;
+        for (auto& e : on) if (e.sample >= change) { firstNew = e.note; break; }
+        // New chord: starts from its lowest note; Off: runs on (after the last note the next one above it, else the lowest)
+        const bool startOk = retrig == VaultArp::retrigChord ? firstNew == 65 : firstNew >= 0;
+        check (oneEach && noOld && startOk && hang == 0 && ! twice && on.size() == 16,
+               juce::String ("engine arp: chord change on the grid line (ons before offs), retrigger ") + (retrig == VaultArp::retrigChord ? "New chord" : "Off")
+               + ": one note per step, no old notes, no hanging notes (" + juce::String ((int) on.size()) + " notes, first new " + juce::String (firstNew) + ")");
+    }
+    // ---- legato chord change mid-step (the new chord overlaps the old one by 40 ms): runs on, never doubles
+    {
+        VaultArp a = recipe::arp (VaultArp::up, "1/8", 1, 1.0f);
+        ArpSim s (a);
+        auto k = keysOf ({ 60, 64, 67 }, 0, (int64_t) (1.04 * srT));
+        auto k2 = keysOf ({ 62, 65, 69 }, (int64_t) (1.0 * srT), (int64_t) (2.0 * srT));
+        k.insert (k.end(), k2.begin(), k2.end());
+        s.run ((int64_t) (2.2 * srT), k);
+        const auto on = s.ons();
+        int64_t minGap = INT64_MAX;
+        for (size_t i = 1; i < on.size(); ++i) minGap = std::min (minGap, on[i].sample - on[i - 1].sample);
+        bool after = true;
+        for (auto& e : on) if (e.sample > (int64_t) (1.05 * srT)) after &= e.note == 62 || e.note == 65 || e.note == 69;
+        check (minGap >= (int64_t) (0.25 * srT) - 1 && after && s.balanced() && s.hanging() == 0, "arp legato chord change: steps stay one per 1/8, only the new notes after the old ones are up");
+    }
+    // ---- a chord played a little late on the host grid: the step line it missed plays at once; too late -> the next line
+    {
+        VaultArp a = recipe::arp (VaultArp::up, "1/16", 1, 0.5f);
+        ArpSim s1 (a);
+        const int64_t line = (int64_t) (0.5 * srT), late = line + (int64_t) (0.012 * srT);
+        s1.run ((int64_t) (1.0 * srT), keysOf ({ 60 }, late, (int64_t) (0.9 * srT)));
+        ArpSim s2 (a);
+        const int64_t tooLate = line + (int64_t) (0.05 * srT);
+        s2.run ((int64_t) (1.0 * srT), keysOf ({ 60 }, tooLate, (int64_t) (0.9 * srT)));
+        const auto o1 = s1.ons(), o2 = s2.ons();
+        check (! o1.empty() && o1[0].sample == late && o1.size() > 1 && std::abs ((double) o1[1].sample - (double) (line + (int64_t) (0.125 * srT))) <= 1
+               && ! o2.empty() && std::abs ((double) o2[0].sample - (double) (line + (int64_t) (0.125 * srT))) <= 1,
+               "arp on the host grid: a chord 12 ms late plays at once (then on the grid), 50 ms late waits for the next step");
+    }
+    // ---- Chord mode: keys a few ms apart (free clock) join the chord step instead of waiting a step
+    {
+        VaultArp a = recipe::arp (VaultArp::chord, "1/8", 1, 0.5f);
+        ArpSim s (a);
+        s.clock = [&] (int64_t p) { return std::make_pair (7.7 + (double) p * s.bps(), false); };
+        std::vector<ArpSim::Key> k { { 1000, 60, 0.8f, true }, { 1000 + 240, 64, 0.8f, true }, { 1000 + 480, 67, 0.8f, true } };
+        for (int n : { 60, 64, 67 }) k.push_back ({ (int64_t) (1.0 * srT), n, 0.0f, false });
+        s.run ((int64_t) (1.2 * srT), k);
+        const auto first = s.ons (0, 2000), second = s.ons (2000 + (int64_t) (0.2 * srT), 2000 + (int64_t) (0.3 * srT));
+        check (first.size() == 3 && second.size() == 3 && second[0].sample == second[2].sample && s.hanging() == 0,
+               "arp Chord: keys 5 / 10 ms after the first join its step at once, then step together");
+    }
+    // ---- transport: loop jumps (a host that splits the block at the loop end / one that does not but reports its loop
+    //      points / one that reports neither), then stop -> the free clock; no hanging notes, no double triggers
+    for (int variant = 0; variant < 3; ++variant)
+    {
+        VaultArp a = recipe::arp (VaultArp::upDown, "1/16", 2, 0.95f);
+        ArpSim s (a);
+        const double bps = s.bps();
+        const int64_t loopLen = (int64_t) std::llround (4.0 / bps);   // one bar
+        const int64_t stopAt = 3 * loopLen + 10000;
+        s.block = variant == 0 ? 250 : 333;                            // 250 divides the loop: the blocks end on the loop end
+        if (variant == 1) { s.loopStart = 0.0; s.loopEnd = 4.0; }
+        s.clock = [&] (int64_t p) -> std::pair<double, bool>
+        {
+            if (p < stopAt) return { (double) (p % loopLen) * bps, true };   // the block that holds the wrap reports the old pass
+            return { 9.0 + (double) (p - stopAt) * bps, false };
+        };
+        s.run (4 * loopLen, keysOf ({ 60, 64, 67 }, 0, 4 * loopLen - 2000));
+        auto passNotes = [&] (int pass) { std::vector<int> n; for (auto& e : s.ons (pass * loopLen, (pass + 1) * loopLen)) n.push_back (e.note); return n; };
+        const auto p1 = passNotes (0), p2 = passNotes (1), p3 = passNotes (2);
+        bool starts = true;
+        for (int pass : { 1, 2, 3 }) { const auto on = s.ons (pass * loopLen - 1, pass * loopLen + 2); starts &= on.size() == 1 && on[0].note == 60; }
+        const auto all = s.ons();
+        int64_t minGap = INT64_MAX;
+        for (size_t i = 1; i < all.size(); ++i) minGap = std::min (minGap, all[i].sample - all[i - 1].sample);
+        const juce::String name = variant == 0 ? "split blocks" : variant == 1 ? "a wrap inside a block, loop points known" : "a wrap inside a block, no loop points";
+        if (variant < 2)
+            check (p1.size() == 16 && p1 == p2 && p2 == p3 && starts, "arp loop (" + name + "): every pass plays the same 16 notes from the loop start, on the sample");
+        check (s.balanced() && s.hanging() == 0 && minGap >= (int64_t) (0.125 * srT) - 2,
+               "arp loop (" + name + ") + stop: no hanging notes, no double trigger (closest notes " + juce::String ((int) minGap) + " samples)");
+        if (variant == 0)
+        {
+            const auto before = s.ons (stopAt - 7000, stopAt), after = s.ons (stopAt, stopAt + 7000);
+            check (before.size() == 1 && after.size() == 1 && std::abs ((double) (after[0].sample - before[0].sample) - 0.125 * srT) <= 2,
+                   "arp transport stop: the pattern carries on in the same rhythm on the free clock");
+        }
+    }
+    // ---- latch: replace / add, the sustain pedal holds the keys
+    {
+        auto latchRun = [] (uint8_t mode)
+        {
+            VaultArp a = recipe::arp (VaultArp::up, "1/16", 1, 0.5f);
+            a.latch = true; a.latchMode = mode;
+            ArpSim s (a);
+            auto k = keysOf ({ 60, 64, 67 }, 0, (int64_t) (0.3 * srT));
+            auto k2 = keysOf ({ 62 }, (int64_t) (0.6 * srT), (int64_t) (0.7 * srT));
+            k.insert (k.end(), k2.begin(), k2.end());
+            s.run ((int64_t) (1.6 * srT), k);
+            std::set<int> late;
+            for (auto& e : s.ons ((int64_t) (1.0 * srT))) late.insert (e.note);
+            return late;
+        };
+        check (latchRun (VaultArp::latchReplace) == std::set<int> { 62 } && latchRun (VaultArp::latchAdd) == std::set<int> { 60, 62, 64, 67 },
+               "arp latch: a new chord replaces the held one (On) / joins it (Add), the pattern runs on after the keys are up");
+        VaultArp a = recipe::arp (VaultArp::up, "1/16", 1, 0.5f);
+        ArpSim s (a);
+        auto k = keysOf ({ 60, 64 }, 0, (int64_t) (0.2 * srT));
+        k.push_back ({ 100, 0, 0, true, true });
+        k.push_back ({ (int64_t) (0.8 * srT), 0, 0, false, true });
+        s.run ((int64_t) (1.5 * srT), k);
+        check (s.ons ((int64_t) (0.5 * srT), (int64_t) (0.78 * srT)).size() >= 3 && s.ons ((int64_t) (0.95 * srT)).empty() && s.hanging() == 0,
+               "arp + sustain pedal: released keys keep playing while the pedal is down, stop after it goes up");
+    }
+    // ---- velocity source, 32 steps, LENGTH, SLIDE, Every bar retrigger in 3/4
+    {
+        auto vel = [] (uint8_t m)
+        {
+            VaultArp a = recipe::arp (VaultArp::up, "1/16", 1, 0.5f);
+            a.velMode = m; a.vel.fill (0.5f);
+            ArpSim s (a);
+            s.run ((int64_t) (0.3 * srT), keysOf ({ 60 }, 0, (int64_t) (0.25 * srT), 0.8f));
+            return s.ons().empty() ? -1.0f : s.ons()[0].vel;
+        };
+        check (std::abs (vel (VaultArp::velPlayedPattern) - 0.4f) < 1e-3f && std::abs (vel (VaultArp::velPattern) - 0.5f) < 1e-3f && std::abs (vel (VaultArp::velPlayed) - 0.8f) < 1e-3f,
+               "arp velocity: played x steps / steps / played");
+        VaultArp a = recipe::arp (VaultArp::up, "1/16", 1, 0.5f);
+        a.steps = 32; a.type[20] = VaultArp::rest; a.oct[25] = 1; a.len[3] = 0.5f; a.slide[5] = 1;
+        ArpSim s (a);
+        s.run ((int64_t) (8.3 * srT), keysOf ({ 60 }, 0, (int64_t) (8.2 * srT)));
+        const auto on = s.ons();
+        const double st = 0.125 * srT;
+        auto onAt = [&] (int step) { for (auto& e : on) if (std::abs ((double) e.sample - step * st) <= 1) return e.note; return -1; };
+        auto offAfter = [&] (int step, int note) { for (auto& e : s.out) if (! e.on && e.note == note && e.sample > (int64_t) (step * st)) return (double) e.sample - step * st; return -1.0; };
+        const bool lanes = onAt (20) == -1 && onAt (52) == -1 && onAt (25) == 72 && onAt (57) == 72 && onAt (21) == 60 && onAt (32) == 60;
+        const double l3 = offAfter (3, 60), l5 = offAfter (5, 60);
+        check (lanes && std::abs (l3 - 0.25 * st) <= 2 && l5 >= st && l5 <= 1.3 * st && s.balanced(),
+               "arp 32 steps: a rest at 21, an octave at 26 every 2 bars; LENGTH 50 % x gate 50 % = 1/4 step; SLIDE overlaps the next note");
+        VaultArp b = recipe::arp (VaultArp::up, "1/16", 1, 0.5f);
+        b.retrig = VaultArp::retrigBar; b.steps = 16; b.oct[0] = 1;   // lane 1 = an octave up: marks where the lanes start
+        ArpSim t (b); t.barBeats = 3.0;
+        t.run ((int64_t) (3.2 * srT), keysOf ({ 60, 64, 67 }, 0, (int64_t) (3.1 * srT)));
+        bool barOk = true;
+        for (int bar = 0; bar < 2; ++bar)
+        {
+            const auto o = t.ons ((int64_t) (bar * 1.5 * srT), (int64_t) (bar * 1.5 * srT) + 5);   // 3 beats at 120 = 1.5 s
+            barOk &= o.size() == 1 && o[0].note == 72;   // lane 1 (+1 octave) on the lowest note
+        }
+        check (barOk && t.hanging() == 0, "arp Every bar (3/4): the lanes and the order start again on each bar line");
+    }
+    // ---- rate change while playing (free clock): no double trigger, the due step still comes
+    {
+        VaultArp a = recipe::arp (VaultArp::up, "1/8", 1, 0.5f);
+        ArpSim s (a);
+        s.clock = [&] (int64_t p) { return std::make_pair (7.7 + (double) p * s.bps(), false); };
+        s.run ((int64_t) (0.6 * srT), keysOf ({ 60, 64 }, 0, (int64_t) (1.5 * srT)));
+        a.rate = (uint8_t) vault::divisionIndex ("1/32");
+        s.arp.setSettings (a);
+        s.run ((int64_t) (1.0 * srT));
+        const auto on = s.ons();
+        int64_t minGap = INT64_MAX;
+        for (size_t i = 1; i < on.size(); ++i) minGap = std::min (minGap, on[i].sample - on[i - 1].sample);
+        check (minGap >= (int64_t) (0.0625 * srT) - 1 && s.hanging() == 0, "arp rate change while playing: no double trigger, no hanging note");
+    }
+    // ---- engine: arp off / preset switch / all-notes-off while notes sound -> nothing hangs
+    {
+        auto p = base(); p.arp = recipe::arp (VaultArp::up, "1/16", 2, 1.0f, 0.0f, true);
+        auto q = base ("t3.other"); q.arp = recipe::arp (VaultArp::chord, "1/8T", 1, 1.0f, 0.0f, true);
+        Rig r; r.eng->setArpOn (true); r.load (p);
+        r.run (0.4, chord ({ 60, 64, 67 }, 0.0, 0.0), true);
+        r.load (q, false);                 // preset switch while the arp plays
+        r.run (0.4, {}, true);
+        r.eng->setArpOn (false);           // arp off: the keys still down play
+        r.run (0.2, {}, true);
+        r.eng->setArpOn (true);
+        r.run (0.3, {}, true);
+        const int64_t p0 = r.pos;
+        std::vector<std::pair<int64_t, juce::MidiMessage>> offs;
+        for (int n : { 60, 64, 67 }) offs.push_back ({ p0 + 10, juce::MidiMessage::noteOff (1, n) });
+        r.run (0.5, offs, false);          // transport stops, keys up
+        std::vector<VaultEngine::NoteLog> log (512);
+        log.resize ((size_t) r.eng->readNoteLog (log.data(), 512));
+        int bal[128] {}; bool twice = false;
+        for (auto& e : log) { bal[e.note] += e.on ? 1 : -1; twice |= bal[e.note] > 1; }
+        int hang = 0; for (int b : bal) hang += b != 0 ? 1 : 0;
+        check (log.size() < 512 && hang == 0 && ! twice, "engine arp: preset switch, arp off / on, transport stop, keys up - every note ends (" + juce::String ((int) log.size()) + " events)");
+        r.run (0.6);
+        const auto tail = r.run (0.2);
+        check (tail.getMagnitude (0, tail.getNumSamples()) < 1.0e-4f, "engine arp: silent after everything is up");
+    }
+    // ---- the on-screen keyboard (report item 13): VaultEngine::soundingNotes shows the arp's notes (latched too), short
+    // notes between two UI frames still light once, nothing stays lit after the arp stops
+    {
+        auto p = base(); p.arp = recipe::arp (VaultArp::up, "1/64", 1, 0.1f, 0.0f, true);
+        p.arp.latch = true;
+        Rig r; r.eng->setArpOn (true); r.load (p);
+        std::set<int> seen; bool foreign = false;
+        int reads = 0;
+        auto read = [&] (int64_t)
+        {
+            if (++reads % 8 != 0) return;   // ~ a 30 Hz UI timer at 256-sample blocks
+            uint64_t m[2] {};
+            r.eng->soundingNotes (m);
+            for (int k = 0; k < 128; ++k)
+                if ((m[k >> 6] >> (k & 63)) & 1u) { seen.insert (k); foreign |= k != 60 && k != 64 && k != 67; }
+        };
+        r.run (1.5, chord ({ 60, 64, 67 }, 0.05, 0.2), true, 170.0, read);   // keys up at 0.2 s: the latch keeps the pattern
+        const bool latched = seen == std::set<int> { 60, 64, 67 } && ! foreign;
+        seen.clear();
+        r.run (0.5, {}, true, 170.0, read);
+        const bool stillLatched = seen == std::set<int> { 60, 64, 67 };
+        r.eng->setArpOn (false);
+        r.run (0.1, {}, true, 170.0);
+        uint64_t m[2] { 1, 1 };
+        r.eng->soundingNotes (m);   // consumes the "started" bits of the run above
+        r.eng->soundingNotes (m);
+        const bool dark = m[0] == 0 && m[1] == 0 && ! r.eng->isNoteSounding (60);
+        // without the arp: the played keys
+        r.run (0.1, { { r.pos + 10, juce::MidiMessage::noteOn (1, 62, (juce::uint8) 100) } }, false);
+        const bool direct = r.eng->isNoteSounding (62);
+        r.eng->allNotesOff (false);
+        r.eng->soundingNotes (m);
+        r.eng->soundingNotes (m);
+        check (latched && stillLatched && dark && direct && m[0] == 0 && m[1] == 0,
+               "on-screen keyboard: soundingNotes shows the arp's 1/64 notes at 170 BPM (latched, keys up) and nothing after the arp / all notes stop");
+    }
+    // ---- processor bypass while the arp plays: nothing keeps playing afterwards
+    {
+        VaultProcessor p;
+        p.prepareToPlay (48000.0, 256);
+        p.editSound ([] (VaultPreset& s) { s.arp = recipe::arp (VaultArp::up, "1/16", 1, 0.8f); s.arp.latch = false; });
+        p.setSwitch (VaultProcessor::idArpOn, true);
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer mb;
+        for (int i = 0; i < 4; ++i) { mb.clear(); p.processBlock (buf, mb); }
+        mb.clear(); mb.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0); mb.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 0);
+        p.processBlock (buf, mb);
+        for (int i = 0; i < 40; ++i) { mb.clear(); p.processBlock (buf, mb); }
+        const bool playing = buf.getMagnitude (0, 256) > 1.0e-3f;
+        const bool running = p.arpStep() >= 0;
+        for (int i = 0; i < 20; ++i) { mb.clear(); p.processBlockBypassed (buf, mb); }   // the key-ups happen while bypassed
+        std::vector<VaultEngine::NoteLog> log (512);
+        const int before = p.audioEngine().readNoteLog (log.data(), 512);
+        for (int i = 0; i < 200; ++i) { mb.clear(); p.processBlock (buf, mb); }
+        const int after = p.audioEngine().readNoteLog (log.data(), 512);
+        int newOns = 0;
+        for (int i = before; i < after; ++i) newOns += log[(size_t) i].on ? 1 : 0;
+        check (running && p.arpStep() < 0 && newOns == 0 && before < 512, "processor bypass while the arp plays: the arp stops, no new notes afterwards ("
+                                                                            + juce::String (playing ? "was audible" : "was silent") + ")");
+    }
+    // ---- MIDI export = what the engine plays (host from bar 1): order, swing, ties, slide, octaves, velocity mode
+    {
+        VaultArp a = recipe::arp (VaultArp::asPlayed, "1/16", 2, 0.6f, 0.4f, true);
+        a.octMode = VaultArp::octAlternate; a.velMode = VaultArp::velPattern; a.steps = 12;
+        a.type[3] = VaultArp::tie; a.type[6] = VaultArp::rest; a.slide[8] = 1; a.len[1] = 0.4f; a.oct[10] = -1;
+        for (int i = 0; i < vault::numSteps; ++i) a.vel[(size_t) i] = 0.4f + 0.05f * (float) (i % 12);
+        const double bpm = 128.0;
+        const std::vector<std::pair<int, float>> held { { 67, 0.7f }, { 60, 0.7f }, { 64, 0.7f } };
+        const auto mf = vault::arpPatternToMidi (a, held, 2.0, bpm);
+        struct N { double tick; int note; int vel; bool on; };
+        std::vector<N> fileEv;
+        if (auto* tr = mf.getTrack (0))
+            for (auto* e : *tr)
+                if (e->message.isNoteOn()) fileEv.push_back ({ e->message.getTimeStamp(), e->message.getNoteNumber(), e->message.getVelocity(), true });
+        auto p = base(); p.arp = a;
+        Rig r; r.eng->setArpOn (true); r.load (p);
+        std::vector<std::pair<int64_t, juce::MidiMessage>> ev;
+        for (auto& [k, v] : held) ev.push_back ({ 0, juce::MidiMessage::noteOn (1, k, v) });
+        const double secs = 2.0 * 4.0 * 60.0 / bpm;
+        r.run (secs, ev, true, bpm);
+        std::vector<VaultEngine::NoteLog> log (512);
+        log.resize ((size_t) r.eng->readNoteLog (log.data(), 512));
+        std::vector<N> engEv;
+        const double ticksPerSample = bpm / 60.0 / srT * 960.0;
+        for (auto& e : log) if (e.on && e.sample < (int64_t) std::floor (secs * srT)) engEv.push_back ({ (double) e.sample * ticksPerSample, e.note, juce::jlimit (1, 127, juce::roundToInt (e.velocity * 127.0f)), true });
+        bool same = engEv.size() == fileEv.size() && ! fileEv.empty();
+        double worstTick = 0;
+        for (size_t i = 0; same && i < fileEv.size(); ++i)
+        {
+            worstTick = std::max (worstTick, std::abs (engEv[i].tick - fileEv[i].tick));
+            same &= engEv[i].note == fileEv[i].note && std::abs (engEv[i].vel - fileEv[i].vel) <= 1 && std::abs (engEv[i].tick - fileEv[i].tick) <= 1.0;
+        }
+        check (same, "arp MIDI export = the engine's notes over 2 bars (" + juce::String ((int) fileEv.size()) + " notes vs " + juce::String ((int) engEv.size())
+                     + ", worst " + juce::String (worstTick, 2) + " ticks)");
+    }
+    // ---- the gate on the arp's step clock: swing 75 % -> open 1.5 steps, closed 0.5 step
+    {
+        auto p = base();
+        p.gate = recipe::gate ("1/16", { 1, 0 }, 1.0f, 0.0f, 1.0f, true); p.gate.swing = 1.0f;
+        Rig r; r.eng->setGateOn (true); r.load (p);
+        const auto b = r.run (2.0, chord ({ 60 }, 0.0, 1.9), true, 120.0);
+        const double L = 0.125 * srT;
+        float openMin = 1, closedMax = 0;
+        for (int k = 2; k <= 12; k += 2)
+        {
+            openMin = std::min (openMin, rms (b, (int) (k * L + 0.15 * L), (int) (k * L + 1.35 * L)));
+            closedMax = std::max (closedMax, rms (b, (int) (k * L + 1.62 * L), (int) (k * L + 1.9 * L)));
+        }
+        check (openMin > 0.02f && closedMax < openMin * 0.05f, "gate swing 75 % on the shared step clock: open 1.5 steps, closed 0.5 (open " + juce::String (openMin, 3)
+                                                              + ", closed " + juce::String (closedMax, 4) + ")");
+    }
+    // ---- CVB v4: the new arp fields round trip; the shipped v3 bank reads with the defaults
+    {
+        auto p = base ("t3.arp4");
+        p.arp = recipe::arp (VaultArp::pinky, "1/64T", 3, 0.3f, 0.2f, true);
+        p.arp.octMode = VaultArp::octUpDown; p.arp.velMode = VaultArp::velPlayed; p.arp.retrig = VaultArp::retrigBar; p.arp.latch = true;
+        p.arp.latchMode = VaultArp::latchAdd; p.arp.steps = 32; p.arp.len[31] = 0.25f; p.arp.slide[30] = 1; p.arp.vel[29] = 0.3f; p.arp.type[28] = VaultArp::tie;
+        p.gate.steps = 32; p.gate.level[31] = 0.5f;
+        juce::String why;
+        const bool valid = vault::validatePreset (p, &why);
+        const auto mb = vault::serializeBank ({ p }, true);
+        std::vector<VaultPreset> back;
+        int ver = 0;
+        check (valid && vault::deserializeBank (mb.getData(), mb.getSize(), back, nullptr, &ver) && back.size() == 1 && back[0] == p && ver == 4,
+               "CVB v4: modes, 32-step lanes, LENGTH / SLIDE round trip " + why);
+        juce::MemoryBlock fb;
+        std::vector<VaultPreset> bank;
+        int fver = 0;
+        const auto f = juce::File::getCurrentWorkingDirectory().getChildFile ("resources/vault/factory.cvb");
+        if (f.loadFileAsData (fb) && vault::deserializeBank (fb.getData(), fb.getSize(), bank, nullptr, &fver) && fver == 3)
+        {
+            bool ok = ! bank.empty();
+            for (auto& x : bank) ok &= x.arp.retrig == VaultArp::retrigChord && x.arp.len[20] == 1.0f && x.gate.level.size() == (size_t) vault::numSteps && vault::validatePreset (x);
+            check (ok, "the v3 factory bank still reads (new arp fields at their defaults, every preset valid)");
+        }
     }
 }
 
@@ -912,6 +1449,7 @@ int vaultV3Tests()
     v3test::fxTypeTests();
     v3test::quickAndMacroTests();
     v3test::arpGateTests();
+    v3test::arpProTests();
     v3test::lockAndStateTests();
     v3test::cpuAndAllocTests();
     v3test::recipeComfortTests();

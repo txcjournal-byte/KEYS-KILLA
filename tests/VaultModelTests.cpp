@@ -142,18 +142,25 @@ int vaultModelTests()
         const auto pExact = paramsOf (mi, { { "m.vibrato", 0.0f }, { "m.detune", 0.0f }, { "m.motion", 0.0f } });
         const auto pDef = paramsOf (mi, {});
 
-        // ---- pitch C2..C7 within +-5 cents
+        // ---- pitch C2..C7 within +-5 cents (voices: C3..C7 - a voice sings a range like a sampled instrument and stays
+        // silent at MIDI 24, 32.7 Hz: VoiceModels.cpp lowestNote, owner report item 0)
         juce::String pitchLine; float worst = 0.0f;
         for (int note = 24; note <= 84; note += 12)
         {
             const auto o = run (mi, pExact, note, 0.9f, 2.2, 2.0, sr);
+            if (voice && note < 36)
+            {
+                mcheck (peakOf (o.l) < 1.0e-4f, mi.id + ": silent below its range (MIDI " + juce::String (note) + ", peak " + juce::String (peakOf (o.l), 5) + ")");
+                pitchLine << "- ";
+                continue;
+            }
             const int from = (int) ((ens ? 0.9 : 0.3) * sr);
             const double f = measureHz (o.l, sr, from, (int) (1.2 * sr), hzOf (note));
             const float c = (float) (1200.0 * std::log2 (f / hzOf (note)));
             worst = std::max (worst, std::abs (c));
             pitchLine << juce::String (c, 1) << " ";
         }
-        mcheck (worst <= 5.0f, mi.id + ": pitch C2..C7 within 5 cents (" + pitchLine.trim() + ")");
+        mcheck (worst <= 5.0f, mi.id + (voice ? ": pitch C3..C7 within 5 cents (" : ": pitch C2..C7 within 5 cents (") + pitchLine.trim() + ")");
         // other sample rates: C5 in tune and level within 3 dB of 48 kHz
         {
             const auto ref = run (mi, pExact, 60, 0.9f, 2.2, 2.0, sr);
