@@ -1,4 +1,5 @@
 #include "VaultPages.h"
+#include "VaultValues.h"
 
 // CHROME VAULT v3 FX page: the 8-slot chain of the current sound. Each slot card: drag grip (reorder), power, type,
 // variant / type menu (▾), its 3 main knobs. FX presets (whole chains), Bypass all, Keep while browsing.
@@ -6,7 +7,7 @@ namespace vui
 {
 namespace
 {
-constexpr int headerH = 34, gridTop = 48, cardH = 140, gap = 12, cols = 4;
+constexpr int headerH = 34, gridTop = 48, minCardH = 140, footH = 34, gap = 12, cols = 4;
 using vault::FxType;
 
 int variantParam (FxType t)
@@ -124,7 +125,12 @@ struct FxPage::SlotCard : public juce::Component
         addChildComponent (variant);
         variant.small = true;
         addChildComponent (addBtn);
-        for (auto& k : knobs) { k.diameter = 36; addChildComponent (k); }
+        for (int k = 0; k < numKnobs; ++k)
+        {
+            knobs[(size_t) k].diameter = k < 3 ? 44 : 36;   // the main 3 bigger, the more detailed row smaller
+            knobs[(size_t) k].valueAlways = true;
+            addChildComponent (knobs[(size_t) k]);
+        }
         power.onClick = [this]
         {
             const int sl = slot;
@@ -132,18 +138,27 @@ struct FxPage::SlotCard : public juce::Component
         };
         variant.onClick = [this] { owner.showSlotMenu (slot, variant); };
         addBtn.onClick = [this] { owner.showSlotMenu (slot, addBtn); };
-        for (int k = 0; k < 3; ++k)
+        for (int k = 0; k < numKnobs; ++k)
         {
+            // the knob shows the value the engine uses (sound macros - most presets set the reverb / delay mix with one -
+            // and the MAIN knob of the type included); turning it makes that the value (vui::val::setFxValue)
             knobs[(size_t) k].onChange = [this, k] (float n)
             {
                 const int sl = slot, pi = params[(size_t) k];
-                ctx.edit ([sl, pi, n] (VaultPreset& p)
+                const auto& snd = ctx.sound();
+                if (! juce::isPositiveAndBelow (sl, (int) snd.fx.size()) || pi < 0) return;
+                const auto type = snd.fx[(size_t) sl].type;
+                auto c = val::Ctx::of (ctx.proc);
+                if (const int q = val::fxQuickKnob (snd, sl, type, pi); q >= 0)
                 {
-                    if (! juce::isPositiveAndBelow (sl, (int) p.fx.size()) || pi < 0) return;
-                    auto& fx = p.fx[(size_t) sl];
-                    fx.p[(size_t) pi] = vault::fxTypeInfo (fx.type).params[(size_t) pi].fromNorm (n);
-                });
+                    // the MAIN knob's offset is folded into the slot: the MAIN knob shows the same value at its tick
+                    const float neutral = vault::quickInfo()[(size_t) q].neutral;
+                    if (std::abs (c.quick[q] - neutral) > 1.0e-6f) { ctx.proc.setQuick (q, neutral); c.quick[q] = neutral; }
+                }
+                const float want = vault::fxTypeInfo (type).params[(size_t) pi].fromNorm (n);
+                ctx.edit ([sl, pi, want, c] (VaultPreset& p) { val::setFxValue (p, c, sl, pi, want); });
             };
+            knobs[(size_t) k].onReset = [this, k] { owner.resetParam (slot, params[(size_t) k]); };
             knobs[(size_t) k].onRightClick = [this, k] (const juce::MouseEvent&)
             {
                 if (targets[(size_t) k].isNotEmpty()) mod::showMenu (ctx, knobs[(size_t) k], targets[(size_t) k]);
@@ -157,7 +172,7 @@ struct FxPage::SlotCard : public juce::Component
         empty = slot >= (int) snd.fx.size();
         power.setVisible (! empty);
         variant.setVisible (! empty);
-        addBtn.setVisible (empty && slot == (int) snd.fx.size());
+        addBtn.setVisible (empty);   // every empty slot the same: "+ Add effect" (it goes after the last effect)
         if (empty)
         {
             for (auto& k : knobs) k.setVisible (false);
@@ -172,10 +187,23 @@ struct FxPage::SlotCard : public juce::Component
         name = juce::String (ti.name).toUpperCase();
         const auto vt = variantText (s);
         if (variant.getButtonText() != vt) { variant.setButtonText (vt); resized(); }
-        params = mainParams (s.type);
+        {   // row 1: the 3 main knobs; row 2: up to 3 more of the effect's continuous parameters (the variant has the menu)
+            const auto m = mainParams (s.type);
+            params.fill (-1);
+            for (int k = 0; k < 3; ++k) params[(size_t) k] = m[(size_t) k];
+            int e = 3;
+            const int vp = variantParam (s.type);
+            for (int pi = 0; pi < (int) ti.params.size() && e < numKnobs; ++pi)
+            {
+                const auto& in = ti.params[(size_t) pi];
+                if (pi == vp || std::find (m.begin(), m.end(), pi) != m.end() || in.choices != nullptr
+                    || (in.flags & vault::FxParamInfo::toggle) != 0) continue;
+                params[(size_t) e++] = pi;
+            }
+        }
         const auto& bank = ctx.bankSound();
         const VaultFxSlot* bs = slot < (int) bank.fx.size() && bank.fx[(size_t) slot].type == s.type ? &bank.fx[(size_t) slot] : nullptr;
-        for (int k = 0; k < 3; ++k)
+        for (int k = 0; k < numKnobs; ++k)
         {
             auto& kn = knobs[(size_t) k];
             const int pi = params[(size_t) k];
@@ -183,8 +211,9 @@ struct FxPage::SlotCard : public juce::Component
             if (pi < 0) { targets[(size_t) k].clear(); continue; }
             const auto& in = ti.params[(size_t) pi];
             juce::String lbl (in.name);
-            lbl = lbl.toUpperCase().replace ("THRESHOLD", "THRESH").replace ("FEEDBACK", "FEEDBK").replace ("MONO BELOW", "MONO <")
-                     .replace ("RESONANCE", "RESO").replace ("ENV AMOUNT", "ENV");
+            lbl = lbl.toUpperCase().replace ("THRESHOLD", "THRESH").replace ("FEEDBACK", "FEEDBK").replace ("MONO BELOW", "LOW MONO")
+                     .replace ("RESONANCE", "RESO").replace ("ENV AMOUNT", "ENV")
+                     .replace ("TIME (FREE)", "TIME MS").replace (" FREQ", " HZ").replace ("PRE-DELAY", "PREDELAY");
             kn.label = lbl;
             const bool stepped = (in.flags & (vault::FxParamInfo::integer | vault::FxParamInfo::toggle)) != 0;
             kn.steps = stepped ? juce::roundToInt (in.hi - in.lo) + 1 : 0;
@@ -192,8 +221,9 @@ struct FxPage::SlotCard : public juce::Component
             kn.arcOrigin = in.lo < 0 && in.hi > 0 ? 0.5f : 0.0f;
             const auto info = in;
             kn.valueText = [info] (float n) { return fxValueText (info, info.fromNorm (n)); };
-            kn.setValue (in.toNorm (s.p[(size_t) pi]));
-            kn.resetValue = in.toNorm (bs != nullptr ? bs->p[(size_t) pi] : in.def);
+            const auto c = val::Ctx::of (ctx.proc);
+            kn.setValue (in.toNorm (val::fxValue (snd, c, slot, s.type, pi)));
+            kn.resetValue = in.toNorm (bs != nullptr ? val::fxValue (bank, c, slot, s.type, pi) : in.def);
             targets[(size_t) k] = stepped ? juce::String() : "fx" + juce::String (slot + 1) + "." + in.id;
             mod::show (kn, snd, targets[(size_t) k]);
             kn.repaint();
@@ -211,18 +241,27 @@ struct FxPage::SlotCard : public juce::Component
         const int vw = std::min (std::max (60, variant.idealWidth()), w / 2 - 10);
         variant.setBounds (w - 12 - vw, 11, vw, 24);
         addBtn.setBounds (getLocalBounds().withSizeKeepingCentre (std::min (w - 40, addBtn.idealWidth() + 10), 34));
-        int n = 0;
-        for (int k = 0; k < 3; ++k) n += params[(size_t) k] >= 0 ? 1 : 0;
+        // two rows of up to 3 knobs (each row centred); the rows share the card's height
         const int cw = (w - 20) / 3;
-        int i = 0;
-        for (int k = 0; k < 3; ++k)
-            if (params[(size_t) k] >= 0)
-            {
-                // fewer than 3 knobs: centred
-                const int x0 = 10 + (3 - n) * cw / 2;
-                knobs[(size_t) k].setBounds (x0 + i * cw, 46, cw, knobs[(size_t) k].idealHeight());
-                ++i;
-            }
+        const int h1 = knobs[0].idealHeight(), h2 = knobs[3].idealHeight();
+        int n2 = 0;
+        for (int k = 3; k < numKnobs; ++k) n2 += params[(size_t) k] >= 0 ? 1 : 0;
+        const int room = getHeight() - 46 - 10;
+        const int gapY = n2 > 0 ? std::max (6, (room - h1 - h2) / 3) : std::max (6, (room - h1) / 2);
+        const int y1 = 46 + gapY - (n2 > 0 ? 0 : 8), y2 = y1 + h1 + gapY;
+        for (int row = 0; row < 2; ++row)
+        {
+            int n = 0;
+            for (int k = row * 3; k < row * 3 + 3; ++k) n += params[(size_t) k] >= 0 ? 1 : 0;
+            int i = 0;
+            for (int k = row * 3; k < row * 3 + 3; ++k)
+                if (params[(size_t) k] >= 0)
+                {
+                    const int x0 = 10 + (3 - n) * cw / 2;   // fewer than 3 knobs: centred
+                    knobs[(size_t) k].setBounds (x0 + i * cw, row == 0 ? y1 : y2, cw, knobs[(size_t) k].idealHeight());
+                    ++i;
+                }
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -239,12 +278,6 @@ struct FxPage::SlotCard : public juce::Component
             juce::PathStrokeType (1.0f).createDashedStroke (dashed, p, dash, 2);
             g.setColour (col::line3);
             g.fillPath (dashed);
-            if (! addBtn.isVisible())
-            {
-                g.setFont (font (14.0f));
-                g.setColour (col::dim);
-                g.drawText ("Slot " + juce::String (slot + 1), r, juce::Justification::centred, false);
-            }
             return;
         }
         drawPanel (g, r);
@@ -278,9 +311,10 @@ struct FxPage::SlotCard : public juce::Component
     PowerButton power;
     Dropdown variant;
     Pill addBtn { "Add effect", Pill::Icon::plus };
-    std::array<Knob, 3> knobs;
-    std::array<int, 3> params { -1, -1, -1 };
-    std::array<juce::String, 3> targets;
+    static constexpr int numKnobs = 6;
+    std::array<Knob, numKnobs> knobs;
+    std::array<int, numKnobs> params { -1, -1, -1, -1, -1, -1 };
+    std::array<juce::String, numKnobs> targets;
     juce::String name;
 };
 
@@ -316,9 +350,53 @@ FxPage::FxPage (UiContext& c) : Page (c)
 
 FxPage::~FxPage() = default;
 
+std::vector<FxPage::SlotKnob> FxPage::slotKnobs() const
+{
+    std::vector<SlotKnob> out;
+    for (auto& c : slots)
+        for (int k = 0; k < SlotCard::numKnobs; ++k)
+            if (c->isVisible() && ! c->empty && c->knobs[(size_t) k].isVisible() && c->params[(size_t) k] >= 0)
+                out.push_back ({ &c->knobs[(size_t) k], c->slot, c->params[(size_t) k] });
+    return out;
+}
+
+void FxPage::resetParam (int slot, int param)
+{
+    // double-click: the parameter as the bank preset has it - its stored value, the ranges of the sound macros that set
+    // it and (for the first slot of a MAIN knob's type) the MAIN knob as designed
+    const auto& bank = ctx.bankSound();
+    const auto& snd = ctx.sound();
+    if (! juce::isPositiveAndBelow (slot, (int) snd.fx.size()) || param < 0) return;
+    const auto type = snd.fx[(size_t) slot].type;
+    if (const int q = val::fxQuickKnob (snd, slot, type, param); q >= 0) ctx.proc.setQuick (q, vault::quickInfo()[(size_t) q].neutral);
+    const bool sameSlot = slot < (int) bank.fx.size() && bank.fx[(size_t) slot].type == type;
+    const float def = sameSlot ? bank.fx[(size_t) slot].p[(size_t) param] : VaultFxSlot::make (type).p[(size_t) param];
+    ctx.edit ([&] (VaultPreset& p)
+    {
+        if (! juce::isPositiveAndBelow (slot, (int) p.fx.size())) return;
+        p.fx[(size_t) slot].p[(size_t) param] = def;
+        for (int m = 0; m < vault::numSoundMacros; ++m)
+        {
+            auto& t = p.macros[(size_t) m].targets;
+            const auto& bt = bank.macros[(size_t) m].targets;
+            for (int i = 0; i < (int) t.size() && i < (int) bt.size(); ++i)
+                if (t[(size_t) i].target == bt[(size_t) i].target)
+                {
+                    const auto r = vault::parseTarget (t[(size_t) i].target);
+                    const auto tail = t[(size_t) i].target.fromFirstOccurrenceOf (".", false, false);
+                    const bool hits = (r.kind == vault::TargetRef::fxSlot && r.a == slot && vault::fxTypeInfo (type).indexOf (tail.toRawUTF8()) == param)
+                                   || (r.kind == vault::TargetRef::fxType && (vault::FxType) r.a == type && r.b == param && val::firstSlotOfType (p, type) == slot);
+                    if (hits) t[(size_t) i] = bt[(size_t) i];
+                }
+        }
+    });
+}
+
 juce::Rectangle<int> FxPage::cardRect (int i) const
 {
+    // two rows of 4 cards fill the page down to the hint line
     const int cw = (getWidth() - (cols - 1) * gap) / cols;
+    const int cardH = std::max (minCardH, (getHeight() - gridTop - footH - gap) / 2);
     return { (i % cols) * (cw + gap), gridTop + (i / cols) * (cardH + gap), cw, cardH };
 }
 

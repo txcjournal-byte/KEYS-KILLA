@@ -14,7 +14,6 @@ void noClickFocus (juce::Component& c, const juce::Component* except)
     for (auto* ch : c.getChildren()) noClickFocus (*ch, except);
 }
 const juce::Font logoFont() { return font (18.0f, true, 0.16f); }
-const juce::Font advFont() { return font (14.0f, false, 0.16f); }
 } // namespace
 
 //==============================================================================
@@ -37,6 +36,13 @@ VaultMainView::VaultMainView (VaultProcessor& p, std::shared_ptr<VaultSettings> 
         tabs[(size_t) i].onClick = [this, i] { showPage (i); };
     }
     tabs[0].setTooltip ("Browse, play and tweak");
+    tabs[pageLayers].setTooltip ("Every layer: level, pan, tuning, envelope, filter, voice");
+    tabs[pageFx].setTooltip ("The effect chain of the sound (8 slots)");
+    tabs[pageMod].setTooltip ("LFOs, mod wheel, velocity and aftertouch");
+    tabs[pageArp].setTooltip ("Arpeggiator and gate");
+    addAndMakeVisible (advBtn);
+    advBtn.onClick = [this] { showPage (pageLayers); };
+    advBtn.setTooltip (juce::String (juce::CharPointer_UTF8 ("Sound design pages: LAYERS, FX, MOD, ARP \xc2\xb7 GATE")));
     for (auto* t : { &fxT, &arpT, &gateT }) addAndMakeVisible (*t);
     auto toggle = [this] (const char* id) { proc.setSwitch (id, ! proc.getSwitch (id)); refreshAll(); };
     fxT.onClick = [toggle] { toggle (VaultProcessor::idFxOn); };
@@ -92,6 +98,7 @@ juce::Rectangle<int> VaultMainView::pageArea() const
 void VaultMainView::showPage (int id)
 {
     page = juce::jlimit (0, (int) numPages - 1, id);
+    advBtn.setToggleState (page != pageMain, juce::dontSendNotification);
     for (int i = 0; i < numPages; ++i)
     {
         pageComponent (i).setVisible (i == page);
@@ -116,9 +123,9 @@ void VaultMainView::resized()
     auto tab = [&] (int i) { auto& t = tabs[(size_t) i]; t.setBounds (x, ty, t.idealWidth(), 32); x += t.idealWidth() + 2; };
     tab (pageMain);
     sepX = x + 8;
-    x = sepX + 10;
-    advLabelX = x;
-    x += (int) std::ceil (textWidth (advFont(), "ADVANCED")) + 8;
+    x = sepX + 6;
+    advBtn.setBounds (x, ty, advBtn.idealWidth(), 32);
+    x += advBtn.idealWidth() + 2;
     for (int i = pageLayers; i < numPages; ++i) tab (i);
     int r = getWidth() - 16;
     const int by = (topH - 30) / 2;
@@ -141,11 +148,23 @@ void VaultMainView::paint (juce::Graphics& g)
         g.setGradientFill (bg);
         g.fillRect (b);
     }
-    // top bar
-    g.setGradientFill (ColourGradient (col::barA, 0, 0, col::barB, 0, (float) topH, false));
+    // top bar: a brushed-metal faceplate (fine horizontal grain, a lit top edge, a bevelled lower edge)
+    g.setGradientFill (ColourGradient (Colour (0xff1c2431), 0, 0, Colour (0xff121822), 0, (float) topH, false));
     g.fillRect (0.0f, 0.0f, b.getWidth(), (float) topH);
-    g.setColour (col::line3);
+    {
+        Random grain (17);
+        for (int y = 2; y < topH - 2; y += 2)
+        {
+            g.setColour (Colours::white.withAlpha (0.006f + grain.nextFloat() * 0.012f));
+            g.fillRect (0.0f, (float) y, b.getWidth(), 1.0f);
+        }
+    }
+    g.setColour (Colour (0x14ffffff));
+    g.fillRect (0.0f, 0.0f, b.getWidth(), 1.0f);
+    g.setColour (Colour (0xff06080c));
     g.fillRect (0.0f, (float) topH - 1.0f, b.getWidth(), 1.0f);
+    g.setGradientFill (ColourGradient (Colour (0x59000000), 0, (float) topH, Colour (0x00000000), 0, (float) topH + 8.0f, false));
+    g.fillRect (0.0f, (float) topH, b.getWidth(), 8.0f);
     {   // logo
         g.setGradientFill (chromeGradient (8.0f, 30.0f));
         g.setFont (logoFont());
@@ -156,22 +175,38 @@ void VaultMainView::paint (juce::Graphics& g)
     }
     g.setColour (col::line3);
     g.fillRect ((float) sepX, (float) topH * 0.5f - 9.0f, 1.0f, 18.0f);
-    g.setFont (advFont());
-    g.setColour (col::dim);
-    g.drawText ("ADVANCED", advLabelX, 0, 120, topH, Justification::centredLeft, false);
+    if (page != pageMain)
+    {
+        // the ADVANCED group: a thin bracket under the group header and its tabs
+        const float x0 = (float) advBtn.getX() + 8.0f, x1 = (float) tabs[(size_t) numPages - 1].getRight() - 4.0f;
+        g.setColour (col::ice2.withAlpha (0.35f));
+        g.fillRect (x0, (float) advBtn.getBottom() + 3.0f, x1 - x0, 1.0f);
+    }
 
-    // keyboard bed
+    // keyboard bed: the dark cheek of an instrument - a lit edge, a recess the keys sit in
     const auto kr = Rectangle<float> (0.0f, (float) (getHeight() - keysH), b.getWidth(), (float) keysH);
-    g.setColour (col::keyBed);
+    g.setGradientFill (ColourGradient (Colour (0xff161c26), 0, kr.getY(), Colour (0xff0a0d12), 0, kr.getBottom(), false));
     g.fillRect (kr);
-    g.setColour (col::line3);
+    g.setColour (Colour (0xff06080c));
     g.fillRect (kr.getX(), kr.getY(), kr.getWidth(), 1.0f);
+    g.setColour (Colour (0x12ffffff));
+    g.fillRect (kr.getX(), kr.getY() + 1.0f, kr.getWidth(), 1.0f);
+    const auto well = keyboard.getBounds().toFloat().expanded (3.0f, 3.0f).withTrimmedBottom (-1.0f);
+    g.setColour (Colour (0xff040508));
+    g.fillRoundedRectangle (well, 4.0f);
+    g.setColour (Colour (0xff1e2633));
+    g.drawRoundedRectangle (well.reduced (0.5f), 4.0f, 1.0f);
 }
 
 void VaultMainView::syncFromProcessor()
 {
     mainP->syncFromProcessor();
     pageComponent (page).tick();
+    {   // the on-screen keyboard shows what really sounds (the arp's notes, latched ones, the played keys)
+        uint64_t m[2] {};
+        proc.audioEngine().soundingNotes (m);
+        keyboard.setSounding (m);
+    }
     // ~10x per second: the sound / switches / locks changed elsewhere (host automation, state restore, a macro or MAIN knob
     // moved by the host): the pages follow. Nothing is repainted while nothing changed.
     if (++ticks % 3 == 0)
@@ -179,7 +214,13 @@ void VaultMainView::syncFromProcessor()
         int sig = 0, bit = 1;
         for (auto* id : { VaultProcessor::idFxOn, VaultProcessor::idArpOn, VaultProcessor::idGateOn }) { sig |= proc.getSwitch (id) ? bit : 0; bit <<= 1; }
         for (auto sec : { VaultProcessor::Section::fx, VaultProcessor::Section::arp, VaultProcessor::Section::gate }) { sig |= proc.getLock (sec) ? bit : 0; bit <<= 1; }
-        if (sig != lastStateSig || ! (proc.currentSound() == lastSound)) { lastStateSig = sig; refreshAll(); }
+        // the macros and the MAIN knobs move the effective values every knob shows (a macro sets the reverb mix ...)
+        std::array<float, vault::numMacros + vault::numQuick> prm {};
+        for (int m = 0; m < vault::numMacros; ++m) prm[(size_t) m] = proc.getMacro (m);
+        for (int q = 0; q < vault::numQuick; ++q) prm[(size_t) (vault::numMacros + q)] = proc.getQuick (q);
+        bool paramsMoved = false;
+        for (size_t i = 0; i < prm.size(); ++i) paramsMoved |= std::abs (prm[i] - lastParams[i]) > 1.0e-6f;
+        if (sig != lastStateSig || paramsMoved || ! (proc.currentSound() == lastSound)) { lastStateSig = sig; lastParams = prm; refreshAll(); }
     }
 }
 
@@ -203,27 +244,35 @@ void VaultMainView::updateToggles()
     if (relayout && getWidth() > 0) resized();
 }
 
+std::vector<float> VaultMainView::scaleChoices() const
+{
+    // only the sizes whose window fits the screen the editor is on (never a window larger than the screen)
+    const float cur = currentScale ? currentScale() : 1.0f;
+    const auto* ed = findParentComponentOfClass<VaultEditor>();
+    const auto area = ed != nullptr ? ed->displayArea() : juce::Rectangle<int>();
+    std::vector<float> out;
+    for (float sc : VaultEditor::scalePresets())
+        if (area.isEmpty() || sc <= VaultEditor::minScale + 0.001f || VaultEditor::fits (sc, area) || std::abs (sc - cur) < 0.005f)
+            out.push_back (sc);
+    return out;
+}
+
 void VaultMainView::showScaleMenu()
 {
     juce::PopupMenu m;
     m.setLookAndFeel (&getLookAndFeel());
     const float cur = currentScale ? currentScale() : 1.0f;
-    // sizes that would not fit on this screen are greyed out (the window must never be larger than the screen)
-    const auto* ed = findParentComponentOfClass<VaultEditor>();
-    const auto area = ed != nullptr ? ed->displayArea() : juce::Rectangle<int>();
-    int id = 1;
-    for (float sc : VaultEditor::scalePresets())
-    {
-        const bool ticked = std::abs (sc - cur) < 0.005f;
-        const bool ok = area.isEmpty() || ticked || sc <= VaultEditor::minScale || VaultEditor::fits (sc, area);
-        m.addItem (id++, juce::String (juce::roundToInt (sc * 100.0f)) + "%", ok, ticked);
-    }
+    const auto choices = scaleChoices();
+    for (int i = 0; i < (int) choices.size(); ++i)
+        m.addItem (i + 1, juce::String (juce::roundToInt (choices[(size_t) i] * 100.0f)) + "%", true, std::abs (choices[(size_t) i] - cur) < 0.005f);
     juce::Component::SafePointer<VaultMainView> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&scaleBtn).withMinimumWidth (scaleBtn.getWidth()),
-                     [safe] (int r)
+    // a desktop menu next to the button's screen area: JUCE keeps it inside the screen whatever the window's scale
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (scaleBtn.getScreenBounds()).withMinimumWidth (scaleBtn.getScreenBounds().getWidth())
+                         .withMaximumNumColumns (1),
+                     [safe, choices] (int r)
                      {
-                         if (safe == nullptr || r <= 0) return;
-                         if (safe->onScaleChosen) safe->onScaleChosen (VaultEditor::scalePresets()[(size_t) r - 1]);
+                         if (safe == nullptr || r <= 0 || r > (int) choices.size()) return;
+                         if (safe->onScaleChosen) safe->onScaleChosen (choices[(size_t) r - 1]);
                          safe->updateToggles();
                      });
 }
@@ -235,7 +284,7 @@ void VaultMainView::showSettingsMenu()
     m.addItem (1, "Preview a sound when it is clicked (C5)", true, settings->previewOnClick());
     m.addSeparator();
     m.addItem (2, "Reset the MAIN knobs");
-    m.addItem (3, "Revert the sound to the preset", proc.isSoundEdited());
+    m.addItem (3, "Revert the sound to the preset", proc.hasEdits());
     m.addSeparator();
     m.addItem (9, "Sound library: " + (proc.libraryFound() ? proc.libraryPath().getFullPathName() : juce::String ("not installed")), false);
     m.addItem (10, "Bank: " + proc.bankDescription(), false);
@@ -245,7 +294,7 @@ void VaultMainView::showSettingsMenu()
         if (safe == nullptr || r <= 0) return;
         if (r == 1) safe->settings->setPreviewOnClick (! safe->settings->previewOnClick());
         if (r == 2) { safe->proc.resetQuick(); safe->mainP->showStatus ("MAIN knobs back to the sound as designed"); }
-        if (r == 3) { safe->proc.revertSound(); safe->mainP->showStatus ("Sound back to the preset"); }
+        if (r == 3) safe->mainP->revertToPreset();
         safe->refreshAll();
     });
 }
@@ -308,22 +357,36 @@ VaultEditor::VaultEditor (VaultProcessor& p) : AudioProcessorEditor (p), proc (p
     const auto area = displayArea();
     const float s = saved <= 0.0f ? firstOpenScale (area) : restoredScale (saved, area);
 
-    // never take the keyboard: the DAW's computer-keyboard piano must keep working (only the search box takes it while typing)
-    setWantsKeyboardFocus (false);
-    setMouseClickGrabsKeyboardFocus (false);
+    // the keyboard: the editor takes it when the user clicks into the plugin (not on open), the computer keyboard then
+    // plays notes; no child keeps it (the resize corner included), the search box only while it is being typed in
+    setWantsKeyboardFocus (true);
+    setMouseClickGrabsKeyboardFocus (true);
     addMouseListener (this, true);
+    keys.onOctaveChanged = [this]
+    {
+        if (main == nullptr) return;
+        main->keys().setComputerKeys (keys.zNote(), keys.highestNote());
+        main->showStatus ("Computer keys: Z = " + vault::noteName (keys.zNote()) + ", Q = " + vault::noteName (keys.zNote() + 12)
+                          + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 \xe2\x86\x90 \xe2\x86\x92 octave")));
+    };
+    main->keys().setComputerKeys (keys.zNote(), keys.highestNote());
     settingSize = true;   // the limits below resize the window once - don't remember that size
     setResizable (true, true);
     setResizeLimits (juce::roundToInt (baseWidth * minScale), juce::roundToInt (baseHeight * minScale),
                      juce::roundToInt (baseWidth * maxScale), juce::roundToInt (baseHeight * maxScale));
     if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) baseWidth / (double) baseHeight);
     setSize (juce::roundToInt (baseWidth * s), juce::roundToInt (baseHeight * s));
+    limitToDisplay (area);
     settingSize = false;
+    for (auto* c : getChildren())   // the resize corner: a click there must not move the keyboard anywhere
+        if (c != main.get()) { c->setWantsKeyboardFocus (false); c->setMouseClickGrabsKeyboardFocus (false); }
     startTimerHz (30);
 }
 
 VaultEditor::~VaultEditor()
 {
+    keys.allOff();
+    keys.onOctaveChanged = nullptr;
     stopTimer();
     removeMouseListener (this);
     main.reset();
@@ -334,6 +397,7 @@ VaultEditor::~VaultEditor()
 void VaultEditor::setUiScale (float s)
 {
     s = juce::jlimit (minScale, maxScale, s);
+    if (const auto area = displayArea(); ! area.isEmpty() && ! fits (s, area)) s = restoredScale (s, area);   // never past the screen
     setSize (juce::roundToInt (baseWidth * s), juce::roundToInt (baseHeight * s));
     settings->setScale (s);   // the user's choice (also when it equals the first-open size)
 }
@@ -353,6 +417,21 @@ void VaultEditor::fitToDisplay()
     const float saved = settings->scale();
     const float target = saved <= 0.0f ? firstOpenScale (area) : restoredScale (saved, area);
     if (std::abs (target - uiScale) > 0.001f) applyScale (target);
+    limitToDisplay (area);
+}
+
+void VaultEditor::limitToDisplay (juce::Rectangle<int> area)
+{
+    // the corner drag can never make the window larger than the screen it is on (aspect kept)
+    if (area.isEmpty()) return;
+    const float most = juce::jlimit (minScale, maxScale, std::min ((float) area.getWidth() / (float) baseWidth, (float) area.getHeight() / (float) baseHeight));
+    const int w = juce::roundToInt (baseWidth * most), h = juce::roundToInt (baseHeight * most);
+    if (auto* c = getConstrainer(); c != nullptr && (c->getMaximumWidth() != w || c->getMaximumHeight() != h))
+    {
+        const juce::ScopedValueSetter<bool> svs (settingSize, true);
+        setResizeLimits (juce::roundToInt (baseWidth * minScale), juce::roundToInt (baseHeight * minScale), w, h);
+    }
+    lastArea = area;
 }
 
 void VaultEditor::paint (juce::Graphics& g) { g.fillAll (vui::col::ink); }
@@ -382,12 +461,61 @@ void VaultEditor::timerCallback()
         displayChecked = true;
         fitToDisplay();
     }
+    else if (displayChecked && ++displayTicks % 30 == 0 && isShowing())   // ~1x per second: moved to another screen?
+        if (displayArea() != lastArea) fitToDisplay();
+    // the keyboard comes back after a popup menu closed (or anything else left the plugin's window active with nothing
+    // focused): once the user has clicked into the plugin, its active window always plays the computer keys
+    if (clickedIn && displayTicks % 8 == 0 && isShowing() && ! main->searchHasFocus()
+        && juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0)
+        if (auto* peer = getPeer(); peer != nullptr && peer->isFocused())
+            if (auto* f = juce::Component::getCurrentlyFocusedComponent(); f == nullptr || (f != this && ! isParentOf (f)))
+                if (f == nullptr || f->getPeer() == peer) takeKeyboard();
 }
 
 void VaultEditor::mouseDown (const juce::MouseEvent& e)
 {
-    // a click anywhere but in the search box ends typing: the keyboard goes back to the DAW
-    if (main != nullptr && main->searchHasFocus() && e.eventComponent != nullptr
-        && ! main->searchBox().isParentOf (e.eventComponent) && e.eventComponent != &main->searchBox())
-        main->giveFocusBack();
+    // a click anywhere but in the search box: the editor has the keyboard (typing in the search box ends, keys play notes)
+    if (main == nullptr || e.eventComponent == nullptr) return;
+    clickedIn = true;
+    if (main->searchBox().isParentOf (e.eventComponent) || e.eventComponent == &main->searchBox()) return;
+    if (main->searchHasFocus() || main->searchBox().getWantsKeyboardFocus()) main->giveFocusBack();   // (armed by a click, typed in)
+    else if (juce::ModalComponentManager::getInstance()->getNumModalComponents() == 0) takeKeyboard();   // (not while a menu is open)
+}
+
+void VaultEditor::takeKeyboard()
+{
+    if (isShowing() && ! hasKeyboardFocus (false)) grabKeyboardFocus();
+}
+
+bool VaultEditor::keyPressed (const juce::KeyPress& k)
+{
+    if (main == nullptr || main->searchHasFocus()) return false;   // typing in the search box
+    if (keys.keyPressed (k)) return true;
+    const auto mods = k.getModifiers();
+    if (! mods.isCommandDown() && ! mods.isCtrlDown() && ! mods.isAltDown())
+    {
+        if (k.getKeyCode() == juce::KeyPress::upKey)   { main->step (-1, false); return true; }
+        if (k.getKeyCode() == juce::KeyPress::downKey) { main->step (1, false); return true; }
+    }
+    return k.getKeyCode() == juce::KeyPress::tabKey;   // Tab never moves the keyboard into the search box
+}
+
+bool VaultEditor::keyStateChanged (bool)
+{
+    if (main == nullptr || main->searchHasFocus()) { keys.allOff(); return false; }
+    return keys.keyStateChanged();
+}
+
+void VaultEditor::focusLost (FocusChangeType)
+{
+    keys.allOff();   // the search box got it, the window lost it: nothing may keep sounding
+}
+
+void VaultEditor::focusGained (FocusChangeType)
+{
+    if (main != nullptr && ! keysHintShown)
+    {
+        keysHintShown = true;
+        main->showStatus (juce::String (juce::CharPointer_UTF8 ("Computer keys play notes: Z = C4, Q = C5 \xc2\xb7 \xe2\x86\x90 \xe2\x86\x92 octave \xc2\xb7 \xe2\x86\x91 \xe2\x86\x93 sound")));
+    }
 }

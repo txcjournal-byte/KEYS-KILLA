@@ -44,7 +44,10 @@ public:
     int shownPreset() const { return mainP->shownPreset(); }
     bool searchHasFocus() const { return mainP->searchHasFocus(); }
     juce::Component& searchBox() { return mainP->searchBox(); }
+    vui::GroupButton& advancedButton() { return advBtn; }
+    vui::TabButton& tab (int pageId) { return tabs[(size_t) juce::jlimit (0, (int) numPages - 1, pageId)]; }
     vui::VaultKeyboard& keys() { return keyboard; }
+    vui::UiContext& context() { return ctx; }          // tests
     VaultBrowserModel& browser() { return mainP->browser(); }
     vui::PresetList& presetList() { return mainP->presetList(); }
     juce::File renderWavForDrag() { return mainP->renderWavForDrag(); }
@@ -54,6 +57,7 @@ public:
 
     void updateToggles();                               // FX / ARP / GATE toggles, size menu text
     void showScaleMenu();
+    std::vector<float> scaleChoices() const;            // the size menu: only the sizes that fit the screen
     void showSettingsMenu();
 
     std::function<void (float)> onScaleChosen;
@@ -71,12 +75,14 @@ private:
     std::unique_ptr<vui::ArpGatePage> arpP;
     std::array<vui::TabButton, numPages> tabs { vui::TabButton ("MAIN"), vui::TabButton ("LAYERS"), vui::TabButton ("FX"), vui::TabButton ("MOD"),
                                                 vui::TabButton (juce::String (juce::CharPointer_UTF8 ("ARP \xc2\xb7 GATE"))) };
+    vui::GroupButton advBtn { "ADVANCED" };             // the group header: opens LAYERS, lit while an ADVANCED page shows
     vui::LedToggle fxT { "FX" }, arpT { "ARP" }, gateT { "GATE" };
     vui::Dropdown scaleBtn { "100%" };
     vui::GearButton gear;
     vui::VaultKeyboard keyboard;
     std::vector<std::unique_ptr<juce::ParameterAttachment>> switchAtts;
-    int page = pageMain, ticks = 0, advLabelX = 0, sepX = 0;
+    int page = pageMain, ticks = 0, sepX = 0;
     VaultPreset lastSound;                              // what the pages last showed (a change from elsewhere refreshes them)
     int lastStateSig = -1;                              // switches + locks
+    std::array<float, vault::numMacros + vault::numQuick> lastParams {};   // macros + MAIN knobs (the effective values follow them)
 };

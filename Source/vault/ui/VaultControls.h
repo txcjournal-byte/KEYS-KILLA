@@ -7,13 +7,57 @@ namespace vui
 {
 inline void noFocus (juce::Component& c) { c.setWantsKeyboardFocus (false); c.setMouseClickGrabsKeyboardFocus (false); }
 
-// a panel: dark gradient, 1 px outline, rounded
+// style A "Machined" - the studio-hardware surfaces every page shares (docs/qa/design/README.md)
+// a panel: an anodised plate - dark gradient, a fine lit top edge, 1 px outline, a soft shadow under it
 inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> r, float radius = 10.0f)
 {
-    g.setGradientFill (juce::ColourGradient (col::panA, 0, r.getY(), col::panB, 0, r.getBottom(), false));
+    using juce::Colour;
+    g.setColour (Colour (0x40000000));
+    g.fillRoundedRectangle (r.translated (0.0f, 2.0f), radius);
+    g.setGradientFill (juce::ColourGradient (Colour (0xff171e2a), 0, r.getY(), Colour (0xff0f141c), 0, r.getBottom(), false));
     g.fillRoundedRectangle (r, radius);
-    g.setColour (col::line3);
+    g.setColour (Colour (0xff252e3e));
     g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
+    // the lit top edge of the plate
+    g.setGradientFill (juce::ColourGradient (Colour (0x14ffffff), r.getCentreX(), r.getY(), Colour (0x00ffffff), r.getX() + 8.0f, r.getY(), true));
+    g.fillRect (r.getX() + radius, r.getY() + 1.0f, r.getWidth() - 2.0f * radius, 1.0f);
+}
+
+// a raised hardware button face (pills, dropdowns, toggles, tabs): dark metal, lit top edge, soft shadow; `on` = an
+// ice-lit outline, `down` = pressed in
+inline void drawButtonFace (juce::Graphics& g, juce::Rectangle<float> r, float radius, bool over, bool down, bool on, bool enabled = true)
+{
+    using juce::Colour;
+    if (! down)
+    {
+        g.setColour (Colour (0x55000000));
+        g.fillRoundedRectangle (r.translated (0.0f, 1.0f), radius);
+    }
+    const Colour top (down ? 0xff10151c : on ? 0xff253046 : over ? 0xff252e3c : 0xff1e2531);
+    const Colour bot (down ? 0xff171d27 : on ? 0xff172031 : over ? 0xff161c26 : 0xff131820);
+    g.setGradientFill (juce::ColourGradient (top, 0, r.getY(), bot, 0, r.getBottom(), false));
+    g.fillRoundedRectangle (r, radius);
+    if (! down)
+    {
+        g.setColour (Colour (on ? 0x1f9fc3ff : 0x14ffffff));
+        g.fillRect (r.getX() + radius * 0.8f, r.getY() + 1.0f, r.getWidth() - radius * 1.6f, 1.0f);
+    }
+    g.setColour (on ? col::ice2.withAlpha (enabled ? 0.75f : 0.35f) : over && enabled ? Colour (0xff42506a) : Colour (0xff2a3445));
+    g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
+}
+
+// a recessed well (segment tracks, the search field, step lanes): dark, shadowed at the top, a faint lit lower edge
+inline void drawWell (juce::Graphics& g, juce::Rectangle<float> r, float radius)
+{
+    using juce::Colour;
+    g.setColour (Colour (0xff080b11));
+    g.fillRoundedRectangle (r, radius);
+    g.setGradientFill (juce::ColourGradient (Colour (0x66000000), 0, r.getY(), Colour (0x00000000), 0, r.getY() + 5.0f, false));
+    g.fillRoundedRectangle (r.withHeight (std::min (r.getHeight(), 6.0f)), radius);
+    g.setColour (Colour (0xff1c2432));
+    g.drawRoundedRectangle (r.reduced (0.5f), radius, 1.0f);
+    g.setColour (Colour (0x0dffffff));
+    g.fillRect (r.getX() + radius, r.getBottom() - 0.5f, r.getWidth() - 2.0f * radius, 1.0f);
 }
 
 // small caps section header ("FILTER · AMP")
@@ -53,12 +97,9 @@ public:
 
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
-        auto r = getLocalBounds().toFloat().reduced (0.5f);
+        auto r = getLocalBounds().toFloat().reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
         const bool on = getToggleState();
-        g.setColour (down ? col::rowHover : on ? col::segOn.withAlpha (0.55f) : juce::Colour (0xff0b111a));
-        g.fillRoundedRectangle (r, 6.0f);
-        g.setColour (on ? col::ice2 : over && ! dimmed ? col::ice2.withAlpha (0.7f) : col::pillLine);
-        g.drawRoundedRectangle (r, 6.0f, 1.0f);
+        drawButtonFace (g, r, 6.0f, over && ! dimmed, down, on, ! dimmed);
         const auto f = pillFont();
         const auto t = getButtonText();
         const float iw = icon == Icon::none ? 0.0f : 14.0f;
@@ -125,11 +166,8 @@ public:
     int idealWidth() const { return (int) std::ceil (textWidth (font (14.0f, small), getButtonText()) + 30.0f); }
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
-        auto r = getLocalBounds().toFloat().reduced (0.5f);
-        g.setColour (down ? col::rowHover : juce::Colour (0xff0b111a));
-        g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (over ? col::ice2.withAlpha (0.7f) : col::pillLine);
-        g.drawRoundedRectangle (r, 5.0f, 1.0f);
+        auto r = getLocalBounds().toFloat().reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
+        drawButtonFace (g, r, 5.0f, over && isEnabled(), down, false, isEnabled());
         const auto f = font (14.0f, small);
         g.setFont (f);
         g.setColour (isEnabled() ? (over ? col::text : col::muted) : col::dim);
@@ -169,27 +207,24 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        // a recessed track; the chosen segment is a raised key with an ice-lit edge
         auto r = getLocalBounds().toFloat().reduced (0.5f);
-        g.setColour (juce::Colour (0xff0b111a));
-        g.fillRoundedRectangle (r, 6.0f);
+        drawWell (g, r, 6.0f);
         const auto rects = segRects();
         for (int i = 0; i < options.size(); ++i)
         {
             const auto sr = rects[(size_t) i];
             const bool on = i == selected;
-            if (on)
+            if (on) drawButtonFace (g, sr.reduced (2.0f, 2.0f), 4.5f, false, false, enabledLook, enabledLook);
+            else if (i > 0 && i - 1 != selected)
             {
-                juce::Path p;
-                p.addRoundedRectangle (sr.getX(), sr.getY(), sr.getWidth(), sr.getHeight(), 5.0f, 5.0f, i == 0, i == options.size() - 1, i == 0, i == options.size() - 1);
-                g.setColour (enabledLook ? col::segOn : col::stepOff);
-                g.fillPath (p);
+                g.setColour (juce::Colour (0xff1c2432));
+                g.fillRect (sr.getX(), sr.getY() + 7.0f, 1.0f, sr.getHeight() - 14.0f);
             }
             g.setFont (segFont());
-            g.setColour (! enabledLook ? col::dim : on ? col::silver : i == hover ? col::text : col::muted);
+            g.setColour (! enabledLook ? col::dim : on ? col::ice : i == hover ? col::text : col::muted);
             g.drawText (options[i], sr, juce::Justification::centred, false);
         }
-        g.setColour (col::pillLine);
-        g.drawRoundedRectangle (r, 6.0f, 1.0f);
     }
     void mouseMove (const juce::MouseEvent& e) override { setHover (hit (e.position)); }
     void mouseExit (const juce::MouseEvent&) override { setHover (-1); }
@@ -243,18 +278,19 @@ public:
     }
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
+        // a round hardware push button with an LED in its middle
         const float d = std::min ((float) getWidth(), (float) getHeight()) - 2.0f;
         auto r = juce::Rectangle<float> (d, d).withCentre (getLocalBounds().toFloat().getCentre());
         const bool on = getToggleState();
-        g.setColour (on ? col::ok : over ? col::ice2 : juce::Colour (0xff3a4660));
-        g.drawEllipse (r.reduced (0.75f), 1.5f);
-        if (on)
-        {
-            g.setColour (col::ok.withAlpha (0.25f));
-            g.fillEllipse (r.reduced (d * 0.2f));
-            g.setColour (col::ok);
-            g.fillEllipse (r.reduced (d * 0.3f));
-        }
+        g.setColour (juce::Colour (0x66000000));
+        g.fillEllipse (r.translated (0.0f, 1.0f));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (over ? 0xff8693a8 : 0xff6b778b), r.getCentreX(), r.getY(), juce::Colour (0xff0d1118), r.getCentreX(), r.getBottom(), false));
+        g.fillEllipse (r);
+        const auto face = r.reduced (1.4f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3a4454), face.getX() + face.getWidth() * 0.4f, face.getY() + face.getHeight() * 0.3f,
+                                                 juce::Colour (0xff151a22), face.getRight(), face.getBottom(), true));
+        g.fillEllipse (face);
+        drawLed (g, juce::Rectangle<float> (d * 0.36f, d * 0.36f).withCentre (r.getCentre()), on);
     }
 };
 
@@ -263,23 +299,64 @@ public:
 class TabButton : public juce::Button
 {
 public:
-    explicit TabButton (const juce::String& t) : juce::Button (t) { noFocus (*this); setMouseCursor (juce::MouseCursor::PointingHandCursor); }
+    explicit TabButton (const juce::String& t) : juce::Button (t)
+    {
+        noFocus (*this);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTriggeredOnMouseDown (true);   // a page switch must never get lost in a small drag
+    }
     static juce::Font tabFont() { return font (14.0f, true, 0.1f); }
     int idealWidth() const { return (int) std::ceil (textWidth (tabFont(), getButtonText()) + 22.0f); }
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
-        auto r = getLocalBounds().toFloat();
+        // the page selector: the chosen page is a raised key with an ice LED strip under its name
+        auto r = getLocalBounds().toFloat().reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
         const bool on = getToggleState();
         if (on)
         {
-            g.setColour (col::tabOn);
-            g.fillRoundedRectangle (r, 6.0f);
+            drawButtonFace (g, r, 6.0f, false, false, false);
+            const auto strip = juce::Rectangle<float> (r.getX() + 9.0f, r.getBottom() - 4.0f, r.getWidth() - 18.0f, 2.0f);
+            g.setColour (col::ice.withAlpha (0.25f));
+            g.fillRoundedRectangle (strip.expanded (1.5f, 1.0f), 2.0f);
             g.setColour (col::ice);
-            g.fillRoundedRectangle (r.getX() + 2.0f, r.getBottom() - 2.0f, r.getWidth() - 4.0f, 2.0f, 1.0f);
+            g.fillRoundedRectangle (strip, 1.0f);
+        }
+        else if (over)
+        {
+            g.setColour (juce::Colour (0x0affffff));
+            g.fillRoundedRectangle (r, 6.0f);
         }
         g.setFont (tabFont());
         g.setColour (on ? col::text : over ? col::muted : col::dim);
         g.drawText (getButtonText(), r, juce::Justification::centred, false);
+    }
+};
+
+// top-bar group header ("ADVANCED"): clickable - opens the group's first page; lit while a page of the group is shown
+class GroupButton : public juce::Button
+{
+public:
+    explicit GroupButton (const juce::String& t) : juce::Button (t)
+    {
+        noFocus (*this);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTriggeredOnMouseDown (true);
+    }
+    static juce::Font groupFont() { return font (14.0f, false, 0.16f); }
+    int idealWidth() const { return (int) std::ceil (textWidth (groupFont(), getButtonText()) + 20.0f); }
+    void paintButton (juce::Graphics& g, bool over, bool) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const bool on = getToggleState();
+        if (over) { g.setColour (col::tabOn.withAlpha (0.6f)); g.fillRoundedRectangle (r, 6.0f); }
+        g.setFont (groupFont());
+        g.setColour (on ? col::ice : over ? col::text : col::dim);
+        g.drawText (getButtonText(), r, juce::Justification::centred, false);
+        // a small chevron: the group continues to the right
+        const float cx = r.getRight() - 4.0f, cy = r.getCentreY();
+        juce::Path p;
+        p.startNewSubPath (cx - 2.5f, cy - 3.5f); p.lineTo (cx + 0.5f, cy); p.lineTo (cx - 2.5f, cy + 3.5f);
+        g.strokePath (p, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 };
 
@@ -293,16 +370,10 @@ public:
     int idealWidth() const { return (int) std::ceil (textWidth (ledFont(), getButtonText()) + 38.0f + (locked ? 16.0f : 0.0f)); }
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
-        auto r = getLocalBounds().toFloat().reduced (0.5f);
+        auto r = getLocalBounds().toFloat().reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
         const bool on = getToggleState();
-        g.setColour (juce::Colour (0xff0d131c));
-        g.fillRoundedRectangle (r, 6.0f);
-        g.setColour (over ? col::ice2.withAlpha (0.7f) : col::line3);
-        g.drawRoundedRectangle (r, 6.0f, 1.0f);
-        auto led = juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ r.getX() + 14.0f, r.getCentreY() });
-        if (on) { g.setColour (col::ok.withAlpha (0.3f)); g.fillEllipse (led.expanded (2.5f)); g.setColour (col::ok); }
-        else g.setColour (col::ledOff);
-        g.fillEllipse (led);
+        drawButtonFace (g, r, 6.0f, over, false, false);
+        drawLed (g, juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ r.getX() + 14.0f, r.getCentreY() }), on);
         g.setFont (ledFont());
         g.setColour (on ? col::text : col::muted);
         auto t = r.withTrimmedLeft (24.0f);
@@ -318,11 +389,8 @@ public:
     GearButton() : juce::Button ("Settings") { noFocus (*this); setMouseCursor (juce::MouseCursor::PointingHandCursor); }
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
-        auto r = getLocalBounds().toFloat().reduced (0.5f);
-        g.setColour (juce::Colour (0xff0d131c));
-        g.fillRoundedRectangle (r, 6.0f);
-        g.setColour (over ? col::ice2.withAlpha (0.7f) : col::line3);
-        g.drawRoundedRectangle (r, 6.0f, 1.0f);
+        auto r = getLocalBounds().toFloat().reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
+        drawButtonFace (g, r, 6.0f, over, false, false);
         const auto c = r.getCentre();
         const float ro = 7.0f, ri = 5.0f;
         juce::Path p;
@@ -336,7 +404,7 @@ public:
         p.closeSubPath();
         g.setColour (over ? col::text : col::muted);
         g.fillPath (p);
-        g.setColour (juce::Colour (0xff0d131c));
+        g.setColour (juce::Colour (0xff1b222d));
         g.fillEllipse (juce::Rectangle<float> (5.0f, 5.0f).withCentre (c));
     }
 };

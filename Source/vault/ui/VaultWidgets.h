@@ -19,12 +19,9 @@ public:
     }
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
-        auto r = getLocalBounds().toFloat().reduced (0.5f);
-        g.setColour (down ? col::rowHover : over ? juce::Colour (0xff0e1828) : juce::Colour (0xff070b11));
-        g.fillRoundedRectangle (r, 6.0f);
-        g.setColour (over ? col::ice2.withAlpha (0.7f) : col::pillLine);
-        g.drawRoundedRectangle (r, 6.0f, 1.0f);
-        g.setColour (col::ice);
+        auto r = getLocalBounds().toFloat().reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
+        drawButtonFace (g, r, 6.0f, over, down, false);
+        g.setColour (over ? col::ice : col::ice2);
         g.fillPath (trianglePath (juce::Rectangle<float> (7.0f, 9.0f).withCentre (r.getCentre().translated (toRight ? 0.5f : -0.5f, 0.0f)), toRight));
     }
 
@@ -175,6 +172,22 @@ public:
     }
     void refresh() { list.updateContent(); muteRowFocus(); list.repaint(); }
     void showRow (int row) { if (row >= 0) list.scrollToEnsureRowIsOnscreen (row); }
+    // the row in the middle of the list (when the list can scroll that far)
+    void centreRow (int row)
+    {
+        if (row < 0) return;
+        auto* vp = list.getViewport();
+        const int h = vp->getViewHeight();
+        const int total = (int) model.visible().size() * rowH;
+        const int y = juce::jlimit (0, std::max (0, total - h), row * rowH - (h - rowH) / 2);
+        vp->setViewPosition (0, y);
+    }
+    bool isRowVisible (int row) const
+    {
+        const auto* vp = list.getViewport();
+        const int y = row * rowH, top = vp->getViewPositionY();
+        return row >= 0 && y >= top && y + rowH <= top + vp->getViewHeight();
+    }
     void scrollToTop() { list.getViewport()->setViewPosition (0, 0); }
     juce::ListBox& listBox() { return list; }
 
@@ -188,7 +201,10 @@ public:
                               ? "No favorites yet. Click the heart next to a sound to keep it here."
                               : model.filter.recentOnly && model.recentList().empty()
                                     ? "Nothing played yet. Click a sound - it shows up here."
-                                    : "No sounds found. Try another word or another category.",
+                                    : model.filter.category >= 0 && model.categoryCount (-1) > 0
+                                          ? "Nothing in this category. All Sounds has " + thousands (model.categoryCount (-1))
+                                                + " - the counts on the left show where they are."
+                                          : juce::String ("No sounds found. Try another word or another category."),
                           getLocalBounds().reduced (16, 14).removeFromTop (44), juce::Justification::topLeft, 2);
     }
 
@@ -290,9 +306,11 @@ private:
 };
 
 //==============================================================================
-// on-screen keyboard: silver keys, ice when pressed, C labels in FL Studio naming. MIDI 60 = C5 - the home note every
-// sound is designed and previewed at - is the ice key.
-class VaultKeyboard : public juce::MidiKeyboardComponent
+// on-screen keyboard (style A "Machined"): realistic white keys (light grey with a darker bottom lip), black keys with
+// depth and a shadow; the keys that SOUND are tinted ice blue - the engine's notes (VaultEngine::soundingNotes: the arp's
+// notes while it runs, latched ones too, else the played keys), so nothing is lit that does not play. A key held down
+// that the arp does not play right now gets a thin ice edge. C labels in FL Studio naming (MIDI 60 = C5).
+class VaultKeyboard : public juce::MidiKeyboardComponent, public juce::SettableTooltipClient
 {
 public:
     explicit VaultKeyboard (juce::MidiKeyboardState& s) : juce::MidiKeyboardComponent (s, horizontalKeyboard)
@@ -302,9 +320,9 @@ public:
         setAvailableRange (36, 83);   // C3..B6 (FL naming), 4 octaves, C5 = MIDI 60 in the third octave
         setLowestVisibleKey (36);
         setBlackNoteLengthProportion (0.6f);
-        setBlackNoteWidthProportion (0.55f);
+        setBlackNoteWidthProportion (0.52f);
         setVelocity (0.8f, true);
-        setWantsKeyboardFocus (false);               // the DAW keeps the computer keyboard
+        setWantsKeyboardFocus (false);               // the editor itself takes the computer keys (vui::ComputerKeys)
         setMouseClickGrabsKeyboardFocus (false);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
         setColour (whiteNoteColourId, col::keyBed);
@@ -316,34 +334,128 @@ public:
         setKeyWidth ((float) getWidth() / 28.0f);
         juce::MidiKeyboardComponent::resized();
     }
+    // the notes the computer keyboard plays (vui::ComputerKeys): a thin ice line over them, "Z" / "Q" on their C keys
+    void setComputerKeys (int lowNote, int highNote)
+    {
+        if (lowNote == keysLow && highNote == keysHigh) return;
+        keysLow = lowNote; keysHigh = highNote;
+        setTooltip ("Computer keyboard: Z = " + vault::noteName (lowNote) + ", Q = " + vault::noteName (lowNote + 12)
+                    + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 \xe2\x86\x90 \xe2\x86\x92 octave \xc2\xb7 \xe2\x86\x91 \xe2\x86\x93 previous / next sound")));
+        repaint();
+    }
+    int computerKeysLow() const { return keysLow; }
+    // the notes that sound now (bit k of mask[k >> 6] = MIDI note k); repaints only when it changed
+    void setSounding (const uint64_t mask[2])
+    {
+        if (mask[0] == sounding[0] && mask[1] == sounding[1]) return;
+        sounding[0] = mask[0]; sounding[1] = mask[1];
+        repaint();
+    }
+    bool isSounding (int note) const { return juce::isPositiveAndBelow (note, 128) && ((sounding[note >> 6] >> (note & 63)) & 1u) != 0; }
+    bool isLit (int note) const { return isSounding (note); }   // tests: what the keyboard shows as playing
+
+    void paint (juce::Graphics& g) override
+    {
+        juce::MidiKeyboardComponent::paint (g);
+        // the felt strip: a soft shadow the key bed casts over the top of the keys
+        const auto w = (float) getWidth();
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0x8c000000), 0.0f, 0.0f, juce::Colours::transparentBlack, 0.0f, 7.0f, false));
+        g.fillRect (0.0f, 0.0f, w, 7.0f);
+        if (keysLow < 0) return;
+        const int lo = std::max (keysLow, getRangeStart()), hi = std::min (keysHigh, getRangeEnd());
+        if (lo > hi) return;
+        const auto a = getRectangleForKey (lo), b = getRectangleForKey (hi);
+        g.setColour (col::ice2.withAlpha (0.7f));
+        g.fillRoundedRectangle (a.getX() + 1.0f, 0.0f, b.getRight() - a.getX() - 2.0f, 1.5f, 0.75f);
+    }
 
 protected:
     void drawWhiteNote (int note, juce::Graphics& g, juce::Rectangle<float> a, bool isDown, bool isOver, juce::Colour, juce::Colour) override
     {
-        auto k = a.reduced (0.5f, 0.0f);
-        const bool home = note == vault::homeNote;
+        using juce::Colour;
+        auto k = a.withTrimmedRight (1.0f);   // 1 px gap between the keys
+        const bool lit = isSounding (note);
+        const bool held = isDown && ! lit;
         juce::Path p;
-        p.addRoundedRectangle (k.getX(), k.getY() - 4.0f, k.getWidth(), k.getHeight() + 4.0f, 4.0f, 4.0f, false, false, true, true);
-        if (isDown) g.setGradientFill (juce::ColourGradient (col::ice2, 0, k.getY(), col::deep, 0, k.getBottom(), false));
-        else if (home) g.setGradientFill (juce::ColourGradient (col::ice, 0, k.getY(), col::ice2, 0, k.getBottom(), false));
-        else g.setGradientFill (juce::ColourGradient (juce::Colour (isOver ? 0xfff4f7fc : 0xffe6eaf1), 0, k.getY(), juce::Colour (0xffc5ccd8), 0, k.getBottom(), false));
+        p.addRoundedRectangle (k.getX(), k.getY() - 4.0f, k.getWidth(), k.getHeight() + 4.0f, 3.0f, 3.0f, false, false, true, true);
+        juce::ColourGradient body (Colour (lit ? 0xffbfd6ff : isOver ? 0xfff1f4f8 : 0xffe8ecf2), 0, k.getY(),
+                                   Colour (lit ? 0xff8db2f0 : 0xffaeb7c4), 0, k.getBottom(), false);
+        if (! lit) body.addColour (0.85, Colour (isOver ? 0xffdde2ea : 0xffd3d9e2));
+        g.setGradientFill (body);
         g.fillPath (p);
+        // the darker bottom lip (inset 3 px)
+        const float lip = 3.0f;
+        g.setColour (Colour (lit ? 0xff6f95d6 : 0xff98a2b0));
+        g.fillRoundedRectangle (k.getX(), k.getBottom() - lip, k.getWidth(), lip, 2.5f);
+        g.setColour (Colour (lit ? 0x40ffffff : 0x66ffffff));
+        g.fillRect (k.getX(), k.getBottom() - lip - 1.0f, k.getWidth(), 1.0f);
+        if (held)
+        {
+            g.setColour (col::ice2.withAlpha (0.9f));
+            g.drawRoundedRectangle (k.reduced (1.0f, 0.0f).withTrimmedBottom (lip), 2.0f, 1.4f);
+        }
         if (note % 12 == 0)
         {
-            g.setColour (juce::Colour (home || isDown ? 0xff0b0f16 : 0xff56627a));
+            const bool home = note == vault::homeNote;
+            g.setColour (Colour (lit ? 0xff13233f : home ? 0xff3a4558 : 0xff6a7588));
             g.setFont (font (14.0f, home));
-            g.drawText (vault::noteName (note), k.removeFromBottom (19.0f), juce::Justification::centred, false);
+            juce::String t = vault::noteName (note);
+            if (note == keysLow) t << " Z";              // the computer keys of this C (FL Studio layout)
+            else if (note == keysLow + 12) t << " Q";
+            g.drawText (t, k.withTrimmedBottom (lip + 1.0f).removeFromBottom (18.0f).withTrimmedLeft (4.0f), juce::Justification::centredLeft, false);
         }
     }
-    void drawBlackNote (int, juce::Graphics& g, juce::Rectangle<float> a, bool isDown, bool isOver, juce::Colour) override
+    void drawBlackNote (int note, juce::Graphics& g, juce::Rectangle<float> a, bool isDown, bool isOver, juce::Colour) override
     {
+        using juce::Colour;
+        const bool lit = isSounding (note);
+        // shadow on the white keys
+        g.setColour (Colour (0x99000000));
+        g.fillRoundedRectangle (a.translated (0.6f, 2.0f), 2.0f);
         juce::Path p;
-        p.addRoundedRectangle (a.getX(), a.getY() - 4.0f, a.getWidth(), a.getHeight() + 4.0f, 3.0f, 3.0f, false, false, true, true);
-        if (isDown) g.setGradientFill (juce::ColourGradient (col::deep, 0, a.getY(), juce::Colour (0xff1d3561), 0, a.getBottom(), false));
-        else g.setGradientFill (juce::ColourGradient (juce::Colour (isOver ? 0xff2e3849 : 0xff232b3a), 0, a.getY(), juce::Colour (0xff05070b), 0, a.getBottom(), false));
+        p.addRoundedRectangle (a.getX(), a.getY() - 4.0f, a.getWidth(), a.getHeight() + 4.0f, 2.0f, 2.0f, false, false, true, true);
+        juce::ColourGradient body (Colour (lit ? 0xff7ea4e6 : isOver ? 0xff343d4b : 0xff2a313c), 0, a.getY(),
+                                   Colour (lit ? 0xff3e64a6 : 0xff1c222b), 0, a.getBottom(), false);
+        body.addColour (0.7, Colour (lit ? 0xff2f4f88 : 0xff0b0e13));
+        g.setGradientFill (body);
         g.fillPath (p);
+        // the front bevel and a faint top highlight (depth)
+        const float bev = std::max (3.0f, a.getHeight() * 0.09f);
+        g.setGradientFill (juce::ColourGradient (Colour (lit ? 0x40ffffff : 0x22ffffff), 0, a.getBottom() - bev, juce::Colours::transparentWhite, 0, a.getBottom(), false));
+        g.fillRect (a.getX() + 1.5f, a.getBottom() - bev, a.getWidth() - 3.0f, bev - 1.0f);
+        g.setColour (Colour (lit ? 0x30ffffff : 0x14ffffff));
+        g.fillRect (a.getX() + 1.5f, a.getY(), 1.0f, a.getHeight() - bev);
+        if (isDown && ! lit)
+        {
+            g.setColour (col::ice2.withAlpha (0.9f));
+            g.drawRoundedRectangle (a.reduced (0.7f), 2.0f, 1.3f);
+        }
     }
     juce::String getWhiteNoteText (int) override { return {}; }
+
+private:
+    int keysLow = -1, keysHigh = -1;
+    uint64_t sounding[2] {};
+};
+
+//==============================================================================
+// the search box: it takes the keyboard ONLY when it is clicked (never by focus traversal, Tab or a window activation:
+// it does not want the keyboard otherwise), and lets it go again on Return / Escape / a click elsewhere (the owner)
+class SearchField : public juce::TextEditor
+{
+public:
+    SearchField() { setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! hasKeyboardFocus (true)) { setWantsKeyboardFocus (true); grabKeyboardFocus(); ++clicksIn; }
+        juce::TextEditor::mouseDown (e);
+    }
+    void focusLost (FocusChangeType t) override
+    {
+        juce::TextEditor::focusLost (t);
+        setWantsKeyboardFocus (false);
+    }
+    int clicksIn = 0;   // tests
 };
 
 //==============================================================================

@@ -47,6 +47,14 @@ public:
     bool isSoundEdited() const;                            // differs from the bank preset
     void editSound (const std::function<void (VaultPreset&)>& change);   // change the current sound (applied without re-striking)
     void revertSound();                                    // back to the bank preset (locked sections stay)
+    // the "edited" badge: ANY change from the preset as it loads - the sound, a MAIN knob off "as designed", a sound macro
+    // moved, the FX switched off, the arp / gate switched differently (sections kept while browsing excepted)
+    bool hasEdits() const;
+    void revertAll();                                      // all of that back: revertSound + MAIN knobs + macros + switches
+    // the host's text of a MAIN knob parameter in the plugin's units (see VaultProcessor.cpp) and its inverse
+    juce::String quickParamText (int q, float value01) const;
+    static juce::String quickOffsetText (int q, float value01);
+    static float quickParamFromText (int q, const juce::String& text);
     juce::String macroName (int index) const;              // the current sound's macro names ("" = unused knob)
     float getQuick (int q) const;                          // vault::Quick, 0..1
     void setQuick (int q, float value01);                  // notifies the host
@@ -78,6 +86,10 @@ public:
     bool isMissingSamples() const;
     float getOutputPeak() const { return outPeak.load(); }   // last block peak (for a meter)
     juce::MidiKeyboardState& getKeyboardState() { return keyboardState; }   // on-screen keyboard
+    // what the editor showed when it was closed (saved with the project): the browser's category (-1 = All Sounds) - a
+    // reopened window shows the same list, scrolled to the sound that plays
+    struct EditorMemory { int category = -1; };
+    EditorMemory editorMemory;
     juce::AudioProcessorValueTreeState apvts;
 
     // the small bank used when no full bank is embedded: one 1-part preset per EVOLVE factory preset
@@ -89,7 +101,9 @@ public:
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;   // ends the notes (no stuck arp)
     using AudioProcessor::processBlock;
+    using AudioProcessor::processBlockBypassed;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -149,9 +163,12 @@ private:
     int editAppliedFor = -2;                             // audio thread: the preset the last edit belongs to
     std::atomic<bool> locks[3] { { false }, { false }, { false } };
     std::atomic<float>* quickParam[vault::numQuick] {};
+    juce::RangedAudioParameter* quickParamObj[vault::numQuick] {};
+    juce::RangedAudioParameter* macroParamObj[vault::numMacros] {};
     std::atomic<float>* fxOnParam = nullptr; std::atomic<float>* arpOnParam = nullptr; std::atomic<float>* gateOnParam = nullptr;
     std::atomic<double> hostBpm { 120.0 };
     std::array<std::atomic<float>, 128> keysHeldUi {};   // keys down (arp MIDI export)
+    bool bypassedNotesOff = false;                       // audio thread
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VaultProcessor)
 };

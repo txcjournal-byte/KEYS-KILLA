@@ -1,5 +1,6 @@
 #include "VaultProcessor.h"
 #include "VaultEditor.h"
+#include "ui/VaultValues.h"
 #include "../Presets.h"
 #include <mutex>
 #if CV_HAS_BANK
@@ -8,26 +9,23 @@
 
 namespace
 {
-juce::AudioProcessorValueTreeState::ParameterLayout createVaultLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout createVaultLayout (const VaultProcessor* self)
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout l;
     l.add (std::make_unique<AudioParameterInt> (ParameterID { VaultProcessor::idPreset, 1 }, "Preset", 0, VaultProcessor::maxPresets - 1, 0));
     for (int m = 0; m < vault::numMacros; ++m)
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idMacro[m], 1 }, "Macro " + String (m + 1), NormalisableRange<float> (0.0f, 1.0f), 0.5f,
-                   AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + " %"; })));
-    // v3: the MAIN page knobs (bipolar around "as designed", vibrato / tremolo from 0) and the quick switches
+                   AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + "%"; })
+                                                  .withValueFromStringFunction ([] (const String& t) { return jlimit (0.0f, 1.0f, t.getFloatValue() / 100.0f); })));
+    // v3: the MAIN page knobs (bipolar around "as designed", vibrato / tremolo from 0) and the quick switches. The host shows
+    // them in the plugin's units ("Cutoff -1.2 oct", "Reverb 14% Plate"), not as a percentage of the knob.
     for (int q = 0; q < vault::numQuick; ++q)
     {
         const auto& qi = vault::quickInfo()[(size_t) q];
-        const float neutral = qi.neutral;
-        l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idQuick[q], 1 }, String (qi.name), NormalisableRange<float> (0.0f, 1.0f), neutral,
-                   AudioParameterFloatAttributes().withStringFromValueFunction ([neutral] (float v, int)
-                   {
-                       if (neutral <= 0.0f) return String (roundToInt (v * 100.0f)) + " %";
-                       const int d = roundToInt ((v - 0.5f) * 200.0f);
-                       return d == 0 ? String ("as designed") : (d > 0 ? "+" : "") + String (d) + " %";
-                   })));
+        l.add (std::make_unique<AudioParameterFloat> (ParameterID { VaultProcessor::idQuick[q], 1 }, String (qi.name), NormalisableRange<float> (0.0f, 1.0f), qi.neutral,
+                   AudioParameterFloatAttributes().withStringFromValueFunction ([self, q] (float v, int) { return self->quickParamText (q, v); })
+                                                  .withValueFromStringFunction ([q] (const String& t) { return VaultProcessor::quickParamFromText (q, t); })));
     }
     l.add (std::make_unique<AudioParameterBool> (ParameterID { VaultProcessor::idFxOn, 1 }, "FX On", true));
     l.add (std::make_unique<AudioParameterBool> (ParameterID { VaultProcessor::idArpOn, 1 }, "Arp On", false));
@@ -138,7 +136,7 @@ std::shared_ptr<const VaultProcessor::Bank> VaultProcessor::sharedBank()
 //==============================================================================
 VaultProcessor::VaultProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "CHROMEVAULT", createVaultLayout())
+      apvts (*this, nullptr, "CHROMEVAULT", createVaultLayout (this))
 {
     bankData = sharedBank();
     library = bankData->library;
@@ -146,6 +144,8 @@ VaultProcessor::VaultProcessor()
     for (int m = 0; m < vault::numMacros; ++m) macroParam[m] = apvts.getRawParameterValue (idMacro[m]);
     volumeParam = apvts.getRawParameterValue (idVolume);
     for (int q = 0; q < vault::numQuick; ++q) quickParam[q] = apvts.getRawParameterValue (idQuick[q]);
+    for (int q = 0; q < vault::numQuick; ++q) quickParamObj[q] = apvts.getParameter (idQuick[q]);   // (0..1 ranges: value = normalised)
+    for (int m = 0; m < vault::numMacros; ++m) macroParamObj[m] = apvts.getParameter (idMacro[m]);
     fxOnParam = apvts.getRawParameterValue (idFxOn);
     arpOnParam = apvts.getRawParameterValue (idArpOn);
     gateOnParam = apvts.getRawParameterValue (idGateOn);
@@ -248,6 +248,85 @@ void VaultProcessor::revertSound()
     publishLive();
 }
 
+// the host's text of a MAIN knob parameter: on the message thread (the host's automation lane, its generic editor) the
+// same text the knob shows - the effective value of what it moves for the sound that plays; elsewhere (any other thread
+// may ask) the offset in the knob's own units: "-1.2 oct", "x2.0", "+30%", "24 ct", "as designed"
+juce::String VaultProcessor::quickOffsetText (int q, float v)
+{
+    using juce::String;
+    const auto& qi = vault::quickInfo()[(size_t) juce::jlimit (0, (int) vault::numQuick - 1, q)];
+    if (qi.neutral <= 0.0f)   // vibrato / tremolo: from 0
+    {
+        if (v < 0.004f) return "off";
+        return q == vault::qVibrato ? String (juce::roundToInt (v * 60.0f)) + " ct" : String (juce::roundToInt (v * 100.0f)) + "%";
+    }
+    const float d = (v - 0.5f) * 2.0f;   // -1..1
+    if (std::abs (d) < 0.005f) return "as designed";
+    const String minus (juce::CharPointer_UTF8 ("\xe2\x88\x92"));
+    auto sgn = [&] (float x) { return x > 0 ? String ("+") : minus; };
+    switch (q)
+    {
+        case vault::qCutoff:  return sgn (d) + String (std::abs (d * 4.0f), 1) + " oct";
+        case vault::qAttack:
+        case vault::qRelease: return String (juce::CharPointer_UTF8 ("\xc3\x97")) + String (std::exp2 (d * 4.0f), std::exp2 (d * 4.0f) < 9.95f ? 2 : 0) + " time";
+        case vault::qEqTilt:  return sgn (d) + String (std::abs (d * 9.0f), 1) + " dB";
+        case vault::qPan:     { const int p = juce::roundToInt (d * 100.0f); return p == 0 ? String ("C") : (p < 0 ? "L " : "R ") + String (std::abs (p)); }
+        case vault::qReverb: case vault::qDelay: case vault::qChorus: case vault::qDrive: case vault::qWidth:
+            return d < 0 ? String (juce::CharPointer_UTF8 ("\xc3\x97")) + String (1.0f + d, 2) + " amount" : sgn (d) + String (juce::roundToInt (d * 100.0f)) + "% to full";
+        default:              return sgn (d) + String (juce::roundToInt (std::abs (d) * 100.0f)) + "%";
+    }
+}
+
+juce::String VaultProcessor::quickParamText (int q, float v) const
+{
+    if (auto* mm = juce::MessageManager::getInstanceWithoutCreating(); mm != nullptr && mm->isThisTheMessageThread() && liveFor >= 0)
+    {
+        const auto c = vui::val::Ctx::of (*this).withQuick (q, v);
+        const auto t = vui::val::quickText (live, c, q, vui::val::quickPosition (live, c, q), getSwitch (idFxOn), isQuickFxOn (q));
+        if (t.isNotEmpty() && t != juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94"))) return t;
+    }
+    return quickOffsetText (q, v);
+}
+
+float VaultProcessor::quickParamFromText (int q, const juce::String& text)
+{
+    const auto t = text.trim().toLowerCase();
+    const auto& qi = vault::quickInfo()[(size_t) juce::jlimit (0, (int) vault::numQuick - 1, q)];
+    if (t.startsWith ("as designed")) return qi.neutral;
+    if (t == "off") return 0.0f;
+    const float x = t.replace (juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")), "-").retainCharacters ("0123456789.-+").getFloatValue();
+    if (qi.neutral <= 0.0f) return juce::jlimit (0.0f, 1.0f, q == vault::qVibrato ? x / 60.0f : x / 100.0f);
+    if (q == vault::qCutoff && t.contains ("oct")) return juce::jlimit (0.0f, 1.0f, 0.5f + x / 8.0f);
+    if (q == vault::qEqTilt && t.contains ("db")) return juce::jlimit (0.0f, 1.0f, 0.5f + x / 18.0f);
+    return juce::jlimit (0.0f, 1.0f, 0.5f + x / 200.0f);
+}
+
+bool VaultProcessor::hasEdits() const
+{
+    if (isSoundEdited()) return true;
+    const auto* p = currentPresetData();
+    if (p == nullptr) return false;
+    for (int q = 0; q < vault::numQuick; ++q)
+        if (std::abs (getQuick (q) - vault::quickInfo()[(size_t) q].neutral) > 1.0e-3f) return true;
+    for (int m = 0; m < vault::numMacros; ++m)
+        if (std::abs (getMacro (m) - p->macroDefaults[m]) > 1.0e-3f) return true;
+    if (! getSwitch (idFxOn)) return true;
+    if (! getLock (Section::arp) && getSwitch (idArpOn) != live.arp.on) return true;
+    if (! getLock (Section::gate) && getSwitch (idGateOn) != live.gate.on) return true;
+    return false;
+}
+
+void VaultProcessor::revertAll()
+{
+    revertSound();
+    resetQuick();
+    if (const auto* p = currentPresetData())
+        for (int m = 0; m < vault::numMacros; ++m) setMacro (m, p->macroDefaults[m]);
+    setSwitch (idFxOn, true);
+    if (! getLock (Section::arp)) setSwitch (idArpOn, live.arp.on);
+    if (! getLock (Section::gate)) setSwitch (idGateOn, live.gate.on);
+}
+
 juce::String VaultProcessor::macroName (int index) const
 {
     return juce::isPositiveAndBelow (index, (int) vault::numSoundMacros) ? live.macros[(size_t) index].name : juce::String();
@@ -255,7 +334,10 @@ juce::String VaultProcessor::macroName (int index) const
 
 float VaultProcessor::getQuick (int q) const
 {
-    return juce::isPositiveAndBelow (q, (int) vault::numQuick) ? quickParam[q]->load() : 0.5f;
+    // the parameter's own value: it is set before any listener hears of the change (the raw value APVTS keeps is updated
+    // by one of those listeners - an editor callback reading it would see the old value)
+    if (! juce::isPositiveAndBelow (q, (int) vault::numQuick)) return 0.5f;
+    return quickParamObj[q] != nullptr ? quickParamObj[q]->getValue() : quickParam[q]->load();
 }
 
 void VaultProcessor::setQuick (int q, float value01)
@@ -338,7 +420,9 @@ void VaultProcessor::setQuickFxOn (int q, bool on)
 juce::MidiFile VaultProcessor::arpPatternMidi (double bars) const
 {
     std::vector<std::pair<int, float>> notes;
-    for (int k = 0; k < 128; ++k) if (const float v = keysHeldUi[(size_t) k].load(); v > 0.0f) notes.push_back ({ k, v });
+    engine.arpHeldNotes (notes);   // what the arp plays from (latched notes too, in played order)
+    if (notes.empty())
+        for (int k = 0; k < 128; ++k) if (const float v = keysHeldUi[(size_t) k].load(); v > 0.0f) notes.push_back ({ k, v });
     if (notes.empty()) notes = { { 60, 0.8f }, { 64, 0.8f }, { 67, 0.8f } };   // the C5 major triad
     return vault::arpPatternToMidi (live.arp, notes, bars, hostBpm.load());
 }
@@ -431,7 +515,8 @@ void VaultProcessor::selectPreset (int index)
 
 float VaultProcessor::getMacro (int index) const
 {
-    return juce::isPositiveAndBelow (index, (int) vault::numMacros) ? macroParam[index]->load() : 0.5f;
+    if (! juce::isPositiveAndBelow (index, (int) vault::numMacros)) return 0.5f;
+    return macroParamObj[index] != nullptr ? macroParamObj[index]->getValue() : macroParam[index]->load();   // (see getQuick)
 }
 
 void VaultProcessor::setMacro (int index, float value01)
@@ -477,8 +562,16 @@ bool VaultProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
 }
 
+void VaultProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    // bypassed: the keys' note-offs never reach the engine - end every note (voices + arp) once, so nothing hangs after
+    if (! bypassedNotesOff) { engine.allNotesOff (false); bypassedNotesOff = true; }
+    buffer.clear();
+}
+
 void VaultProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    bypassedNotesOff = false;
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     if (! engine.isPrepared() || n <= 0) { buffer.clear(); return; }
@@ -535,6 +628,11 @@ void VaultProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             if (auto b = pos->getBpm()) t.bpm = *b;
             if (pos->getIsPlaying()) if (auto p = pos->getPpqPosition()) { t.playing = true; t.ppq = *p; }
+            if (auto bar = pos->getPpqPositionOfLastBarStart()) t.barPpq = *bar;   // the arp's bar lines
+            if (auto sig = pos->getTimeSignature(); sig && sig->numerator > 0 && sig->denominator > 0)
+                t.barBeats = 4.0 * sig->numerator / sig->denominator;
+            if (pos->getIsLooping())   // a loop that wraps inside a block: the arp / gate go back to its start on the sample
+                if (auto lp = pos->getLoopPoints(); lp && lp->ppqEnd > lp->ppqStart) { t.loopStart = lp->ppqStart; t.loopEnd = lp->ppqEnd; }
         }
     hostBpm.store (t.bpm);
     engine.process (buffer, midi, t);
@@ -558,6 +656,7 @@ void VaultProcessor::getStateInformation (juce::MemoryBlock& destData)
     st.setProperty ("lockFx", getLock (Section::fx), nullptr);
     st.setProperty ("lockArp", getLock (Section::arp), nullptr);
     st.setProperty ("lockGate", getLock (Section::gate), nullptr);
+    st.setProperty ("uiCategory", editorMemory.category, nullptr);
     if (liveFor == currentPreset() && isSoundEdited())
     {
         const auto mb = vault::serializeBank ({ live }, true);
@@ -582,6 +681,7 @@ void VaultProcessor::setStateInformation (const void* data, int sizeInBytes)
         if (st.hasProperty (idMacro[m])) setMacro (m, (float) st.getProperty (idMacro[m]));
     if (st.hasProperty (idVolume)) setVolumeDb ((float) st.getProperty (idVolume));
     // v3 (a version 1 state: everything as designed)
+    editorMemory.category = juce::jlimit (-1, (int) vault::numCategories - 1, (int) st.getProperty ("uiCategory", -1));
     setLock (Section::fx, (bool) st.getProperty ("lockFx", false));
     setLock (Section::arp, (bool) st.getProperty ("lockArp", false));
     setLock (Section::gate, (bool) st.getProperty ("lockGate", false));

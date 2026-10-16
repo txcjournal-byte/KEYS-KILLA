@@ -28,6 +28,7 @@ public:
     {
         const int n = (int) bank.size();
         haystack.reserve ((size_t) n);
+        lowerNames.reserve ((size_t) n);
         instr.reserve ((size_t) n);
         favorite.assign ((size_t) n, false);
         for (int i = 0; i < n; ++i)
@@ -45,6 +46,7 @@ public:
             }
             h << " | " << (int) p.parts.size() << (p.parts.size() == 1 ? " layer" : " layers");
             haystack.push_back (h.toLowerCase());
+            lowerNames.push_back (p.name.toLowerCase().trim());
             idToIndex.set (p.id, i);
             if (juce::isPositiveAndBelow (p.category, (int) vault::numCategories)) ++catCount[p.category];
         }
@@ -105,31 +107,68 @@ public:
         }
         return out;
     }
-    int categoryCount (int c) const { return juce::isPositiveAndBelow (c, (int) vault::numCategories) ? catCount[c] : size(); }
+    // the counts follow the search (and the favorites / recent / layers filters): what each category holds of the current
+    // results; -1 = All Sounds = every result over all categories. Nothing narrowing: the whole bank per category.
+    int categoryCount (int c) const { return juce::isPositiveAndBelow (c, (int) vault::numCategories) ? liveCount[c] : liveAll; }
+    int bankCategoryCount (int c) const { return juce::isPositiveAndBelow (c, (int) vault::numCategories) ? catCount[c] : size(); }
     int indexOfId (const juce::String& id) const { return idToIndex.contains (id) ? idToIndex[id] : -1; }
 
     //==========================================================================
     VaultBrowserFilter filter;
     const std::vector<int>& visible() const { return rows; }    // bank indices shown in the list, in list order
 
+    // the rows of the current filter. With a search, the best name matches come first: the exact name, then names that
+    // start with the search, then names with a word starting with it, then names containing it, then everything else
+    // that matches (instrument, category, layer labels) - each group in bank order.
     void refilter()
     {
         rows.clear();
-        auto words = juce::StringArray::fromTokens (filter.query.toLowerCase(), " ,;/+", "\"");
+        const auto q = filter.query.toLowerCase().trim();
+        auto words = juce::StringArray::fromTokens (q, " ,;/+", "\"");
         words.removeEmptyStrings();
-        auto ok = [&] (int i)
+        std::fill (std::begin (liveCount), std::end (liveCount), 0);
+        liveAll = 0;
+        auto okButCategory = [&] (int i)
         {
             const auto& p = bank[(size_t) i];
-            if (filter.category >= 0 && p.category != filter.category) return false;
             if (filter.layers > 0 && (int) p.parts.size() != filter.layers) return false;
             if (filter.favoritesOnly && ! favorite[(size_t) i]) return false;
             for (auto& w : words) if (! haystack[(size_t) i].contains (w)) return false;
             return true;
         };
-        if (filter.recentOnly) { for (int i : recent) if (ok (i)) rows.push_back (i); }
-        else { rows.reserve (bank.size()); for (int i = 0; i < size(); ++i) if (ok (i)) rows.push_back (i); }
+        auto take = [&] (int i)
+        {
+            if (! okButCategory (i)) return;
+            const int c = bank[(size_t) i].category;
+            if (juce::isPositiveAndBelow (c, (int) vault::numCategories)) ++liveCount[c];
+            ++liveAll;
+            if (filter.category >= 0 && c != filter.category) return;
+            rows.push_back (i);
+        };
+        if (filter.recentOnly) { for (int i : recent) take (i); }
+        else { rows.reserve (bank.size()); for (int i = 0; i < size(); ++i) take (i); }
+        if (words.isEmpty() || filter.recentOnly || rows.size() < 2) return;
+        std::vector<std::pair<int, int>> scored;   // (score, bank index), stable in bank order
+        scored.reserve (rows.size());
+        for (int i : rows) scored.push_back ({ nameScore (i, q, words), i });
+        std::stable_sort (scored.begin(), scored.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
+        for (size_t k = 0; k < scored.size(); ++k) rows[k] = scored[k].second;
     }
-
+    // 0 exact name, 1 the name starts with the search, 2 a name word starts with the first search word (and the name holds
+    // every word), 3 the name contains every word, 4 the match is elsewhere (instrument, category, label)
+    int nameScore (int i, const juce::String& q, const juce::StringArray& words) const
+    {
+        const auto& n = lowerNames[(size_t) i];
+        if (n == q) return 0;
+        if (n.startsWith (q)) return 1;
+        bool all = true;
+        for (auto& w : words) all &= n.contains (w);
+        if (! all) return 4;
+        const auto& w0 = words[0];
+        for (int pos = n.indexOf (w0); pos >= 0; pos = n.indexOf (pos + 1, w0))
+            if (pos == 0 || ! juce::CharacterFunctions::isLetterOrDigit (n[pos - 1])) return 2;
+        return 3;
+    }
     int rowOf (int bankIndex) const
     {
         const auto it = std::find (rows.begin(), rows.end(), bankIndex);
@@ -189,10 +228,11 @@ public:
 
 private:
     const std::vector<VaultPreset>& bank;
-    std::vector<juce::String> haystack;
+    std::vector<juce::String> haystack, lowerNames;
     std::vector<juce::StringArray> instr;
     std::vector<bool> favorite;
     std::vector<int> recent, rows;
     juce::HashMap<juce::String, int> idToIndex;
     int catCount[vault::numCategories] {};
+    int liveCount[vault::numCategories] {}, liveAll = 0;   // the current results per category / in all
 };

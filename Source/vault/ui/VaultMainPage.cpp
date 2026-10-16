@@ -1,4 +1,5 @@
 #include "VaultPages.h"
+#include "VaultValues.h"
 #include "../VaultEditor.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -9,38 +10,18 @@ namespace
 {
 // page-local layout (1148 x 612)
 constexpr int sideW = 200, gapX = 14, screenX = sideW + gapX, screenW = 1148 - 2 * (sideW + gapX), macroH = 100, gapY = 10;
-constexpr int cellW = 96, cellPitch = 96, gridTop = 38, knobD = 44;
+constexpr int cellW = 96, cellPitch = 96, gridTop = 36, knobD = 50;
 constexpr int screenH = 612 - macroH - gapY;
 constexpr int pad = 10, rowTop = pad, rowH = 30, colsTop = rowTop + rowH + 8, curH = 52;
 constexpr int catsW = 198;
 
-float quickAmount (float designed, float q, float top)
-{
-    if (std::abs (q - 0.5f) < 1.0e-6f) return designed;
-    if (q < 0.5f) return designed * (2.0f * q);
-    return designed + (std::max (designed, top) - designed) * (2.0f * q - 1.0f);
-}
 bool isFxQuick (int q) { return q >= vault::qReverb && q <= vault::qEqTilt; }
-vault::FxType fxOfQuick (int q)
-{
-    switch (q)
-    {
-        case vault::qReverb: return vault::FxType::reverb;
-        case vault::qDelay:  return vault::FxType::delay;
-        case vault::qChorus: return vault::FxType::chorus;
-        case vault::qDrive:  return vault::FxType::drive;
-        case vault::qWidth:  return vault::FxType::width;
-        default:             return vault::FxType::eq;
-    }
-}
 const char* quickLabel (int q)
 {
     static const char* n[vault::numQuick] { "CUTOFF", "RESO", "ATTACK", "RELEASE", "ENV AMT", "GLIDE", "VIBRATO", "TREMOLO",
                                             "REVERB", "DELAY", "CHORUS", "DRIVE", "WIDTH", "EQ TILT", "PAN" };
     return n[juce::jlimit (0, (int) vault::numQuick - 1, q)];
 }
-juce::String times() { return juce::String (juce::CharPointer_UTF8 ("\xc3\x97")); }
-
 // remove any focus-on-click from a component tree (focus stays with the editor unless the search box is clicked)
 void noClickFocus (juce::Component& c, const juce::Component* except)
 {
@@ -74,6 +55,7 @@ MainPage::MainPage (UiContext& c)
     auto& proc = ctx.proc;
     model.setFavoriteIds (ctx.settings->favorites());
     model.setRecentIds (ctx.settings->recent());
+    model.filter.category = proc.editorMemory.category;   // the window shows the list it showed when it was closed
     model.refilter();
 
     // ---- screen
@@ -132,10 +114,15 @@ MainPage::MainPage (UiContext& c)
         auto& k = quick[(size_t) q];
         k.label = quickLabel (q);
         k.diameter = knobD;
-        k.resetValue = vault::quickInfo()[(size_t) q].neutral;
-        k.arcOrigin = vault::quickInfo()[(size_t) q].neutral;   // offsets (0.5 = as designed) are bipolar
-        k.valueText = [this, q] (float v) { return quickText (q, v); };
-        k.setTooltip (vault::quickInfo()[(size_t) q].name + juce::String (": ") + vault::quickInfo()[(size_t) q].what);
+        k.valueAlways = true;
+        // the knob shows the effective value of what it moves (vui::val::quickPosition): "14% Plate" at 14 %, the cutoff
+        // of layer A in Hz ...; the host parameter is the offset the engine puts on the sound (0.5 = as designed, the tick)
+        k.valueText = [this, q] (float pos)
+        {
+            const bool fxOn = ctx.proc.getSwitch (VaultProcessor::idFxOn);
+            return val::quickText (ctx.sound(), val::Ctx::of (ctx.proc), q, pos, fxOn, ctx.proc.isQuickFxOn (q));
+        };
+        k.onReset = [this, q] { ctx.proc.setQuick (q, vault::quickInfo()[(size_t) q].neutral); updateQuickKnob (q); };
         if (isFxQuick (q))
         {
             k.hasLed = true;
@@ -147,17 +134,37 @@ MainPage::MainPage (UiContext& c)
         }
         k.onRightClick = [this, q] (const juce::MouseEvent&) { mod::showMenu (ctx, quick[(size_t) q], quickTarget (q)); };
         addAndMakeVisible (k);
-        if (auto* p = proc.apvts.getParameter (VaultProcessor::idQuick[q])) atts.push_back (std::make_unique<KnobAttachment> (*p, k));
+        if (auto* prm = proc.apvts.getParameter (VaultProcessor::idQuick[q]))
+        {
+            auto att = std::make_unique<juce::ParameterAttachment> (*prm, [this, q] (float) { if (! quick[(size_t) q].isDragging()) updateQuickKnob (q); }, nullptr);
+            auto* a = att.get();
+            k.onGestureStart = [this, q, a]
+            {
+                // turning an effect knob that is switched off switches its slot on (from the minimum it showed)
+                if (quick[(size_t) q].inactive && ctx.proc.getSwitch (VaultProcessor::idFxOn) && ! ctx.proc.isQuickFxOn (q))
+                {
+                    ctx.proc.setQuickFxOn (q, true);
+                    quick[(size_t) q].inactive = false;
+                    if (auto& kk = quick[(size_t) q]; kk.hasLed) kk.ledOn = true;
+                }
+                a->beginGesture();
+            };
+            k.onChange = [this, q, a] (float pos) { a->setValueAsPartOfGesture (val::quickParamFor (ctx.sound(), val::Ctx::of (ctx.proc), q, pos)); };
+            k.onGestureEnd = [this, q, a] { a->endGesture(); updateQuickKnob (q); };
+            quickAtts.push_back (std::move (att));
+        }
     }
     for (int i = 0; i < vault::numMacros; ++i)
     {
         auto& k = macro[(size_t) i];
-        k.diameter = 42;
+        k.diameter = 46;
+        k.valueAlways = true;
         k.valueText = [] (float v) { return pct (v); };
         addAndMakeVisible (k);
         if (auto* p = proc.apvts.getParameter (VaultProcessor::idMacro[i])) atts.push_back (std::make_unique<KnobAttachment> (*p, k));
     }
     volume.diameter = knobD;
+    volume.valueAlways = true;
     volume.resetValue = proc.apvts.getParameter (VaultProcessor::idVolume)->convertTo0to1 (0.0f);
     volume.valueText = [this] (float v)
     {
@@ -171,9 +178,10 @@ MainPage::MainPage (UiContext& c)
     ctx.settings->addChangeListener (this);
     noClickFocus (*this, &search);
     updateToggles();
+    cats.setSelected (model.filter.category);
     const int cur = proc.currentPreset();
     setShown (cur);
-    list.showRow (model.rowOf (cur));
+    revealPending = true;   // scrolled to the sound once the list has its size (resized)
     refresh();
 }
 
@@ -181,6 +189,8 @@ MainPage::~MainPage()
 {
     search.removeKeyListener (&searchKeys);
     ctx.settings->removeChangeListener (this);
+    for (auto& k : quick) { k.onGestureStart = nullptr; k.onChange = nullptr; k.onGestureEnd = nullptr; }
+    quickAtts.clear();
     atts.clear();
 }
 
@@ -220,6 +230,12 @@ void MainPage::resized()
     cats.setBounds (catsRect().reduced (0, 0));
     cats.rowH = (catsRect().getHeight() - 2 * CategoryList::padTop) / (vault::numCategories + 1);
     list.setBounds (listRect());
+    search.setBounds (search.getBounds().withTrimmedRight (countW));
+    if (revealPending && list.getHeight() > PresetList::rowH)
+    {
+        revealPending = false;
+        list.centreRow (model.rowOf (shown));   // the sound that plays: visible and highlighted, also on the first open
+    }
     {
         auto c = curRect();
         int x = c.getRight();
@@ -248,7 +264,7 @@ void MainPage::resized()
     // sound macros
     const auto m = macroPanelRect();
     for (int i = 0; i < vault::numMacros; ++i)
-        macro[(size_t) i].setBounds (m.getX() + 14 + i * 112, m.getY() + 10, 112, macro[(size_t) i].idealHeight());
+        macro[(size_t) i].setBounds (m.getX() + 14 + i * 112, m.getY() + 7, 112, macro[(size_t) i].idealHeight());
 }
 
 void MainPage::paint (juce::Graphics& g)
@@ -275,11 +291,19 @@ void MainPage::paint (juce::Graphics& g)
         g.drawRoundedRectangle (s.reduced (0.5f), 12.0f, 1.0f);
         // search field
         const auto sr = searchRect().toFloat();
-        g.setColour (Colour (0xff070b11));
-        g.fillRoundedRectangle (sr, 6.0f);
-        g.setColour (search.hasKeyboardFocus (true) ? col::ice2 : col::pillLine);
-        g.drawRoundedRectangle (sr.reduced (0.5f), 6.0f, 1.0f);
+        drawWell (g, sr, 6.0f);
+        if (search.hasKeyboardFocus (true)) { g.setColour (col::ice2); g.drawRoundedRectangle (sr.reduced (0.5f), 6.0f, 1.0f); }
         drawSearchIcon (g, { sr.getX() + 11.0f, sr.getCentreY() - 7.0f, 14.0f, 14.0f }, col::dim);
+        if (model.filter.query.trim().isNotEmpty())
+        {
+            // how many sounds the search found (in the category shown)
+            const int n = visibleCount();
+            g.setFont (font (14.0f));
+            g.setColour (n > 0 ? col::muted : col::dim);
+            g.drawText (n == 0 ? juce::String ("none") : thousands (n) + (n == 1 ? " sound" : " sounds"),
+                        Rectangle<float> ((float) search.getRight(), sr.getY(), sr.getRight() - (float) search.getRight() - 10.0f, sr.getHeight()),
+                        Justification::centredRight, false);
+        }
         // wells
         for (auto w : { catsRect().toFloat(), listRect().toFloat() })
         {
@@ -295,6 +319,7 @@ void MainPage::paint (juce::Graphics& g)
         const auto* p = ctx.proc.currentPresetData();
         const float textR = (float) moreBtn.getX() - 12.0f;
         auto nameR = Rectangle<float> (c.getX() + 4.0f, c.getY() + 2.0f, textR - c.getX() - 4.0f, 26.0f);
+        editedR = {};
         if (p != nullptr)
         {
             const auto nf = font (19.0f, true);
@@ -310,11 +335,18 @@ void MainPage::paint (juce::Graphics& g)
                 g.setColour (col::muted);
                 g.drawText (String (CharPointer_UTF8 ("Loading\xe2\x80\xa6")), Rectangle<float> (x + 20.0f, nameR.getY(), 90.0f, nameR.getHeight()), Justification::centredLeft, false);
             }
-            else if (ctx.proc.isSoundEdited())
+            else if (ctx.proc.hasEdits())
             {
-                g.setFont (font (14.0f));
-                g.setColour (col::ice2);
-                g.drawText ("edited", Rectangle<float> (x, nameR.getY() + 1.0f, 70.0f, nameR.getHeight()), Justification::centredLeft, false);
+                // "edited" (any change: the sound, a MAIN knob, a macro, a switch) - a click offers "Revert to the preset"
+                const auto bf = font (14.0f);
+                editedR = Rectangle<float> (x, nameR.getCentreY() - 10.0f, textWidth (bf, "edited") + 16.0f, 20.0f);
+                g.setColour (col::ice.withAlpha (editedHot ? 0.16f : 0.08f));
+                g.fillRoundedRectangle (editedR, 10.0f);
+                g.setColour (col::ice2.withAlpha (editedHot ? 0.9f : 0.55f));
+                g.drawRoundedRectangle (editedR.reduced (0.5f), 10.0f, 1.0f);
+                g.setFont (bf);
+                g.setColour (col::ice);
+                g.drawText ("edited", editedR, Justification::centred, false);
             }
             const bool msg = statusMsg.isNotEmpty() && Time::getMillisecondCounter() < statusUntil;
             g.setFont (font (14.0f));
@@ -378,58 +410,31 @@ void MainPage::paintOverChildren (juce::Graphics& g)
 }
 
 //==============================================================================
-juce::String MainPage::quickText (int q, float v) const
+void MainPage::updateQuickKnob (int q)
 {
+    auto& k = quick[(size_t) q];
     const auto& snd = ctx.sound();
-    const bool neutral = std::abs (v - vault::quickInfo()[(size_t) q].neutral) < 0.004f;
-    switch (q)
-    {
-        case vault::qCutoff: return neutral ? juce::String ("0 oct") : (v > 0.5f ? "+" : "") + juce::String ((v - 0.5f) * 8.0f, 1) + " oct";
-        case vault::qReso: case vault::qEnvAmt: case vault::qGlide:
-            return neutral ? juce::String ("0%") : signedPct ((v - 0.5f) * 2.0f);
-        case vault::qAttack: case vault::qRelease:
-        {
-            if (neutral) return times() + "1.0";
-            const float mul = std::exp2 ((v - 0.5f) * 8.0f);
-            return times() + (mul >= 9.95f ? juce::String (juce::roundToInt (mul)) : juce::String (mul, mul < 0.1f ? 2 : 1));
-        }
-        case vault::qVibrato: return v < 0.004f ? juce::String ("off") : juce::String (juce::roundToInt (v * 60.0f)) + " ct";
-        case vault::qTremolo: return v < 0.004f ? juce::String ("off") : pct (v);
-        case vault::qPan:
-        {
-            const int p = juce::roundToInt ((v - 0.5f) * 200.0f);
-            return p == 0 ? juce::String ("C") : (p < 0 ? "L " : "R ") + juce::String (std::abs (p));
-        }
-        default: break;
-    }
-    // EFFECTS: the effective amount of the chain's slot (or the default slot the knob uses) + its type
-    const auto t = fxOfQuick (q);
-    const int slot = ctx.proc.fxSlotForQuick (q);
-    const VaultFxSlot* s = slot >= 0 ? &snd.fx[(size_t) slot] : nullptr;
-    const bool on = ctx.proc.isQuickFxOn (q) && ctx.proc.getSwitch (VaultProcessor::idFxOn);
-    if (! on) return "off";
-    const auto& ti = vault::fxTypeInfo (t);
-    const float designed = s != nullptr ? s->p[0] : (t == vault::FxType::width ? 0.5f : 0.0f);
-    switch (q)
-    {
-        case vault::qReverb: return pct (quickAmount (designed, v, 0.7f)) + " " + choiceName (ti.params[2], s != nullptr ? s->p[2] : 0.0f);
-        case vault::qDelay:
-        {
-            const bool sync = s == nullptr || s->get ("sync") > 0.5f;
-            const auto tm = sync ? choiceName (ti.params[1], s != nullptr ? s->p[1] : ti.params[1].def)
-                                 : juce::String (juce::roundToInt (s->get ("ms"))) + "ms";
-            return pct (quickAmount (designed, v, 0.6f)) + " " + tm;
-        }
-        case vault::qChorus: return pct (quickAmount (designed, v, 1.0f));
-        case vault::qDrive:  return pct (quickAmount (designed, v, 0.8f)) + " " + choiceName (ti.params[1], s != nullptr ? s->p[1] : 0.0f);
-        case vault::qWidth:  return pct (quickAmount (designed, v, 1.0f));
-        case vault::qEqTilt:
-        {
-            const float db = juce::jlimit (-12.0f, 12.0f, designed + (v - 0.5f) * 18.0f);
-            return (db > 0.05f ? "+" : "") + juce::String (db, 1) + " dB";
-        }
-        default: return {};
-    }
+    const auto c = val::Ctx::of (ctx.proc);
+    const auto view = val::quickView (snd, q);
+    const float neutral = vault::quickInfo()[(size_t) q].neutral;
+    const float designed = val::quickPosition (snd, c.withQuick (q, neutral), q);
+    // an effect that is off ("off": the slot switched off, or every FX bypassed) sits at the minimum - what is heard;
+    // turning it switches its slot on again (with every FX bypassed it waits for the top bar's FX switch)
+    const bool fxAllOff = view.kind == val::QuickView::fxKnob && ! ctx.proc.getSwitch (VaultProcessor::idFxOn);
+    const bool slotOff = view.kind == val::QuickView::fxKnob && ! fxAllOff && ! ctx.proc.isQuickFxOn (q);
+    k.setEnabledLook (view.kind != val::QuickView::offKnob && ! fxAllOff);
+    k.arcOrigin = fxAllOff || slotOff ? 0.0f : view.arcOrigin;
+    k.markValue = view.kind == val::QuickView::offKnob || fxAllOff || slotOff || q == vault::qVibrato || q == vault::qTremolo || q == vault::qPan ? -1.0f : designed;
+    k.resetValue = designed;
+    k.inactive = fxAllOff || slotOff;
+    k.setValue (k.inactive ? 0.0f : val::quickPosition (snd, c, q));
+    juce::String tip = vault::quickInfo()[(size_t) q].name + juce::String (": ") + vault::quickInfo()[(size_t) q].what;
+    if (view.kind == val::QuickView::offKnob) tip << " - " << view.why;
+    else if (view.kind == val::QuickView::layerKnob)
+        tip << " (shows layer " << juce::String::charToString ((juce::juce_wchar) ('A' + view.layer)) << "; the tick = as designed)";
+    else if (view.kind == val::QuickView::fxKnob) tip << " (the tick = as designed)";
+    k.setTooltip (tip);
+    k.repaint();
 }
 
 void MainPage::refresh()
@@ -441,7 +446,7 @@ void MainPage::refresh()
         auto& k = quick[(size_t) q];
         if (k.hasLed) { const bool on = fxOn && ctx.proc.isQuickFxOn (q); if (on != k.ledOn) { k.ledOn = on; k.repaint(); } }
         mod::show (k, snd, quickTarget (q));
-        k.repaint();   // value texts follow the sound (types, designed amounts)
+        updateQuickKnob (q);   // positions and texts follow the sound, its macros and the MAIN knobs
     }
     mod::show (volume, snd, "volume");
     const auto& bank = ctx.bankSound();
@@ -456,6 +461,38 @@ void MainPage::refresh()
         k.resetValue = bank.macroDefaults[i];
     }
     repaint (curRect().expanded (2));
+}
+
+void MainPage::mouseDown (const juce::MouseEvent& e)
+{
+    if (! editedR.contains (e.position)) return;
+    juce::PopupMenu m;
+    m.setLookAndFeel (&getLookAndFeel());
+    m.addItem (1, "Revert to the preset (undo every edit)");
+    juce::Component::SafePointer<MainPage> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (editedR.toNearestInt())), [safe] (int r)
+    {
+        if (safe == nullptr || r != 1) return;
+        safe->revertToPreset();
+    });
+}
+
+void MainPage::mouseMove (const juce::MouseEvent& e)
+{
+    const bool hot = editedR.contains (e.position);
+    if (hot != editedHot) { editedHot = hot; setMouseCursor (hot ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); repaint (curRect()); }
+}
+
+void MainPage::mouseExit (const juce::MouseEvent&)
+{
+    if (editedHot) { editedHot = false; setMouseCursor (juce::MouseCursor::NormalCursor); repaint (curRect()); }
+}
+
+void MainPage::revertToPreset()
+{
+    ctx.proc.revertAll();
+    if (ctx.soundEdited) ctx.soundEdited();
+    showStatus ("Back to the preset as designed");
 }
 
 void MainPage::tick()
@@ -530,7 +567,7 @@ juce::String MainPage::statusHint() const
                                            : juce::String (juce::CharPointer_UTF8 ("Sound library not found \xe2\x80\x94 synth sounds play, sampled layers are silent"));
         if (ctx.proc.isLoading()) return juce::String (juce::CharPointer_UTF8 ("Loading samples\xe2\x80\xa6 the sound plays as soon as they are in"));
     }
-    return "Click a sound to hear it at C5";
+    return juce::String (juce::CharPointer_UTF8 ("Click a sound to hear it at C5 \xc2\xb7 computer keys play: Z = C4, Q = C5, \xe2\x86\x90 \xe2\x86\x92 octave"));
 }
 
 //==============================================================================
@@ -545,6 +582,13 @@ void MainPage::setShown (int idx)
 void MainPage::loadPreset (int idx, bool audition)
 {
     if (! juce::isPositiveAndBelow (idx, model.size())) return;
+    if (idx == ctx.proc.currentPreset() && idx == shown)
+    {
+        // the sound that plays already: keep every edit (FX, layers, MAIN knobs) - only show / audition it
+        list.showRow (model.rowOf (idx));
+        if (audition && ctx.settings->previewOnClick()) auditionCurrent();
+        return;
+    }
     ctx.proc.selectPreset (idx);
     setShown (idx);
     model.pushRecent (idx);
@@ -588,10 +632,17 @@ void MainPage::filterChanged (bool scrollToCurrent, bool keepScroll)
     if (scrollToCurrent && row >= 0) list.showRow (row);
     else if (! keepScroll) list.scrollToTop();
     cats.setSelected (model.filter.category);
+    ctx.proc.editorMemory.category = model.filter.category;   // a reopened window shows this category again
+    cats.repaint();                             // the counts follow the search
+    repaint (searchRect());                     // the result count
     updateToggles();
 }
 
-void MainPage::setCategory (int c) { model.filter.category = juce::jlimit (-1, (int) vault::numCategories - 1, c); filterChanged(); }
+void MainPage::setCategory (int c)
+{
+    model.filter.category = juce::jlimit (-1, (int) vault::numCategories - 1, c);
+    filterChanged();
+}
 void MainPage::setQuery (const juce::String& q) { search.setText (q, false); model.filter.query = q; filterChanged(); }
 void MainPage::setLayers (int n) { model.filter.layers = juce::jlimit (0, (int) vault::maxParts, n); filterChanged(); }
 void MainPage::setFavoritesOnly (bool on) { model.filter.favoritesOnly = on; if (on) model.filter.recentOnly = false; filterChanged(); }
@@ -626,9 +677,11 @@ void MainPage::toggleFavorite (int idx)
 void MainPage::giveFocusBack()
 {
     // nobody in the plugin keeps the keyboard: the host gets the keys again (its computer-keyboard piano, shortcuts)
+    // the keyboard goes to the editor again: the computer keys play notes, nothing types into the search box
     ++focusReturnCount;
-    search.giveAwayKeyboardFocus();
-    unfocusAllComponents();
+    if (auto* ed = findParentComponentOfClass<VaultEditor>(); ed != nullptr && ed->isShowing()) ed->takeKeyboard();
+    else { search.giveAwayKeyboardFocus(); unfocusAllComponents(); }
+    search.setWantsKeyboardFocus (false);
     repaint (searchRect().expanded (2));
 }
 

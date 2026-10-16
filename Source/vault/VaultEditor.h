@@ -2,6 +2,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "VaultProcessor.h"
 #include "ui/VaultTheme.h"
+#include "ui/VaultComputerKeys.h"
 #include <array>
 
 class VaultMainView;
@@ -30,10 +31,18 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    // Keyboard: nothing in the editor takes the keyboard except the search box (only while typing in it). Keys are never
-    // used by the editor itself, so the DAW keeps its computer-keyboard piano / shortcuts whenever the search box is not
-    // being typed in. A click anywhere else, Return or Escape hands the keyboard back.
+    // Keyboard: the editor takes the keyboard when the user clicks into it (never on open: until then the DAW keeps its
+    // own computer-keyboard piano), and then the computer keyboard plays notes (vui::ComputerKeys, FL Studio's layout:
+    // Z = C4, Q = C5, Left / Right = octave, Up / Down = previous / next sound). No child keeps the keyboard: after any
+    // click it is the editor's again. Only a click INTO the search box types there; Return, Escape or a click anywhere
+    // else hands the keyboard back to the editor (and the keys play again).
     void mouseDown (const juce::MouseEvent&) override;   // (also from all children)
+    bool keyPressed (const juce::KeyPress&) override;
+    bool keyStateChanged (bool isKeyDown) override;
+    void focusLost (FocusChangeType) override;
+    void focusGained (FocusChangeType) override;
+    vui::ComputerKeys& computerKeys() { return keys; }
+    void takeKeyboard();                                  // the editor (not a child) gets the keyboard, if it is showing
 
     void setUiScale (float scale);                       // clamps to 80 % .. 200 %, resizes the window and remembers it
     float getUiScale() const { return uiScale; }
@@ -41,19 +50,26 @@ public:
 
     // test / snapshot hooks
     VaultMainView& view() { return *main; }
+    void checkDisplay() { fitToDisplay(); }
 
 private:
     void timerCallback() override;
     void fitToDisplay();                                 // once shown: re-check the size against the display it is really on
     void applyScale (float scale);                       // resize without remembering (first-open / display fit)
+    void limitToDisplay (juce::Rectangle<int> area);     // the corner drag's maximum = the screen
 
     VaultProcessor& proc;
+    vui::ComputerKeys keys { proc.getKeyboardState() };
     vui::VaultLookAndFeel lnf;
     std::shared_ptr<VaultSettings> settings;
     std::unique_ptr<VaultMainView> main;
     float uiScale = 1.0f;
     bool settingSize = false;
     bool displayChecked = false;
+    bool keysHintShown = false;
+    int displayTicks = 0;
+    bool clickedIn = false;                              // the user clicked into the plugin (from then on it keeps the keys)
+    juce::Rectangle<int> lastArea;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VaultEditor)
 };

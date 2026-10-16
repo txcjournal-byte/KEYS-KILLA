@@ -36,7 +36,7 @@ juce::String fxValueText (const vault::FxParamInfo& in, float v)
     if (in.choices != nullptr) return choiceName (in, v);
     const juce::String unit (in.unit);
     if (unit == "dB") return (v > 0.05f ? "+" : "") + juce::String (v, std::abs (v) < 9.95f ? 1 : 0) + " dB";
-    if (unit == "Hz") return hzText (v);
+    if (unit == "Hz") return in.lo <= 0.0f && v < 0.5f ? juce::String ("off") : hzText (v);   // "Mono Below 0 Hz" = off
     if (unit == "ms") return v >= 1000.0f ? juce::String (v / 1000.0f, 2) + " s" : juce::String (juce::roundToInt (v)) + " ms";
     if (unit == ":1") return juce::String (v, v < 9.95f ? 1 : 0) + ":1";
     if (unit == "x") return juce::String (v, 2) + "x";
@@ -71,14 +71,69 @@ juce::String amountText (const juce::String& target, float a)
     return sign + juce::String (juce::roundToInt (m * 100.0f)) + "%";
 }
 
-juce::String shortName (const juce::String& target)
+juce::String longName (const juce::String& target, const VaultPreset* p)
+{
+    using T = vault::TargetRef;
+    const auto t = vault::parseTarget (target);
+    if (t.kind == T::fxSlot)
+    {
+        // "fx1.mix" -> "Reverb Mix" (the effect that sits in that slot; a second one of a type: "Reverb 2 Mix")
+        const auto tail = target.fromFirstOccurrenceOf (".", false, false);
+        if (p != nullptr && juce::isPositiveAndBelow ((int) t.a, (int) p->fx.size()))
+        {
+            const auto type = p->fx[(size_t) t.a].type;
+            const auto& ti = vault::fxTypeInfo (type);
+            int nth = 0, same = 0;
+            for (int i = 0; i < (int) p->fx.size(); ++i)
+                if (p->fx[(size_t) i].type == type) { ++same; if (i <= (int) t.a) ++nth; }
+            const int pi = ti.indexOf (tail.toRawUTF8());
+            const juce::String prm = pi >= 0 ? juce::String (ti.params[(size_t) pi].name) : tail.substring (0, 1).toUpperCase() + tail.substring (1);
+            return juce::String (ti.name) + (same > 1 ? " " + juce::String (nth) : juce::String()) + " " + prm;
+        }
+        return "Effect " + juce::String (t.a + 1) + " " + tail.substring (0, 1).toUpperCase() + tail.substring (1);
+    }
+    return vault::describeTarget (target);
+}
+
+juce::String shortName (const juce::String& target, const VaultPreset* p)
 {
     using T = vault::TargetRef;
     const auto t = vault::parseTarget (target);
     if (t.kind == T::layer)
         return "L" + juce::String (t.a + 1) + " " + juce::StringArray { "Level", "Pan", "Cutoff", "Reso", "Attack", "Release", "Tune" }[t.b];
     if (t.kind == T::reso) return "Reso";
-    return vault::describeTarget (target);
+    return longName (target, p);
+}
+
+// two targets that move the same value: "fx.<type>.<param>" (the first slot of that type) and "fx<n>.<param>" when slot n
+// is that first slot - a routing on either shows its ring on the MAIN knob and on the FX page's knob
+bool sameTarget (const VaultPreset& p, const juce::String& a, const juce::String& b)
+{
+    if (a == b) return true;
+    using T = vault::TargetRef;
+    const auto ta = vault::parseTarget (a), tb = vault::parseTarget (b);
+    auto fxOf = [&] (const T& t, const juce::String& id, int& slot, juce::String& param) -> bool
+    {
+        if (t.kind == T::fxSlot)
+        {
+            slot = t.a;
+            param = id.fromFirstOccurrenceOf (".", false, false);
+            return juce::isPositiveAndBelow (slot, (int) p.fx.size());
+        }
+        if (t.kind == T::fxType)
+        {
+            const auto type = (vault::FxType) t.a;
+            slot = -1;
+            for (int i = 0; i < (int) p.fx.size(); ++i) if (p.fx[(size_t) i].type == type) { slot = i; break; }
+            const auto& ti = vault::fxTypeInfo (type);
+            param = juce::isPositiveAndBelow ((int) t.b, (int) ti.params.size()) ? juce::String (ti.params[(size_t) t.b].id) : juce::String();
+            return slot >= 0;
+        }
+        return false;
+    };
+    int sa = -1, sb = -1;
+    juce::String pa, pb;
+    return fxOf (ta, a, sa, pa) && fxOf (tb, b, sb, pb) && sa == sb && pa == pb && pa.isNotEmpty();
 }
 
 float amountOn (const VaultPreset& p, const juce::String& target, bool& any)
@@ -87,10 +142,10 @@ float amountOn (const VaultPreset& p, const juce::String& target, bool& any)
     float sum = 0;
     for (auto& l : p.mod.lfo)
         for (auto& d : l.dests)
-            if (d.target == target) { any = true; sum += d.amount * l.depth; }
+            if (sameTarget (p, d.target, target)) { any = true; sum += d.amount * l.depth; }
     for (auto* list : { &p.mod.modWheel, &p.mod.velocity, &p.mod.aftertouch })
         for (auto& d : *list)
-            if (d.target == target) { any = true; sum += d.amount; }
+            if (sameTarget (p, d.target, target)) { any = true; sum += d.amount; }
     return juce::jlimit (-1.0f, 1.0f, sum / range (target));
 }
 
@@ -138,7 +193,7 @@ void showMenu (UiContext& ctx, juce::Component& anchor, const juce::String& targ
     auto snapshot = ctx.sound();
     juce::PopupMenu m;
     m.setLookAndFeel (&anchor.getLookAndFeel());
-    m.addSectionHeader ("Modulate " + vault::describeTarget (target) + " with" + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6")));
+    m.addSectionHeader ("Modulate " + longName (target, &snapshot) + " with" + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6")));
     bool anyAt = false;
     for (int s = 0; s < 5; ++s)
     {
@@ -157,31 +212,40 @@ void showMenu (UiContext& ctx, juce::Component& anchor, const juce::String& targ
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&anchor), [&ctx, safe, target] (int r)
     {
         if (safe == nullptr || r <= 0) return;
-        juce::String msg;
-        ctx.edit ([&] (VaultPreset& p)
-        {
-            if (r == 9)
-            {
-                for (int s = 0; s < 5; ++s)
-                {
-                    auto* l = listFor (p, s);
-                    l->erase (std::remove_if (l->begin(), l->end(), [&] (const VaultModDest& d) { return d.target == target; }), l->end());
-                }
-                msg = "Modulation of " + vault::describeTarget (target) + " removed";
-                return;
-            }
-            const int s = r - 1;
-            auto* l = listFor (p, s);
-            const auto it = std::find_if (l->begin(), l->end(), [&] (const VaultModDest& d) { return d.target == target; });
-            if (it != l->end()) { l->erase (it); msg = juce::String (sourceName (s)) + " no longer moves " + vault::describeTarget (target); return; }
-            const float a = defaultAmount (target, s);
-            l->push_back ({ target, a });
-            if (s <= 1 && p.mod.lfo[s].depth <= 0.0f) p.mod.lfo[s].depth = 1.0f;
-            msg = juce::String (sourceName (s)) + juce::String (juce::CharPointer_UTF8 (" \xe2\x86\x92 ")) + vault::describeTarget (target) + " "
-                + amountText (target, a) + " (the amount: MOD page)";
-        });
-        ctx.say (msg);
+        apply (ctx, target, r == 9 ? -1 : r - 1);
+        if (safe != nullptr) safe->repaint();
     });
+}
+
+void apply (UiContext& ctx, const juce::String& target, int s)
+{
+    juce::String msg;
+    ctx.edit ([&] (VaultPreset& p)
+    {
+        if (s < 0)
+        {
+            for (int k = 0; k < 5; ++k)
+            {
+                auto* l = listFor (p, k);
+                l->erase (std::remove_if (l->begin(), l->end(), [&] (const VaultModDest& d) { return d.target == target; }), l->end());
+            }
+            msg = "Modulation of " + longName (target, &p) + " removed";
+            return;
+        }
+        s = juce::jlimit (0, 4, s);
+        auto* l = listFor (p, s);
+        const auto it = std::find_if (l->begin(), l->end(), [&] (const VaultModDest& d) { return d.target == target; });
+        if (it != l->end()) { l->erase (it); msg = juce::String (sourceName (s)) + " no longer moves " + longName (target, &p); return; }
+        const int cap = s <= 1 ? (int) vault::maxLfoDests : (int) vault::maxRoutings;
+        if ((int) l->size() >= cap) return;
+        const float a = defaultAmount (target, s);
+        l->push_back ({ target, a });
+        if (s <= 1 && p.mod.lfo[s].depth <= 0.0f) p.mod.lfo[s].depth = 1.0f;
+        msg = juce::String (sourceName (s)) + juce::String (juce::CharPointer_UTF8 (" \xe2\x86\x92 ")) + longName (target, &p) + " "
+            + amountText (target, a) + " (the amount: MOD page)";
+    });
+    // the green ring shows at once on whatever page is open (ctx.edit refreshed it)
+    if (msg.isNotEmpty()) ctx.say (msg);
 }
 
 void addTargetsMenu (juce::PopupMenu& menu, const VaultPreset& p, int firstId, juce::StringArray& ids)
