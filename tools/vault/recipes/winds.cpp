@@ -43,7 +43,7 @@
 //    macro is rendered at 0 and 1 (C5) and a side that breaks a comfort rule (2-5 kHz, > 6 / 8 kHz, fundamental, clipping,
 //    +4 dB louder, a longer tail) is shortened until it passes.
 //  * Arp / gate: off everywhere except 5 pattern presets with plain names, appended so every v2 id stays: Thumb Piano
-//    Arpeggio (Up-Down 1/16), Dan Tranh Arpeggio (Up 1/16), Balafon Sixteenths (As Played 1/16 with accents), Woodwind
+//    Arpeggio (Up-Down 1/16), Dan Tranh Arpeggio (Up 1/16), Balafon Sixteenths (As Played 1/16 with accents), Flute
 //    Arpeggio (Up 1/8, short gate), Gated Flute Choir (1/8 gate, 3 steps closed). Patterns start from Init.
 //  * Selection: the shipped v2 presets are accepted first (ids and names stay), then the other candidates; the own
 //    distinctness threshold stays 4.8 (WINDS_OWN_MIN) and the assembly QA limits (8 kHz share, centroid, chord headroom)
@@ -700,7 +700,7 @@ void addAll (const RecipeContext& ctx, std::vector<Cand>& out)
     pat ("Thumb Piano Arpeggio", vault::catWorld, { S ("world.kalimba", "pluck", "Thumb Piano") }, false, 1);
     pat ("Dan Tranh Arpeggio", vault::catWorld, { S ("world.dantranh", "pluck", "Dan Tranh", 0, dark) }, false, 2);
     pat ("Balafon Sixteenths", vault::catWorld, { S ("world.balafon", "soft mallet", "Balafon", 0, { { "s.width", 0.5f } }) }, false, 3);
-    pat ("Woodwind Arpeggio", vault::catFlutesWoodwinds, { S ("winds.flute.concert", "staccato", "Concert Flute", 1, fl),
+    pat ("Flute Arpeggio", vault::catFlutesWoodwinds, { S ("winds.flute.concert", "staccato", "Concert Flute", 1, fl),
                                                            lvl (S ("winds.clarinet", "staccato", "Clarinet", 1, soft), 0.55f, -0.3f) }, false, 4);
     pat ("Gated Flute Choir", vault::catFlutesWoodwinds, { S ("winds.flute.concert", "sustain", "Concert Flute", 0, fl),
                                                            lvl (S ("winds.recorder.tenor", "sustain", "Tenor Recorder", 0, soft), 0.5f, -0.35f),
@@ -1992,7 +1992,7 @@ std::vector<VaultPreset> build_winds (const RecipeContext& ctx)
         cacheRoles.readLines (cachedIds);
         std::map<juce::String, size_t> at;
         for (size_t i = 0; i < all.size(); ++i) at[all[i].id] = i;
-        for (auto& p : out) outRoles.push_back (roles[at[p.id]]);
+        for (auto& p : out) { outRoles.push_back (roles[at[p.id]]); p.name = all[at[p.id]].name; }   // names follow the current list
         std::printf ("winds: v2 stage from the cache (%d presets)\n", (int) out.size());
     }
     else

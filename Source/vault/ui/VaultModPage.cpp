@@ -187,7 +187,7 @@ struct ModPage::LfoCard : public juce::Component
     void refresh()
     {
         const auto& L = ctx.sound().mod.lfo[lfo];
-        power.setToggleState (L.depth > 0.0f, juce::dontSendNotification);
+        power.setToggleState (L.depth > 0.0f && ! L.dests.empty(), juce::dontSendNotification);   // lit = it moves something
         shapes.setSelected (L.shape);
         syncSeg.setSelected (L.sync ? 0 : 1);
         retrigSeg.setSelected (L.retrig ? 0 : 1);
@@ -242,7 +242,7 @@ struct ModPage::LfoCard : public juce::Component
     {
         drawPanel (g, getLocalBounds().toFloat());
         const auto& L = ctx.sound().mod.lfo[lfo];
-        const bool on = L.depth > 0.0f;
+        const bool on = L.depth > 0.0f && ! L.dests.empty();   // an LFO with no destination is shown off (it moves nothing)
         g.setFont (font (18.0f, true));
         g.setColour (on ? col::text : col::dim);
         g.drawText ("LFO " + juce::String (lfo + 1), juce::Rectangle<float> (44.0f, 10.0f, 120.0f, 30.0f), juce::Justification::centredLeft, false);

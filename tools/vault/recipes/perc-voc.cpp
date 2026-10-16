@@ -47,7 +47,7 @@
 //  * The whole v3 sound is refitted at C5 before the macros are made (2-5 kHz <= 7.5 %, > 6 kHz <= 2 %, > 8 kHz <= 0.7 %,
 //    centroid 80 Hz under the category ceiling, fundamental >= -2.5 dB on everything but the bells).
 //  * Arp / gate: off everywhere except 4 rhythm presets with plain names, patterns from Init (rate / mode / octaves /
-//    length / steps only), appended after the shipped presets: Marimba Arpeggio (up, 1/16), Music Box Arpeggio
+//    length / steps only), appended after the shipped presets: Marimba Arpeggio (up, 1/16), Music Box Eighths
 //    (up-down, 1/8), Gated Choir (1/16 gate), Gated Vocal Pad (1/16 gate).
 //  * Selection: the shipped v2 selection is pinned by name (the greedy search below is order-sensitive; PV_FULL=1 runs it
 //    again), every shipped preset keeps its id and name; then the finished sounds go through the gate's own analysis
@@ -2087,7 +2087,7 @@ std::vector<Pattern> patterns()
 {
     return {
         { "Marimba Arpeggio", vault::catBellsMallets, { with (marimba (0), { { "s.cutoff", 3000.0f } }) }, kStrike, 1 },
-        { "Music Box Arpeggio", vault::catBellsMallets, { musicBox (1) }, kStrike, 2 },
+        { "Music Box Eighths", vault::catBellsMallets, { musicBox (1) }, kStrike, 2 },
         { "Gated Choir", vault::catVocalsChoir, choirBlend (0, 0.6f, 8), kHeld, 3 },
         { "Gated Vocal Pad", vault::catVocalsChoir, { vpad (2, 0.9f) }, kPad, 4 },
     };

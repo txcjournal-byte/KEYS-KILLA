@@ -231,7 +231,7 @@ if(KK_BUILD_TESTS)
 endif()
 
 # --- vault bank ---------------------------------------------------------------
-# VaultBankGen: assembles the v2 factory bank resources/vault/factory.cvb from the preset recipes (tools/vault/recipes,
+# VaultBankGen: assembles the factory bank (v3) resources/vault/factory.cvb from the preset recipes (tools/vault/recipes,
 # gate tools/vault/recipes/RecipeGate.h): VaultBankGen -recipe all -qa -out resources/vault/factory.cvb (resources/vault/README.md).
 # -v1 runs the legacy v1 synth-bank generator. The generated .cvb is committed, so normal builds / CI never need to run it.
 if(KK_BUILD_TESTS)

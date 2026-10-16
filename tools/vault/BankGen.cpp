@@ -1732,6 +1732,36 @@ int main (int argc, char** argv)
     const auto cwd = juce::File::getCurrentWorkingDirectory();
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
 
+    if (argc > 2 && juce::String (argv[1]) == "-stats")   // -stats <bank.cvb>: v3 sections per category (FX slots, LFOs, macros, arp / gate)
+    {
+        std::vector<VaultPreset> b;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b)) return 1;
+        struct S { int n = 0, slots = 0, maxSlots = 0, lfo = 0, named = 0, arp = 0, gate = 0; };
+        std::map<int, S> st;
+        S all;
+        for (auto& p : b)
+            for (auto* s : { &st[p.category], &all })
+            {
+                int on = 0;
+                for (auto& f : p.fx) on += f.on ? 1 : 0;
+                ++s->n; s->slots += on; s->maxSlots = std::max (s->maxSlots, on);
+                bool lfo = false;
+                for (auto& l : p.mod.lfo) lfo |= ! l.dests.empty();
+                s->lfo += lfo ? 1 : 0;
+                int named = 0;
+                for (auto& m : p.macros) named += m.name.isNotEmpty() && ! m.targets.empty() ? 1 : 0;
+                s->named += named == 4 ? 1 : 0;
+                s->arp += p.arp.on ? 1 : 0; s->gate += p.gate.on ? 1 : 0;
+            }
+        auto row = [] (const char* name, const S& s)
+        {
+            std::printf ("%-20s %5d  slots %.2f (max %d)  LFO %5d  4 macros %5d  arp %3d  gate %3d\n", name, s.n, s.n ? (double) s.slots / s.n : 0.0,
+                         s.maxSlots, s.lfo, s.named, s.arp, s.gate);
+        };
+        for (auto& [c, s] : st) row (vault::categoryNames()[c].toRawUTF8(), s);
+        row ("all", all);
+        return 0;
+    }
     if (argc > 2 && juce::String (argv[1]) == "-list")   // -list <bank.cvb>: id, name, layers, tags
     {
         std::vector<VaultPreset> b;
@@ -1743,6 +1773,133 @@ int main (int argc, char** argv)
             std::printf ("%s\t%s\t%s\t%s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), lab.joinIntoString (" + ").toRawUTF8(),
                          vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)].toRawUTF8());
         }
+        return 0;
+    }
+    if (argc > 2 && juce::String (argv[1]) == "-macrocheck")   // -macrocheck <bank.cvb> [fails.tsv] [threads] [fixed.cvb]: every sound macro at 0 and 1
+    {
+        // the assembly's macro check (recipegate::checkPresetMacros) on a finished bank, without re-running the recipes;
+        // with fixed.cvb the failing sides are narrowed (as the assembly does) and the bank is written there
+        std::vector<VaultPreset> b;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b)) { std::printf ("cannot load %s\n", argv[2]); return 1; }
+        const int threads = argc > 4 ? juce::jmax (1, juce::String (argv[4]).getIntValue()) : (int) std::max (1u, std::thread::hardware_concurrency());
+        std::vector<recipegate::MacroCheck> mcs (b.size());
+        std::atomic<int> next { 0 }, done { 0 };
+        std::vector<std::thread> pool;
+        for (int t = 0; t < threads; ++t)
+            pool.emplace_back ([&]
+            {
+                for (int k; (k = next++) < (int) b.size();)
+                {
+                    mcs[(size_t) k] = recipegate::checkPresetMacros (b[(size_t) k], argc > 5);
+                    if (const int d = ++done; d % 200 == 0) std::printf ("  %d / %d\n", d, (int) b.size());
+                }
+            });
+        for (auto& t : pool) t.join();
+        int checked = 0, quiet = 0;
+        juce::StringArray fails;
+        std::map<juce::String, int> why;
+        for (auto& mc : mcs) { checked += mc.checked; quiet += mc.quiet; fails.addArray (mc.fails); for (auto& [w, n] : mc.why) why[w] += n; }
+        std::printf ("macro check: %d presets, %d macros at 0 and 1, %d with an extreme outside the bank rules, %d barely audible\n",
+                     (int) b.size(), checked, fails.size(), quiet);
+        for (auto& [w, n] : why) std::printf ("  macro extreme %-14s %d\n", w.toRawUTF8(), n);
+        for (auto& f : fails) std::printf ("  %s\n", f.toRawUTF8());
+        if (argc > 3) cwd.getChildFile (argv[3]).replaceWithText (fails.joinIntoString ("\n") + (fails.isEmpty() ? "" : "\n"));
+        if (argc > 5)
+        {
+            int fixed = 0, narrowed = 0;
+            for (auto& mc : mcs) { fixed += mc.fixed.size(); narrowed += mc.narrowed; }
+            std::printf ("narrowed %d times, %d macros fixed\n", narrowed, fixed);
+            if (! vault::saveBankFile (cwd.getChildFile (argv[5]), b)) { std::printf ("cannot write %s\n", argv[5]); return 1; }
+        }
+        return fails.isEmpty() ? 0 : 2;
+    }
+    if (argc > 3 && juce::String (argv[1]) == "-listen3")   // -listen3 <bank.cvb> <dir> [id|id|...]: the v3 listening clips
+    {
+        // per preset: <id>.ogg (the listening phrase, 4 s) and <id>_m1.ogg (sound macro 1 swept 0 -> 1, 6 s), plus picks.tsv
+        // (id, name, category, layers, recipe-free style line: FX chain / movement / macro names). Without ids: 4 presets per
+        // category picked for different processing: the first preset, the first arp / gate preset (if any), then greedily
+        // the most different FX chain + macro set + instrument.
+        std::vector<VaultPreset> b;
+        if (! vault::loadBankFile (cwd.getChildFile (argv[2]), b)) { std::printf ("cannot load %s\n", argv[2]); return 1; }
+        auto dir = cwd.getChildFile (argv[3]);
+        dir.createDirectory();
+        auto tokens = [] (const VaultPreset& p)
+        {
+            std::set<juce::String> t;
+            for (auto& s : p.fx) if (s.on) t.insert (juce::String ("fx:") + vault::fxTypeInfo (s.type).id
+                                                     + (s.type == vault::FxType::reverb || s.type == vault::FxType::drive ? juce::String ((int) s.get ("type")) : juce::String()));
+            for (auto& m : p.macros) if (m.name.isNotEmpty()) t.insert ("m:" + m.name.toLowerCase());
+            for (auto& pt : p.parts) t.insert ("src:" + pt.source);
+            if (p.arp.on) t.insert ("arp");
+            if (p.gate.on) t.insert ("gate");
+            return t;
+        };
+        auto jdist = [] (const std::set<juce::String>& a, const std::set<juce::String>& c)
+        {
+            int inter = 0; for (auto& x : a) inter += c.count (x) ? 1 : 0;
+            const int uni = (int) (a.size() + c.size()) - inter;
+            return uni > 0 ? 1.0f - (float) inter / (float) uni : 0.0f;
+        };
+        std::vector<int> picks;
+        if (argc > 4)
+        {
+            for (auto& id : juce::StringArray::fromTokens (argv[4], "|", ""))
+                for (int i = 0; i < (int) b.size(); ++i) if (b[(size_t) i].id == id || b[(size_t) i].name == id) picks.push_back (i);
+        }
+        else
+            for (int c = 0; c < vault::numCategories; ++c)
+            {
+                std::vector<int> idx;
+                for (int i = 0; i < (int) b.size(); ++i) if (b[(size_t) i].category == c) idx.push_back (i);
+                if (idx.empty()) continue;
+                std::vector<int> mine { idx.front() };
+                int patterns = (b[(size_t) idx.front()].arp.on || b[(size_t) idx.front()].gate.on) ? 1 : 0;
+                for (int i : idx)   // the category's first arp / gate preset, when it has one (the rhythm side of the bank)
+                    if (patterns == 0 && (b[(size_t) i].arp.on || b[(size_t) i].gate.on)) { mine.push_back (i); patterns = 1; }
+                while ((int) mine.size() < 4 && mine.size() < idx.size())
+                {
+                    int best = -1; float bestD = -1;
+                    for (int i : idx)
+                    {
+                        if (std::find (mine.begin(), mine.end(), i) != mine.end()) continue;
+                        const bool pat = b[(size_t) i].arp.on || b[(size_t) i].gate.on;
+                        if (pat && patterns > 0) continue;   // at most one arp / gate preset per category
+                        float d = 1.0e9f;
+                        for (int j : mine) d = std::min (d, jdist (tokens (b[(size_t) i]), tokens (b[(size_t) j])));
+                        if (d > bestD + 1.0e-4f) { bestD = d; best = i; }
+                    }
+                    if (best < 0) break;
+                    patterns += (b[(size_t) best].arp.on || b[(size_t) best].gate.on) ? 1 : 0;
+                    mine.push_back (best);
+                }
+                picks.insert (picks.end(), mine.begin(), mine.end());
+            }
+        juce::String tsv ("id\tname\tcategory\tlayers\tstyle\tmacros\n");
+        for (int i : picks)
+        {
+            const auto& p = b[(size_t) i];
+            const auto ph = recipegate::renderPhrase (p);
+            const auto sw = recipegate::renderMacroSweep (p, 0, 6.0);
+            const bool ok1 = recipegate::writeOgg (dir.getChildFile (p.id + ".ogg"), ph, 2);
+            const bool ok2 = recipegate::writeOgg (dir.getChildFile (p.id + "_m1.ogg"), sw, 2);
+            juce::StringArray lab, chain, mods, macs;
+            for (auto& pt : p.parts) lab.add (pt.label + (pt.octave != 0 ? juce::String::formatted (" (%+d)", pt.octave) : juce::String()));
+            for (auto& s : p.fx) if (s.on) chain.add (vault::fxTypeInfo (s.type).name);
+            for (int l = 0; l < 2; ++l)
+                for (auto& d : p.mod.lfo[l].dests) if (p.mod.lfo[l].depth > 0.0f && d.amount != 0.0f) mods.addIfNotAlreadyThere (d.target);
+            for (auto& m : p.macros) macs.add (m.name.isNotEmpty() ? m.name : juce::String ("-"));
+            juce::String style = chain.isEmpty() ? juce::String ("no effects") : chain.joinIntoString (" > ");
+            if (! mods.isEmpty()) style << " | LFO: " << mods.joinIntoString (", ");
+            if (p.arp.on) style << " | Arp " << juce::String (p.arp.mode == VaultArp::up ? "Up" : p.arp.mode == VaultArp::down ? "Down" : p.arp.mode == VaultArp::upDown ? "Up-Down"
+                                                             : p.arp.mode == VaultArp::asPlayed ? "As Played" : p.arp.mode == VaultArp::random ? "Random" : "Chord")
+                                  << " " << vault::divisions()[(int) p.arp.rate].name;
+            if (p.gate.on) style << " | Gate " << vault::divisions()[(int) p.gate.rate].name;
+            tsv << p.id << "\t" << p.name << "\t" << vault::categoryNames()[juce::jlimit (0, (int) vault::numCategories - 1, p.category)] << "\t"
+                << lab.joinIntoString (" + ") << "\t" << style << "\t" << macs.joinIntoString (" / ") << "\n";
+            std::printf ("%s %-26s phrase peak %.3f, sweep peak %.3f %s\n", p.id.toRawUTF8(), p.name.toRawUTF8(), ph.getMagnitude (0, ph.getNumSamples()),
+                         sw.getMagnitude (0, sw.getNumSamples()), ok1 && ok2 ? "ok" : "OGG FAILED");
+        }
+        dir.getChildFile ("picks.tsv").replaceWithText (tsv);
         return 0;
     }
     if (argc > 2 && juce::String (argv[1]) == "-check")   // -check <bank.cvb> [first count]: re-render presets at their final gain through the gate

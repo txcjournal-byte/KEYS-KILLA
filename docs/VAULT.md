@@ -20,7 +20,8 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 
 ## v2 status (what exists, what is next)
 
-* v3 (FX chain, modulation, sound macros, arp, gate, MAIN knobs, locks; CVB v3; the bank converted): see "v3" below.
+* v3 (FX chain, modulation, sound macros, arp, gate, MAIN knobs, locks; CVB v3), the v3 editor and the v3 factory bank
+  (every preset finished by its designer recipe): see "v3" and "The v3 factory bank" below.
 * Done (core): part kinds + `CVB` v2 (v1 still read), the multi-zone sampler, the sample library format + loader + LRU
   cache, the library builder `VaultLibBuild`, the model interface +
   registry (+ the `sine` example), the 16 v2 categories, Style / Character tags removed everywhere, C5 + keyboard-focus
@@ -45,9 +46,8 @@ nothing piercing. `VaultTests -libreport` prints these measurements per instrume
 
 Every preset now ships "finished": an FX chain, modulation, four named sound macros and (optionally) arp / gate settings,
 all of which the MAIN page tweaks and the ADVANCED tabs edit. Status: engine, data format, processor API, recipe API,
-converted bank and tests are done; the v3 editor (MAIN / LAYERS / FX / MOD / ARP·GATE, from the approved mockup) and the
-designers' enrichment of the bank are next. The shipped bank is the v2 bank converted losslessly (below): it sounds
-exactly as before until the recipes set the new sections.
+the v3 editor (MAIN / LAYERS / FX / MOD / ARP·GATE, from the approved mockup) and the v3 factory bank (every preset with
+its own chain, movement and four named macros, see "The v3 factory bank") are done.
 
 ### Data model (`VaultTypes.h`)
 
@@ -306,6 +306,7 @@ designed; keep bright FX (drive, shimmer, exciters) under those limits.
 | `tools/vault/recipes/Recipe.h`, `recipes/*.cpp` | the v2 preset recipes: one file per sound designer (`keys`, `strings`, `orch`, `winds`, `perc-voc`, `synth`), each registered with `VAULT_RECIPE` |
 | `tools/vault/recipes/RecipeGate.h` | the v2 bank gate + assembly (`VaultBankGen -recipe <name>\|all`): C5 renders, comfort rules, loudness + peak control, chord headroom, distinctness, report, listening renders |
 | `tools/vault/bank_report_doc.py`, `listen_page.py`, `listen_picks.py` | `docs/VAULT_BANK_REPORT.md` from the assembly report; the owner's listening page (4 presets per category) |
+| `tools/vault/listen3_page.py` | the v3 listening page from `VaultBankGen -listen3` clips (phrase + macro-1 sweep per preset, Czech headings, votes) |
 | `tools/vault/BankGen.cpp` | console target `VaultBankGen`: `-recipe` runs the v2 recipes (RecipeGate.h); the rest is the legacy v1 synth-bank generator (`-v1`, never writes the shipped bank by default) |
 | `tools/vault/BankQC.h`, `BankAudit.h` | v1 quality gate / audit (shared with VaultTests) |
 | `tests/VaultTests.cpp` | console target `VaultTests` |
@@ -856,7 +857,72 @@ library when one is installed or named by `CHROME_VAULT_LIBRARY` (picking the bi
 the UI thread and shows Loading, the state ends when the samples are in, an instrument the library lacks gets the "newer
 sound library" card); both at 80 / 100 % with the 14 px minimum text.
 
-## The v2 factory bank (`resources/vault/factory.cvb`, `VaultBankGen -recipe all`)
+## The v3 factory bank (`resources/vault/factory.cvb`, `VaultBankGen -recipe all`)
+
+3,380 presets in 16 categories. Every preset is a finished sound from its designer recipe: an FX chain (5.0 slots on
+average, at most 8; the v2-converted bank had 1.75), movement (LFOs on 2,237 presets, mod wheel / velocity / aftertouch
+routings) and sound macros named for that sound (four on 3,370 presets, fewer on 10 Plucks / FX); arp and gate are off
+except on 31 plain-named rhythm presets (20 arp, 11 gate: "... Arpeggio", "Gated ...", "... Eighths"). `VaultBankGen
+-stats <bank.cvb>` prints these numbers per category. Nobody has listened to it yet:
+every judgement is measured. QC report: `docs/VAULT_BANK_REPORT.md`.
+
+```
+CHROME_VAULT_LIBRARY=/home/user/cv-library build-vault/VaultBankGen_artefacts/Release/VaultBankGen -recipe all -qa -chords \
+    -macros /tmp/cv-macrofails.tsv -cache /tmp/cv-cache -threads 4 -out resources/vault/factory.cvb -report /tmp/cv-full-report.md
+python3 tools/vault/bank_report_doc.py /tmp/cv-full-report.md docs/VAULT_BANK_REPORT.md
+VaultBankGen -macrocheck <bank.cvb> [fails.tsv] [threads] [fixed.cvb]   # the macro check alone on a finished bank
+VaultBankGen -listen3 <bank.cvb> <dir> ["id|id|..."]                    # listening clips: phrase + macro-1 sweep (OGG) + picks.tsv
+python3 tools/vault/listen3_page.py <dir> index.html                    # the owner's listening page (Czech, votes, summary)
+```
+
+Time on 4 cores with an empty cache: about 2 h 30 for the six recipes (keys 24 min, orch 11, perc-voc 8, strings 16,
+synth 34, winds 18 with their own v2 caches: `KEYS_V2_CACHE`, `ORCH_V2CACHE`, `PV_V2CACHE`, `WINDS_V2_CACHE`,
+`SYNTH_V2_CACHE`), 20 min to measure the 3,431 candidates and about 60 min for the macro check. With `-cache` every stage
+is cached (recipe output per recipe, measurements and macro results keyed by a hash of the preset); a re-run with
+nothing changed takes 10 s and writes the identical bank.
+
+**Gate**: the v2 gate and assembly QA below, unchanged, on the whole v3 sound (FX chain on, modulation, arp / gate as
+designed). **Macro check** (`-macros`, new): every sound macro of every accepted preset rendered at 0 and at 1 (the other
+macros at their defaults, C5 at the preset's final gain); an extreme fails when it breaks a rule the designed sound keeps:
+clipping at velocity 1.0, 2-5 kHz > 10 %, > 6 kHz > 3 %, > 8 kHz > 1 %, the fundamental > 3 dB under the strongest
+harmonic (not Bells & Mallets / FX & Atmos), > 4 dB louder than designed, or a tail longer than the gate's category limit.
+A failing side is narrowed (x0.55 per round, the fourth round takes it away) and the knob re-mapped so the designed sound
+at its default stays exactly the same (`recipegate::narrowMacro`). The recipes already ran the same check at their own
+gain; the assembly re-runs it at the final gain after peak control.
+
+**Result** (2026-10-16): 3,380 of 3,431 candidates (rejected: 46 cross-recipe near-duplicates, 2 near-duplicates, 2
+loudness, 1 too quiet). Min pairwise distance 3.50 (Velvet Folk Harp / Hushed Folk Harp Swell), across recipes 3.50.
+Peak control on 79 presets. At C5: fundamental within 3 dB of the strongest harmonic (inharmonic bells / FX excepted),
+2-5 kHz <= 9.1 % (median <= 0.9 % per category), > 6 kHz <= 0.93 %, > 8 kHz <= 0.59 %, loudness within 1.3 dB of the
+category target, the listening phrase at most +1.9 dB over the safety limiter (median -3.5 .. -12.1 dB per category).
+Macros: 13,510 checked, 28 extremes broke a rule (7 clip, 7 louder, 7 > 8 kHz, 4 fundamental, 2 tail, 1 2-5 kHz; 15 of
+them in Piano / Keys & Organ) and were narrowed (59 narrowings), none left; 2,252 (17 %) change the measured sound only
+slightly (slow drift / motion LFOs, reverb amounts on long sounds, pitch wobble the measurement does not see).
+
+| category | presets | | category | presets |
+| --- | ---: | --- | --- | ---: |
+| Piano | 193 | | Bells & Mallets | 196 |
+| Keys & Organ | 210 | | Vocals & Choir | 191 |
+| Guitars | 172 | | Plucks | 271 |
+| Bass | 200 | | Leads | 184 |
+| Strings | 256 | | Pads | 215 |
+| Brass | 212 | | Synth | 252 |
+| Flutes & Woodwinds | 242 | | World | 212 |
+| Orchestral | 157 | | FX & Atmos | 217 |
+
+**Ids against the previous (v2-converted) bank**: 3,164 of its 3,377 presets keep id and name; 208 ids are gone (90
+Guitars, 24 Bass, 20 World, 16 Flutes & Woodwinds, 11 Leads, the rest <= 9 per category: the v3 chains made them too
+close to a sibling, or the recipe's selection changed), 211 new ids are appended. Five Piano / Keys ids now hold a
+different, renamed preset (the keys recipe turned them into its arp / gate presets): cv.piano.0032 Night Drive Tine Piano
+-> Gated Dreamwave, cv.piano.0073 Rising FM Piano -> Gated FM Piano, cv.piano.0084 Rising Digital Piano -> Gated Digital
+Piano, cv.keys.0091 Echo FM Keys -> FM Keys Arpeggio, cv.keys.0110 Echo Music Box -> Music Box Arpeggio.
+
+**Listening page**: `VaultBankGen -listen3` picks 4 presets per category (the first preset, the category's first arp /
+gate preset, then the most different FX chain + macro set + instrument) and renders the listening phrase (C5 E5 G5 C6,
+then the C5 triad, 4 s) and sound macro 1 swept 0 -> 1 over 6 s; `tools/vault/listen3_page.py` embeds them as base64 OGG
+in one page (about 8 MB) with votes kept in the browser and a summary to copy.
+
+## The v2 factory bank (previous; kept for reference) (`resources/vault/factory.cvb`, `VaultBankGen -recipe all`)
 
 3,377 presets in 16 categories, every one built by a sound-design recipe and measured; nothing in the bank has been
 listened to by a person yet (the owner's listening page is the first ear). QC report of the shipped bank:

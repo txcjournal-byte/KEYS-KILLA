@@ -27,6 +27,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <set>
@@ -333,7 +334,8 @@ inline void writeWav (const juce::File& f, const juce::AudioBuffer<float>& b)
 
 // ---- assembly (VaultBankGen -recipe all): caches, cross-recipe distinctness, the assembly QA, listening renders ----------
 constexpr int gateVersion = 4;   // bump when analyse() changes (invalidates the analysis cache)
-constexpr int peakControlVersion = 2;   // bump when the engine's peak control changes (invalidates only presets that use it)
+constexpr int peakControlVersion = 2;
+constexpr int macroCheckVersion = 1;   // bump when the assembly macro check / narrowing changes (invalidates macros.tsv)   // bump when the engine's peak control changes (invalidates only presets that use it)
 
 // the recipe that owns a cross-recipe near-duplicate pair keeps it in this order: real instruments first, generic synth last
 inline int recipePriority (const juce::String& g)
@@ -431,6 +433,51 @@ inline bool writeOgg (const juce::File& f, const juce::AudioBuffer<float>& b, in
     return false;
 }
 
+// listening clip for a sound macro: the knob swept from 0 to 1 over the clip (the other macros at their defaults) while
+// C5 E5 G5 C6 G5 E5 ... plays (0.6 s notes every 0.7 s, velocity ~0.77)
+inline juce::AudioBuffer<float> renderMacroSweep (const VaultPreset& p, int macroIndex, double seconds = 6.0)
+{
+    const auto compiled = VaultEngine::compile (p);
+    auto eng = std::make_unique<VaultEngine>();
+    for (int m = 0; m < vault::numMacros; ++m) eng->setMacro (m, m == macroIndex ? 0.0f : compiled.macroDefaults[m]);
+    eng->setArpOn (compiled.ctl.arp.on);
+    eng->setGateOn (compiled.ctl.gate.on);
+    constexpr int block = 256;
+    eng->prepare (sr, block, std::max (1, compiled.numParts), false);
+    eng->setPreset (compiled, true);
+    for (int k = 0; k < compiled.numParts; ++k)
+        if (auto* h = compiled.parts[(size_t) k].instrument; h != nullptr && compiled.library != nullptr)
+            compiled.library->loadNow (h);
+    eng->serviceResources();
+    juce::MidiBuffer mb;
+    auto at = [] (double t) { return (int) std::round (t * sr); };
+    const int mel[] { 60, 64, 67, 72, 67, 64 };
+    const double sweepEnd = seconds - 0.6;
+    int k = 0;
+    for (double t = 0.0; t + 0.6 < sweepEnd; t += 0.7, ++k)
+    {
+        mb.addEvent (juce::MidiMessage::noteOn (1, mel[k % 6], (juce::uint8) 98), at (t));
+        mb.addEvent (juce::MidiMessage::noteOff (1, mel[k % 6]), at (t + 0.6));
+    }
+    const int n = at (seconds);
+    juce::AudioBuffer<float> out (2, n), buf (2, block);
+    out.clear();
+    for (int s0 = 0; s0 < n; s0 += block)
+    {
+        const int len = std::min (block, n - s0);
+        eng->setMacro (macroIndex, (float) juce::jlimit (0.0, 1.0, (s0 / sr) / std::max (0.1, sweepEnd - 0.5)));
+        juce::MidiBuffer slice;
+        for (const auto meta : mb)
+            if (meta.samplePosition >= s0 && meta.samplePosition < s0 + len) slice.addEvent (meta.getMessage(), meta.samplePosition - s0);
+        buf.setSize (2, len, false, false, true);
+        eng->process (buf, slice);
+        for (int c = 0; c < 2; ++c) out.copyFrom (c, s0, buf, c, 0, len);
+    }
+    const int fade = at (0.35);
+    for (int c = 0; c < 2; ++c) out.applyGainRamp (c, n - fade, fade, 1.0f, 0.0f);
+    return out;
+}
+
 inline juce::String statLine (std::vector<float> v, int decimals, float scale = 1.0f)
 {
     if (v.empty()) return "-";
@@ -446,14 +493,206 @@ inline void roundLikeCache (Result& r)
     r.fail = fail;
 }
 
+// ---- assembly macro check (VaultBankGen -recipe all -macros): every sound macro of every accepted preset at 0 and at 1 --
+// rendered at C5 at the preset's final gain with the whole v3 sound (FX chain on, modulation, arp / gate as designed); an
+// extreme fails when it breaks a bank rule that the designed sound (macros at their defaults) keeps: clipping at velocity
+// 1.0, 2-5 kHz > 10 %, > 6 kHz > 3 %, > 8 kHz > 1 % (assembly QA), the fundamental > 3 dB under the strongest harmonic (not
+// Bells & Mallets / FX & Atmos), NaN / silence, > 4 dB louder than the designed sound, or a tail longer than the gate's
+// category limit (10 s, Pads / FX & Atmos 16 s; the same 60 dB rule as analyse(), checked on a full-length render only
+// when the short probe still rings at its end). The renders already carry the preset gain (the engine applies it).
+struct MacroProbe
+{
+    juce::AudioBuffer<float> c5;
+    float loud = -120, s25 = 0, s6 = 0, s8 = 0, h1 = 0, peak127 = 0, tailEnd = -200, tailMax = -200;
+    bool finite = true;
+};
+inline MacroProbe macroProbe (const VaultPreset& p, const float* mv, double total)
+{
+    MacroProbe r;
+    juce::MidiBuffer mb;
+    mb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 102), 0);
+    mb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (holdSeconds * sr));
+    r.c5 = VaultEngine::renderMidi (p, mb, (int) (total * sr), sr, mv);
+    const auto a = vaultqc::analyse (r.c5, sr, holdSeconds);
+    r.finite = a.finite;
+    if (! r.finite) return r;
+    r.loud = a.loud;
+    const auto sp = spectrum (r.c5, 0.05);
+    const double tot = std::max (1e-20, bandPower (sp, 20, 20000));
+    r.s25 = (float) (bandPower (sp, 2000, 5000) / tot);
+    r.s6 = (float) (bandPower (sp, 6000, 20000) / tot);
+    r.s8 = (float) (bandPower (sp, 8000, 20000) / tot);
+    const float f0 = soundingHz (p, vault::homeNote);
+    const float h1 = peakDb (sp, f0 * 0.97, f0 * 1.03);
+    float strongest = h1;
+    for (int k = 2; k <= 24 && k * f0 < 16000.0f; ++k) strongest = std::max (strongest, peakDb (sp, k * f0 * 0.985, k * f0 * 1.015));
+    r.h1 = h1 - strongest;
+    const int fr = (int) (0.01 * sr), nf = r.c5.getNumSamples() / fr;
+    for (int fi = 0; fi < nf; ++fi)
+    {
+        double acc = 0;
+        for (int i = fi * fr; i < (fi + 1) * fr; ++i) acc += 0.5 * ((double) r.c5.getSample (0, i) * r.c5.getSample (0, i) + (double) r.c5.getSample (1, i) * r.c5.getSample (1, i));
+        const float e = vaultaudit::db (acc / fr + 1e-20);
+        r.tailMax = std::max (r.tailMax, e);
+        if (fi >= nf - 10) r.tailEnd = std::max (r.tailEnd, e);
+    }
+    juce::MidiBuffer hb;
+    hb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 127), 0);
+    hb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (0.7 * sr));
+    const auto hard = VaultEngine::renderMidi (p, hb, (int) (0.8 * sr), sr, mv);
+    r.peak127 = std::max (hard.getMagnitude (0, hard.getNumSamples()), r.c5.getMagnitude (0, r.c5.getNumSamples()));
+    return r;
+}
+inline juce::String macroJudge (const MacroProbe& x, const MacroProbe& ref, float lin, bool longTail, bool inharmonic)
+{
+    if (! x.finite) return "nan";
+    if (x.loud < -70.0f && ref.loud > -50.0f) return "silent";
+    if (x.peak127 * lin >= 0.885f && x.peak127 > ref.peak127 * 1.06f) return "clip";   // lin: 1 for renders at the final gain
+    if (x.s25 > 0.10f && x.s25 > ref.s25 + 0.005f) return "harsh-2-5k";
+    if (x.s6 > 0.03f && x.s6 > ref.s6 + 0.002f) return "piercing-6k";
+    if (x.s8 > maxShare8k && x.s8 > ref.s8 + 0.001f) return "air-8k";
+    if (! inharmonic && x.h1 < -3.0f && x.h1 < ref.h1 - 0.5f) return "fundamental";
+    if (x.loud > ref.loud + 4.0f) return "louder";
+    if (longTail && x.tailEnd > x.tailMax - 55.0f && x.tailEnd > ref.tailEnd + 3.0f) return "tail";   // candidate: see gateTail()
+    return {};
+}
+// the gate's tail length (analyse(): last 10 ms frame within 60 dB of the loudest, from the note-off) at velocity 0.8
+inline float gateTail (const VaultPreset& p, const float* mv)
+{
+    const float lim = tailLimit (p.category);
+    juce::MidiBuffer mb;
+    mb.addEvent (juce::MidiMessage::noteOn (1, vault::homeNote, (juce::uint8) 102), 0);
+    mb.addEvent (juce::MidiMessage::noteOff (1, vault::homeNote), (int) (holdSeconds * sr));
+    const auto c5 = VaultEngine::renderMidi (p, mb, (int) ((holdSeconds + lim + 1.0) * sr), sr, mv);
+    const int fr = (int) (0.01 * sr), nf = c5.getNumSamples() / fr;
+    std::vector<float> e ((size_t) nf);
+    float mx = -200;
+    for (int f = 0; f < nf; ++f)
+    {
+        double acc = 0;
+        for (int i = f * fr; i < (f + 1) * fr; ++i) acc += 0.5 * ((double) c5.getSample (0, i) * c5.getSample (0, i) + (double) c5.getSample (1, i) * c5.getSample (1, i));
+        e[(size_t) f] = vaultaudit::db (acc / fr); mx = std::max (mx, e[(size_t) f]);
+    }
+    int last = 0;
+    for (int f = 0; f < nf; ++f) if (e[(size_t) f] >= mx - 60.0f) last = f;
+    return last >= nf - 2 ? lim + 1.0f : (float) ((last + 1) * 0.01 - holdSeconds);
+}
+inline float macroExtremeDistance (const MacroProbe& a, const MacroProbe& b)
+{
+    const std::vector<std::pair<double, double>> segs { { 0.0, 0.15 }, { 0.15, 0.8 }, { 0.8, 1.4 }, { 1.5, 2.5 } };
+    const auto x = melFrames (a.c5, segs), y = melFrames (b.c5, segs);
+    double s = 0;
+    for (size_t i = 0; i < x.size() && i < y.size(); ++i) s += (x[i] - y[i]) * (x[i] - y[i]);
+    return (float) std::sqrt (s / std::max<size_t> (1, x.size()));
+}
+struct MacroCheck { int checked = 0, narrowed = 0, curveRefit = 0; juce::StringArray fails, fixed; int quiet = 0; std::map<juce::String, int> why; };
+
+// narrow sound macro i to the knob positions [a, b] = [d - d * kl, d + (1 - d) * kh] around its default d (kl / kh = 1 keeps a
+// side, 0 takes it away) and re-map the knob to 0..1: every target's min / max become its old values at a and b, the default
+// moves so the designed sound is exactly the same (linear targets; a curved target gets the curve that passes through its
+// designed value again, found by bisection - returns false when no curve in -1..1 does).
+inline bool narrowMacro (VaultPreset& p, int i, float kl, float kh)
+{
+    const float d = p.macroDefaults[i];
+    const float a = d - d * kl, b = d + (1.0f - d) * kh;
+    const float nd = b - a > 1.0e-6f ? (d - a) / (b - a) : d;
+    bool exact = true;
+    auto curveAt = [] (float m, float c)
+    {
+        m = juce::jlimit (0.0f, 1.0f, m);
+        if (c > 0.001f) return std::pow (m, 1.0f + 3.0f * c);
+        if (c < -0.001f) return 1.0f - std::pow (1.0f - m, 1.0f - 3.0f * c);
+        return m;
+    };
+    for (auto& t : p.macros[(size_t) i].targets)
+    {
+        auto g = [&t, &curveAt] (float x) { return t.min + (t.max - t.min) * curveAt (x, t.curve); };
+        const float v = g (d), lo = g (a), hi = g (b);
+        if (std::abs (t.curve) > 0.001f && std::abs (hi - lo) > 1.0e-9f)
+        {
+            const float want = (v - lo) / (hi - lo);   // curveAt (nd, c) must give this; it falls as c rises
+            float c0 = -1.0f, c1 = 1.0f;
+            if (want > curveAt (nd, c0) || want < curveAt (nd, c1)) exact = false;
+            for (int it = 0; it < 60; ++it) { const float c = 0.5f * (c0 + c1); (curveAt (nd, c) > want ? c0 : c1) = c; }
+            t.curve = 0.5f * (c0 + c1);
+        }
+        t.min = lo; t.max = hi;
+    }
+    p.macroDefaults[i] = nd;
+    return exact;
+}
+
+// the assembly macro check; with narrow = true a failing side is narrowed (rounds of x0.55, the 4th takes the side away)
+// until both extremes pass - the sound at the knob's default does not change
+inline MacroCheck checkPresetMacros (VaultPreset& p, bool narrow = false)
+{
+    MacroCheck mc;
+    bool longTail = false;
+    for (auto& m : p.macros) for (auto& t : m.targets) if (t.target.contains ("reverb") || t.target.contains ("delay") || t.target.contains ("release")) longTail = true;
+    const double total = longTail ? 8.0 : 3.5;
+    const auto ref = macroProbe (p, p.macroDefaults, total);
+    for (int i = 0; i < 4; ++i)
+    {
+        const auto& mac = p.macros[(size_t) i];
+        if (mac.targets.empty()) continue;
+        ++mc.checked;
+        MacroProbe lo, hi;
+        juce::String badLo, badHi, first;
+        for (int round = 0; round < 5; ++round)
+        {
+            float mv[4];
+            std::copy (std::begin (p.macroDefaults), std::end (p.macroDefaults), mv);
+            mv[i] = 0.0f; lo = macroProbe (p, mv, total);
+            mv[i] = 1.0f; hi = macroProbe (p, mv, total);
+            auto judge = [&] (const MacroProbe& x, float v)
+            {
+                auto bad = macroJudge (x, ref, 1.0f, longTail, inharmonicCategory (p.category));
+                if (bad == "tail")   // the short probe still rings: measure the whole tail like the gate does
+                {
+                    mv[i] = v;
+                    const float t = gateTail (p, mv);
+                    bad = t > tailLimit (p.category) ? juce::String ("tail") : juce::String();
+                }
+                return bad;
+            };
+            badLo = judge (lo, 0.0f);
+            badHi = judge (hi, 1.0f);
+            if (badLo.isEmpty() && badHi.isEmpty()) break;
+            if (round == 0) first = (badLo.isNotEmpty() ? "0:" + badLo : juce::String()) + (badHi.isNotEmpty() ? (badLo.isNotEmpty() ? " " : "") + juce::String ("1:") + badHi : juce::String());
+            if (! narrow || round == 4) break;
+            const float k = round == 3 ? 0.0f : 0.55f;
+            if (! narrowMacro (p, i, badLo.isNotEmpty() ? k : 1.0f, badHi.isNotEmpty() ? k : 1.0f)) ++mc.curveRefit;
+            ++mc.narrowed;
+        }
+        if (first.isNotEmpty() && badLo.isEmpty() && badHi.isEmpty())
+            mc.fixed.add (p.id + "\t" + p.name + "\t" + juce::String (i + 1) + "\t" + mac.name + "\t" + first + "\tnarrowed");
+        if (badLo.isNotEmpty() || badHi.isNotEmpty())
+        {
+            mc.fails.add (p.id + "\t" + p.name + "\t" + juce::String (i + 1) + "\t" + mac.name + "\t" + (badLo.isNotEmpty() ? "0:" + badLo : juce::String())
+                          + (badHi.isNotEmpty() ? (badLo.isNotEmpty() ? " " : "") + juce::String ("1:") + badHi : juce::String())
+                          + juce::String::formatted ("\tref 2-5k %.1f%% >6k %.2f%% >8k %.2f%% H1 %.1f peak %.3f | lo %.1f%% %.2f%% %.2f%% %.1f %.3f | hi %.1f%% %.2f%% %.2f%% %.1f %.3f",
+                                                     100 * ref.s25, 100 * ref.s6, 100 * ref.s8, ref.h1, ref.peak127, 100 * lo.s25, 100 * lo.s6, 100 * lo.s8, lo.h1, lo.peak127,
+                                                     100 * hi.s25, 100 * hi.s6, 100 * hi.s8, hi.h1, hi.peak127));
+        }
+        for (auto& w : juce::StringArray::fromTokens (first, " ", "")) ++mc.why[w.fromFirstOccurrenceOf (":", false, false)];
+        if (lo.finite && hi.finite && macroExtremeDistance (lo, hi) < 1.0f && std::abs (lo.loud - hi.loud) < 1.0f) ++mc.quiet;
+    }
+    return mc;
+}
+
 // VaultBankGen -recipe <name>|all [-out bank.cvb] [-report report.md] [-threads N] [-dist 3.5] [-wdist 3.5] [-qa] [-spread 1.5]
 //              [-cache dir] [-rebuild name,name] [-demo <dir> <id or name,...>] [-listen <dir> <id or name|...>] [-prints f.tsv]
+//              [-macros [fails.tsv]] [-chords]
 //   -dist     distinctness threshold; with "all" it applies across recipes (each recipe already ran its own pass), and
 //             -wdist (default: the same as -dist) inside one recipe (0 = trust the recipe's own pass)
 //   -qa       the assembly QA on top of the gate: loudness within -spread dB of the category target, > 8 kHz share,
 //             spectral-centroid ceilings per category
 //   -cache    keep each recipe's output (<dir>/<recipe>.cvb, rebuilt only when named in -rebuild) and every analysis
-//             (<dir>/analysis.tsv, keyed by a hash of the preset) so assembly re-runs only measure what changed
+//             (<dir>/analysis.tsv, keyed by a hash of the preset) so assembly re-runs only measure what changed; with
+//             -macros also the macro check (<dir>/macros.tsv + macros.cvb, keyed by the preset incl. its final gain)
+//   -macros [fails.tsv]  every sound macro of every accepted preset at 0 and 1 (checkPresetMacros); a failing side is
+//             narrowed (the default sound stays the same); the file lists the fixed and the still-failing extremes
+//   -chords [-chordsout f.tsv]  the listening-phrase headroom per category
 inline int runRecipes (int argc, char** argv)
 {
     const auto cwd = juce::File::getCurrentWorkingDirectory();
@@ -462,7 +701,8 @@ inline int runRecipes (int argc, char** argv)
     juce::StringArray rebuild;
     int threads = (int) std::max (1u, std::thread::hardware_concurrency());
     float minDist = 3.5f, withinDist = -1.0f, spread = 1.5f;
-    bool qa = false, chords = false;
+    bool qa = false, chords = false, macros = false;
+    juce::String macrosPath;
     for (int i = 3; i < argc; ++i)
     {
         const juce::String a (argv[i]);
@@ -480,6 +720,7 @@ inline int runRecipes (int argc, char** argv)
         else if (a == "-prints" && i + 1 < argc) printsPath = argv[++i];   // TSV: id, name, result, fingerprint (threshold studies)
         else if (a == "-chords") chords = true;
         else if (a == "-chordsout" && i + 1 < argc) { chords = true; chordsPath = argv[++i]; }
+        else if (a == "-macros") { macros = true; if (i + 1 < argc && ! juce::String (argv[i + 1]).startsWith ("-")) macrosPath = argv[++i]; }
     }
     const bool assembly = which == "all";
     if (withinDist < 0.0f) withinDist = minDist;   // one definition of "near-duplicate" for the whole bank
@@ -680,6 +921,100 @@ inline int runRecipes (int argc, char** argv)
             if (d < minPair) { minPair = d; pairA = a.preset.name; pairB = b.preset.name; }
             if (a.group != b.group && d < minCross) { minCross = d; crossA = a.preset.name; crossB = b.preset.name; }
         }
+    // macro extremes of every accepted preset (at its final gain, FX on): -macros [fails.tsv]
+    int macrosChecked = 0, macrosQuiet = 0, macrosNarrowed = 0, macrosCurve = 0;
+    juce::StringArray macroFails, macrosFixed;
+    std::map<juce::String, int> macroWhy;
+    if (macros)
+    {
+        std::vector<MacroCheck> mcs (accepted.size());
+        // cache (with -cache): macros.tsv + macros.cvb, one entry per checked preset, keyed by the preset as checked (hash
+        // of everything incl. the final gain): the counters / fail lines and the preset with its narrowed macros
+        const auto mcTsv = cache != juce::File() ? cache.getChildFile ("macros.tsv") : juce::File();
+        const auto mcCvb = cache != juce::File() ? cache.getChildFile ("macros.cvb") : juce::File();
+        auto macroKey = [] (const VaultPreset& p)
+        {
+            uint32_t g = 0;
+            std::memcpy (&g, &p.gain, sizeof (g));
+            return (presetHash (p) ^ ((uint64_t) g * 0x9E3779B97F4A7C15ull)) + (uint64_t) macroCheckVersion;
+        };
+        auto pack = [] (const juce::StringArray& a) { return a.joinIntoString (juce::String::charToString (0x1e)).replace ("\t", juce::String::charToString (0x1f)); };
+        auto unpack = [] (const juce::String& t)
+        {
+            juce::StringArray a;
+            if (t.isNotEmpty()) a.addTokens (t, juce::String::charToString (0x1e), "");
+            for (auto& x : a) x = x.replace (juce::String::charToString (0x1f), "\t");
+            return a;
+        };
+        std::map<uint64_t, std::pair<juce::String, VaultPreset>> mcCache;
+        {
+            juce::StringArray lines;
+            std::vector<VaultPreset> bank;
+            if (mcTsv.existsAsFile() && mcCvb.existsAsFile() && vault::loadBankFile (mcCvb, bank))
+            {
+                mcTsv.readLines (lines);
+                lines.removeEmptyStrings();
+                if (lines.size() == (int) bank.size())
+                    for (int i = 0; i < lines.size(); ++i)
+                        mcCache[(uint64_t) lines[i].upToFirstOccurrenceOf ("\t", false, false).getHexValue64()] = { lines[i], bank[(size_t) i] };
+            }
+        }
+        std::vector<uint64_t> keys (accepted.size());
+        std::vector<int> mcTodo;
+        for (size_t k = 0; k < accepted.size(); ++k)
+        {
+            auto& pr = all[(size_t) accepted[k]].preset;
+            keys[k] = macroKey (pr);
+            auto it = mcCache.find (keys[k]);
+            if (it != mcCache.end() && it->second.second.id == pr.id)
+            {
+                auto c = juce::StringArray::fromTokens (it->second.first, "\t", "");
+                while (c.size() < 8) c.add ({});
+                auto& mc = mcs[k];
+                mc.checked = c[1].getIntValue(); mc.narrowed = c[2].getIntValue(); mc.curveRefit = c[3].getIntValue(); mc.quiet = c[4].getIntValue();
+                for (auto& w : juce::StringArray::fromTokens (c[5], ",", "")) if (w.contains ("=")) mc.why[w.upToFirstOccurrenceOf ("=", false, false)] = w.fromFirstOccurrenceOf ("=", false, false).getIntValue();
+                mc.fails = unpack (c[6]); mc.fixed = unpack (c[7]);
+                pr = it->second.second;
+            }
+            else mcTodo.push_back ((int) k);
+        }
+        std::printf ("macro check: %d presets (%d from the cache)\n", (int) accepted.size(), (int) (accepted.size() - mcTodo.size()));
+        parallelFor ((int) mcTodo.size(), [&] (int j)
+        {
+            const auto k = (size_t) mcTodo[(size_t) j];
+            mcs[k] = checkPresetMacros (all[(size_t) accepted[k]].preset, true);
+        });
+        if (mcTsv != juce::File())
+        {
+            for (int k : mcTodo)
+            {
+                const auto& mc = mcs[(size_t) k];
+                juce::StringArray why;
+                for (auto& [w, n] : mc.why) why.add (w + "=" + juce::String (n));
+                juce::String line;
+                line << juce::String::toHexString ((juce::int64) keys[(size_t) k]) << "\t" << mc.checked << "\t" << mc.narrowed << "\t" << mc.curveRefit << "\t" << mc.quiet
+                     << "\t" << why.joinIntoString (",") << "\t" << pack (mc.fails) << "\t" << pack (mc.fixed);
+                mcCache[keys[(size_t) k]] = { line, all[(size_t) accepted[(size_t) k]].preset };
+            }
+            juce::StringArray lines;
+            std::vector<VaultPreset> bank;
+            for (auto& [h, e] : mcCache) { lines.add (e.first); bank.push_back (e.second); }
+            vault::saveBankFile (mcCvb, bank);
+            mcTsv.replaceWithText (lines.joinIntoString ("\n") + "\n");
+        }
+        for (auto& mc : mcs)
+        {
+            macrosChecked += mc.checked; macrosQuiet += mc.quiet; macroFails.addArray (mc.fails); macrosFixed.addArray (mc.fixed);
+            macrosNarrowed += mc.narrowed; macrosCurve += mc.curveRefit;
+            for (auto& [w, n] : mc.why) macroWhy[w] += n;
+        }
+        std::printf ("macro check: %d macros at 0 and 1; %d had an extreme outside the bank rules, %d of them fixed by narrowing that side "
+                     "(%d narrowings, %d curve re-fits off the designed value), %d left; %d barely audible\n", macrosChecked,
+                     macrosFixed.size() + macroFails.size(), macrosFixed.size(), macrosNarrowed, macrosCurve, macroFails.size(), macrosQuiet);
+        for (auto& [w, n] : macroWhy) std::printf ("  macro extreme %-14s %d\n", w.toRawUTF8(), n);
+        for (int k = 0; k < std::min (40, macroFails.size()); ++k) std::printf ("  %s\n", macroFails[k].toRawUTF8());
+        if (macrosPath.isNotEmpty()) cwd.getChildFile (macrosPath).replaceWithText ((macrosFixed.joinIntoString ("\n") + "\n" + macroFails.joinIntoString ("\n")).trim() + "\n");
+    }
     std::map<juce::String, int> fails;
     std::map<int, int> perCat;
     for (auto& r : all) { if (r.fail.isNotEmpty()) ++fails[r.fail.upToFirstOccurrenceOf (":", false, false)]; else ++perCat[r.preset.category]; }
@@ -706,6 +1041,10 @@ inline int runRecipes (int argc, char** argv)
           << "* minimum pairwise fingerprint distance **" << juce::String (minPair, 2) << "** (" << pairA << " / " << pairB << ")"
           << (assembly ? ", across recipes **" + juce::String (minCross, 2) + "** (" + crossA + " / " + crossB + "), cross-recipe threshold " + juce::String (minDist, 2) : juce::String())
           << "\n* peak control set on " << peakFixed << " presets (" << peakTried << " were under the loudness spread or over the chord headroom)"
+          << (macros ? "\n* sound macros checked at 0 and 1 (C5, final gain, FX on): " + juce::String (macrosChecked) + "; "
+                       + juce::String (macrosFixed.size() + macroFails.size()) + " had an extreme outside the bank rules, "
+                       + juce::String (macrosFixed.size()) + " fixed by narrowing that side (default sound unchanged), "
+                       + juce::String (macroFails.size()) + " left; " + juce::String (macrosQuiet) + " barely audible" : juce::String())
           << "\n* recipes:";
         for (auto& [n, c] : builtPerRecipe) s << " " << n << " " << c << ";";
         s << "\n* rejected:";
