@@ -81,9 +81,11 @@ jobs:
              App   -> /Applications/HAT GOBLIN.app
           3. Open your DAW, rescan plugins, load HAT GOBLIN as an instrument.
 
-          Keys: C3-C4 rolls (1/2 to 1/256, triplets on black keys), C2-B2 patterns,
-          C1/D1 pitch down/up, E1 latch. Drop any WAV on the plugin to roll your own hat.
-          Drag "DRAG MIDI" into your piano roll to get the roll as MIDI notes.
+          How it works: press PLAY (or click the plugin and hit SPACE). Smash GENERATE
+          for a new hi-hat groove, pick a STYLE, tweak the grid and the FEEL knobs.
+          DRAG AUDIO drops the loop as a WAV into your DAW, DRAG MIDI gives the notes
+          (on C5, they play any sampler), DRAG HAT gives the sample.
+          Drop any WAV on the plugin to use your own hat.
 
           Support: trapwin.com
           TXT
