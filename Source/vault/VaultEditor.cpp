@@ -1,15 +1,7 @@
 #include "VaultEditor.h"
 #include "ui/VaultMainView.h"
 
-#if JUCE_WINDOWS
- #ifndef NOMINMAX
-  #define NOMINMAX
- #endif
- #ifndef WIN32_LEAN_AND_MEAN
-  #define WIN32_LEAN_AND_MEAN
- #endif
- #include <windows.h>
-#endif
+#include "VaultHostKeys.h"
 
 using namespace vui;
 
@@ -39,31 +31,11 @@ int hostKeyCode (const juce::KeyPress& k)
     return 0;
 }
 
-#if JUCE_WINDOWS
-// The DAW's own window: JUCE only posts unused keys to the plugin window's direct parent, which in some hosts (FL Studio)
-// is a frame that ignores them, so Space never reached the transport. Post to the window that owns the whole chain instead.
-HWND hostWindow (juce::Component& c)
-{
-    auto* peer = c.getPeer();
-    if (peer == nullptr) return nullptr;
-    auto own = (HWND) peer->getNativeHandle();
-    if (own == nullptr || GetParent (own) == nullptr) return nullptr;   // a top-level window (standalone): no host to tell
-    auto host = GetAncestor (own, GA_ROOTOWNER);
-    return host != nullptr && host != own ? host : nullptr;
-}
 bool postKey (juce::Component& c, int vk, bool down, bool repeat = false)
 {
-    auto host = hostWindow (c);
-    if (host == nullptr) return false;
-    const auto scan = (LPARAM) MapVirtualKeyW ((UINT) vk, MAPVK_VK_TO_VSC) << 16;
-    const bool alt = (GetKeyState (VK_MENU) & 0x8000) != 0;
-    const UINT msg = alt ? (down ? WM_SYSKEYDOWN : WM_SYSKEYUP) : (down ? WM_KEYDOWN : WM_KEYUP);
-    const LPARAM lp = down ? (scan | 1 | (alt ? (1 << 29) : 0) | (repeat ? (1 << 30) : 0)) : (scan | 1 | (alt ? (1 << 29) : 0) | (LPARAM) 0xC0000000);
-    return PostMessageW (host, msg, (WPARAM) vk, lp) != 0;
+    auto* peer = c.getPeer();
+    return peer != nullptr && vaultPostKeyToHost (peer->getNativeHandle(), vk, down, repeat);
 }
-#else
-bool postKey (juce::Component&, int, bool, bool = false) { return false; }   // macOS: an unused key already goes on to the host
-#endif
 } // namespace
 
 //==============================================================================
