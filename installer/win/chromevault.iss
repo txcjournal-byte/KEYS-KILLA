@@ -24,19 +24,19 @@
 [Setup]
 ; NEVER change the AppId after release - Windows uses it to find the installed product for updates / uninstall
 AppId={{9F6FBD8D-BF05-49CA-B509-1BE044ABD3A9}
-AppName=CHROME VAULT
-AppVerName=CHROME VAULT {#AppVersion}
+AppName=TrapWin Chrome Vault
+AppVerName=TrapWin Chrome Vault {#AppVersion}
 AppVersion={#AppVersion}
 AppPublisher=TrapWin
 VersionInfoCompany=TrapWin
-VersionInfoProductName=CHROME VAULT
+VersionInfoProductName=TrapWin Chrome Vault
 VersionInfoVersion={#AppVersion}
 DefaultDirName={commonpf64}\TrapWin\CHROME VAULT
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 Uninstallable=yes
-UninstallDisplayName=CHROME VAULT by TrapWin
-UninstallDisplayIcon={app}\CHROME VAULT.exe
+UninstallDisplayName=TrapWin Chrome Vault
+UninstallDisplayIcon={app}\TrapWin Chrome Vault.exe
 LicenseFile=..\EULA_CHROME_VAULT.txt
 OutputDir=..\..\build\installer-vault
 OutputBaseFilename=CHROME-VAULT-{#AppVersion}-Windows-Setup
@@ -59,10 +59,10 @@ SolidCompression=yes
 #endif
 
 [Files]
-; VST3 bundle -> C:\Program Files\Common Files\VST3\CHROME VAULT.vst3 (the folder every VST3 host scans)
-Source: "{#Artefacts}\VST3\CHROME VAULT.vst3\*"; DestDir: "{commoncf64}\VST3\CHROME VAULT.vst3"; Excludes: "*.pdb,*.ilk,*.exp,*.lib"; Flags: ignoreversion recursesubdirs createallsubdirs
+; VST3 bundle -> C:\Program Files\Common Files\VST3\TrapWin Chrome Vault.vst3 (the folder every VST3 host scans)
+Source: "{#Artefacts}\VST3\TrapWin Chrome Vault.vst3\*"; DestDir: "{commoncf64}\VST3\TrapWin Chrome Vault.vst3"; Excludes: "*.pdb,*.ilk,*.exp,*.lib"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Standalone app -> C:\Program Files\TrapWin\CHROME VAULT
-Source: "{#Artefacts}\Standalone\CHROME VAULT.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Artefacts}\Standalone\TrapWin Chrome Vault.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\EULA_CHROME_VAULT.txt"; DestDir: "{app}"; DestName: "EULA.txt"; Flags: ignoreversion
 Source: "..\..\docs\CHROME_VAULT_CREDITS.md"; DestDir: "{app}"; DestName: "Sample credits.txt"; Flags: ignoreversion
 #ifdef LibraryDir
@@ -77,15 +77,20 @@ Type: filesandordirs; Name: "{commonappdata}\TrapWin\CHROME VAULT\Library\audio"
 Type: files; Name: "{commonappdata}\TrapWin\CHROME VAULT\Library\library.json"
 #endif
 
+[InstallDelete]
+; the plugin was called "CHROME VAULT" before: remove the old bundle / app so the DAW does not list it twice
+Type: filesandordirs; Name: "{commoncf64}\VST3\CHROME VAULT.vst3"
+Type: files; Name: "{app}\CHROME VAULT.exe"
+
 [Icons]
-Name: "{commonprograms}\TrapWin\CHROME VAULT"; Filename: "{app}\CHROME VAULT.exe"
-Name: "{commonprograms}\TrapWin\Uninstall CHROME VAULT"; Filename: "{uninstallexe}"
+Name: "{commonprograms}\TrapWin\TrapWin Chrome Vault"; Filename: "{app}\TrapWin Chrome Vault.exe"
+Name: "{commonprograms}\TrapWin\Uninstall TrapWin Chrome Vault"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\CHROME VAULT.exe"; Description: "Open CHROME VAULT (standalone)"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser
+Filename: "{app}\TrapWin Chrome Vault.exe"; Description: "Open TrapWin Chrome Vault (standalone)"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{commoncf64}\VST3\CHROME VAULT.vst3"
+Type: filesandordirs; Name: "{commoncf64}\VST3\TrapWin Chrome Vault.vst3"
 #ifdef LibraryDir
 Type: filesandordirs; Name: "{commonappdata}\TrapWin\CHROME VAULT\Library"
 Type: dirifempty; Name: "{commonappdata}\TrapWin\CHROME VAULT"

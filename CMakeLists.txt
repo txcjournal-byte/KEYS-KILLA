@@ -161,7 +161,7 @@ juce_add_plugin(ChromeVault
     BUNDLE_ID com.trapwin.chromevault
     PLUGIN_MANUFACTURER_CODE Trpw
     PLUGIN_CODE Cvlt
-    PRODUCT_NAME "CHROME VAULT"
+    PRODUCT_NAME "TrapWin Chrome Vault"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
@@ -225,7 +225,7 @@ if(KK_BUILD_TESTS)
     # --- end vault models ---
     target_compile_definitions(VaultTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_USE_OGGVORBIS=1 JUCE_MODAL_LOOPS_PERMITTED=1 ${CV_BANK_DEF} CV_TEST_BUILD=1
-        JucePlugin_Name="CHROME VAULT" JucePlugin_IsSynth=1 JucePlugin_VersionString="${CV_VERSION}")
+        JucePlugin_Name="TrapWin Chrome Vault" JucePlugin_IsSynth=1 JucePlugin_VersionString="${CV_VERSION}")
     target_link_libraries(VaultTests PRIVATE
         ${CV_DATA_LIB}
         juce::juce_audio_utils juce::juce_dsp

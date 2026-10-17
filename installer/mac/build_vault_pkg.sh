@@ -23,7 +23,7 @@ ART="$ROOT/build/ChromeVault_artefacts/Release"
 STAGE="$ROOT/build/pkgroot-vault"
 OUT="$ROOT/build/installer-vault"
 PKGID="com.trapwin.chromevault"
-NAME="CHROME VAULT"
+NAME="TrapWin Chrome Vault"
 
 VST3_DIR="$STAGE/Library/Audio/Plug-Ins/VST3"
 AU_DIR="$STAGE/Library/Audio/Plug-Ins/Components"
@@ -37,7 +37,14 @@ cp -R "$ART/VST3/$NAME.vst3" "$VST3_DIR/"
 cp -R "$ART/AU/$NAME.component" "$AU_DIR/"
 cp -R "$ART/Standalone/$NAME.app" "$APP_DIR/"
 
-SCRIPT_ARGS=()
+# preinstall: the plugin was called "CHROME VAULT" before - remove the old bundles so the DAW does not list it twice
+mkdir -p "$SCRIPTS"
+cat > "$SCRIPTS/preinstall" <<'SH'
+#!/bin/sh
+rm -rf "/Library/Audio/Plug-Ins/VST3/CHROME VAULT.vst3" "/Library/Audio/Plug-Ins/Components/CHROME VAULT.component" "/Applications/CHROME VAULT.app"
+SH
+chmod 755 "$SCRIPTS/preinstall"
+SCRIPT_ARGS=(--scripts "$SCRIPTS")
 if [ -n "${CV_LIBRARY_DIR:-}" ]; then
     [ -f "$CV_LIBRARY_DIR/library.json" ] || { echo "CV_LIBRARY_DIR=$CV_LIBRARY_DIR has no library.json" >&2; exit 1; }
     mkdir -p "$STAGE/$LIB_DEST"
@@ -46,15 +53,10 @@ if [ -n "${CV_LIBRARY_DIR:-}" ]; then
     chmod -R u+rwX,go+rX,go-w "$STAGE/Library/Application Support"
     echo "with the sample library: $(du -sh "$STAGE/$LIB_DEST" | cut -f1) from $CV_LIBRARY_DIR"
     # an update replaces the whole library, so no stale samples of an older version stay behind
-    mkdir -p "$SCRIPTS"
-    cat > "$SCRIPTS/preinstall" <<'SH'
-#!/bin/sh
-rm -rf "/Library/Application Support/TrapWin/CHROME VAULT/Library"
-exit 0
-SH
-    chmod 755 "$SCRIPTS/preinstall"
-    SCRIPT_ARGS=(--scripts "$SCRIPTS")
-else
+    echo 'rm -rf "/Library/Application Support/TrapWin/CHROME VAULT/Library"' >> "$SCRIPTS/preinstall"
+fi
+echo 'exit 0' >> "$SCRIPTS/preinstall"
+if [ -z "${CV_LIBRARY_DIR:-}" ]; then
     echo "CV_LIBRARY_DIR not set: plugin-only pkg (an installed library is kept)."
 fi
 
@@ -71,7 +73,7 @@ pkgbuild --root "$STAGE" --identifier "$PKGID" --version "$VERSION" --install-lo
 cat > "$OUT/distribution.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>CHROME VAULT by TrapWin $VERSION</title>
+    <title>TrapWin Chrome Vault $VERSION</title>
     <license file="EULA.txt"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <choices-outline><line choice="default"/></choices-outline>

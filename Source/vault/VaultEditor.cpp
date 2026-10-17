@@ -1,6 +1,16 @@
 #include "VaultEditor.h"
 #include "ui/VaultMainView.h"
 
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+#endif
+
 using namespace vui;
 
 namespace
@@ -14,6 +24,46 @@ void noClickFocus (juce::Component& c, const juce::Component* except)
     for (auto* ch : c.getChildren()) noClickFocus (*ch, except);
 }
 const juce::Font logoFont() { return font (18.0f, true, 0.16f); }
+
+// Windows key code of a key the editor does not use but the DAW may (Space = play / stop, Ctrl / Alt shortcuts), else 0
+int hostKeyCode (const juce::KeyPress& k)
+{
+    const int c = k.getKeyCode();
+    if (c == juce::KeyPress::spaceKey) return 0x20;   // VK_SPACE
+    const auto m = k.getModifiers();
+    if (m.isCtrlDown() || m.isAltDown() || m.isCommandDown())
+    {
+        if (c >= 'a' && c <= 'z') return c - 'a' + 'A';
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return c;
+    }
+    return 0;
+}
+
+#if JUCE_WINDOWS
+// The DAW's own window: JUCE only posts unused keys to the plugin window's direct parent, which in some hosts (FL Studio)
+// is a frame that ignores them, so Space never reached the transport. Post to the window that owns the whole chain instead.
+HWND hostWindow (juce::Component& c)
+{
+    auto* peer = c.getPeer();
+    if (peer == nullptr) return nullptr;
+    auto own = (HWND) peer->getNativeHandle();
+    if (own == nullptr || GetParent (own) == nullptr) return nullptr;   // a top-level window (standalone): no host to tell
+    auto host = GetAncestor (own, GA_ROOTOWNER);
+    return host != nullptr && host != own ? host : nullptr;
+}
+bool postKey (juce::Component& c, int vk, bool down, bool repeat = false)
+{
+    auto host = hostWindow (c);
+    if (host == nullptr) return false;
+    const auto scan = (LPARAM) MapVirtualKeyW ((UINT) vk, MAPVK_VK_TO_VSC) << 16;
+    const bool alt = (GetKeyState (VK_MENU) & 0x8000) != 0;
+    const UINT msg = alt ? (down ? WM_SYSKEYDOWN : WM_SYSKEYUP) : (down ? WM_KEYDOWN : WM_KEYUP);
+    const LPARAM lp = down ? (scan | 1 | (alt ? (1 << 29) : 0) | (repeat ? (1 << 30) : 0)) : (scan | 1 | (alt ? (1 << 29) : 0) | (LPARAM) 0xC0000000);
+    return PostMessageW (host, msg, (WPARAM) vk, lp) != 0;
+}
+#else
+bool postKey (juce::Component&, int, bool, bool = false) { return false; }   // macOS: an unused key already goes on to the host
+#endif
 } // namespace
 
 //==============================================================================
@@ -497,11 +547,19 @@ bool VaultEditor::keyPressed (const juce::KeyPress& k)
         if (k.getKeyCode() == juce::KeyPress::upKey)   { main->step (-1, false); return true; }
         if (k.getKeyCode() == juce::KeyPress::downKey) { main->step (1, false); return true; }
     }
-    return k.getKeyCode() == juce::KeyPress::tabKey;   // Tab never moves the keyboard into the search box
+    if (k.getKeyCode() == juce::KeyPress::tabKey) return true;   // Tab never moves the keyboard into the search box
+    // Space (play / stop) and the DAW's shortcuts work wherever the plugin has the keyboard
+    if (const int vk = hostKeyCode (k); vk != 0 && postKey (*this, vk, true, vk == hostKeyDown)) { hostKeyDown = vk; return true; }
+    return false;
 }
 
 bool VaultEditor::keyStateChanged (bool)
 {
+    if (hostKeyDown != 0 && ! juce::KeyPress::isKeyCurrentlyDown (hostKeyDown == 0x20 ? juce::KeyPress::spaceKey : hostKeyDown))
+    {
+        postKey (*this, hostKeyDown, false);
+        hostKeyDown = 0;
+    }
     if (main == nullptr || main->searchHasFocus()) { keys.allOff(); return false; }
     return keys.keyStateChanged();
 }

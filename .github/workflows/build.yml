@@ -143,10 +143,10 @@ jobs:
           New-Item -ItemType Directory -Force out, out\cv-stage, out\cv-lib | Out-Null
           # moved, not copied: build\ is cached and must not carry a 2 GB installer
           Move-Item (Get-ChildItem build\installer-vault\CHROME-VAULT-*.exe | Select-Object -First 1).FullName out\CHROME-VAULT-Setup-Windows.exe -Force
-          # zip root = "CHROME VAULT.vst3" (debug symbols / linker files left out)
-          Copy-Item -LiteralPath "build\ChromeVault_artefacts\Release\VST3\CHROME VAULT.vst3" -Destination out\cv-stage -Recurse -Force
+          # zip root = "TrapWin Chrome Vault.vst3" (debug symbols / linker files left out)
+          Copy-Item -LiteralPath "build\ChromeVault_artefacts\Release\VST3\TrapWin Chrome Vault.vst3" -Destination out\cv-stage -Recurse -Force
           Get-ChildItem out\cv-stage -Recurse -File -Include *.pdb,*.ilk,*.exp,*.lib | Remove-Item -Force
-          Compress-Archive -LiteralPath "out\cv-stage\CHROME VAULT.vst3" -DestinationPath out\CHROME-VAULT-VST3-Windows.zip -Force
+          Compress-Archive -LiteralPath "out\cv-stage\TrapWin Chrome Vault.vst3" -DestinationPath out\CHROME-VAULT-VST3-Windows.zip -Force
           # the library for manual installs: CHROME-VAULT-Library.zip, or self-contained parts when larger than 1.9 GB
           $libZips = @()
           if ($env:CV_LIBRARY_DIR) {
@@ -272,7 +272,7 @@ jobs:
             Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
             Expand-Archive pluginval.zip -DestinationPath pluginval -Force
           }
-          & .\pluginval\pluginval.exe --strictness-level 10 --verbose --output-dir pluginval-logs-vault --validate "build\ChromeVault_artefacts\Release\VST3\CHROME VAULT.vst3" 2>&1 | ForEach-Object {
+          & .\pluginval\pluginval.exe --strictness-level 10 --verbose --output-dir pluginval-logs-vault --validate "build\ChromeVault_artefacts\Release\VST3\TrapWin Chrome Vault.vst3" 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { "[stderr] $($_.ToString())" } else { "$_" }
           }
           $code = $LASTEXITCODE
@@ -416,16 +416,16 @@ jobs:
         run: |
           echo "CHROME_VAULT_LIBRARY = '${CHROME_VAULT_LIBRARY:-}'"
           ./build/VaultTests_artefacts/Release/VaultTests
-          lipo -info "build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3/Contents/MacOS/CHROME VAULT"
-          lipo -info "build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component/Contents/MacOS/CHROME VAULT"
+          lipo -info "build/ChromeVault_artefacts/Release/VST3/TrapWin Chrome Vault.vst3/Contents/MacOS/TrapWin Chrome Vault"
+          lipo -info "build/ChromeVault_artefacts/Release/AU/TrapWin Chrome Vault.component/Contents/MacOS/TrapWin Chrome Vault"
 
       - name: CHROME VAULT auval
         id: cv_auval
         if: ${{ !cancelled() }}
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
-          rm -rf ~/Library/Audio/Plug-Ins/Components/"CHROME VAULT.component"
-          cp -R "build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component" ~/Library/Audio/Plug-Ins/Components/
+          rm -rf ~/Library/Audio/Plug-Ins/Components/"TrapWin Chrome Vault.component"
+          cp -R "build/ChromeVault_artefacts/Release/AU/TrapWin Chrome Vault.component" ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
           sleep 5
           auval -v aumu Cvlt Trpw
@@ -438,7 +438,7 @@ jobs:
             curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
             unzip -q -o pluginval.zip
           fi
-          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3"
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --validate "build/ChromeVault_artefacts/Release/VST3/TrapWin Chrome Vault.vst3"
 
       - name: CHROME VAULT installer (pkg; signed + notarized when secrets exist)
         id: cv_pkg
@@ -452,17 +452,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           # take the bundles the pkg step staged (code-signed when MAC_APP_SIGN_ID exists), else the raw build output
-          if [ -d "build/pkgroot-vault/Library/Audio/Plug-Ins/VST3/CHROME VAULT.vst3" ]; then
-            VST3="build/pkgroot-vault/Library/Audio/Plug-Ins/VST3/CHROME VAULT.vst3"
-            AU="build/pkgroot-vault/Library/Audio/Plug-Ins/Components/CHROME VAULT.component"
+          if [ -d "build/pkgroot-vault/Library/Audio/Plug-Ins/VST3/TrapWin Chrome Vault.vst3" ]; then
+            VST3="build/pkgroot-vault/Library/Audio/Plug-Ins/VST3/TrapWin Chrome Vault.vst3"
+            AU="build/pkgroot-vault/Library/Audio/Plug-Ins/Components/TrapWin Chrome Vault.component"
           else
-            VST3="build/ChromeVault_artefacts/Release/VST3/CHROME VAULT.vst3"
-            AU="build/ChromeVault_artefacts/Release/AU/CHROME VAULT.component"
+            VST3="build/ChromeVault_artefacts/Release/VST3/TrapWin Chrome Vault.vst3"
+            AU="build/ChromeVault_artefacts/Release/AU/TrapWin Chrome Vault.component"
           fi
           rm -rf build/cv-zip out-vault && mkdir -p build/cv-zip out-vault
-          ditto "$VST3" "build/cv-zip/CHROME VAULT.vst3"
-          ditto "$AU" "build/cv-zip/CHROME VAULT.component"
-          (cd build/cv-zip && zip -qry ../../out-vault/CHROME-VAULT-Mac.zip "CHROME VAULT.vst3" "CHROME VAULT.component")
+          ditto "$VST3" "build/cv-zip/TrapWin Chrome Vault.vst3"
+          ditto "$AU" "build/cv-zip/TrapWin Chrome Vault.component"
+          (cd build/cv-zip && zip -qry ../../out-vault/CHROME-VAULT-Mac.zip "TrapWin Chrome Vault.vst3" "TrapWin Chrome Vault.component")
           cp build/installer-vault/CHROME-VAULT-*-macOS.pkg out-vault/CHROME-VAULT-Setup-Mac.pkg 2>/dev/null || echo "no pkg (installer step failed) - zip only"
           unzip -l out-vault/CHROME-VAULT-Mac.zip | tail -n 3
 

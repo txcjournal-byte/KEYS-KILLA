@@ -43,6 +43,7 @@ public:
     void focusGained (FocusChangeType) override;
     vui::ComputerKeys& computerKeys() { return keys; }
     void takeKeyboard();                                  // the editor (not a child) gets the keyboard, if it is showing
+    int hostKeyDown = 0;                                  // Windows key code passed on to the DAW and not yet released
 
     void setUiScale (float scale);                       // clamps to 80 % .. 200 %, resizes the window and remembers it
     float getUiScale() const { return uiScale; }
